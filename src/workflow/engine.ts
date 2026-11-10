@@ -1,5 +1,6 @@
 import { createHash, randomBytes } from 'node:crypto';
 import { LOCAL_DEFINITION, LOCAL_DRIVER } from './driver-name.js';
+import { retryCommand, stepArgument } from './runtimes/retry-command.js';
 import fs from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { z } from 'zod';
@@ -404,14 +405,6 @@ export function respondCommand(run: string, step: string, choice: string, pass: 
   return `teamai workflow respond ${run} ${stepArgument(step)} ${choice} --pass ${pass}`;
 }
 
-/** The command the person runs to retry step `step` of run `run`, quoted as `respondCommand` quotes it. */
-export function retryCommand(run: string, step: string): string {
-  return `teamai workflow retry ${run} ${stepArgument(step)}`;
-}
-
-function stepArgument(step: string): string {
-  return /^[A-Za-z0-9_.-]+$/.test(step) ? step : `'${step}'`;
-}
 
 /** The first gate of `run` that waits, as a driver with HITL is asked it; with `byAgent`, only one an agent may answer. */
 function waitingHitl(run: RunState, { byAgent }: { byAgent: boolean }) {
@@ -464,7 +457,7 @@ export type PersonHandoff = { kind: 'offers' } | { kind: 'unoffered'; reason: st
 
 /** Why step `step` of run `run`, which only a person can take, failed `hitl_required` under a driver without HITL. */
 function personRequired(run: string, step: string, unoffered: string | undefined): WorkflowFailure {
-  const retry = `${retryCommand(run, step)}; then teamai workflow resume ${run}`;
+  const retry = `${retryCommand({ run, step })}; then teamai workflow resume ${run}`;
 
   return unoffered === undefined
     ? { code: 'hitl_required', message: `Step "${step}" needs a person's answer, and the driver declares no HITL (driver.can.hitl). Retry it, then resume the run where a person answers, from a terminal in an attended run (TEAMAI_MODE=attended, or neither TEAMAI_MODE nor CI set): ${retry}` }

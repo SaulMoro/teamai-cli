@@ -19,7 +19,7 @@ import type { OpenedDriver } from '../runtimes/sources.js';
 import type { StepRuntime } from '@teamai/runtime-protocol/step-runtime';
 import type { DriverCan } from '../requirements.js';
 import { teamCommitReach } from '../cache.js';
-import { retryCommand } from '../engine.js';
+import { retryCommand } from '../runtimes/retry-command.js';
 import { answerCancel, attemptRef, claimAttempt, finishAttempt, fleetFailure, leaveOffer, leaseEnv, leaseInputs, leasePrompt, listMemberRecords, listOffers, readAttemptRecord, recordProgress, isHeld, type Cancelling, type HeldAttempt, type Offered, type FleetError, type FleetLease, type FleetResult } from './record.js';
 import type { ExecAnswer, ExecQuestion } from '@teamai/runtime-protocol/step-runtime';
 import { definitionsOf, type Definitions } from '../handoff.js';
@@ -435,14 +435,14 @@ async function runClaim(config: LocalConfig, { lock, claim, root, secrets, membe
   const trusted = await trustedLease(config, claim);
 
   if ('refused' in trusted) {
-    const next = trusted.next ?? `Once the owner ran teamai pull, ${retryCommand(run, lease.step)} offers it again.`;
+    const next = trusted.next ?? `Once the owner ran teamai pull, ${retryCommand({ run, step: lease.step })} offers it again.`;
 
     return finish({ exitCode: 1, stderr: `The member did not run step "${lease.step}": ${trusted.refused} ${next}` });
   }
 
   const runsHere = place[trusted.kind];
 
-  if (runsHere === undefined) return finish({ exitCode: 1, stderr: `The member did not run step "${lease.step}": its driver runs no ${trusted.kind} step. ${retryCommand(run, lease.step)} offers it again.` });
+  if (runsHere === undefined) return finish({ exitCode: 1, stderr: `The member did not run step "${lease.step}": its driver runs no ${trusted.kind} step. ${retryCommand({ run, step: lease.step })} offers it again.` });
   // A whole workflow's nested run scopes each of its steps' env itself, as the local driver does.
   const ready = trusted.kind === 'workflow' ? trusted : await scopedStep(config, trusted);
 

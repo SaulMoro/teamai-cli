@@ -9,7 +9,7 @@ import { PassScoring } from './scorers/pass-scoring.js';
 import { Subject } from './scorers/subject.js';
 import { log, PROGRESS_STREAMS_ENV, setStderrOnly, writeInfoLine } from './utils/logger.js';
 import { collectEnvSecrets, redact, redactJson } from '@teamai/shared/redact';
-import { admitStart, parseNextPayload, parseReport, parseResponsePayload, resumableSessions, retryCommand, withIgnored, type ParsedResponsePayload } from './workflow/engine.js';
+import { admitStart, parseNextPayload, parseReport, parseResponsePayload, resumableSessions, withIgnored, type ParsedResponsePayload } from './workflow/engine.js';
 import { resumeOrPublish } from './workflow/runtimes/retry-command.js';
 import { claimOffered, publishRun, resumeRun, takeoverFor } from './workflow/handoff.js';
 import { PublishedRuns, type Lack, type PublishedRun, type ResumableRun, type Taker } from './workflow-published-runs.js';
@@ -25,6 +25,7 @@ import { headCommit } from './workflow/worktree.js';
 import { localStrictCan, personAnswers, runLocalDriver, STOP_SIGNALS, withDriverLock, type LocalDriverOptions } from './workflow/drivers/local/local-driver.js';
 import { definedDrive, driveRun, unsupportedDriver } from './workflow-drive.js';
 import { awaitsLine, awaitsOf, driveByDefault, leftOpenLine, type DefaultDrive, drivesHere } from './default-driver.js';
+import { retryCommand } from './workflow/runtimes/retry-command.js';
 import { LOCAL_DRIVER, parseDriver, type Driver, type DriverName } from './workflow/driver-name.js';
 import { checkDriver, disposeDriver, openDriver, type OpenedDriver } from './workflow/runtimes/sources.js';
 import { sessionAppOf } from './workflow/session-apps.js';
@@ -251,7 +252,7 @@ async function explainFailedSteps(
     if (ids.length === 1 && only !== undefined) {
       log.error(redact(`Step "${only}" failed${why}${said}`, { envSecrets: secrets, patterns: false }));
 
-      if (isRetryable) log.info(`Retry it with ${retryCommand(runId, only)}, then continue the run with teamai workflow resume ${runId}`);
+      if (isRetryable) log.info(`Retry it with ${retryCommand({ run: runId, step: only })}, then continue the run with teamai workflow resume ${runId}`);
       continue;
     }
 
@@ -270,7 +271,7 @@ async function explainFailedSteps(
     // The limit stops a workflow step with the steps under it: retrying the one under it reopens the one around it.
     const stoppedUnder = (id: string): boolean => stopped.some((other) => other.startsWith(`${id}.`) || other.startsWith(`${id}[`));
 
-    for (const step of stopped.filter((id) => !stoppedUnder(id))) log.info(`Retry it with ${retryCommand(runId, step)}, then continue the run with teamai workflow resume ${runId}`);
+    for (const step of stopped.filter((id) => !stoppedUnder(id))) log.info(`Retry it with ${retryCommand({ run: runId, step })}, then continue the run with teamai workflow resume ${runId}`);
   }
 
   // An isolated run refuses a retry: what it admitted or measured would change.

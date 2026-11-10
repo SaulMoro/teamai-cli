@@ -6,7 +6,7 @@ import { isJsonObject, type JsonValue, type LocalConfig } from '../types.js';
 import { shellQuoteValue } from '../utils/shell-profile.js';
 import { agentEvidence, type AgentEvidence } from './attempt-marker.js';
 import {
-  error, finishRun, locateStep, ok, parseReads, reconcileRun, respondCommand, restartQueued, retryCommand, runData, withRun, workflowLabel,
+  error, finishRun, locateStep, ok, parseReads, reconcileRun, respondCommand, restartQueued, runData, withRun, workflowLabel,
   type RunReads, type WorkflowResult,
 } from './engine.js';
 import { evaluateExpression, isRecord, isTruthy, pathValue } from './expression.js';
@@ -23,6 +23,7 @@ import { answerHitl, cancel, cancellable, redeliver, repend, resetIteration, res
 import { parseTemplate, templatePaths, templatedTexts } from './template.js';
 import type { DriverIdentity, RunState, WorkflowEnvelope } from './types.js';
 import { isIsolated } from './workspace.js';
+import { retryCommand } from './runtimes/retry-command.js';
 
 async function controlRun(
   config: LocalConfig,
@@ -629,7 +630,7 @@ async function restoreForRetry(config: LocalConfig, runId: string, step: string,
   if (failed.length === 0) return undefined;
   const why = failed.map(({ branch, reason }) => `Branch ${branch} is not back ${reason}.`).join(' ');
 
-  return error('branches_not_restored', `Run ${runId} was not reopened: not every branch the run recorded is back at the commit it recorded. ${why} Try again once that is fixed: ${retryCommand(runId, step)}`);
+  return error('branches_not_restored', `Run ${runId} was not reopened: not every branch the run recorded is back at the commit it recorded. ${why} Try again once that is fixed: ${retryCommand({ run: runId, step })}`);
 }
 
 /** What a retry answers under `retried`: the step, the pass it runs again as, and the other steps that run again with it. */
@@ -646,7 +647,7 @@ export async function retryStep(config: LocalConfig, runId: string, secrets: Rec
 
   const reopen = isRunId(runId)
     ? {
-      busy: error('busy', `Cleanup of run ${runId} is removing its branches, so it was not reopened. Try again shortly: ${retryCommand(runId, step)}`),
+      busy: error('busy', `Cleanup of run ${runId} is removing its branches, so it was not reopened. Try again shortly: ${retryCommand({ run: runId, step })}`),
       prepare: () => restoreForRetry(config, runId, step, retention),
     }
     : undefined;

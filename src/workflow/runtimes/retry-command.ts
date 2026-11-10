@@ -1,8 +1,13 @@
 // What a step's failure tells the person to run next: retry the step, or resume or publish the run.
 
-/** The command that runs step `step` of run `run` again. */
+/** Step path `step` as one shell word: as it is when it holds no character a shell reads, else single-quoted. */
+export function stepArgument(step: string): string {
+  return /^[A-Za-z0-9_.-]+$/.test(step) ? step : `'${step.replaceAll("'", "'\\''")}'`;
+}
+
+/** The command that runs step `step` of run `run` again, which a shell runs as written. */
 export function retryCommand({ run, step }: { run: string; step: string }): string {
-  return `teamai workflow retry ${run} ${step}`;
+  return `teamai workflow retry ${run} ${stepArgument(step)}`;
 }
 
 /** The two ways on for a run this machine stops driving: resume it here, or publish it for another machine to take. */
