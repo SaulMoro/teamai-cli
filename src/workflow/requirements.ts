@@ -425,6 +425,14 @@ export interface Offer {
 }
 
 /**
+ * The runtime that runs a step in teamai's process, as its records name it: `tools` for a prompt, `host` for a command
+ * or an answer, which the member's tool answers on the host slot.
+ */
+export function inProcessRuntimeOf({ isPrompt, isAnswer }: { isPrompt: boolean; isAnswer: boolean }): 'tools' | 'host' {
+  return isPrompt && !isAnswer ? 'tools' : 'host';
+}
+
+/**
  * Whether a step runs only on this host, so no runtime that runs steps away from it (`can.remote`) takes it:
  * - an answer step, which the local loop answers with the member's tool here, whatever runtime takes its lease;
  * - a command step of a workflow teamai ships, which does its bookkeeping against the run's files, this machine's

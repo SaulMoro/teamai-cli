@@ -48,7 +48,7 @@ import { sanitizePrUrl, type PrUrl } from './pr-url.js';
 import { completeDelivery, deliveringStep, nextDelivery, resolveCreate, sameCreate, unresolvedCreate } from './delivery-ledger.js';
 import type { DeliveryKey, UnresolvedCreate } from './delivery-schema.js';
 import {
-  CAN_KEYS, LimitSchema, ReportedUnenforcedSchema, heldFor, isPinnedToHost, setsLimit, mergeRequirements, negotiate, reportedUnenforced, requiredEnvKeys, unionUnenforced,
+  CAN_KEYS, LimitSchema, ReportedUnenforcedSchema, heldFor, inProcessRuntimeOf, isPinnedToHost, setsLimit, mergeRequirements, negotiate, reportedUnenforced, requiredEnvKeys, unionUnenforced,
   type Allow, type DriverCan, type EnvFacts, type Executor, type Held, type InEffect, type Limit, type Missing, type Negotiation, type ReportedUnenforced, type Terms, type TurnLimits,
 } from './requirements.js';
 import { knownSecrets, resolveWorkflowEnv, secretKey, type WorkflowEnv } from '../env-resolution.js';
@@ -2648,7 +2648,7 @@ export async function leaseNext(config: LocalConfig, runId: string, driver: Driv
           // in teamai's process, the runtime that runs it: `host` for a command or an answer, `tools` for a prompt.
           if (options.alone?.offering !== undefined) {
             const inProcess = options.alone.offers.some((offer) => offer.runtime === options.alone?.offering && offer.inProcess === true);
-            granted.runtime = !inProcess ? options.alone.offering : definition.prompt !== undefined && definition.answer === undefined ? 'tools' : 'host';
+            granted.runtime = !inProcess ? options.alone.offering : inProcessRuntimeOf({ isPrompt: definition.prompt !== undefined, isAnswer: definition.answer !== undefined });
           }
 
           if (unenforced.length > 0) granted.unenforced = unenforced;

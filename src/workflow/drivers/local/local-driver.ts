@@ -16,7 +16,7 @@ import { continuedConversations, leaseNext, promptTool, type PersonHandoff, type
 import { offeredToPerson, offerToPerson, reconcileTakenCopies } from '../../handoff.js';
 import { UsageLimits } from '../../usage-limits.js';
 import { LeaseWireSchema } from '../../lease-wire.js';
-import { type DecidedCan, type DriverCan, type Missing } from '../../requirements.js';
+import { inProcessRuntimeOf, type DecidedCan, type DriverCan, type Missing } from '../../requirements.js';
 import { callerProvenance, respondProvenance, respondToHitl, type ResponseInput } from '../../run-controls.js';
 import { isRecord } from '../../expression.js';
 import { toolsStepRuntime, type StepLauncher } from '@teamai/runtime-tools';
@@ -754,10 +754,10 @@ async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, given: 
     if (slot.kind === 'external') return;
     const attempt = AttemptIdSchema.safeParse(lease.attempt);
 
-    // Named for what runs, as the step's record is: a prompt on tools, a command or an answer on the host.
-    const runs = lease.prompt !== undefined && !lease.answer ? 'tools' : 'host';
+    // Named for what runs, as the step's record is.
+    const runtime = inProcessRuntimeOf({ isPrompt: lease.prompt !== undefined, isAnswer: lease.answer === true });
 
-    if (attempt.success) await recordInProcessAttempt(config, runId, attempt.data, { runtime: runs, driver: defined.driver });
+    if (attempt.success) await recordInProcessAttempt(config, runId, attempt.data, { runtime, driver: defined.driver });
     const view = { worktree: lease.cwd ?? root, readonly: [], result: path.dirname(attemptResultPath(config, runId, lease.attempt)), runDir: runScratchDir(config, runId), toolHome: {} };
     const opened = await slot.runtime.open({ op: newOpId(), run: runId, attempt: lease.attempt, view, credentials: {} }, async () => {});
 
