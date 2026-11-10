@@ -1922,6 +1922,11 @@ export interface SoleDriver {
 export interface RuntimeOffer {
   /** The runtime, as the definition's `use` names it. */
   runtime: string;
+  /**
+   * It runs in teamai's process, where commands and answers run on the host runtime and prompts launch on `tools`: an
+   * attempt there is recorded by what it runs, `host` or `tools`, whatever the definition calls the slot.
+   */
+  inProcess?: true;
   can: DriverCan;
   /** The tools it cannot run now, each with the runtime's reason and next step. */
   unavailable?: Readonly<Record<string, string>>;
@@ -2646,8 +2651,12 @@ export async function leaseNext(config: LocalConfig, runId: string, driver: Driv
 
           if (options.runMode) granted.runMode = options.runMode;
 
-          // The runtime of a driver definition the step goes to, the host command slot included, is kept with its pass.
-          if (options.alone?.offering !== undefined && options.alone.driver !== 'local') granted.runtime = options.alone.offering;
+          // The runtime of a driver definition the step goes to, the host command slot included, is kept with its pass;
+          // in teamai's process, the runtime that runs it: `host` for a command or an answer, `tools` for a prompt.
+          if (options.alone?.offering !== undefined && options.alone.driver !== 'local') {
+            const inProcess = options.alone.offers.some((offer) => offer.runtime === options.alone?.offering && offer.inProcess === true);
+            granted.runtime = !inProcess ? options.alone.offering : definition.prompt !== undefined && definition.answer === undefined ? 'tools' : 'host';
+          }
 
           if (unenforced.length > 0) granted.unenforced = unenforced;
 

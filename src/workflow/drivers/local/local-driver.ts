@@ -693,7 +693,7 @@ async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, given: 
   const ordered = inProcess ? definedSlots.map((slot) => (slot === inProcess ? host : slot)) : [...definedSlots, host];
   const [firstSlot = host, ...otherSlots] = ordered;
   const slots: [RuntimeSlot, ...RuntimeSlot[]] = [firstSlot, ...otherSlots];
-  const offerOf = (slot: RuntimeSlot): RuntimeOffer => ({ runtime: slot.use, can: slot.can, ...(slot.unavailable && { unavailable: slot.unavailable }) });
+  const offerOf = (slot: RuntimeSlot): RuntimeOffer => ({ runtime: slot.use, can: slot.can, ...(slot.kind !== 'external' && { inProcess: true }), ...(slot.unavailable && { unavailable: slot.unavailable }) });
   const sole: SoleDriver = { driver: defined.driver, offers: [offerOf(slots[0]), ...otherSlots.map(offerOf)] };
   // Started or resumed from an agent session, with no terminal here, on a runtime a person reaches through its app: a
   // gate is relayed to that session rather than decided, and the loop stops at it once nothing it started still runs.

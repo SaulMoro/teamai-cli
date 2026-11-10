@@ -595,6 +595,44 @@ steps:
     expect(done).toMatchObject({ data: { done: { outcome: 'succeeded' } } });
   });
 
+  it('records each step on a [tools] definition by what it ran: a command and an answer on the host, a prompt on tools', async () => {
+    const { config, workspace, runId } = await workflowFixture(`schemaVersion: v1alpha1
+name: build
+description: A command, an answer and a prompt.
+steps:
+  - id: build
+    command: node -e "process.exit(0)"
+  - id: ask
+    needs: [build]
+    answer: Name one color.
+    output: { color: string }
+  - id: review
+    needs: [ask]
+    prompt: Review this project.
+    output:
+      ok: boolean
+`);
+    vi.stubEnv('TEAMAI_AI_TOOL', '');
+    const claude = claudeBeside(workspace, { answer: '{"ok":true}', answers: [{ when: 'Name one color', answer: '{"color":"red"}' }] });
+    fs.mkdirSync(personalDir('drivers'), { recursive: true });
+    onTestFinished(() => fs.rmSync(personalDir('drivers'), { recursive: true, force: true }));
+    fs.writeFileSync(path.join(personalDir('drivers'), 'mine.yaml'), 'schemaVersion: v1alpha1\nname: mine\nruntimes:\n  - use: tools\n');
+    const opened = await openDriver(config, 'mine', { personal: true, mode: 'attended', canAsk: false, purpose: 'run', checkout: workspace });
+    if (!opened.ok) throw new Error(opened.failure.message);
+
+    const done = await runLocalDriver(config, runId, workspace, {
+      adapter: hostLauncher(undefined, () => claude.executable), toolPaths, resolveTool: (command) => (command === 'claude' ? claude.executable : null),
+      runtimes: { driver: 'mine', asked: 'mine', runtimes: opened.opened.runtimes },
+    });
+
+    expect(await readRun(config, runId)).toMatchObject({ steps: [
+      { id: 'build', status: 'succeeded', runtime: 'host' },
+      { id: 'ask', status: 'succeeded', outputs: { color: 'red' }, runtime: 'host' },
+      { id: 'review', status: 'succeeded', runtime: 'tools' },
+    ] });
+    expect(done).toMatchObject({ data: { done: { outcome: 'succeeded' } } });
+  });
+
   it('stops a Claude prompt step that prints nothing for workflows.idle_timeout, and fails it naming the limit', async () => {
     const { config, workspace, runId } = await fixture();
     config.workflows = { tools: { default: 'claude' }, idle_timeout: '1s' };
