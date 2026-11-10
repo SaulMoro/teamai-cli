@@ -6,6 +6,7 @@
   "exports": {
     ".": "./src/index.ts",
     "./answer": "./src/answer.ts",
+    "./confined": "./src/confined.ts",
     "./headless": "./src/headless.ts"
   }
 }

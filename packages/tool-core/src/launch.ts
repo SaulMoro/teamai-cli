@@ -109,7 +109,7 @@ export function resultDirRule(resultDir: string): string {
   return `--allowedTools=Edit(/${rulePath}/**)`;
 }
 
-/** A run confined to one directory, in `src/workflow/confined-launch.ts`: what judges a scorer. */
+/** A run confined to one directory, which `@teamai/runtime-tools/confined` launches: what judges a scorer. */
 export interface ConfinedLaunch {
   readonly evidence: Evidence;
   /** The member's variables the run keeps, beyond the common ones. */
