@@ -229,7 +229,6 @@ export const withoutDaemon = (failure: RuntimeFailure | undefined, cannot: strin
   ? { code: failure.code, message: `${failure.message} Until then teamai-runtime-paseo cannot ${cannot}; ${then}.` }
   : { code: 'daemon_unreachable', message: `teamai-runtime-paseo reaches no Paseo daemon, so it cannot ${cannot}. Start the daemon with \`paseo start\`, then ${then}.` });
 
-/** The create a new prompt sends, on one of `models`, in `how`'s mode with its prompt and options, or the failure that keeps it from being sent. */
 /** The workflow folder's path a step of a workflow folder gets, so its agent's shell finds the folder's files; none for a single file. */
 function folderEnv(env: Readonly<Record<string, string>>): Partial<Record<typeof WORKFLOW_DIR_ENV, string>> {
   const folder = env[WORKFLOW_DIR_ENV];
@@ -237,6 +236,7 @@ function folderEnv(env: Readonly<Record<string, string>>): Partial<Record<typeof
   return folder === undefined ? {} : { [WORKFLOW_DIR_ENV]: folder };
 }
 
+/** The create a new prompt sends, on one of `models`, in `how`'s mode with its prompt and options, or the failure that keeps it from being sent. */
 function createFor(live: Daemon, request: Extract<RuntimeRequest, { type: 'prompt' }>, { name: tool, provider }: Target, models: Model[], how: Launch): AgentCreate | RuntimeFailure {
   const { place } = how;
   const { lease } = request;
