@@ -12,7 +12,7 @@ import { isRecord } from '../expression.js';
 import { log } from '../../utils/logger.js';
 import type { LaunchTool } from '../../tool-launch/tools.js';
 import type { LocalConfig } from '../../types.js';
-import { writeJsonAtomic } from '../../utils/fs.js';
+import { errnoCode, writeJsonAtomic } from '../../utils/fs.js';
 import { attemptDir, AttemptIdSchema, attemptResultPath, attemptsDir, RunIdSchema, type AttemptId, type RunId } from '../store.js';
 import type { WorkflowFailure } from '../types.js';
 import type { SessionRef } from '../workspace.js';
@@ -125,11 +125,15 @@ const InProcessAttemptRecordSchema = z.object({
   inProcess: z.literal(true),
 }).strict();
 
-/** Where an attempt ran, by its record: on an external runtime, in teamai's process, or nowhere this teamai recorded. */
+/**
+ * Where an attempt ran, by its record: on an external runtime, in teamai's process, nowhere this teamai recorded, or
+ * unknown, from a record that is there but cannot be read (`why`).
+ */
 export type AttemptPlacement =
   | { kind: 'external'; record: AttemptRuntimeRecord }
   | { kind: 'in_process'; runtime: string }
-  | { kind: 'unrecorded' };
+  | { kind: 'unrecorded' }
+  | { kind: 'unreadable'; why: string };
 
 /** Records that attempt `attempt` of run `run` runs in teamai's process, on `runtime` of driver `driver`. */
 export async function recordInProcessAttempt(config: LocalConfig, run: RunId, attempt: AttemptId, { runtime, driver }: { runtime: string; driver: string }): Promise<void> {
@@ -142,8 +146,8 @@ export async function readAttemptPlacement(config: LocalConfig, run: RunId, atte
 
   try {
     parsed = JSON.parse(await readRegularFile(attemptRuntimePath(config, run, attempt), 'utf8'));
-  } catch {
-    return { kind: 'unrecorded' };
+  } catch (error) {
+    return errnoCode(error) === 'ENOENT' ? { kind: 'unrecorded' } : { kind: 'unreadable', why: error instanceof Error ? error.message : String(error) };
   }
 
   const inProcess = InProcessAttemptRecordSchema.safeParse(parsed);
@@ -151,7 +155,7 @@ export async function readAttemptPlacement(config: LocalConfig, run: RunId, atte
   if (inProcess.success) return { kind: 'in_process', runtime: inProcess.data.runtime };
   const external = AttemptRuntimeRecordSchema.safeParse(parsed);
 
-  return external.success ? { kind: 'external', record: external.data } : { kind: 'unrecorded' };
+  return external.success ? { kind: 'external', record: external.data } : { kind: 'unreadable', why: 'it is not a runtime record this teamai knows' };
 }
 
 /** The record of attempt `attempt` of run `run` on an external runtime; undefined for any other (`readAttemptPlacement`). */

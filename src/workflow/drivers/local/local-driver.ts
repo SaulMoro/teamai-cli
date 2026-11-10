@@ -831,6 +831,11 @@ async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, given: 
         case 'unrecorded':
           slot = slots[0];
           break;
+        case 'unreadable':
+          // Nothing says it ran here, and an external runtime may still run it: that runtime's reattach finds out.
+          log.warn(`The runtime record of attempt ${step.lease.attempt} cannot be read (${placement.why}), so teamai asks the first external runtime of this driver whether it still runs it.`);
+          slot = slots.find((candidate) => candidate.kind === 'external') ?? slots[0];
+          break;
         default: {
           const unhandled: never = placement;
 

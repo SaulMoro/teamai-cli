@@ -17,7 +17,7 @@ import { hostLauncher } from './helpers/host-launcher.js';
 import { _setDriverPollMs, runLocalDriver } from '../workflow/drivers/local/local-driver.js';
 import { type WorkflowRunRecord } from '../workflow/records.js';
 import { AttemptIdSchema, readRun, RunIdSchema } from '../workflow/store.js';
-import { attemptToolHome, readAttemptPlacement, readAttemptRuntime, recordInProcessAttempt } from '../workflow/runtimes/attempt.js';
+import { attemptRuntimePath, attemptToolHome, readAttemptPlacement, readAttemptRuntime, recordInProcessAttempt } from '../workflow/runtimes/attempt.js';
 import { openDriver } from '../workflow/runtimes/sources.js';
 import { personalDir } from '../workflow/runtimes/definitions.js';
 import { cancelRun } from '../workflow/run-controls.js';
@@ -1416,9 +1416,10 @@ steps:
 
 describe('a step an earlier driver leased in teamai\'s process', () => {
   it.each([
-    { recorded: true, goesTo: 'tools' },
-    { recorded: false, goesTo: 'toy' },
-  ])('with an in-process record $recorded, goes back to $goesTo of a definition that lists the toy before tools', async ({ recorded, goesTo }) => {
+    { recorded: 'in_process', toolsFirst: false, goesTo: 'tools' },
+    { recorded: 'none', toolsFirst: false, goesTo: 'toy' },
+    { recorded: 'unreadable', toolsFirst: true, goesTo: 'toy' },
+  ] as const)('with a record $recorded, goes back to $goesTo of a definition that lists tools first: $toolsFirst', async ({ recorded, toolsFirst, goesTo }) => {
     const { config, workspace, runId } = await workflowFixture(`schemaVersion: v1alpha1
 name: build
 description: Review the project.
@@ -1446,11 +1447,18 @@ steps:
     const leasedRun = await readRun(config, runId);
     const leasedStep = typeof leasedRun === 'string' ? undefined : leasedRun.steps[0];
     const attempt = AttemptIdSchema.parse(leasedStep?.status === 'leased' ? leasedStep.lease.attempt : undefined);
-    if (recorded) await recordInProcessAttempt(config, RunIdSchema.parse(runId), attempt, { runtime: 'tools', driver: 'mine' });
-    const runtimes: DriverRuntimes = {
-      driver: 'mine', asked: 'mine',
-      runtimes: [{ kind: 'external', use: 'toy', runtime, can: ready.can, launchesAgents: true, engine: { logins: [] }, credentials: {}, found: [], masks: {}, optionsFrom: 'test' }, ...opened.opened.runtimes],
-    };
+    if (recorded === 'in_process') await recordInProcessAttempt(config, RunIdSchema.parse(runId), attempt, { runtime: 'tools', driver: 'mine' });
+
+    // A record that cannot be read says nothing of where the attempt ran, so it is not taken as one in teamai's process,
+    // which an external runtime may still be running.
+    if (recorded === 'unreadable') {
+      fs.mkdirSync(path.dirname(attemptRuntimePath(config, RunIdSchema.parse(runId), attempt)), { recursive: true });
+      fs.writeFileSync(attemptRuntimePath(config, RunIdSchema.parse(runId), attempt), '{"runtime": "to');
+    }
+
+    const toy: DriverRuntimes['runtimes'][number] = { kind: 'external', use: 'toy', runtime, can: ready.can, launchesAgents: true, engine: { logins: [] }, credentials: {}, found: [], masks: {}, optionsFrom: 'test' };
+    const [first, ...rest] = opened.opened.runtimes;
+    const runtimes: DriverRuntimes = { driver: 'mine', asked: 'mine', runtimes: toolsFirst ? [first, ...rest, toy] : [toy, first, ...rest] };
 
     expect(await runLocalDriver(config, runId, workspace, { adapter: hostLauncher(undefined, () => claude.executable), toolPaths, runtimes })).toMatchObject({ data: { done: { outcome: 'succeeded' } } });
 
