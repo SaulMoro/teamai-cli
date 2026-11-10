@@ -1,6 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { bundleRuntime, connect, fakeEngine, tempDir, type Connection, type FakeEngine, type Message } from './testing/harness.js';
 import { closeLeftovers, expectNothingLeft } from './testing/leaks.js';
 
@@ -250,7 +250,7 @@ describe('how a prompt step\'s tool fails', () => {
     const ending = prompt(connection, at, { prompt: 'hang on' }, {}, op);
     await connection.next((message) => message.op === op && message.event === 'accepted');
     // Once the tool started in the container, so the cancel stops a running process.
-    for (let waited = 0; !fs.existsSync(path.join(at.toolHome, 'launch.json')) && waited < 10_000; waited += 50) await new Promise((resolve) => setTimeout(resolve, 50));
+    await vi.waitFor(() => { expect(fs.existsSync(path.join(at.toolHome, 'launch.json'))).toBe(true); }, { timeout: 10_000, interval: 50 });
     connection.send({ type: 'cancel', op });
 
     expect(await ending).toMatchObject({ op, event: 'cancelled' });

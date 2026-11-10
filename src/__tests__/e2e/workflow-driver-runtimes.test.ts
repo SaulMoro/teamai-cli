@@ -139,6 +139,12 @@ describe('a driver definition with several runtimes', () => {
     prompt: Review the repository without changing it.
     output:
       ok: boolean`);
+    writeFlow('budgeted', `  - id: review
+    prompt: Review the repository without changing it.
+    budget: { tokens: 1000 }
+    on_limit: end_turn
+    output:
+      ok: boolean`);
     writeFlow('scoredpass', `  - id: review
     prompt: Review the repository without changing it.
     scorers: [quality]
@@ -1519,6 +1525,20 @@ steps:
       expect(review).toMatchObject({ status: 'succeeded', session: `toy-session-${sent?.op.slice(3)}`, outputs: { ok: true }, tokens: { input: 7 } });
       // The resumed teamai read the outcome the toy kept: it sent no prompt again.
       expect(sends().map((line) => line.op)).toEqual([sent?.op]);
+    });
+
+    it('ends a prompt that finished stopped at its budget while teamai was killed at that limit, on the outcome the runtime kept', async () => {
+      writeDefinition('budgetdie', [{ use: 'toy', options: { state, die_at: 'prompt-finished', can: { end_turn: true }, agent: { output: { ok: true }, usage: { input: 7 }, stopped: 'budget' } } }]);
+
+      const before = runIds();
+      const killed = await runCLI(['workflow', 'start', 'budgeted', '--driver', 'budgetdie'], repo, env());
+      expect(killed.signal, killed.stderr).toBe('SIGKILL');
+      const runId = [...runIds()].find((id) => !before.has(id));
+
+      const resumed = await runCLI(['workflow', 'resume', String(runId), '--driver', 'budgetdie'], repo, env());
+
+      expect(envelope(resumed), resumed.stderr).toMatchObject({ data: { done: { outcome: 'succeeded' } } });
+      expect(readRunState(String(runId)).steps).toMatchObject([{ id: 'review', status: 'succeeded', limit: 'budget', tokens: { input: 7 } }]);
     });
 
     it('reconnects to a prompt still running when teamai was killed, and reports it once its agent finishes', async () => {

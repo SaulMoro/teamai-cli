@@ -1,6 +1,6 @@
 # Sandbox 运行时
 
-`sandbox` [步骤运行时](workflow-advanced.md#驱动定义和步骤运行时)把工作流步骤的每次尝试放进一个独立的沙箱里运行：Docker Sandboxes 的微型虚拟机，或者来自团队构建的镜像的容器。Agent 只能处理该步骤的工作树，碰不到你机器上的其他内容。工具命令的构建、结果的读取、预算的计量，以及提交和推送，仍然由 teamai 在主机上完成。
+`sandbox` [步骤运行时](workflow-advanced.md#驱动定义和步骤运行时)把工作流步骤的每次尝试放进一个独立的沙箱里运行：Docker Sandboxes 的微型虚拟机，或者来自团队构建的镜像的容器。Agent 只能处理该步骤的工作树，碰不到你机器上的其他内容。sandbox 在那里启动工具，并执行步骤的各项限制；结果的读取，以及提交和推送，仍然由 teamai 在主机上完成。
 
 这个版本支持 `sbx`（[Docker Sandboxes](#sbxdocker-sandboxes)）、`docker` 和 `podman`。它随 teamai 一起发布，可执行文件名为 `teamai-runtime-sandbox`。
 
