@@ -1,8 +1,12 @@
 /** @import { ESTree } from '@oxlint/plugins' */
+import fs from 'node:fs';
+import path from 'node:path';
+
 import { defineRule } from '@oxlint/plugins';
+import { z } from 'zod';
 
 import { importedName } from '../imports.js';
-import { inProductionSource, sourcePath, variableOf } from '../utils.js';
+import { repositoryPath, scopedFiles, variableOf } from '../utils.js';
 
 /** The modules a file is read from. */
 const FS = new Set(['fs', 'node:fs', 'fs/promises', 'node:fs/promises', 'fs-extra']);
@@ -14,16 +18,48 @@ const READS = new Set([
 ]);
 
 /**
- * The exports of `src/utils/fs.ts` that never open a file to read it. Any other export is refused, so a new wrapper
- * that reads, as readJson or fileHash do, is refused until it is shown to leave contents unread.
+ * The helper itself, which reads only the descriptor it opened without blocking and checked. Only this file reads
+ * plainly by design; `scopedFiles` fails lint if it moves.
  */
-const UNREAD = new Set([
-  'DRAFT_SUFFIX', 'ensureDir', 'errnoCode', 'expandHome', 'getDirLatestMtime', 'getFileMtime', 'hasVcsMetadataRecursive',
-  'isDraft', 'isIgnored', 'isSameRealPath', 'listDirs', 'listFiles', 'listFilesRecursive', 'pathExists', 'pruneEmptyDirs',
-  'remove', 'symlinkTarget', 'writeFile', 'writeFileAtomic', 'writeJson', 'writeJsonAtomic',
-]);
+const HELPER = scopedFiles(['packages/shared/src/regular-file.ts'])[0];
 
-const MESSAGE = 'Read a file in src/workflow with readRegularFile or openRegularFile from @teamai/shared/regular-file: a step writes the paths the engine reads, and a FIFO it leaves there blocks a plain read until a writer comes, past every deadline. The helper opens without blocking and refuses anything but a regular file.';
+const MESSAGE = 'Read a file with readRegularFile or openRegularFile from @teamai/shared/regular-file: a step writes the paths the engine reads, and a FIFO it leaves there blocks a plain read until a writer comes, past every deadline. The helper opens without blocking and refuses anything but a regular file.';
+
+/** The baseline file: how many plain reads each file still has, by its path from the repository root. */
+export const BaselineSchema = z.record(z.string(), z.number().int().positive());
+
+/** The rule's option: the baseline file, from the repository root. */
+const OptionsSchema = z.tuple([z.object({ baseline: z.string() }).strict()]);
+
+/**
+ * Whether the rule checks `file`, given from the repository root: production source under `src/` or a package's `src/`,
+ * so a new folder or package is in scope with no rule edit. Tests, `__tests__/` and `testing/` support are not.
+ * @param {string} file
+ * @returns {boolean}
+ */
+export function isReadChecked(file) {
+  return /^(?:packages\/[^/]+\/)?src\/.+\.[cm]?[jt]sx?$/.test(file) && !/\.test\.[cm]?[jt]sx?$|(?:^|\/)(?:__tests__|testing)\//.test(file.replace(/^(?:packages\/[^/]+\/)?src\//, ''));
+}
+
+/** @type {Map<string, z.infer<typeof BaselineSchema>>} */
+const baselines = new Map();
+
+/**
+ * The baseline at `file`, read once per lint run.
+ * @param {string} file
+ */
+function baselineAt(file) {
+  const cached = baselines.get(file);
+
+  if (cached !== undefined) return cached;
+  const baseline = BaselineSchema.parse(JSON.parse(fs.readFileSync(file, 'utf8')));
+  baselines.set(file, baseline);
+
+  return baseline;
+}
+
+/** @param {number} count */
+const reads = (count) => `${count} plain read${count === 1 ? '' : 's'}`;
 
 /**
  * The module `variable` imports, and the name it imports from it (`default` or `*` for the module itself); undefined
@@ -61,24 +97,43 @@ function isFsModule(sourceCode, node) {
 export default defineRule({
   meta: {
     type: 'problem',
-    docs: { description: 'Read files in src/workflow only through the helper that refuses a FIFO or a device.' },
+    docs: { description: 'Read files in production source only through the helper that refuses a FIFO or a device.' },
+    // `baseline`: a JSON file, from the repository root, of the plain reads each file still has. It only shrinks: a read past a
+    // file's count fails, a count that fell fails until its entry is lowered, and an entry whose file is gone fails.
+    schema: [{ type: 'object', properties: { baseline: { type: 'string' } }, required: ['baseline'], additionalProperties: false }],
   },
   create(context) {
-    if (!inProductionSource(context) || !sourcePath(context).startsWith('src/workflow/')) return {};
+    const { root, relative } = repositoryPath(context);
+
+    if (!isReadChecked(relative) || relative === HELPER) return {};
     const { sourceCode } = context;
+    const [{ baseline: baselineFile }] = OptionsSchema.parse(context.options);
+    const baseline = baselineAt(path.posix.join(root, baselineFile));
+    const allowed = baseline[relative] ?? 0;
+    // Each file checks the entries of its own folder, so a removed file fails lint instead of staying listed.
+    const gone = Object.keys(baseline).filter((file) => path.posix.dirname(file) === path.posix.dirname(relative) && !fs.existsSync(path.posix.join(root, file)));
+    /** @type {ESTree.Node[]} */
+    const found = [];
 
     return {
-      ImportDeclaration(node) {
-        const from = String(node.source.value);
-        /** @type {((name: string) => boolean) | undefined} */
-        const reads = FS.has(from) ? (name) => READS.has(name) : from.endsWith('/utils/fs.js') ? (name) => !UNREAD.has(name) : undefined;
+      'Program:exit'(/** @type {ESTree.Program} */ node) {
+        for (const file of gone) context.report({ node, message: `${file} is in ${baselineFile} but does not exist. Remove its entry.` });
 
-        if (reads === undefined || node.importKind === 'type') return;
+        if (found.length > allowed) {
+          const counted = allowed === 0 ? '' : ` ${relative} has ${reads(found.length)}; the baseline allows ${allowed}.`;
+
+          for (const read of found) context.report({ node: read, message: `${MESSAGE}${counted}` });
+        } else if (found.length < allowed) {
+          context.report({ node, message: `${relative} has ${reads(found.length)}; lower its entry in ${baselineFile} from ${allowed} to ${found.length}${found.length === 0 ? ' by removing it' : ''}.` });
+        }
+      },
+      ImportDeclaration(node) {
+        if (!FS.has(String(node.source.value)) || node.importKind === 'type') return;
 
         for (const specifier of node.specifiers) {
           if (specifier.type !== 'ImportSpecifier' || specifier.importKind === 'type') continue;
 
-          if (reads(importedName(specifier))) context.report({ node: specifier, message: MESSAGE });
+          if (READS.has(importedName(specifier))) found.push(specifier);
         }
       },
       CallExpression(node) {
@@ -86,7 +141,7 @@ export default defineRule({
 
         if (callee.type !== 'MemberExpression' || callee.computed || callee.property.type !== 'Identifier' || !READS.has(callee.property.name)) return;
 
-        if (isFsModule(sourceCode, callee.object)) context.report({ node, message: MESSAGE });
+        if (isFsModule(sourceCode, callee.object)) found.push(node);
       },
     };
   },
