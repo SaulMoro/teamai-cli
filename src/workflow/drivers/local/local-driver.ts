@@ -22,7 +22,7 @@ import { toolsStepRuntime, type StepLauncher } from '@teamai/runtime-tools';
 import { failureReport, launchToolFor, runPromptStep, type AskPerson, type StagedLease } from '../../steps/prompt.js';
 import { failedCommand, placeView, runtimeCommand, runtimeSetup, runtimeStepEnv, type StartedCommand } from '../../steps/runtime-steps.js';
 import { attemptRun, HeldPlace, isExecRuntimeTool, readAttemptRuntime, attemptRuntimePath, maskAttemptResults, type AttemptRun } from '../../runtimes/attempt.js';
-import { localStepRuntime } from '../../runtimes/local.js';
+import { hostStepRuntime } from '../../runtimes/host.js';
 import { writeHeldSteps, type HeldSteps } from '../../runtimes/held.js';
 import { closeAfterSweep, stopOnRecordedDriver } from '../../runtimes/cancelled.js';
 import { loginHolder, loginLockFile, releaseLogin } from '../../runtimes/login.js';
@@ -213,7 +213,7 @@ export interface LocalDriverOptions {
    * what a shortcut of the run shows live.
    */
   progress?: (line: string, stream: 'stdout' | 'stderr') => void;
-  /** The runtimes of the driver definition `--driver` names, in its order. Without it, the loop has one: `local`. */
+  /** The runtimes of the driver definition `--driver` names, in its order. Without it, the loop has one: `tools`. */
   runtimes?: DriverRuntimes;
   /**
    * Awaited once a prompt step's place is prepared, before the driver checks whether its tool may start, with the signal
@@ -232,12 +232,12 @@ export interface DriverRuntimes {
 }
 
 /**
- * One runtime the loop offers: `local`, which launches on this machine as the loop always did, or the host command slot;
+ * One runtime the loop offers: `host`, the command slot every definition has, which runs commands on this machine;
  * `tools`, which launches the member's tools in this process; or an external one, such as `fleet`, whose steps go
  * through an `AttemptRun`. Each is reached through the `StepRuntime` interface for its offer and the lifecycle of its
  * attempts' places.
  */
-type RuntimeSlot = SlotBase & { kind: 'local' | 'tools' | 'external' };
+type RuntimeSlot = SlotBase & { kind: 'host' | 'tools' | 'external' };
 
 interface SlotBase {
   use: string;
@@ -623,13 +623,13 @@ async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, given: 
   const found = [...LAUNCH_TOOLS, ...instanceNames().filter((name) => !isToolId(name))].filter((tool) => (named === undefined || named.has(tool)) && onPath(tool));
   const pickedUnlooked = [...picked].filter((tool) => !found.some((launched) => launched === tool) && !(named?.has(tool) ?? false));
   const tools = [...found, ...pickedUnlooked];
-  const defined: DriverRuntimes = options.runtimes ?? { driver: 'local', asked: 'local', runtimes: [{ kind: 'local', use: 'local', engine: { logins: [] } }] };
+  const defined: DriverRuntimes = options.runtimes ?? { driver: 'local', asked: 'local', runtimes: [{ kind: 'local', use: 'tools', engine: { logins: [] } }] };
   const lookup = options.resolveTool ? { resolveTool: options.resolveTool } : {};
   const confined = isStarted && mayConfine(started) ? await confinedOffers(lookup) : [];
-  const local = localStepRuntime(localCan({ strict: localStrictCan(config, options), hitl: canHitl, tools, confined }));
-  const localReady = await local.init({ options: {}, mode });
+  const hostRuntime = hostStepRuntime(localCan({ strict: localStrictCan(config, options), hitl: canHitl, tools, confined }));
+  const hostReady = await hostRuntime.init({ options: {}, mode });
 
-  if (!localReady.ok) return { error: { code: 'runtime_failed', message: localReady.failure.message } };
+  if (!hostReady.ok) return { error: { code: 'runtime_failed', message: hostReady.failure.message } };
 
   // An external runtime is offered with what it said it can. One that execs the tool launches only the tools it can give
   // a home, and the instances of them it lists; one that launches agents its own way gives each its own. It keeps
@@ -639,11 +639,10 @@ async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, given: 
 
   // What this machine declares it has that teamai does not model: a step's requires.labels runs here only with each.
   const hostLabels = config.workflows?.labels;
-  const hostCan: DriverCan = hostLabels ? { ...localReady.can, labels: hostLabels } : localReady.can;
+  const hostCan: DriverCan = hostLabels ? { ...hostReady.can, labels: hostLabels } : hostReady.can;
 
-  // `tools` runs prompt steps and no command. Its slot still offers exec: a prompt step's setup runs in this process, on
-  // the host, before its tool starts, as on `local`; the host command slot is offered before it, so it takes no command.
-  const toolsRuntime = toolsStepRuntime<DriverCan>({ can: { ...hostCan, exec: false }, launch: toolsLaunchDeps(), ...(options.adapter && { launcher: options.adapter }) });
+  // `tools` launches the member's tools for prompt steps and runs no command; the host runtime runs those in this process.
+  const toolsRuntime = toolsStepRuntime<DriverCan>({ can: hostCan, launch: toolsLaunchDeps(), ...(options.adapter && { launcher: options.adapter }) });
   const toolsReady = await toolsRuntime.init({ options: {}, mode });
 
   if (!toolsReady.ok) return { error: { code: 'runtime_failed', message: toolsReady.failure.message } };
@@ -651,9 +650,7 @@ async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, given: 
   const toSlot = (entry: OpenedDriver['runtimes'][number]): RuntimeSlot => {
     switch (entry.kind) {
       case 'local':
-        return entry.use === 'tools'
-          ? { kind: 'tools', use: 'tools', runtime: toolsRuntime, can: { ...toolsReady.can, exec: true }, launchesAgents: false, engine: entry.engine, credentials: {}, found: [] }
-          : { kind: 'local', use: 'local', runtime: local, can: hostCan, launchesAgents: false, engine: entry.engine, credentials: {}, found: [] };
+        return { kind: 'tools', use: entry.use, runtime: toolsRuntime, can: toolsReady.can, launchesAgents: false, engine: entry.engine, credentials: {}, found: [] };
       case 'external':
         return {
           kind: 'external', use: entry.use, runtime: entry.runtime, launchesAgents: entry.launchesAgents, engine: entry.engine, credentials: entry.credentials, found: entry.found,
@@ -677,23 +674,21 @@ async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, given: 
     }
   }
 
-  // Every definition has a host command slot: its `local`, or else one here that takes no prompt step but answer steps:
-  // before the definition's first `tools`, which takes the prompt steps it does not, else last. While another runtime
-  // runs commands, it takes only the command steps of teamai's own workflows, so a team's command never runs here in
-  // place of that runtime, and nor does it on `tools`.
+  // The definition's `tools` is the slot in this process, which offers what this machine does, as `local` did: its
+  // commands run on the host runtime, and its prompt steps' tools launch on `tools`, so a run takes its steps in the
+  // order it always did. A definition with none has the host command slot last, which takes no prompt step but answer
+  // steps. While another runtime runs commands, the slot here takes only the command steps of teamai's own workflows,
+  // so a team's command never runs here in place of that runtime.
   const definedSlots = defined.runtimes.map(toSlot);
-  const listedHost = definedSlots.find((slot) => slot.kind === 'local');
+  const inProcess = definedSlots.find((slot) => slot.kind === 'tools');
 
-  const hostSlot: RuntimeSlot = listedHost ?? {
-    kind: 'local', use: 'host', runtime: local, can: { ...hostCan, prompt: false, tools: [], confined: [] }, launchesAgents: false, engine: { logins: [] }, credentials: {}, found: [],
+  const hostSlot: RuntimeSlot = inProcess ?? {
+    kind: 'host', use: 'host', runtime: hostRuntime, can: { ...hostCan, prompt: false, tools: [], confined: [] }, launchesAgents: false, engine: { logins: [] }, credentials: {}, found: [],
   };
 
   const runsCommands = definedSlots.some((slot) => slot.kind === 'external' && slot.can.exec !== false);
-  const pinned = (slot: RuntimeSlot): RuntimeSlot => (runsCommands ? { ...slot, can: { ...slot.can, commands: 'pinned' } } : slot);
-  const host = pinned(hostSlot);
-  const definedOrder = definedSlots.map((slot) => (slot === listedHost ? host : slot.kind === 'tools' ? pinned(slot) : slot));
-  const toolsAt = definedOrder.findIndex((slot) => slot.kind === 'tools');
-  const ordered = listedHost ? definedOrder : toolsAt === -1 ? [...definedOrder, host] : [...definedOrder.slice(0, toolsAt), host, ...definedOrder.slice(toolsAt)];
+  const host = runsCommands ? { ...hostSlot, can: { ...hostSlot.can, commands: 'pinned' as const } } : hostSlot;
+  const ordered = inProcess ? definedSlots.map((slot) => (slot === inProcess ? host : slot)) : [...definedSlots, host];
   const [firstSlot = host, ...otherSlots] = ordered;
   const slots: [RuntimeSlot, ...RuntimeSlot[]] = [firstSlot, ...otherSlots];
   const offerOf = (slot: RuntimeSlot): RuntimeOffer => ({ runtime: slot.use, can: slot.can, ...(slot.unavailable && { unavailable: slot.unavailable }) });
@@ -814,7 +809,7 @@ async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, given: 
 
       const slot = (record && slots.find((candidate) => candidate.kind === 'external' && candidate.use === record.runtime))
         ?? (record ? slots.find((candidate) => candidate.kind === 'external') : undefined)
-        ?? slots.find((candidate) => candidate.kind === 'local') ?? slots[0];
+        ?? slots.find((candidate) => candidate.kind === 'host') ?? slots[0];
 
       reconnecting.push({ attempt: step.lease.attempt, slot });
     }

@@ -16,7 +16,7 @@ import { cancelRun, respondProvenance, respondToHitl, retryStep } from '../workf
 import { type StepLauncher, type StepRunResult, type StepRun } from '@teamai/runtime-tools';
 import { hostLauncher } from './helpers/host-launcher.js';
 import { _setDriverPollMs, runLocalDriver } from '../workflow/drivers/local/local-driver.js';
-import { localStepRuntime } from '../workflow/runtimes/local.js';
+import { hostStepRuntime } from '../workflow/runtimes/host.js';
 import type { ExecEnd, StepRuntime } from '@teamai/runtime-protocol/step-runtime';
 import type { DriverCan } from '../workflow/requirements.js';
 import { driverIdentity } from '../driver-identity.js';
@@ -1572,7 +1572,7 @@ steps:
           workspace: continue
           command: echo reviewed
 `);
-    const local = localStepRuntime();
+    const local = hostStepRuntime();
     let stopWhole: (() => void) | undefined;
     // The whole workflow runs until the run stops it, then answers what its steps spent, as a fleet member's does.
     const runtime: StepRuntime<DriverCan> = {

@@ -31,7 +31,7 @@ import { readRegularFile } from '@teamai/shared/regular-file';
 
 // ─── Where a step runtime comes from ─────────────────────
 //
-//  `local` and `tools` are built in: `tools` launches the member's tools in teamai's own process. Any other runtime is an external program, found first in the member's own
+//  `tools` is built in: it launches the member's tools in teamai's own process, and `local` names it too. Any other runtime is an external program, found first in the member's own
 //  ~/.teamai/runtimes/<name>/, then in the team repo's runtimes/<name>/ (and runtimes/<namespace>/<name>/ for each
 //  active namespace), then among the runtimes teamai ships (the `teamai-runtime-<name>` entries of its package's
 //  `bin`, found in its own package directory), then as `teamai-runtime-<name>` on PATH. A runtime directory holds an executable named `runtime`.
@@ -62,7 +62,7 @@ export function toolsLaunchDeps(): StepLaunchDeps {
 export const RUNTIME_ENTRY = 'runtime';
 
 export type RuntimeSource =
-  | { kind: 'builtin'; name: 'local' | 'tools' }
+  | { kind: 'builtin'; name: 'tools' }
   | { kind: 'personal' | 'path'; name: string; executable: string }
   /** A runtime teamai ships, as a built file of its package that the Node running teamai runs. */
   | { kind: 'shipped'; name: string; file: string }
@@ -74,9 +74,8 @@ async function isFile(at: string): Promise<boolean> {
 
 /** The runtime `use` names for `driver`, or why there is none. */
 export async function locateRuntime(driver: ResolvedDriver, use: string): Promise<{ ok: true; source: RuntimeSource } | { ok: false; failure: WorkflowFailure }> {
-  if (use === 'local') return { ok: true, source: { kind: 'builtin', name: 'local' } };
-
-  if (use === 'tools') return { ok: true, source: { kind: 'builtin', name: 'tools' } };
+  // `local` is the name `tools` had while it ran on the host beside the commands.
+  if (use === 'tools' || use === 'local') return { ok: true, source: { kind: 'builtin', name: 'tools' } };
 
   if (use === 'skill') {
     return { ok: false, failure: { code: 'runtime_not_found', message: `Driver "${driver.name}" uses runtime "${use}", which this version of teamai does not run from a definition. Use local, or a runtime of your own or of the team.` } };
@@ -335,11 +334,11 @@ function signInsFound(env: NodeJS.ProcessEnv): Record<string, string> {
 }
 
 /**
- * One runtime of an opened definition: `kind: 'local'`, one in teamai's process, `local` or `tools`, which the loop
- * builds itself with the tools it found for the run; or an external one that took its options.
+ * One runtime of an opened definition: `kind: 'local'`, `tools` in teamai's process, which the loop builds itself with
+ * the tools it found for the run; or an external one that took its options.
  */
 export type OpenedRuntime =
-  | { kind: 'local'; use: 'local' | 'tools'; engine: EngineOptions }
+  | { kind: 'local'; use: 'tools'; engine: EngineOptions }
   /**
    * `launchesAgents`: prompt steps reach it as `prompt`, and it gives each tool its own home. `credentials`: the values
    * of the credentials it declares from the member's environment, by name, in memory only. `masks`: the values its
@@ -456,11 +455,11 @@ async function openRuntime(driver: ResolvedDriver, use: string, options: Runtime
   if (source.kind === 'builtin') {
     const [key] = Object.keys(split.runtime);
 
-    if (key !== undefined) return { ok: false, failure: badOption(driver, use, key, `The ${source.name} runtime takes no options, and was given "${key}".`) };
+    if (key !== undefined) return { ok: false, failure: badOption(driver, use, key, `The ${use} runtime takes no options, and was given "${key}".`) };
 
-    if (split.engine.logins.length > 0) return { ok: false, failure: badOption(driver, use, 'credentials', `${source.name} runs each tool in the member's own home, so it brings no login`) };
+    if (split.engine.logins.length > 0) return { ok: false, failure: badOption(driver, use, 'credentials', `${use} runs each tool in the member's own home, so it brings no login`) };
 
-    if (split.credentials.length > 0) return { ok: false, failure: badOption(driver, use, 'credentials', `${source.name} runs each step in the member's own environment, so it brings no credential`) };
+    if (split.credentials.length > 0) return { ok: false, failure: badOption(driver, use, 'credentials', `${use} runs each step in the member's own environment, so it brings no credential`) };
 
     return { ok: true, opened: { kind: 'local', use: source.name, engine: split.engine } };
   }
@@ -583,7 +582,7 @@ async function openComposed(driver: ResolvedDriver, names: { inner: string; oute
   if (outer.opened.kind !== 'external' || inner.opened.kind !== 'external') {
     await Promise.all([outer.opened, inner.opened].map((part) => (part.kind === 'external' ? part.runtime.dispose() : undefined)));
 
-    const builtin = [outer.opened, inner.opened].find((part) => part.kind !== 'external')?.use ?? 'local';
+    const builtin = outer.opened.kind === 'external' ? names.inner : names.outer;
 
     return { ok: false, failure: { code: 'driver_invalid', message: `Driver definition ${driver.file} runs ${names.inner} through ${names.outer}, and ${builtin} runs in teamai's own process: it runs neither through another runtime nor another through it. Fix the file and start again.` } };
   }

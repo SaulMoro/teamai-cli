@@ -248,8 +248,8 @@ export type PromptRuntime = {
 
 /**
  * Runs prompt step `lease`, staged in its place, and answers the report a driver sends the engine for it: the tool it
- * picks here (`staged`, else the step's own, `tools`, then the member's), on this machine through `adapter` or on the
- * step runtime `onRuntime`. A failure before the launch gives the place up and reports the step failed. `secrets` are
+ * picks here (`staged`, else the step's own, `tools`, then the member's), on this machine through `adapter`, the
+ * `tools` runtime's launcher, or on the step runtime `onRuntime`. A failure before the launch gives the place up and reports the step failed. `secrets` are
  * the values its output is masked of; `askPerson` asks the person at the terminal, when one answers.
  */
 export async function runPromptStep({ config, lock, driver, lease, adapter = stepLauncher(toolsLaunchDeps()), tools = {}, toolPaths, archive, signal, mode, staged, secrets, askPerson, onRuntime }: {

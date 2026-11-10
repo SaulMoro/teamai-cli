@@ -28,7 +28,7 @@ import type { TokenUsage } from '../../tool-launch/stdout.js';
 import { isJsonObject } from '../../types.js';
 import { copyGit, placeEditsOf } from '../place/place.js';
 import { git } from '../worktree.js';
-import { localStepRuntime } from '../runtimes/local.js';
+import { hostStepRuntime } from '../runtimes/host.js';
 import { newOpId, type ExecAnswer, type ExecEnd, type ExecEvents, type ExecQuestion, type PromptEnd, type StepRuntime, type WakeEnd } from '@teamai/runtime-protocol/step-runtime';
 import type { DriverCan } from '../requirements.js';
 import { LAUNCH_TOOLS } from '../../tool-launch/tools.js';
@@ -247,7 +247,7 @@ function promptEnded(result: FleetResult, attempt: AttemptId): Extract<PromptEnd
  * the runtime an entry's `options.wake` names: without it, an entry that sets one fails `init`.
  */
 export function fleetStepRuntime({ config, masks, openWake }: { config: LocalConfig; masks: Record<string, string>; openWake?: OpenWake }): StepRuntime<DriverCan> {
-  const local = localStepRuntime();
+  const local = hostStepRuntime();
   const disposing = new AbortController();
   // The wait of each exec this teamai sent, by its id, so a repeated id reconnects to it and a cancel reaches it.
   const waits = new Map<OpId, { place: FleetPlace; cancel: AbortController; end: Promise<Waited>; isWhole: boolean }>();

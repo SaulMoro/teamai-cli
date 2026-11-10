@@ -25,11 +25,11 @@ function endedState(op: OpId, end: LocalEnd): OpState {
 }
 
 /**
- * The `local` step runtime, in teamai's process: the place is the worktree as it is on the host, and each `exec` runs
+ * The `host` step runtime, in teamai's process: the place is the worktree as it is on the host, and each `exec` runs
  * there in a process group of its own. It retains outcomes for as long as this process lives, so a teamai started
  * again finds every handle `gone`. It takes no options; `can` is what the caller decided this machine offers.
  */
-export function localStepRuntime(can: DriverCan = {}): StepRuntime<DriverCan> {
+export function hostStepRuntime(can: DriverCan = {}): StepRuntime<DriverCan> {
   const handles = new Map<string, string>();
   const ended = new Map<OpId, { handle: string; end: LocalEnd }>();
   const running = new Map<OpId, { handle: string; end: Promise<ExecEnd>; stop: () => Promise<void>; cancelled: boolean }>();
@@ -99,17 +99,17 @@ export function localStepRuntime(can: DriverCan = {}): StepRuntime<DriverCan> {
   ];
 
   return {
-    name: 'local',
+    name: 'host',
 
     async init({ options }) {
       const [key] = Object.keys(options);
 
-      return key === undefined ? { ok: true, can, launchesAgents: false } : { ok: false, failure: { code: 'bad_option', key, message: `The local runtime takes no options, and was given "${key}".` } };
+      return key === undefined ? { ok: true, can, launchesAgents: false } : { ok: false, failure: { code: 'bad_option', key, message: `The host runtime takes no options, and was given "${key}".` } };
     },
 
     async open(request, onAccepted) {
       const key = `${request.run}/${request.attempt}`;
-      const handle = handles.get(key) ?? `local-${request.run}-${request.attempt}`;
+      const handle = handles.get(key) ?? `host-${request.run}-${request.attempt}`;
       handles.set(key, handle);
       await onAccepted(handle);
 
@@ -119,7 +119,7 @@ export function localStepRuntime(can: DriverCan = {}): StepRuntime<DriverCan> {
     exec,
 
     async prompt() {
-      return { kind: 'failed', failure: { code: 'runtime_protocol', message: 'The local runtime launches a prompt\'s tool as an exec of its argv, never through prompt.' } };
+      return { kind: 'failed', failure: { code: 'runtime_protocol', message: 'The host runtime runs commands, and launches no prompt\'s tool: the tools runtime does.' } };
     },
 
     async cancel(op) {

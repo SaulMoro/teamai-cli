@@ -225,7 +225,7 @@ export async function attemptHoldingSession(config: LocalConfig, run: string, se
  * nothing to continue, so none of its places is held. A place through another runtime is never held, as it would keep
  * the step's credentials past the step.
  */
-function holdsOn(slot: { kind: 'local' | 'tools' | 'external'; launchesAgents: boolean; keepsConversations?: true; isThrough?: true } | undefined): boolean {
+function holdsOn(slot: { kind: 'host' | 'tools' | 'external'; launchesAgents: boolean; keepsConversations?: true; isThrough?: true } | undefined): boolean {
   return slot?.kind === 'external' && slot.launchesAgents && slot.keepsConversations === true && slot.isThrough !== true;
 }
 

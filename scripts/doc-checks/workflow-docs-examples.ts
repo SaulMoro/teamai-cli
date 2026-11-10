@@ -24,7 +24,7 @@ import { parseDriverDefinition } from '../../src/workflow/runtimes/definitions.j
 import { engineOptions } from '../../src/workflow/runtimes/sources.js';
 import { parseFleetOptions, shadowedFleetEntries } from '../../src/workflow/fleet/owner.js';
 import { nestedOptions } from '../../src/workflow/runtimes/composed.js';
-import { localStepRuntime } from '../../src/workflow/runtimes/local.js';
+import { hostStepRuntime } from '../../src/workflow/runtimes/host.js';
 import { parseOptions as parsePaseoOptions } from '../../packages/runtime-paseo/src/options.js';
 import { parseOptions as parseSandboxOptions } from '../../packages/runtime-sandbox/src/options.js';
 import { parseOptions as parseT3Options } from '../../packages/runtime-t3/src/options.js';
@@ -690,7 +690,7 @@ type OptionsCheck = (options: RuntimeOptions) => Promise<{ ok: true } | { ok: fa
 
 /** Each runtime teamai ships or builds in, checking a definition's options the way that runtime does at `init`. */
 const RUNTIME_OPTIONS = new Map<string, OptionsCheck>([
-  ['local', (options) => localStepRuntime().init({ options, mode: 'attended' })],
+  ['local', (options) => hostStepRuntime().init({ options, mode: 'attended' })],
   ['fleet', async (options) => parseFleetOptions(options)],
   ['sandbox', async (options) => parseSandboxOptions(options)],
   ['t3', async (options) => parseT3Options(options)],

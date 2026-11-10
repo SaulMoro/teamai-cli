@@ -8,7 +8,7 @@ import { buildSync } from 'esbuild';
 import { z } from 'zod';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { log } from '../utils/logger.js';
-import { localStepRuntime } from '../workflow/runtimes/local.js';
+import { hostStepRuntime } from '../workflow/runtimes/host.js';
 import { toolsLaunchDeps } from '../workflow/runtimes/sources.js';
 import { stepLauncher, toolsStepRuntime } from '@teamai/runtime-tools';
 import { stdioStepRuntime } from '../workflow/runtimes/stdio.js';
@@ -79,7 +79,7 @@ const SUBJECTS: Subject[] = [
     retains: true,
     journal: (state) => [path.join(state, 'outer', 'ops'), path.join(state, 'inner', 'ops')],
   },
-  { name: 'local', start: () => localStepRuntime(), options: () => ({}), retains: false },
+  { name: 'host', start: () => hostStepRuntime(), options: () => ({}), retains: false },
   {
     name: 'sandbox on a fake docker',
     start: (state) => stdioStepRuntime({ name: 'sandbox', command: docker.command, args: docker.args(state) }),

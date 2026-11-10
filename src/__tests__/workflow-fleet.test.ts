@@ -11,7 +11,7 @@ import { memberPlace, takeFleetAttempt, type MemberPlace } from '../workflow/fle
 import type { OpenedDriver, OpenedRuntime } from '../workflow/runtimes/sources.js';
 import { fleetStepRuntime, shadowedFleetEntries } from '../workflow/fleet/owner.js';
 import { RuntimeOptionsSchema, WAKE_COMMAND } from '@teamai/runtime-protocol';
-import { localStepRuntime } from '../workflow/runtimes/local.js';
+import { hostStepRuntime } from '../workflow/runtimes/host.js';
 import { newOpId, type StepRuntime } from '@teamai/runtime-protocol/step-runtime';
 import type { DriverCan } from '../workflow/requirements.js';
 import { stdioStepRuntime } from '../workflow/runtimes/stdio.js';
@@ -516,7 +516,7 @@ describe('a member taking an attempt', () => {
   });
 
   it('runs the step on the step runtime of the member\'s own driver, with the step\'s env alone, and pushes what it wrote there', async () => {
-    const local = localStepRuntime();
+    const local = hostStepRuntime();
     const execs: Array<{ argv: string[]; env: Record<string, string>; cwd: string }> = [];
     const runtime: StepRuntime<DriverCan> = { ...local, exec: (request, events, kind) => {
       execs.push({ argv: request.argv, env: request.env, cwd: request.cwd });
@@ -729,7 +729,7 @@ describe('cancelling an attempt through its record', () => {
     let execs = 0;
     let open = (): void => {};
     const opening = new Promise<void>((resolve) => { open = resolve; });
-    const local = localStepRuntime();
+    const local = hostStepRuntime();
     const runtime: StepRuntime<DriverCan> = {
       ...local,
       open: async (request, onAccepted) => {
@@ -879,7 +879,7 @@ describe('a restarted member', () => {
     // What the killed run left on the runtime, once stopped: a closed place, and the exec it had sent there, whose id the
     // runtime answers with how that exec ended, as an id sent again reconnects to its exec.
     const stoppedExec = newOpId();
-    const local = localStepRuntime();
+    const local = hostStepRuntime();
     const runtime: StepRuntime<DriverCan> = { ...local, exec: async (request, events, kind) => (request.op === stoppedExec ? { kind: 'cancelled' } : local.exec(request, events, kind)) };
     fs.mkdirSync(attemptDir(bob.config, run, ATTEMPT), { recursive: true });
     fs.writeFileSync(attemptRuntimePath(bob.config, run, ATTEMPT), JSON.stringify({ runtime: runtime.name, driver: 'bobs', phase: 'closed', open: { op: newOpId(), handle: 'h-left' }, exec: { op: stoppedExec } }));
@@ -1128,9 +1128,9 @@ describe('where a member runs an attempt', () => {
   async function driverOf(cans: Array<'local' | { use: string; can: Record<string, boolean> }>): Promise<OpenedDriver> {
     const acme = team();
     const { config } = await acme.member('bob');
-    const runtime = localStepRuntime();
+    const runtime = hostStepRuntime();
     const runtimes = cans.map((entry): OpenedRuntime => (entry === 'local'
-      ? { kind: 'local', use: 'local', engine: { logins: [] } }
+      ? { kind: 'local', use: 'tools', engine: { logins: [] } }
       : { kind: 'external', use: entry.use, runtime, can: entry.can, launchesAgents: false, engine: { logins: [] }, credentials: {}, found: [], masks: {}, optionsFrom: 'test' }));
     const [first, ...rest] = runtimes;
     if (!first) throw new Error('no runtime');
@@ -1357,7 +1357,7 @@ describe('waking a fleet member for an offer no member claimed', () => {
 
   it('warns once with the runtime\'s message when it has no machine to wake on, and the offer still waits for a member', async () => {
     const warned = vi.spyOn(log, 'warn');
-    const local = localStepRuntime();
+    const local = hostStepRuntime();
     const unavailable: StepRuntime<DriverCan> = { ...local, name: 'nowhere', wake: async () => ({ kind: 'failed', failure: { code: 'wake_unavailable', message: 'Link a machine in T3 Code, and add the repository there as a project.' } }) };
     const { alice, bob, run, attempt, open } = await owner(async () => ({ runtime: unavailable, wakes: true }));
     const { runtime, exec } = await open();
@@ -1378,7 +1378,7 @@ describe('waking a fleet member for an offer no member claimed', () => {
 
   it('says nothing of a wake it stopped waiting for when the runtime never confirms the cancel', async () => {
     const warned = vi.spyOn(log, 'warn');
-    const local = localStepRuntime();
+    const local = hostStepRuntime();
     let unconfirmed: (() => void) | undefined;
     const silent: StepRuntime<DriverCan> = {
       ...local,
@@ -1400,7 +1400,7 @@ describe('waking a fleet member for an offer no member claimed', () => {
   });
 
   it('keeps what the runtime shows of the member it woke, for the attempt listing', async () => {
-    const local = localStepRuntime();
+    const local = hostStepRuntime();
     const display = { label: 'T3 thread on studio-mac', url: 't3code://thread/abc' };
     const showing: StepRuntime<DriverCan> = { ...local, name: 'shows', wake: async (_request, events) => { events.onDisplay?.(display); return { kind: 'woken', where: 'studio-mac', display }; } };
     const { alice, run, attempt, open } = await owner(async () => ({ runtime: showing, wakes: true }));
