@@ -12,7 +12,7 @@ import { ArchivedPassSchema, FailureSchema, ReleasedTokensSchema, SessionContinu
 import type { HandoffOwner } from './snapshot.js';
 import { uniqueOutcomes, WorkOutcomeSchema, type WorkOutcome } from '../outcomes.js';
 import type { DriveOptions, RunState } from './types.js';
-import { readRegularFile } from '@teamai/shared/regular-file';
+import { appendRegularFile, readRegularFile } from '@teamai/shared/regular-file';
 
 /**
  * Run ids: `r` + 16 hex digits. Records are a team-wide key on the reports
@@ -152,7 +152,7 @@ export async function appendAttemptOutcome(config: LocalConfig, marker: string, 
   if (await readRegularFile(runFilePath(config, run.data), 'utf8').catch(() => null) === null) return 'unknown_run';
   const file = attemptOutcomesPath(config, run.data, attempt.data);
   await fs.mkdir(path.dirname(file), { recursive: true });
-  await fs.appendFile(file, `${JSON.stringify(outcome)}\n`, 'utf8');
+  await appendRegularFile(file, `${JSON.stringify(outcome)}\n`);
 
   return 'appended';
 }

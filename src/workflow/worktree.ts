@@ -13,7 +13,7 @@ import { stopProcess } from '@teamai/shared/process-group';
 import { TeamaiConfigBaseSchema } from '../types.js';
 import { pathExists, writeJsonAtomic } from '../utils/fs.js';
 import { MAX_TIMER_MS } from '../utils/timer.js';
-import { readRegularFile } from '@teamai/shared/regular-file';
+import { appendRegularFile, readRegularFile } from '@teamai/shared/regular-file';
 
 /** Agent configuration a workspace step reads from the run's base rather than from its branch. */
 export const AGENT_PATHS: readonly string[] = agentConfigPaths();
@@ -532,7 +532,7 @@ async function hideTeamaiWorktrees(main: string): Promise<void> {
 
   if (current.includes(marker)) return;
   await fs.mkdir(path.dirname(exclude), { recursive: true });
-  await fs.appendFile(exclude, `${current.endsWith('\n') || current === '' ? '' : '\n'}${marker}\n.teamai/workflow-worktrees/\n.teamai/workflow-hooks/\n`);
+  await appendRegularFile(exclude, `${current.endsWith('\n') || current === '' ? '' : '\n'}${marker}\n.teamai/workflow-worktrees/\n.teamai/workflow-hooks/\n`);
 }
 
 export function hooksPath(main: string): string {
