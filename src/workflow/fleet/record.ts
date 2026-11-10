@@ -8,6 +8,7 @@
 import { randomUUID } from 'node:crypto';
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import { setTimeout as sleep } from 'node:timers/promises';
 import { z } from 'zod';
 import { OpIdSchema, RuntimeDisplaySchema, type OpId, type RuntimeDisplay } from '@teamai/runtime-protocol';
 import { sanitizeGitUrl } from '@teamai/shared/redact';
@@ -551,12 +552,14 @@ export async function expireClaim(config: LocalConfig, claimed: HeldAttempt | Ca
 
 /**
  * Cancels attempt `record` through its record: an offer no member claimed is withdrawn, and a claim becomes `cancelling`,
- * which its member answers once it stopped the step. Another write first answers `state_moved`.
+ * which its member answers once it stopped the step. Another write first answers `state_moved`. While another write on
+ * this install holds teamai-reports, such as `workflow cancel` publishing the run, the cancel waits for it until
+ * `wait.until` (epoch ms), or `wait.signal` aborts.
  */
-export async function cancelAttempt(config: LocalConfig, record: Offered | HeldAttempt): Promise<Written<Extract<FleetRecord, { state: 'withdrawn' | 'cancelling' }>>> {
+export async function cancelAttempt(config: LocalConfig, record: Offered | HeldAttempt, wait?: LockWait): Promise<Written<Extract<FleetRecord, { state: 'withdrawn' | 'cancelling' }>>> {
   const now = new Date().toISOString();
   const cancel: Extract<FleetRecord, { state: 'withdrawn' | 'cancelling' }> = record.state === 'offered' ? { ...record, write: randomUUID(), state: 'withdrawn', withdrawnAt: now } : { ...claimOf(record), write: randomUUID(), state: 'cancelling', cancelAt: now };
-  const written = await writeRecord(config, cancel, { replaces: record.write, message: `[teamai] Cancel attempt ${record.attempt} of run ${record.run}` });
+  const written = await writeRecord(config, cancel, { replaces: record.write, message: `[teamai] Cancel attempt ${record.attempt} of run ${record.run}`, ...(wait && { wait }) });
 
   return written.ok ? { ok: true, value: cancel } : written;
 }
@@ -762,16 +765,25 @@ export async function listMemberRecords(config: LocalConfig, { member, repositor
   return named.sort((left, right) => left.claimedAt.localeCompare(right.claimedAt));
 }
 
+/** How long a write that waits for this install's teamai-reports lock may wait: until `until` (epoch ms), or `signal`. */
+export type LockWait = { until: number; signal?: AbortSignal };
+
+/** How often a write that waits for this install's teamai-reports lock tries to take it. */
+const LOCK_RETRY_MS = 250;
+
+const isAborted = (signal: AbortSignal | undefined): boolean => signal?.aborted === true;
+
 /**
  * Writes `record` while origin still holds the write `replaces`, or no record when `replaces` is undefined. A write in
- * between answers `state_moved`, as does one that landed while this write could not tell.
+ * between answers `state_moved`, as does one that landed while this write could not tell. With `wait`, a write that
+ * finds another write of this install holding teamai-reports tries again until `wait` ends, instead of at once failing.
  */
-async function writeRecord(config: LocalConfig, record: FleetRecord, { replaces, message }: { replaces: string | undefined; message: string }): Promise<Written<void>> {
+async function writeRecord(config: LocalConfig, record: FleetRecord, { replaces, message, wait }: { replaces: string | undefined; message: string; wait?: LockWait }): Promise<Written<void>> {
   const rel = recordPath(record.run, record.attempt);
   const moved: FleetError = { code: 'state_moved', message: `Attempt ${record.attempt} of run ${record.run} changed on teamai-reports meanwhile, so this write did not land.` };
 
-  const result = await updateReports(config, async (worktree, update): Promise<ReportsChange<Written<void>>> => {
-    const read = await fetchReportsOriginFile(worktree, rel, update);
+  const update = () => updateReports(config, async (worktree, context): Promise<ReportsChange<Written<void>>> => {
+    const read = await fetchReportsOriginFile(worktree, rel, context);
 
     if (read.status === 'unreachable') return { value: { ok: false, error: { code: 'reports_unreachable', message: `teamai-reports could not be read (${sanitizeGitUrl(read.reason)}).` } }, write: null };
     const held = read.status === 'found' ? parseRecord(read.text, record.run, record.attempt) : undefined;
@@ -784,6 +796,16 @@ async function writeRecord(config: LocalConfig, record: FleetRecord, { replaces,
 
     return { value: { ok: true, value: undefined }, write: { files: [rel], message } };
   });
+
+  let result = await update();
+
+  // Busy: the write did not run, so it is tried again as it was.
+  while (result.status === 'busy' && wait !== undefined && Date.now() < wait.until && !isAborted(wait.signal)) {
+    await sleep(Math.min(LOCK_RETRY_MS, wait.until - Date.now()), undefined, wait.signal && { signal: wait.signal }).catch(() => undefined);
+
+    if (isAborted(wait.signal)) break;
+    result = await update();
+  }
 
   if (result.value && !result.value.ok) return result.value;
 

@@ -10,7 +10,7 @@
 import { isDeepStrictEqual } from 'node:util';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { z } from 'zod';
-import { CanSchema, ISOLATION_LEVELS, RuntimeOptionsSchema, WAKE_COMMAND, WORKSPACE_MODES, type OpId, type OpState, type RuntimeOptions } from '@teamai/runtime-protocol';
+import { CANCEL_FAILED, CanSchema, ISOLATION_LEVELS, RuntimeOptionsSchema, WAKE_COMMAND, WORKSPACE_MODES, type OpId, type OpState, type RuntimeOptions } from '@teamai/runtime-protocol';
 import { sanitizeGitUrl } from '@teamai/shared/redact';
 import { safeText } from '../../session-flow/session-cmd-shared.js';
 import { getRepoIdentity } from '../../session-flow/sync.js';
@@ -19,7 +19,7 @@ import type { LocalConfig } from '../../types.js';
 import { log } from '../../utils/logger.js';
 import { durationMs } from '../parse.js';
 import { budgetLeft, leaseContext } from '../engine.js';
-import { answerQuestion, attemptRef, cancelAttempt, expireClaim, isHeld, fleetFailure, lastGoneWork, leaseEnv, leaseInputs, leasePrompt, leaseValues, markOffered, noteWake, offerAttempt, readAttemptRecord, readOfferedMarker, DEFAULT_FLEET_POOL, type Claimed, type FleetLease, type FleetRecord, type FleetResult, type WakeNote } from './record.js';
+import { answerQuestion, attemptRef, cancelAttempt, expireClaim, isHeld, fleetFailure, lastGoneWork, leaseEnv, leaseInputs, leasePrompt, leaseValues, markOffered, noteWake, offerAttempt, readAttemptRecord, readOfferedMarker, DEFAULT_FLEET_POOL, type Claimed, type FleetError, type FleetLease, type FleetRecord, type FleetResult, type WakeNote } from './record.js';
 import { runDefinition } from '../snapshot.js';
 import { AttemptIdSchema, installOwner, readRun, RunIdSchema, type AttemptId, type RunId } from '../store.js';
 import { workflowRunBy, type WorkflowFailure } from '../types.js';
@@ -39,6 +39,12 @@ const RECORD_POLL_MS = 1_000;
 
 /** The longest an owner waits between two reads of a record that did not change: each such read doubles the wait. */
 const RECORD_POLL_MAX_MS = 30_000;
+
+/**
+ * How long a cancel keeps trying to reach the attempt's record, from its first write that did not land: longer than
+ * `workflow cancel` holds teamai-reports while it publishes the run. Past it, the cancel ends `cancel_failed`.
+ */
+export const CANCEL_WRITE_MS = 60_000;
 
 const FleetOptionsSchema = z.object({
   pool: z.string().min(1).default(DEFAULT_FLEET_POOL),
@@ -574,6 +580,8 @@ async function waitOnOffer(input: WaitInput, { cancel, leave }: { cancel: AbortS
   let isCancelWritten = false;
   // When this wait first saw the cancel, on this machine's clock.
   let cancelledAt: number | undefined;
+  // When the first cancel write began: until CANCEL_WRITE_MS after it, a cancel that did not land is written again.
+  let cancelTriedAt: number | undefined;
   // The gate the member asks, put to this driver's person once: `answer` once the person answered.
   let asked: Asked | undefined;
   // Each reason a member gave on the offer for leaving it, shown once, by member and reason.
@@ -693,7 +701,10 @@ async function waitOnOffer(input: WaitInput, { cancel, leave }: { cancel: AbortS
 
         if (Date.now() - cancelledAt > staleAfterMs) return failed({ code: 'runtime_interrupted', message: `Step "${step}" was cancelled, and the record of its attempt on fleet pool ${pool} could not be read for ${staleAfterMs / 1_000} s, so no member was asked to stop it, and a member may still take its offer. ${read.error.message}` });
       } else if (record.state === 'offered' || isHeld(record)) {
-        const written = await cancelAttempt(config, record);
+        cancelTriedAt ??= Date.now();
+        const until = cancelTriedAt + CANCEL_WRITE_MS;
+        // A publish of this install holding teamai-reports, as `workflow cancel` does, is waited for.
+        const written = await cancelAttempt(config, record, { until, signal: leave });
 
         if (written.ok) {
           isCancelWritten = true;
@@ -703,12 +714,16 @@ async function waitOnOffer(input: WaitInput, { cancel, leave }: { cancel: AbortS
         const { error } = written;
 
         switch (error.code) {
-          // Another write landed first, such as the member's progress: the cancel is written over what is read next.
-          case 'state_moved': continue;
-          // teamai-reports is busy, as with this install's own publish, or out of reach: the cancel is written at the
-          // next poll, so the offer does not stay out for a member to take.
+          // Another write landed first, such as the member's progress, or teamai-reports was held or out of reach: the
+          // cancel is written over what is read next, or at the next poll, so the offer does not stay out for a member
+          // to take, until the deadline. Past it, the member is not known to have been asked to stop.
+          case 'state_moved':
           case 'reports_failed':
-          case 'reports_unreachable': break;
+          case 'reports_unreachable':
+            if (Date.now() >= until && !leave.aborted) return failed(cancelNotWritten({ step, run, attempt, pool }, error));
+
+            if (error.code === 'state_moved') continue;
+            break;
           case 'fleet_unpublishable':
           case 'fleet_record_unreadable':
           case 'fleet_record_newer': return failed(fleetFailure(error));
@@ -723,9 +738,24 @@ async function waitOnOffer(input: WaitInput, { cancel, leave }: { cancel: AbortS
 
     // An answer kept from a failed write waits for the next poll, not for the person.
     const woken = AbortSignal.any([cancel, leave, ...(asked !== undefined && asked.answer === undefined ? [asked.answered.signal] : [])]);
+    // A cancel not yet written is tried again at the shortest poll, so its deadline is kept.
+    if (cancel.aborted && !isCancelWritten) pollMs = RECORD_POLL_MS;
     await sleep(pollMs, undefined, cancel.aborted ? { signal: leave } : { signal: woken }).catch(() => undefined);
     pollMs = Math.min(pollMs * 2, slowestPollMs);
   }
+}
+
+/** The failure a cancel ends with when it could not be written into the attempt's record by the deadline, for `error`. */
+function cancelNotWritten({ step, run, attempt, pool }: { step: string; run: RunId; attempt: AttemptId; pool: string }, error: FleetError): WorkflowFailure {
+  return {
+    code: CANCEL_FAILED,
+    message: `Step "${step}" was cancelled, and its cancel could not be written to the record of attempt ${attempt} on teamai-reports for ${CANCEL_WRITE_MS / 1_000} s, so a member of fleet pool ${pool} may still take or run it. ${cancelWriteCause(error)} The attempt's place and records are kept. Run teamai workflow cancel ${run} again.`,
+  };
+}
+
+/** Why the last write of a cancel did not land, for the person. */
+function cancelWriteCause(error: FleetError): string {
+  return error.code === 'state_moved' ? 'Another write, such as the member\'s progress, landed on the record before each one.' : error.message;
 }
 
 /**
@@ -992,9 +1022,12 @@ async function takeWork({ config, run, root, dir, ref, to, step }: PlaceOf & { t
 /**
  * Cancels attempt `attempt` of run `run` through its record, for `teamai workflow cancel` with no live driver of the run:
  * an offer is withdrawn, and a claim's member is asked to stop, which it answers at its next read of the record. Answers
- * what it did, for the person.
+ * what it did, for the person. The cancel waits for another write of this install that holds teamai-reports, and is
+ * written again over another write that lands first, until CANCEL_WRITE_MS after it began.
  */
 export async function cancelFleetAttempt(config: LocalConfig, run: RunId, attempt: AttemptId): Promise<{ ok: boolean; message: string }> {
+  const until = Date.now() + CANCEL_WRITE_MS;
+
   for (;;) {
     const read = await readAttemptRecord(config, run, attempt);
 
@@ -1002,7 +1035,7 @@ export async function cancelFleetAttempt(config: LocalConfig, run: RunId, attemp
     const record = read.value;
 
     if (record === 'absent' || (record.state !== 'offered' && !isHeld(record))) return { ok: true, message: `Attempt ${attempt} of run ${run} was out on the fleet, and its record already says it is ${record === 'absent' ? 'not offered' : record.state}.` };
-    const cancel = await cancelAttempt(config, record);
+    const cancel = await cancelAttempt(config, record, { until });
 
     if (cancel.ok) {
       return { ok: true, message: record.state === 'offered'
@@ -1010,6 +1043,10 @@ export async function cancelFleetAttempt(config: LocalConfig, run: RunId, attemp
         : `Asked the fleet member ${record.member.user} that runs attempt ${attempt} of run ${run} to stop it: it stops the step at its next read of the attempt's record and pushes its work, which a retry goes on from.` };
     }
 
-    if (cancel.error.code !== 'state_moved') return { ok: false, message: `Attempt ${attempt} of run ${run} is out on the fleet, and its cancel could not be written: ${cancel.error.message} Run teamai workflow cancel ${run} again.` };
+    const { error } = cancel;
+
+    if (error.code === 'state_moved' && Date.now() < until) continue;
+
+    return { ok: false, message: `Attempt ${attempt} of run ${run} is out on the fleet, and its cancel could not be written: ${cancelWriteCause(error)} Run teamai workflow cancel ${run} again.` };
   }
 }
