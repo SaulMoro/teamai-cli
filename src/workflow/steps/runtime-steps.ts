@@ -441,6 +441,10 @@ export function runtimePrompter(run: AttemptRun, { view, runId, step, tool, prov
 
         if (end.usage) ran.tokens = end.usage;
 
+        if (end.model) ran.model = end.model;
+
+        if (end.cost) ran.cost = end.cost;
+
         // A tool stopped silent is a failure, as teamai's own launch reports it; a budget or a timeout is a limit.
         switch (end.stopped) {
           case undefined:

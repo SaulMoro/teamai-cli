@@ -600,6 +600,10 @@ export function stdioStepRuntime({ name, command, args = [], cwd, secrets = {} }
 
               if (event.usage) end.usage = event.usage;
 
+              if (event.model) end.model = event.model;
+
+              if (event.cost) end.cost = event.cost;
+
               if (event.confined) end.confined = event.confined;
 
               if (event.resumed === true) end.resumed = true;

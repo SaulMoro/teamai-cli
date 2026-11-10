@@ -821,6 +821,10 @@ export function attemptRun({ config, run, attempt, runtime, driver, deadline }: 
 
           if (state.usage) end.usage = state.usage;
 
+          if (state.model) end.model = state.model;
+
+          if (state.cost) end.cost = state.cost;
+
           if (state.confined) end.confined = state.confined;
 
           if (state.resumed === true) end.resumed = true;

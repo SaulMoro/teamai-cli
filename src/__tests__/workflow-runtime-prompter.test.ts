@@ -122,6 +122,18 @@ describe('a prompt step on a runtime that launches agents its own way', () => {
     expect(ran).toMatchObject({ exitCode: 0, session: 's-1', stoppedBy: 'budget', tokens: { input: 900, output: 200 } });
   });
 
+  it('reports the model the tool ran on and what it said the run cost, as the runtime gives them', async () => {
+    const run: AttemptRun = {
+      ...promptOnlyRun().run,
+      prompt: async () => ({ kind: 'finished', session: { tool: 'claude', id: 's-1' }, result: { output: { ok: true } }, model: 'claude-sonnet-4-5', cost: { amount: 0.12, unit: 'USD' } }),
+    };
+
+    const ran = await runtimePrompter(run, { view, runId: RunIdSchema.parse('r0123abcd'), step: 'review', tool: 'claude', provided: [], unset: [], credentials: {}, setUp: async () => undefined })
+      .run('claude', { prompt: 'Review.', expected: undefined, cwd: dir, resultPath: path.join(dir, 'result.json'), secrets: {} }, undefined);
+
+    expect(ran).toMatchObject({ exitCode: 0, session: 's-1', model: 'claude-sonnet-4-5', cost: { amount: 0.12, unit: 'USD' } });
+  });
+
   it('says it started fresh when the runtime resumed no session, even when its place could not be collected', async () => {
     const { run } = promptOnlyRun();
     const uncollectable: AttemptRun = { ...run, collect: async () => ({ code: 'runtime_failed', message: 'The place could not be collected.' }) };

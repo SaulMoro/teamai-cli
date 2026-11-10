@@ -181,7 +181,10 @@ function outcomeOf({ tool, resume, ran, stderr, masks }: { tool: string; resume:
   // A tool that continued the session the lease names states that session again.
   const resumed = resume !== undefined && ran.session === resume && ran.startedFresh !== true;
 
-  return { state: 'finished', session: { tool, id: ran.session }, result, ...(ran.tokens && { usage: ran.tokens }), ...(resumed && { resumed }), ...(stopped && { stopped }) };
+  return {
+    state: 'finished', session: { tool, id: ran.session }, result, ...(ran.tokens && { usage: ran.tokens }), ...(ran.model && { model: ran.model }), ...(ran.cost && { cost: ran.cost }),
+    ...(resumed && { resumed }), ...(stopped && { stopped }),
+  };
 }
 
 /**

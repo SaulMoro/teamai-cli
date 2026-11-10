@@ -562,6 +562,10 @@ const finishedPrompt = {
   session: PromptSessionSchema,
   result: PromptResultSchema,
   usage: PromptUsageSchema.optional(),
+  /** The model the tool ran on, as the tool named it. */
+  model: z.string().min(1).optional(),
+  /** What the tool said the run cost, as it said it. */
+  cost: z.object({ amount: z.number().nonnegative(), unit: z.string().min(1) }).strict().optional(),
   /** A confined prompt's: the level and access the runtime kept. */
   confined: ConfinedKeptSchema.optional(),
   /**

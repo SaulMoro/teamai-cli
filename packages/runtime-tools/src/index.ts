@@ -86,6 +86,8 @@ function promptEnd(tool: string, ran: StepRunResult, aborted: boolean): ToolsEnd
     session: { tool, id: ran.session },
     result: { ...('output' in ran && { output: ran.output }), ...(ran.failure && { failure: ran.failure }) },
     ...(ran.tokens && { usage: ran.tokens }),
+    ...(ran.model && { model: ran.model }),
+    ...(ran.cost && { cost: ran.cost }),
     ...(stopped && { stopped }),
   };
 }

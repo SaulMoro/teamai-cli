@@ -60,15 +60,17 @@ export type Lost = { kind: 'lost'; failure: RuntimeFailure };
  */
 export type ExecEnd = { kind: 'exited'; code: number; stdout: string } | { kind: 'cancelled'; stdout?: string } | { kind: 'failed'; failure: RuntimeFailure; isStepOutcome?: true } | Lost;
 
+type FinishedState = Extract<OpState, { state: 'finished' }>;
+
 /** The limit of a prompt lease's `limits` at which the runtime stopped the tool. */
-export type PromptStopped = NonNullable<Extract<OpState, { state: 'finished' }>['stopped']>;
+export type PromptStopped = NonNullable<FinishedState['stopped']>;
 
 /**
  * How a prompt ended: finished with the tool's session, the result the agent wrote, its usage, whether it continued the
  * session the lease asked to resume and, for a confined prompt, what the runtime kept; cancelled; or failed.
  */
 export type PromptEnd =
-  | { kind: 'finished'; session: z.infer<typeof PromptSessionSchema>; result: PromptResult; usage?: z.infer<typeof PromptUsageSchema>; confined?: ConfinedKept; resumed?: true; stopped?: PromptStopped }
+  | { kind: 'finished'; session: z.infer<typeof PromptSessionSchema>; result: PromptResult; usage?: z.infer<typeof PromptUsageSchema>; model?: FinishedState['model']; cost?: FinishedState['cost']; confined?: ConfinedKept; resumed?: true; stopped?: PromptStopped }
   | { kind: 'cancelled' }
   | { kind: 'failed'; failure: RuntimeFailure }
   | Lost;
