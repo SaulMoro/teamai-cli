@@ -50,10 +50,11 @@ function isCalled(node) {
 }
 
 /**
- * The helper itself, which reads only the descriptor it opened without blocking and checked. Only this file reads
- * plainly by design; `scopedFiles` fails lint if it moves.
+ * The helper itself, which reads only the descriptor it opened without blocking and checked, and the hook fast path's
+ * copy of it: that path loads before the bundle and only node: modules (teamai/uncached-entry). Only these files read
+ * plainly by design; `scopedFiles` fails lint if one moves.
  */
-const HELPER = scopedFiles(['packages/shared/src/regular-file.ts'])[0];
+const HELPERS = new Set(scopedFiles(['packages/shared/src/regular-file.ts', 'src/hook-fast-path.ts']));
 
 const MESSAGE = 'Read a file with readRegularFile or openRegularFile from @teamai/shared/regular-file: a step writes the paths the engine reads, and a FIFO it leaves there blocks a plain read until a writer comes, past every deadline. The helper opens without blocking and refuses anything but a regular file.';
 
@@ -104,7 +105,7 @@ export default defineRule({
   create(context) {
     const { root, relative } = repositoryPath(context);
 
-    if (!isReadChecked(relative) || relative === HELPER) return {};
+    if (!isReadChecked(relative) || HELPERS.has(relative)) return {};
     const { sourceCode } = context;
     const [{ baseline: baselineFile }] = OptionsSchema.parse(context.options);
     const baseline = baselineAt(path.posix.join(root, baselineFile));

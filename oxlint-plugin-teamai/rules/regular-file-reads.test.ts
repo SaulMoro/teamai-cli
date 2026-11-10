@@ -96,6 +96,9 @@ export const readFileSafe = (file: string) => fse.readFile(file, 'utf-8');`, (ou
 valid('allows the helper\'s own read of the descriptor it checked', `import fs from 'node:fs';
 export const read = (fd: number) => fs.readFileSync(fd, 'utf8');`, { filename: 'packages/shared/src/regular-file.ts' });
 
+valid('allows the hook fast path\'s copy of the helper, which runs before the bundle that holds it', `import fs from 'node:fs';
+export const read = (fd: number) => fs.readFileSync(fd, 'utf8');`, { filename: 'src/hook-fast-path.ts' });
+
 valid('allows the helper, and a read of an open handle it returned', `import { openRegularFile, readRegularFile } from '@teamai/shared/regular-file';
 export const text = (file: string) => readRegularFile(file, 'utf8');
 export const head = async (file: string) => {

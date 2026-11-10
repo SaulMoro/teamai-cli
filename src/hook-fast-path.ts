@@ -172,12 +172,25 @@ export function promptAnswersInForeground(sessionId: string, env: NodeJS.Process
     || isHttpEnrolled(env);
 }
 
-/** A file's text, or null when it cannot be read. */
+/**
+ * A regular file's text, or null when it cannot be read or is anything else. A copy of @teamai/shared/regular-file's
+ * check, which the fast path cannot load: opened without blocking, so a FIFO a step left here does not hold the hook.
+ */
 function readTextFile(file: string): string | null {
+  let fd: number;
+
   try {
-    return fs.readFileSync(file, 'utf8');
+    fd = fs.openSync(file, process.platform === 'win32' ? fs.constants.O_RDONLY : fs.constants.O_RDONLY | fs.constants.O_NONBLOCK);
   } catch {
     return null;
+  }
+
+  try {
+    return fs.fstatSync(fd).isFile() ? fs.readFileSync(fd, 'utf8') : null;
+  } catch {
+    return null;
+  } finally {
+    fs.closeSync(fd);
   }
 }
 
