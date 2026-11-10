@@ -504,7 +504,8 @@ async function openRuntime(driver: ResolvedDriver, use: string, options: Runtime
     options: split.runtime, mode: purpose === 'check' ? 'check' : mode, credentials, instances: await runnableInstances(), checkout,
   });
 
-  if (ready.ok && ready.launchesAgents && split.engine.logins.length > 0) {
+  // A runtime that runs each tool on the attempt's tool home gets the login there, as an exec runtime does.
+  if (ready.ok && ready.launchesAgents && ready.runsOnToolHome !== true && split.engine.logins.length > 0) {
     await runtime.dispose();
 
     return { ok: false, failure: badOption(driver, use, 'credentials', `${use} launches agents its own way, in each tool's own home, so it brings no login`) };
@@ -532,9 +533,10 @@ async function openRuntime(driver: ResolvedDriver, use: string, options: Runtime
     // A login the runtime's provider keeps itself is not copied into an attempt's tool home over it.
     const engine = { ...split.engine, logins: split.engine.logins.filter((tool) => !ownLogins.has(tool)) };
 
-    // A sign-in found by name reaches only a runtime that execs the tool and keeps a value to it. One that launches
-    // agents its own way signs them in where it runs them, so it gets none, rather than the start failing over it.
-    const isKeepingFound = !ready.launchesAgents && ready.can.env === true;
+    // A sign-in found by name reaches only a runtime that runs the tool on teamai's environment and keeps a value to it:
+    // one that execs it, or runs it on the attempt's tool home. One that launches agents its own way signs them in where
+    // it runs them, so it gets none, rather than the start failing over it.
+    const isKeepingFound = (!ready.launchesAgents || ready.runsOnToolHome === true) && ready.can.env === true;
     // A tool whose login the runtime's provider keeps signs in on that login, before the member's own route: the
     // credentials their config declares, then what their environment holds. The definition's own credential still goes.
     const ownLoginVariables = new Set(Object.entries(SIGN_INS).flatMap(([tool, signIn]) => (ownLogins.has(tool) ? variablesOf(signIn) : [])));
@@ -598,6 +600,13 @@ async function openComposed(driver: ResolvedDriver, names: { inner: string; oute
     await Promise.all([outerOpened.runtime.dispose(), innerOpened.runtime.dispose()]);
 
     return { ok: false, failure: { code: 'driver_invalid', message: `Driver definition ${driver.file} runs ${names.inner} through ${names.outer}, and ${names.inner} launches no agents of its own: only a runtime that launches agents, such as an app's, runs its tools through another. Use ${names.outer} on its own, or fix the file, and start again.` } };
+  }
+
+  // One that runs each tool itself on the attempt's tool home, as a sandbox does, runs it in its own place, never the outer's.
+  if (innerOpened.runsOnToolHome === true && how.purpose !== 'stop') {
+    await Promise.all([outerOpened.runtime.dispose(), innerOpened.runtime.dispose()]);
+
+    return { ok: false, failure: { code: 'driver_invalid', message: `Driver definition ${driver.file} runs ${names.inner} through ${names.outer}, and ${names.inner} runs each tool itself, in its own place, on the attempt's tool home: only a runtime that launches agents its own way, such as an app's, runs its tools through another. Use ${names.inner} and ${names.outer} as runtimes of their own, or fix the file, and start again.` } };
   }
 
   const offer = composedOffer({ ok: true, can: outerOpened.can, launchesAgents: outerOpened.launchesAgents }, { ok: true, can: innerOpened.can, launchesAgents: innerOpened.launchesAgents, ...(innerOpened.unavailable && { unavailable: innerOpened.unavailable }) });

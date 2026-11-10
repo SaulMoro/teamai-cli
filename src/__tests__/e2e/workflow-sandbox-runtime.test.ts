@@ -38,6 +38,8 @@ if (args[args.indexOf('-p') + 1].includes('Spend')) {
   setInterval(() => { n += 1; console.log(JSON.stringify({ type: 'stream_event', event: { type: 'message_start', message: { id: 'm' + n, usage: { input_tokens: 100, output_tokens: 1 } } } })); }, 20);
   return;
 }
+// It notes the base URL it was given, beside its sessions.
+fs.writeFileSync(path.join(process.env.CLAUDE_CONFIG_DIR, 'base-url.txt'), String(process.env.ANTHROPIC_BASE_URL));
 fs.writeFileSync(process.env.TEAMAI_WORKFLOW_RESULT, JSON.stringify({ output: { ok: true } }));
 console.log(JSON.stringify({ type: 'result', subtype: 'success', is_error: false, result: 'Done.', session_id: session, usage: { input_tokens: 10, output_tokens: 5 } }));
 `;
@@ -127,6 +129,9 @@ beforeAll(async () => {
   fs.writeFileSync(path.join(repo, '.teamai', 'drivers', 'keychain.yaml'), stringify({
     schemaVersion: 'v1alpha1', name: 'keychain', tool: 'claude', runtimes: [{ use: 'sandbox', options: { provider: 'docker', image: IMAGE } }],
   }));
+  fs.writeFileSync(path.join(repo, '.teamai', 'drivers', 'gateway.yaml'), stringify({
+    schemaVersion: 'v1alpha1', name: 'gateway', tool: 'claude', runtimes: [{ use: 'sandbox', options: { provider: 'docker', image: IMAGE } }, { use: 'tools' }],
+  }));
   // The sandbox runs its prompt steps itself, and the tools runtime beside it takes what it does not.
   fs.writeFileSync(path.join(repo, '.teamai', 'drivers', 'boxed.yaml'), stringify({
     schemaVersion: 'v1alpha1', name: 'boxed', tool: 'claude',
@@ -136,6 +141,7 @@ beforeAll(async () => {
   fs.writeFileSync(path.join(repo, '.teamai', 'workflows', 'spend.yaml'), 'schemaVersion: v1alpha1\nname: spend\ndescription: spend\nsteps:\n  - id: spend\n    tool: claude\n    prompt: Spend tokens.\n    budget: { tokens: 300 }\n    on_limit: end_turn\n');
   fs.writeFileSync(path.join(repo, '.teamai', 'workflows', 'pair.yaml'), 'schemaVersion: v1alpha1\nname: pair\ndescription: pair\nsteps:\n  - id: plan\n    tool: claude\n    prompt: Plan the change.\n    output:\n      ok: boolean\n  - id: apply\n    needs: [plan]\n    session:\n      from: plan\n    prompt: Make the change you planned.\n    output:\n      ok: boolean\n');
   fs.writeFileSync(path.join(repo, '.teamai', 'workflows', 'review.yaml'), 'schemaVersion: v1alpha1\nname: review\ndescription: review\nsteps:\n  - id: review\n    tool: claude\n    prompt: Review the repository.\n    output:\n      ok: boolean\n');
+  fs.writeFileSync(path.join(repo, '.teamai', 'workflows', 'codexreview.yaml'), 'schemaVersion: v1alpha1\nname: codexreview\ndescription: codexreview\nsteps:\n  - id: review\n    tool: codex\n    prompt: Review the repository.\n    output:\n      ok: boolean\n');
   // Setup prints the names it gets, then fails, so its output is quoted in the failure.
   writeFlow('setupnames', 'env | cut -d= -f1 | sort | tr "\\n" " "; exit 3');
   writeFlow('setupsecret', 'printf "%s" "$NPM_TOKEN" > .npmrc');
@@ -226,3 +232,45 @@ it('stops a prompt step past its budget in the container, and ends its turn ther
   expect(spend).toMatchObject({ status: 'succeeded', limit: 'budget', session: expect.stringMatching(/^sess-/) });
 });
 
+
+it("signs a Codex prompt step in on the login teamai keeps, copied into the attempt's tool home, and writes the login the tool refreshed back", async () => {
+  const dedicated = path.join(os.homedir(), '.teamai', 'logins', 'codex', 'auth.json');
+  const login = (refresh: string): string => JSON.stringify({ OPENAI_API_KEY: null, tokens: { account_id: 'acct-1', refresh_token: refresh, access_token: 'access', id_token: 'id' } });
+  fs.mkdirSync(path.dirname(dedicated), { recursive: true });
+  fs.writeFileSync(dedicated, login('r1'), { mode: 0o600 });
+  // The image's Codex reads the login in the home CODEX_HOME names, refreshes it as Codex does, and ends its turn.
+  fs.writeFileSync(path.join(dir, 'image-bin', 'codex'), `#!${process.execPath}
+const fs = require('node:fs');
+const path = require('node:path');
+if (process.argv.includes('--version')) { console.log('codex-cli 0.130.0'); process.exit(0); }
+const file = path.join(process.env.CODEX_HOME, 'auth.json');
+const login = JSON.parse(fs.readFileSync(file, 'utf8'));
+fs.writeFileSync(file, JSON.stringify({ ...login, tokens: { ...login.tokens, refresh_token: login.tokens.refresh_token + '-next' } }));
+fs.writeFileSync(process.env.TEAMAI_WORKFLOW_RESULT, JSON.stringify({ output: { ok: true } }));
+console.log(JSON.stringify({ type: 'thread.started', thread_id: 'th-1' }));
+console.log(JSON.stringify({ type: 'turn.completed', usage: { input_tokens: 4, output_tokens: 2 } }));
+`, { mode: 0o755 });
+  fs.writeFileSync(path.join(repo, '.teamai', 'drivers', 'codexlogin.yaml'), stringify({
+    schemaVersion: 'v1alpha1', name: 'codexlogin', tool: 'codex',
+    runtimes: [{ use: 'sandbox', options: { provider: 'docker', image: IMAGE, credentials: { codex: 'login' } } }, { use: 'tools' }],
+  }));
+  const before = engineCalls().length;
+
+  const ran = await runCLI(['workflow', 'start', 'codexreview', '--driver', 'codexlogin'], repo, engineEnv);
+
+  expect(envelope(ran), ran.stderr).toMatchObject({ data: { done: { outcome: 'succeeded' } } });
+  expect(engineCalls().slice(before).filter(([command, ...rest]) => command === 'exec' && rest.includes('codex'))).toHaveLength(1);
+  expect(fs.readFileSync(dedicated, 'utf8')).toBe(login('r1-next'));
+  expect(fs.existsSync(path.join(os.homedir(), '.teamai', 'logins', 'codex.lock'))).toBe(false);
+});
+
+it("signs a Claude prompt step in on the gateway the member's environment names, at the host alias the container reaches this machine by", async () => {
+  const ran = await runCLI(['workflow', 'start', 'review', '--driver', 'gateway'], repo, { ...engineEnv, ANTHROPIC_AUTH_TOKEN: 'gateway-token-5b1c', ANTHROPIC_BASE_URL: 'http://127.0.0.1:8317' });
+
+  expect(envelope(ran), ran.stderr).toMatchObject({ data: { done: { outcome: 'succeeded' } } });
+  const [review] = readRunState(ran).steps;
+  const attempt = review !== undefined && 'attempt' in review ? String(review.attempt) : '';
+  const noted = fs.readdirSync(dataHome, { recursive: true }).map(String).filter((file) => file.includes(attempt) && file.endsWith('base-url.txt'));
+  expect(noted.map((file) => fs.readFileSync(path.join(dataHome, file), 'utf8'))).toEqual(['http://host.docker.internal:8317']);
+  expect(JSON.stringify(engineCalls())).not.toContain('gateway-token-5b1c');
+});

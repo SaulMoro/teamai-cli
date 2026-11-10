@@ -30,7 +30,7 @@ const id = args.includes('--resume') ? args[args.indexOf('--resume') + 1] : 'ses
 const say = (line) => process.stdout.write(JSON.stringify(line) + '\n');
 fs.mkdirSync(path.join(home, 'projects'), { recursive: true });
 fs.appendFileSync(path.join(home, 'projects', id + '.jsonl'), JSON.stringify({ sessionId: id, cwd: process.cwd() }) + '\n');
-fs.writeFileSync(path.join(home, 'launch.json'), JSON.stringify({ args, env: Object.keys(process.env).sort(), cwd: process.cwd() }));
+fs.writeFileSync(path.join(home, 'launch.json'), JSON.stringify({ args, env: Object.keys(process.env).sort(), cwd: process.cwd(), baseUrl: process.env.ANTHROPIC_BASE_URL }));
 say({ type: 'system', subtype: 'init', session_id: id, model: 'claude-sonnet-4-5' });
 if (prompt.includes('spend')) {
   let n = 0;
@@ -131,7 +131,7 @@ async function prompt(connection: Connection, at: Place, lease: Message = {}, re
 }
 
 /** How the agent was launched, as it noted in its home. */
-function launched(at: Place): { args: string[]; env: string[]; cwd: string } {
+function launched(at: Place): { args: string[]; env: string[]; cwd: string; baseUrl?: string } {
   return JSON.parse(fs.readFileSync(path.join(at.toolHome, 'launch.json'), 'utf8'));
 }
 
@@ -169,6 +169,15 @@ describe('a prompt step in the attempt\'s container', () => {
     expect(env).toEqual(expect.arrayContaining(['STEP_VALUE', 'ANTHROPIC_API_KEY', 'CLAUDE_CONFIG_DIR', 'TEAMAI_WORKFLOW_RESULT']));
     expect(env).not.toContain('RUNTIME_OWN_SECRET');
     expect(env).not.toContain('FAKE_ENGINE_STATE');
+  });
+
+  it('gives the tool a base URL on this machine itself as the host alias the container reaches it by', async () => {
+    const connection = start();
+    await init(connection);
+    const at = await openPlace(connection);
+
+    expect(await prompt(connection, at, {}, { credentials: { ANTHROPIC_API_KEY: 'sk-ant-secret-1', ANTHROPIC_BASE_URL: 'http://127.0.0.1:4000/anthropic' } })).toMatchObject({ event: 'finished' });
+    expect(launched(at).baseUrl).toBe('http://host.docker.internal:4000/anthropic');
   });
 });
 
