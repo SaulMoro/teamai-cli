@@ -102,7 +102,7 @@
     "teamai/regular-file-reads": ["error", { "baseline": "oxlint-plugin-teamai/rules/regular-file-reads.baseline.json" }],
     // Opening a FIFO for writing blocks until a reader comes, as a read blocks until a writer does.
     // Files not converted yet go in stillAppends, a list that only shrinks.
-    "teamai/step-path-writes": ["error", { "stillAppends": ["src/workflow/drivers/skill/journal.ts"] }],
+    "teamai/step-path-writes": ["error", { "stillWrites": ["src/workflow/conformance-interpreter.ts", "src/workflow/drivers/skill/journal.ts", "src/workflow/fleet/member.ts", "src/workflow/fleet/record.ts"] }],
     // getUserHome owns the HOME / USERPROFILE fallback that keeps Windows paths safe.
     "teamai/home-env": "error",
     "teamai/learnings-root": "error",

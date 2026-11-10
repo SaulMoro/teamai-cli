@@ -10,7 +10,7 @@ import { acquireLock, releaseLock } from '../../update.js';
 import { AttemptIdSchema, RunIdSchema, type AttemptId, type RunId } from '../store.js';
 import type { WorkflowFailure } from '../types.js';
 import type { LaunchTool } from '../../tool-launch/tools.js';
-import { readRegularFile } from '@teamai/shared/regular-file';
+import { readRegularFile, writeRegularFile } from '@teamai/shared/regular-file';
 
 // ─── A tool login teamai keeps for step runtimes ─────────
 //
@@ -217,7 +217,7 @@ export async function holdLogin({ tool, run, attempt, toolHome, signal, onWait }
       }
 
       await fs.mkdir(toolHome, { recursive: true });
-      await fs.writeFile(path.join(toolHome, LOGIN_FILES[tool]), body, { mode: 0o600 });
+      await writeRegularFile(path.join(toolHome, LOGIN_FILES[tool]), body, { mode: 0o600 });
       await placeLock(tool, { ...lock, copied: sha256(body) }, { replace: true });
 
       return { ok: true };
@@ -362,7 +362,7 @@ export async function writeLoginBack({ tool, run, attempt, toolHome, collected }
   if (account !== accountOf(current)) return kept(`the step's ${LOGIN_FILES[tool]} is for another account`);
   const { mode } = await fs.stat(target);
   const temporary = `${target}.${process.pid}.tmp`;
-  await fs.writeFile(temporary, written, { mode: mode & 0o777 });
+  await writeRegularFile(temporary, written, { mode: mode & 0o777 });
   await fs.chmod(temporary, mode & 0o777);
   await fs.rename(temporary, target);
 

@@ -1,6 +1,7 @@
 import { randomBytes } from 'node:crypto';
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import { writeRegularFile } from '@teamai/shared/regular-file';
 import { DefaultWorkflows } from '../default-workflows.js';
 import { knownSecrets } from '../env-resolution.js';
 import type { RunMode } from '../launch-context.js';
@@ -447,7 +448,7 @@ function sessionsNotArchived(runId: string, reason: string): HandoffError {
 async function writeSnapshot(worktree: string, snapshot: RunSnapshot, message: string): Promise<{ files: string[]; message: string }> {
   const rel = snapshotPath(snapshot.run);
   await fs.mkdir(path.join(worktree, path.dirname(rel)), { recursive: true });
-  await fs.writeFile(path.join(worktree, rel), snapshotText(snapshot), 'utf-8');
+  await writeRegularFile(path.join(worktree, rel), snapshotText(snapshot));
 
   return { files: [rel], message };
 }

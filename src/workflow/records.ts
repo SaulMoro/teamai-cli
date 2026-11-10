@@ -38,7 +38,7 @@ import { isFailureCode, type FailureCode } from './failure-codes.js';
 import type { DriverIdentity, RunState, RunStatus, WorkflowFailure } from './types.js';
 import { definedFields } from '../utils/defined-fields.js';
 import { parseYaml } from '../utils/yaml.js';
-import { readRegularFile } from '@teamai/shared/regular-file';
+import { readRegularFile, writeRegularFile } from '@teamai/shared/regular-file';
 
 function hasTeamaiCode(failure: WorkflowFailure | undefined): failure is WorkflowFailure & { code: FailureCode } {
   return failure !== undefined && isFailureCode(failure.code);
@@ -438,7 +438,7 @@ export async function queueBenchmarkRecord(config: LocalConfig, record: QueuedBe
   const dir = pendingBenchmarksDir(config);
   await fs.mkdir(dir, { recursive: true });
   const target = path.join(dir, `${record.run}.json`);
-  await fs.writeFile(`${target}.tmp`, `${JSON.stringify(redactJson(record, secrets), null, 2)}\n`, 'utf-8');
+  await writeRegularFile(`${target}.tmp`, `${JSON.stringify(redactJson(record, secrets), null, 2)}\n`);
   await fs.rename(`${target}.tmp`, target);
 
   return true;
@@ -479,7 +479,7 @@ export async function enqueueRecord(config: LocalConfig, record: CurrentWorkflow
   await fs.mkdir(dir, { recursive: true });
   const target = pendingPath(config, record);
   const tmp = `${target}.tmp`;
-  await fs.writeFile(tmp, `${JSON.stringify(redactJson(record, secrets), null, 2)}\n`, 'utf-8');
+  await writeRegularFile(tmp, `${JSON.stringify(redactJson(record, secrets), null, 2)}\n`);
   await fs.rename(tmp, target);
 }
 
@@ -606,7 +606,7 @@ export async function publishPendingRecords(config: LocalConfig, options: { run?
       }
 
       await fs.mkdir(path.join(worktree, path.dirname(rel)), { recursive: true });
-      await fs.writeFile(path.join(worktree, rel), `${JSON.stringify(merged, null, 2)}\n`, 'utf-8');
+      await writeRegularFile(path.join(worktree, rel), `${JSON.stringify(merged, null, 2)}\n`);
       files.push(rel);
       delivered.push(...records);
     }
@@ -645,7 +645,7 @@ export async function publishPendingRecords(config: LocalConfig, options: { run?
 
       const mergedStats = mergeWorkflowStats(ensureDigestFields(existingStats, username), username, delta, originByRun);
       await fs.mkdir(path.join(worktree, 'stats'), { recursive: true });
-      await fs.writeFile(path.join(worktree, statsRel), YAML.stringify(mergedStats), 'utf-8');
+      await writeRegularFile(path.join(worktree, statsRel), YAML.stringify(mergedStats));
       files.push(statsRel);
     }
 
@@ -653,7 +653,7 @@ export async function publishPendingRecords(config: LocalConfig, options: { run?
     for (const { record, text } of benchmarks) {
       const rel = benchmarkRecordPath(record.run);
       await fs.mkdir(path.join(worktree, path.dirname(rel)), { recursive: true });
-      await fs.writeFile(path.join(worktree, rel), text, 'utf-8');
+      await writeRegularFile(path.join(worktree, rel), text);
       files.push(rel);
     }
 

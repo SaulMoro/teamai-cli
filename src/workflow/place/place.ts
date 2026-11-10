@@ -31,7 +31,7 @@ import { finishTeamClone, openTeamClone, removeTeamClone, teamKeyOf } from './te
 import { finishDataCheckout, openDataCheckout, removeDataCheckout } from './data.js';
 import { commitPathsOf } from './worktree-snapshot.js';
 import { finishWriter, mergeBranches, recordMergePreparation, rememberConflicts, unreportedChangesMessage, withUnpushed } from './writer.js';
-import { readRegularFile } from '@teamai/shared/regular-file';
+import { readRegularFile, writeRegularFile } from '@teamai/shared/regular-file';
 
 /**
  * The checkout a driver working from `cwd` makes its places in: `checkout`, the one the run started from, unless `cwd`
@@ -573,7 +573,7 @@ async function keepMemberConfig(config: LocalConfig, run: RunId, root: string): 
   if ('error' in read) return { code: 'workspace_base', message: `teamai could not read the git config of ${root}, so the step did not run. Git said: ${read.error}.` };
   const file = keptConfigPath(config, run);
   await fs.mkdir(path.dirname(file), { recursive: true });
-  await fs.writeFile(file, `${JSON.stringify({ ...kept, [root]: read })}\n`);
+  await writeRegularFile(file, `${JSON.stringify({ ...kept, [root]: read })}\n`);
 
   return undefined;
 }
