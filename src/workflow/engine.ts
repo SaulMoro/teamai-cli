@@ -1957,28 +1957,40 @@ function heldOn(definition: WorkflowDefinition, workflows: Record<string, Workfl
   const none = new Set<string>();
   const { facts } = describeWorkflow({ definition, source: 'team', workflows, ceiling: 1, can, allow: {}, env: { declared: none, secrets: none, present: none } });
   const strict = new Map<string, 'isolation' | 'network' | 'never'>();
-  const prompts = new Map<string, { isAnswer: boolean }>();
+  const prompts = new Map<string, AiStep>();
 
   for (const { step, missing } of facts.held) {
     if (missing.includes('isolation')) strict.set(step, 'isolation');
     else if (missing.includes('network')) strict.set(step, 'network');
     else if (missing.includes('host') || missing.includes('prompt')) strict.set(step, 'never');
 
-    if (missing.includes('prompt')) prompts.set(step, { isAnswer: facts.runs.some((run) => run.step === step && run.answer === true) });
+    if (missing.includes('prompt')) prompts.set(step, facts.runs.some((run) => run.step === step && run.answer === true) ? 'answer' : 'prompt');
   }
 
-  return { strict, prompts };
+  return { strict, prompts, scored: facts.scored.map(({ step }) => step) };
 }
 
+/** What a step asks of an AI tool: it runs a prompt, it is an answer step, or its passes are judged by a scorer. */
+type AiStep = 'prompt' | 'answer' | 'scored';
+
 /**
- * Why step `step` runs on no runtime of the run's only driver `driver`, none of which takes a prompt or an answer: no
- * AI tool runs on it, as on the built-in `host`, whose host slot answers no answer step, since that calls the member's tool.
+ * Why step `step` runs on no runtime of the run's only driver `driver`, none of which launches an AI tool, as on the
+ * built-in `host`, whose host slot answers no answer step either, since that calls the member's tool.
  */
-function launchesNoAiTool(driver: string, { step, isAnswer }: { step: string; isAnswer: boolean }): WorkflowFailure {
-  return {
-    code: 'requirement_unmet',
-    message: `Step "${step}" ${isAnswer ? 'is an answer step, which asks your AI tool' : 'runs a prompt'}, and driver "${driver}" launches no AI tool: it runs only commands, gates and workflows whose steps need none. Run the workflow with --driver local.`,
-  };
+function aiStepRefused(driver: string, step: string, ai: AiStep): WorkflowFailure {
+  switch (ai) {
+    case 'prompt':
+      return { code: 'requirement_unmet', message: `Step "${step}" runs a prompt, and driver "${driver}" launches no AI tool: it runs only commands, gates and workflows whose steps need none. Run the workflow with --driver local.` };
+    case 'answer':
+      return { code: 'requirement_unmet', message: `Step "${step}" is an answer step, which asks your AI tool, and driver "${driver}" launches no AI tool: it runs only commands, gates and workflows whose steps need none. Run the workflow with --driver local.` };
+    case 'scored':
+      return { code: 'requirement_unmet', message: `Step "${step}" is scored, and its judge runs on an AI tool, which driver "${driver}" does not launch: it runs only commands, gates and workflows whose steps need none. Run the workflow with --driver local.` };
+    default: {
+      const unhandled: never = ai;
+
+      return unhandled;
+    }
+  }
 }
 
 /** What `can` gets of step `state` confined to the directory `rendered` names; undefined for a step not confined. */
@@ -2004,7 +2016,11 @@ function strictlyUnmet(definition: WorkflowDefinition, workflows: Record<string,
   const [mineJudged, ...othersJudged] = judged;
   const promptless = mineJudged && [...mineJudged.prompts].find(([step]) => othersJudged.every((other) => other.prompts.has(step)));
 
-  if (promptless) return launchesNoAiTool(sole.driver, { step: promptless[0], isAnswer: promptless[1].isAnswer }).message;
+  if (promptless) return aiStepRefused(sole.driver, ...promptless).message;
+  // A scored pass is judged by a teamai-score run on this same driver, whose judge no runtime of it could run.
+  const judgeless = sole.offers.every((offer) => offer.can.prompt === false) ? mineJudged?.scored[0] : undefined;
+
+  if (judgeless !== undefined) return aiStepRefused(sole.driver, judgeless, 'scored').message;
   const helds = judged.map((held) => held.strict);
   const [mine = new Map<string, 'isolation' | 'network' | 'never'>(), ...others] = helds;
   // A step every runtime holds, at least one of them for a strict key: the others may never take it at all.
@@ -2061,7 +2077,7 @@ function beyondSoleDriver(
   const lackedByAll = missing.filter((key) => helds.every((held) => held.includes(key)));
 
   // No runtime takes a prompt or an answer, as on the built-in `host`: a step of a workflow a step produced meets it here.
-  if (lackedByAll.includes('prompt')) return launchesNoAiTool(sole.driver, { step, isAnswer });
+  if (lackedByAll.includes('prompt')) return aiStepRefused(sole.driver, step, isAnswer ? 'answer' : 'prompt');
 
   // A runtime that cannot run the tool now says why and what to do; every refusal of the step quotes it.
   const reasons = tool === undefined ? [] : sole.offers.flatMap((offer) => (offer.unavailable?.[tool] === undefined ? [] : [`${offer.runtime}: ${offer.unavailable[tool]}`]));

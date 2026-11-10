@@ -1549,7 +1549,7 @@ teamai looks for `<name>.yaml` in this order and uses the first it finds:
 
 | Where | Notes |
 | --- | --- |
-| Built in: `host` | No file defines or replaces it, and a `host.yaml` in the places below is not read, with a warning. It runs every step on the `host` slot described below, so it runs commands, gates and workflows whose steps need no AI tool. `workflow start` refuses a prompt, `interactive` or `answer:` step with `requirement_unmet`, naming the step and `--driver local`. |
+| Built in: `host` | No file defines or replaces it, and a `host.yaml` in the places below is not read, with a warning. It runs every step on the `host` slot described below, so it runs commands, gates and workflows whose steps need no AI tool. `workflow start` refuses a prompt, `interactive`, `answer:` or scored step with `requirement_unmet`, naming the step and `--driver local`. |
 | `~/.teamai/drivers/` | Yours alone. `resume --next` never reads it. |
 | `drivers/` in the team repo, and `drivers/<namespace>/` | A name two active namespaces define fails `driver_namespace_conflict`. |
 | The user scope's team repo | Only when you start in a project. |

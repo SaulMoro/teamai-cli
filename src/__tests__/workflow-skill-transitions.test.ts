@@ -1093,6 +1093,22 @@ const CASES: Array<{ name: string; rows: string[]; run: () => Promise<string[]> 
           ],
         },
       } } } });
+
+      // Through the workflows its steps run by name; a workflow a step produces, or a judge, may need an AI tool.
+      const flow = (name: string, steps: string): string => `schemaVersion: v1alpha1\nname: ${name}\ndescription: ${name}\ninvoke: allow\nsteps:\n${steps}`;
+      const nested = await harness({
+        tidy: flow('tidy', '  - id: lint\n    command: node -e "0"\n'),
+        look: flow('look', '  - id: read\n    prompt: Read it.\n'),
+        fixed: flow('fixed', '  - id: tidy\n    workflow: tidy\n'),
+        reviewed: flow('reviewed', '  - id: look\n    workflow: look\n'),
+        produced: flow('produced', '  - id: make\n    command: node -e "0"\n    output: { definition: workflow }\n  - id: run\n    needs: [make]\n    workflow: { from: make }\n'),
+        scored: flow('scored', '  - id: tidy\n    workflow: tidy\n    scorers: [quality]\n'),
+      }, { scorers: { quality: '---\nlabels:\n  - { value: good, score: 1, description: Did the work }\n  - { value: bad, score: 0, description: Did not }\npassingScore: 1\nsamplingRate: 100\n---\nJudge the work.\n' } });
+      expect(await nested.call({ kind: 'describe', name: 'fixed' })).toMatchObject({ data: { describe: { ask: { kind: 'background', start: 'teamai workflow start fixed --driver host' } } } });
+      for (const name of ['reviewed', 'produced', 'scored']) {
+        const described = await nested.call({ kind: 'describe', name });
+        expect('data' in described && 'describe' in described.data ? described.data.describe.ask : described, name).not.toHaveProperty('background');
+      }
       return made.rows;
     },
   },

@@ -6422,6 +6422,18 @@ describe('a run whose only driver runs nothing but the host slot, as the built-i
     expect(fs.existsSync(runsDir(config)) ? fs.readdirSync(runsDir(config)) : []).toHaveLength(0);
   });
 
+  it('refuses a start with a scored step whose own steps are commands, since its judge is an AI tool, and creates no run', async () => {
+    const { config } = testConfig();
+    fs.mkdirSync(path.join(config.repo.localPath, 'scorers'), { recursive: true });
+    fs.writeFileSync(path.join(config.repo.localPath, 'scorers', 'quality.md'), '---\nlabels:\n  - { value: good, score: 1, description: Did the work }\n  - { value: bad, score: 0, description: Did not }\npassingScore: 1\nsamplingRate: 100\n---\nJudge the work.\n');
+    fs.writeFileSync(path.join(config.repo.localPath, 'workflows', 'build.yaml'), graph('  - id: tidy\n    workflow: tidy\n    scorers: [quality]\n'));
+    fs.writeFileSync(path.join(config.repo.localPath, 'workflows', 'tidy.yaml'), workflow('tidy', '  - id: lint\n    command: node -e "0"\n'));
+    await syncScorersThenWorkflows(config);
+
+    expect(await startRun(config, 'build', {}, { secrets: await knownSecrets(config), alone: HOST })).toEqual({ error: { code: 'requirement_unmet', message: 'Step "tidy" is scored, and its judge runs on an AI tool, which driver "host" does not launch: it runs only commands, gates and workflows whose steps need none. Run the workflow with --driver local.' } });
+    expect(fs.existsSync(runsDir(config)) ? fs.readdirSync(runsDir(config)) : []).toHaveLength(0);
+  });
+
   it('starts a run of commands and a gate', async () => {
     const { config } = testConfig();
     fs.writeFileSync(path.join(config.repo.localPath, 'workflows', 'build.yaml'), graph('  - id: build\n    command: node -e "0"\n  - id: ship\n    needs: [build]\n    approve: { message: Ship it? }\n    command: node -e "0"\n'));

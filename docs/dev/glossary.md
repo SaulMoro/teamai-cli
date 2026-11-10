@@ -165,7 +165,7 @@ The **step runtime** in teamai's process that every **driver definition** keeps 
 _Avoid_: bare host where a **session host** or a **repo provider** could be meant
 
 **Host driver**:
-The built-in **driver definition** `--driver host` selects: the **host slot** alone, with no **step runtime** listed, so it runs commands, gates and workflows whose steps need no AI tool, and refuses a prompt, `interactive` or `answer:` step. No file defines or replaces it.
+The built-in **driver definition** `--driver host` selects: the **host slot** alone, with no **step runtime** listed, so it runs commands, gates and workflows whose steps need no AI tool, and refuses a prompt, `interactive`, `answer:` or scored step. No file defines or replaces it.
 _Avoid_: bare host where the **host slot** could be meant
 
 **`tools` runtime**:

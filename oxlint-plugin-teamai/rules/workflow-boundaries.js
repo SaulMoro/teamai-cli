@@ -22,7 +22,7 @@ const SKILL_IMPORTS = {
   'src/workflow/types.ts': { typeOnly: true, values: ['onlyPersonAnswers'] },
   // The declared env facts, and the advice a missing key gets, which the preflight prints before a start.
   'src/workflow/requirements.ts': { typeOnly: true, values: ['envAdvice'] },
-  // Whether a run's steps need an AI tool, the one rule start and describe both send a run to the host driver on.
+  // Whether a run needs an AI tool: describe sends one that needs none to the host driver.
   'src/workflow/describe.ts': { typeOnly: true, values: ['needsAiTool'] },
   // What a driver nobody attends says once it offered a run to a person, as the local driver logs it; and the stale
   // window, past which a runner stops renewing a run for a session that called nothing.
