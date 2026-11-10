@@ -29,7 +29,7 @@ import { findProject, loadProjectsManifest, resolveActiveLearningsNamespaces } f
 import type { JsonValue, LocalConfig } from './types.js';
 import { readFileSafe, readJsonObject, writeJson } from './utils/fs.js';
 import { remotesMatch } from './utils/git.js';
-import { log } from './utils/logger.js';
+import { log } from '@teamai/shared/log';
 import { resolvePartitionDir } from './utils/partition.js';
 import { warnOnce } from './utils/warn-once.js';
 

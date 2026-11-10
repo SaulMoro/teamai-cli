@@ -1,7 +1,7 @@
 import path from 'node:path';
 import { z } from 'zod';
 import type { StepLaunch } from '@teamai/tool-core/launch';
-import { log } from '@teamai/tool-core/log';
+import { log } from '@teamai/shared/log';
 import { budgeted, stoppedOnUsageLimit, tokenMeter, toolStdout, type TokenUsage, type ToolReport } from '@teamai/tool-core/stdout';
 import { NotRegularFileError, readRegularFile } from '@teamai/shared/regular-file';
 import { MAX_TIMER_MS } from '@teamai/shared/timer';

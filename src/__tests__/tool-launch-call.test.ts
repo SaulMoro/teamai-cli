@@ -6,7 +6,7 @@ import { z } from 'zod';
 import { readConfigFrom } from '../config.js';
 import { createToolCaller } from '../workflow/runtimes/tool-caller.js';
 import { getDataHome, getUserConfigPath, type LocalConfig } from '../types.js';
-import { log } from '../utils/logger.js';
+import { log } from '@teamai/shared/log';
 
 let root = '';
 afterEach(async () => { vi.unstubAllEnvs(); if (root) await fs.rm(root, { recursive: true, force: true }); root = ''; });

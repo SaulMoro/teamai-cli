@@ -23,7 +23,7 @@ vi.mock('cross-spawn', () => ({
   default: Object.assign(vi.fn(), { sync: vi.fn() }),
 }));
 
-vi.mock('@teamai/tool-core/log', () => ({
+vi.mock('@teamai/shared/log', () => ({
   log: { info: vi.fn(), success: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn(), dim: vi.fn() },
   spinner: () => ({
     start: vi.fn().mockReturnThis(),

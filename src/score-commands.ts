@@ -9,7 +9,7 @@ import { TryScorer, type TryInputs } from './scorers/try-scorer.js';
 import { JsonObjectSchema, type LocalConfig } from './types.js';
 import { LabelStore } from './scorers/label-store.js';
 import { DataBranches } from './utils/data-branches.js';
-import { log, setStderrOnly } from './utils/logger.js';
+import { log, setStderrOnly } from '@teamai/shared/log';
 import { shellQuoteValue } from './utils/shell-profile.js';
 import type { WorkflowEnvelope } from './workflow/types.js';
 import { shortcutDriver, startWorkflow } from './workflow-commands.js';

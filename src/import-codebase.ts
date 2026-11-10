@@ -8,7 +8,7 @@ import { extractCodebase, sourceRepositoryMetadata } from './codebase-extract.js
 import { type JsonValue, JsonObjectSchema } from './types.js';
 import { SourceManifestSchema } from './wiki-engine/code-knowledge/code-collector.js';
 import type { TeamaiInit } from './config.js';
-import { log } from './utils/logger.js';
+import { log } from '@teamai/shared/log';
 import { remotesMatch } from './utils/git.js';
 import { assertSafeResourceName } from './utils/path-safety.js';
 import { shellQuoteValue } from './utils/shell-profile.js';

@@ -32,7 +32,7 @@ import { getDataHome, LocalConfigSchema, type LocalConfig } from '../../types.js
 import { execCommand } from '@teamai/shared/exec';
 import { writeJsonAtomic } from '../../utils/fs.js';
 import { getDefaultBranch, HEAD_STATUS, headStateOf, resolveAnchors, type HeadState } from '../../utils/git.js';
-import { log } from '../../utils/logger.js';
+import { log } from '@teamai/shared/log';
 import { projectSlug } from '../../utils/partition.js';
 import type { TeamDelivery } from '../../pull.js';
 import { CommitSchema, type ClonePlace, type InstalledTeam, type TeamSelection } from '../clone.js';

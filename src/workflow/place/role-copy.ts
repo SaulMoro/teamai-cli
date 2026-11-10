@@ -16,7 +16,7 @@ import { roleDeclaration, type RoleDeclaration } from '../../roles.js';
 import { realHost, type Host } from '../../tool-home.js';
 import { getProjectSearchIndexPath, selfModeGitignorePath, type LocalConfig, type TeamaiConfig } from '../../types.js';
 import { getHeadCommit } from '../../utils/git.js';
-import { log } from '../../utils/logger.js';
+import { log } from '@teamai/shared/log';
 import type { Executor } from '../requirements.js';
 import type { WorkflowFailure } from '../types.js';
 import { AGENT_PATHS } from '../worktree.js';

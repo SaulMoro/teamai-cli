@@ -9,7 +9,7 @@ import path from 'node:path';
 import { z } from 'zod';
 import { readEvents, dataHomeKey, isHumanPromptEntry, TranscriptEntrySchema, type TranscriptEntry } from './dashboard-collector.js';
 import { readFileSafe, ensureDir, pathExists, readJson } from './utils/fs.js';
-import { log } from './utils/logger.js';
+import { log } from '@teamai/shared/log';
 import type { RequestCostMetrics } from './types.js';
 import type { TokenUsage } from '@teamai/tool-core/tokens';
 import { getDataHome, getTeamaiHomeDir, JsonObjectSchema } from './types.js';

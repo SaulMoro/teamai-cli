@@ -2,7 +2,7 @@ import path from 'node:path';
 import fs from 'node:fs';
 import { z } from 'zod';
 import { HookStdinSchema, stdinString, type HookStdin } from './hook-dispatch.js';
-import { log } from './utils/logger.js';
+import { log } from '@teamai/shared/log';
 import { deriveSessionId } from './utils/session-id.js';
 import { getUserHome } from '@teamai/shared/home';
 import { DefaultHooks, type DefaultHook, type HintLanguage } from './default-hooks.js';

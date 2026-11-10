@@ -24,7 +24,7 @@ import { ScoreAnswer } from '../scorers/score-answer.js';
 import { ScoreVerbs, scoreVerbCommand, type EvidenceOptions, type PlanOptions, type ScoreVerbAnswer, type ScoreVerbContext, type SubjectsOptions } from '../score-verbs.js';
 import { labelVersion } from '../scorers/label.js';
 import { LabelStore } from '../scorers/label-store.js';
-import { log, setStderrOnly } from '../utils/logger.js';
+import { log, setStderrOnly } from '@teamai/shared/log';
 import { Marks, type MarkKey } from '../scorers/marks.js';
 import { markFacts } from '../scorers/score-plan.js';
 import { PassScoring } from '../scorers/pass-scoring.js';

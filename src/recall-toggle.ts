@@ -1,6 +1,6 @@
 import path from 'node:path';
 import { autoDetectInit, loadStateForScope, markMemberSettingsWritten, saveLocalConfigForScope, saveStateForScope } from './config.js';
-import { log } from './utils/logger.js';
+import { log } from '@teamai/shared/log';
 import { remove, pathExists } from './utils/fs.js';
 import { keepsTrackedCopy } from './resources/delivered-copies.js';
 import { applyInstructionPlan, planInstructionFiles, registerOpencodeContext, resolveInstructionTargets } from './instruction-targets.js';

@@ -7,7 +7,7 @@ import { parseRelatedBlock } from './resource-relations.js';
 import type { RelationResourceKind } from './resource-relations.js';
 import { assertNotReadOnly } from './read-only.js';
 import { pathExists } from './utils/fs.js';
-import { log, spinner } from './utils/logger.js';
+import { log, spinner } from '@teamai/shared/log';
 import { markContributed } from './contribute-check.js';
 import { agentSessionFromEnv } from './utils/session-id.js';
 import { splitFrontmatter, stringifyFrontmatter, type FrontmatterValue } from './utils/frontmatter.js';

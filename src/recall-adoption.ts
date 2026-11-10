@@ -33,7 +33,7 @@ import { forgetSessionIdentities, readUserVotes, type AdoptionVerdict } from './
 import type { JsonValue, LocalConfig } from './types.js';
 import { isAbsolutePath, pathKey, samePath } from './utils/agent-path.js';
 import { rewriteJsonl } from './utils/jsonl-store.js';
-import { log } from './utils/logger.js';
+import { log } from '@teamai/shared/log';
 import { deriveDispatchSessionId } from './utils/session-id.js';
 import { commandWords, simpleCommands } from './utils/shell-command.js';
 import { classifyToolCall } from './utils/tool-call.js';

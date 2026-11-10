@@ -32,7 +32,7 @@ import { findProject, loadProjectsManifest, unknownProjectMessage } from './proj
 import { caseFoldKey, isSafeNamespaceSegment, NAMESPACE_RULE } from './manifest-schema.js';
 import { isJsonObject, type JsonValue, type LocalConfig } from './types.js';
 import { listDirs, pathExists, readFileIfExists } from './utils/fs.js';
-import { log } from './utils/logger.js';
+import { log } from '@teamai/shared/log';
 import { warnOnce } from './utils/warn-once.js';
 import { deliveredMembers, unionMemberItems } from './workspace-children.js';
 

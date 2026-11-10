@@ -5,7 +5,7 @@ import { spawnCommand } from '@teamai/shared/exec';
 import { z } from 'zod';
 import { getTeamaiHomeDir } from '../../types.js';
 import { errnoCode } from '../../utils/fs.js';
-import { log } from '../../utils/logger.js';
+import { log } from '@teamai/shared/log';
 import { acquireLock, releaseLock } from '../../update.js';
 import { AttemptIdSchema, RunIdSchema, type AttemptId, type RunId } from '../store.js';
 import type { WorkflowFailure } from '../types.js';

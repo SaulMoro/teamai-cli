@@ -73,7 +73,7 @@ afterAll(() => {
 });
 
 // The lists above load product modules (session-id.js reaches types.ts and,
-// through it, utils/fs.js and utils/logger.js), and a module a setup file
+// through it, utils/fs.js and @teamai/shared/log), and a module a setup file
 // loaded is cached before a test file's vi.mock applies: the test would mock
 // utils/fs.js and still reach the real one through them. Drop them, so each
 // test file loads its own, mocked as it asks.

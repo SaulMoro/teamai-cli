@@ -21,7 +21,7 @@ import { LabelStore } from './scorers/label-store.js';
 import { reportUsage } from './team-push.js';
 import { isUsageReportEnabled, usesBranchWorktree, type LocalConfig } from './types.js';
 import { DataBranches } from './utils/data-branches.js';
-import { log } from './utils/logger.js';
+import { log } from '@teamai/shared/log';
 import { agentSessionIdFromEnv } from './utils/session-id.js';
 import { driveRun } from './workflow-drive.js';
 import { inProcessClient } from './workflow/protocol.js';

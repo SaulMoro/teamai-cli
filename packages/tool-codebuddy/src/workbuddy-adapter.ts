@@ -42,7 +42,7 @@ import {
 import { cleanTitleText, cutTitle, fallbackTitle, isInjectedText, titleFromCandidates, titleFromUserText } from '@teamai/tool-core/sessions/title';
 import { assertSafeSessionFileId, deriveTargetSessionId } from '@teamai/tool-core/sessions/ids';
 import { registerWorkBuddySession, unregisterWorkBuddySession } from './workbuddy-store.js';
-import { log } from '@teamai/tool-core/log';
+import { log } from '@teamai/shared/log';
 import { readRegularFileSync } from '@teamai/shared/regular-file';
 
 // ---------------------------------------------------------------------------

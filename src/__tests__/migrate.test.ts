@@ -7,7 +7,7 @@ import path from 'node:path';
 import fse from 'fs-extra';
 import YAML from 'yaml';
 
-vi.mock('@teamai/tool-core/log', () => ({
+vi.mock('@teamai/shared/log', () => ({
   log: {
     info: vi.fn(),
     success: vi.fn(),
@@ -36,7 +36,7 @@ vi.mock('../utils/fs.js', async (importOriginal) => {
 
 import { planMigration, runMigration, maybeMigrate, queueKeptInCheckout } from '../migrate.js';
 import { readConfigFrom, saveLocalConfigForScope } from '../config.js';
-import { log } from '../utils/logger.js';
+import { log } from '@teamai/shared/log';
 import { projectDataHome } from '../utils/partition.js';
 import { queueLockPath, savePendingLearning, setAsideQueueOnModeSwitch, type QueueWrite } from '../utils/pending-learnings.js';
 import { acquireLock, releaseLock } from '../update.js';

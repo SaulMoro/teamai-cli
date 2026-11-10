@@ -11,7 +11,7 @@ import { isJsonObject, type JsonValue } from './types.js';
 import type { LocalConfig, PendingVoteSync, UpvoteLedger, UserVotes, UserVotesV2, VoteDelta, VoteEntryV2 } from './types.js';
 import type { CreditLine } from './recall-log.js';
 import { readFileSafe, writeFileAtomic, ensureDir, expandHome } from './utils/fs.js';
-import { log } from './utils/logger.js';
+import { log } from '@teamai/shared/log';
 
 /**
  * Run `fn` while holding an exclusive per-file lock, so the read-modify-write in

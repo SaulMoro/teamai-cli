@@ -25,7 +25,7 @@ vi.mock('@teamai/shared/cli-path', () => ({
   resolveCliPath: (...args: unknown[]) => resolveCliPathMock(...args),
 }));
 
-vi.mock('@teamai/tool-core/log', () => ({
+vi.mock('@teamai/shared/log', () => ({
   log: { info: vi.fn(), success: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn(), dim: vi.fn() },
   spinner: () => ({
     start: vi.fn().mockReturnThis(),

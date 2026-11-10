@@ -13,7 +13,7 @@ import { type WorkflowEnv } from '../../env-resolution.js';
 import { launchEnv, workflowLaunch, type RunMode } from '../../launch-context.js';
 import type { LocalConfig, TeamaiConfig } from '../../types.js';
 import { writeJsonAtomic } from '../../utils/fs.js';
-import { log } from '../../utils/logger.js';
+import { log } from '@teamai/shared/log';
 import { AgentSession, type AgentSessionRef } from '../../session-flow/agent-session.js';
 import { type SessionArchive } from '../../session-flow/archive.js';
 import { deliveredTeamSkills, usedSkills } from '../../skill-use.js';

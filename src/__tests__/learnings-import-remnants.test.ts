@@ -17,7 +17,7 @@ import { getDataHome, LEARNINGS_LOCK_FILENAME, SYNC_LOCK_FILENAME, type LocalCon
 import { learningsBranch } from '../utils/learnings-branch.js';
 import { listPendingLearnings, savePendingLearning } from '../utils/pending-learnings.js';
 import { publishLearningsMaintenance, publishQueuedLearnings } from '../utils/learnings-publish.js';
-import { log } from '../utils/logger.js';
+import { log } from '@teamai/shared/log';
 import { writeInstallConfig } from './helpers/install-config.js';
 
 let tmp: string;

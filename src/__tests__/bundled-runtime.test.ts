@@ -10,12 +10,12 @@ vi.mock('@teamai/shared/home', () => ({
 }));
 
 // Mock the logger so the module's debug traces do not reach the real log file.
-vi.mock('@teamai/tool-core/log', () => ({
+vi.mock('@teamai/shared/log', () => ({
   log: { info: vi.fn(), success: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
 }));
 
 import { ensureBundledRuntimeOnPath, resetBundledRuntimeCache, resolveWorkbuddyNode } from '../bundled-runtime.js';
-import { log } from '../utils/logger.js';
+import { log } from '@teamai/shared/log';
 
 /** Lay out a WorkBuddy PortableGit runtime under the test home. */
 function makePortableGit(version: string, dirs = ['cmd', 'usr/bin', 'mingw64/bin'], dataRoot = '.workbuddy'): string {

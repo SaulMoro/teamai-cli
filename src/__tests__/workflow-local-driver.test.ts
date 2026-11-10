@@ -11,7 +11,7 @@ import { loadStateForScope, saveStateForScope } from '../config.js';
 import { checkoutRecordKey, type CheckoutRecord } from '../pull.js';
 import { encodeCwdClaude } from '@teamai/tool-core/sessions/fs';
 import { type JsonValue, type LocalConfig, type TeamaiConfig } from '../types.js';
-import { log } from '../utils/logger.js';
+import { log } from '@teamai/shared/log';
 import { type StepLauncher, type StepRunResult, type StepRun, type ToolSpawn } from '@teamai/runtime-tools';
 import { hostLauncher } from './helpers/host-launcher.js';
 import { _setDriverPollMs, runLocalDriver } from '../workflow/drivers/local/local-driver.js';

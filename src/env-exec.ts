@@ -28,7 +28,7 @@ import { ENV_KEY_RE, envTable, sameEnvName } from './resources/env-key.js';
 import { envExecBashEnvPath, envLoaderPath, writeEnvExecBashEnv } from './resources/env-loader.js';
 import { declaredSecretKeys } from './resources/secrets.js';
 import { getDataHome, type GlobalOptions, type LocalConfig } from './types.js';
-import { log, setStderrOnly } from './utils/logger.js';
+import { log, setStderrOnly } from '@teamai/shared/log';
 import { reservedTeamEnvWarning } from './env-reserved.js';
 import { readWorkspaceChildren } from './workspace-children.js';
 import { envAdvice } from './workflow/requirements.js';

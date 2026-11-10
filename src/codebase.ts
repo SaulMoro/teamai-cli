@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 import { createGit } from './utils/git.js';
-import { log } from './utils/logger.js';
+import { log } from '@teamai/shared/log';
 import { readRegularFileSync } from '@teamai/shared/regular-file';
 
 /** 文件扫描截断上限（字符数）。 */

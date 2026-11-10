@@ -8,7 +8,7 @@ import { toolArgumentsFrom, type ContentBlock, type Message, type Session } from
 import { readJsonl, resolveRealCwd } from '@teamai/tool-core/sessions/fs';
 import { JsonValueSchema } from '@teamai/shared/json';
 import { parseYaml } from '@teamai/shared/yaml';
-import { log } from '@teamai/tool-core/log';
+import { log } from '@teamai/shared/log';
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 

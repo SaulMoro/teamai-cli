@@ -1,6 +1,6 @@
 import { execSync, spawnSync, type SpawnSyncOptions, type SpawnSyncOptionsWithStringEncoding } from 'node:child_process';
 import { spawnCommandSync } from '@teamai/shared/exec';
-import { log, spinner } from '../../utils/logger.js';
+import { log, spinner } from '@teamai/shared/log';
 import { resolveCliPath } from '@teamai/shared/cli-path';
 import { isInteractive } from '../../utils/prompt.js';
 import type { RepoInfo } from '../types.js';

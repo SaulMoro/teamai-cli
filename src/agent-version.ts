@@ -7,7 +7,7 @@
  *  - Fallback: return '' when detection fails (best-effort, never throws).
  */
 
-import { log } from './utils/logger.js';
+import { log } from '@teamai/shared/log';
 import { BUILT_IN_TOOLS } from '@teamai/tool-definitions';
 import { readPlistVersion, type VersionDetector } from '@teamai/tool-core/detect';
 import { type ToolId } from './tools.js';

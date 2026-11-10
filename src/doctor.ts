@@ -13,7 +13,7 @@ import { readWorkspaceChildren } from './workspace-children.js';
 import { machineUnreadKeys, memberSettingLines, memberSettingsReport, type MemberSettingsReport } from './member-settings-report.js';
 import { pathExists, readFileSafe } from './utils/fs.js';
 import { getUserHome } from '@teamai/shared/home';
-import { log, setStderrOnly } from './utils/logger.js';
+import { log, setStderrOnly } from '@teamai/shared/log';
 import type { GlobalOptions } from './types.js';
 import {
   COPILOT_TOOL_ID,

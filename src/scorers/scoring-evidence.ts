@@ -10,7 +10,7 @@ import { judgedTranscript } from '../session-flow/session-work.js';
 import { knownSecrets } from '../env-resolution.js';
 import type { LocalConfig } from '../types.js';
 import { readFileIfExists } from '../utils/fs.js';
-import { log } from '../utils/logger.js';
+import { log } from '@teamai/shared/log';
 import { redact } from '@teamai/shared/redact';
 import { readRegularFile } from '@teamai/shared/regular-file';
 import { scoresDir } from './home.js';

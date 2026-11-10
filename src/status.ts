@@ -6,7 +6,7 @@ import { summarizeWorkspaceChildren } from './workspace-children.js';
 import { teamRefNotice } from './team-ref.js';
 import { getDefaultBranch, getHeadRev, getRepoStatus } from './utils/git.js';
 import { assertSafeResourceName } from './utils/path-safety.js';
-import { log } from './utils/logger.js';
+import { log } from '@teamai/shared/log';
 import { findSkippedFolders, isInSkippedFolder, skippedFolderMessage } from './folder-markers.js';
 import { readTeamRules } from './resources/rules.js';
 import { getAllHandlers, getHandler } from './resources/index.js';

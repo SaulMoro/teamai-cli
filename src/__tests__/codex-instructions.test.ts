@@ -29,7 +29,7 @@ vi.mock('../update.js', () => ({
   releaseLock: vi.fn().mockResolvedValue(undefined),
 }));
 
-vi.mock('@teamai/tool-core/log', () => ({
+vi.mock('@teamai/shared/log', () => ({
   log: {
     persist: vi.fn(),
     info: vi.fn(),
@@ -51,7 +51,7 @@ vi.mock('@teamai/tool-core/log', () => ({
 
 import { RulesHandler } from '../resources/rules.js';
 import { pull } from '../pull.js';
-import { log } from '../utils/logger.js';
+import { log } from '@teamai/shared/log';
 import { uninstall } from '../uninstall.js';
 import { autoDetectInit, detectProjectConfig, loadLocalConfigForScope, loadStateForScope, loadTeamConfig, saveStateForScope } from '../config.js';
 import {

@@ -55,7 +55,7 @@ home: { dir: .acme-claude, env: ACME_CLAUDE_CONFIG_DIR }
 async function load(repo: string) {
   const { loadTeamConfig } = await import('../config.js');
   const registry = await import('../tool-registry.js');
-  const { log } = await import('@teamai/tool-core/log');
+  const { log } = await import('@teamai/shared/log');
   const errors = vi.spyOn(log, 'error').mockImplementation(() => undefined);
   const config = await loadTeamConfig(repo);
 
@@ -127,7 +127,7 @@ describe('team tool instances', () => {
     const repo = teamRepo({ 'tools/acme-claude.yaml': ACME_CLAUDE.replace('command: acme-claude', "command: './scripts/acme-claude'") });
     const { loadTeamConfig } = await import('../config.js');
     const { resetWarnOnce } = await import('../utils/warn-once.js');
-    const { log } = await import('@teamai/tool-core/log');
+    const { log } = await import('@teamai/shared/log');
     const errors = vi.spyOn(log, 'error').mockImplementation(() => undefined);
 
     const shown = () => errors.mock.calls.map(([message]) => String(message));

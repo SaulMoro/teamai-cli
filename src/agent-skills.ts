@@ -6,7 +6,7 @@ import { isCliOwnedSkillName } from './cli-skill-names.js';
 import { generatedSkillAt } from './workflow/discovery/generated-marker.js';
 import type { LocalConfig, TeamaiConfig } from './types.js';
 import { parseFrontmatter } from './utils/frontmatter.js';
-import { log } from './utils/logger.js';
+import { log } from '@teamai/shared/log';
 import { resolveReal } from './utils/path-safety.js';
 
 // ─── Local agent skill scanning ─────────────────────────

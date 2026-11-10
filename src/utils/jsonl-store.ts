@@ -23,7 +23,7 @@ import { z } from 'zod';
 import { isJsonObject, type JsonlRecord, type JsonValue } from '@teamai/shared/json';
 import { acquireLock, releaseLock } from '../update.js';
 import { ensureDir, errnoCode } from './fs.js';
-import { log } from './logger.js';
+import { log } from '@teamai/shared/log';
 
 /** How long a writer waits for the lock, in wall time. */
 export interface LockWait {

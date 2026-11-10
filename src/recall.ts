@@ -7,7 +7,7 @@ import { requireInit, detectProjectConfig, describeUnreadableConfig, loadLocalCo
 import { loadIndex, buildIndex, indexInMemory, search, isLegacyIndex } from './utils/search-index.js';
 import type { BuildIndexOptions, SearchResult, UnreadableFile } from './utils/search-index.js';
 import { ensureDir, pathExists } from './utils/fs.js';
-import { log } from './utils/logger.js';
+import { log } from '@teamai/shared/log';
 import type { GlobalOptions, SearchIndex, LocalConfig, KnowledgeDomain } from './types.js';
 import { getProjectSearchIndexPath, getUserSearchIndexPath, getVotesDir, installScopeName } from './types.js';
 import { queryCodeKnowledge } from './code-knowledge-recall.js';

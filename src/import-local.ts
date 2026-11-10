@@ -14,7 +14,7 @@ import type { Install } from './locate.js';
 import type { JsonValue } from './types.js';
 import type { ShortcutEnd } from './workflow-commands.js';
 import { listFilesRecursive, readFileSafe, writeFile, ensureDir } from './utils/fs.js';
-import { log } from './utils/logger.js';
+import { log } from '@teamai/shared/log';
 import { assertSafePath, defaultAllowedRoots } from './utils/path-safety.js';
 
 /** A file over this size is not imported. */

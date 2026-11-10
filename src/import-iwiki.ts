@@ -14,7 +14,7 @@ import { buildDualContext } from './iwiki-dual.js';
 import { RUN_DIR_ENV } from '@teamai/runtime-protocol';
 import { IWikiClient } from './utils/iwiki-client.js';
 import type { IWikiDocument, IWikiPage } from './utils/iwiki-client.js';
-import { log, spinner } from './utils/logger.js';
+import { log, spinner } from '@teamai/shared/log';
 import { pathExists } from './utils/fs.js';
 import type { ShortcutEnd } from './workflow-commands.js';
 import { readRegularFile } from '@teamai/shared/regular-file';

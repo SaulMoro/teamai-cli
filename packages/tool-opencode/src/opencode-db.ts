@@ -6,7 +6,7 @@ import { isSafeSessionFileId } from '@teamai/tool-core/sessions/ids';
 import { findSqlite3 } from '@teamai/tool-core/sessions/sqlite';
 import { addTokenUsage, emptyTokenUsage } from '@teamai/tool-core/tokens';
 import { execCommand } from '@teamai/shared/exec';
-import { log } from '@teamai/tool-core/log';
+import { log } from '@teamai/shared/log';
 import type { TokenReading, TokenRequest, TokenSource } from '@teamai/tool-core/tokens';
 
 const Count = z.number().finite().nonnegative().catch(0).default(0);

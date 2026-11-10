@@ -17,7 +17,7 @@ import { parseFrontmatter, type FrontmatterData } from './frontmatter.js';
 import { createGitWithBlockTimeout } from './git.js';
 import { learningsBranch } from './learnings-branch.js';
 import { CheckoutRefusedError, failureReason, fetchTrackingRef, type PublishResult } from './branch-worktree.js';
-import { log } from './logger.js';
+import { log } from '@teamai/shared/log';
 import {
   dropPendingLearning,
   listPendingForInstall,

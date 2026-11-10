@@ -27,7 +27,7 @@ import {
 } from './types.js';
 import { readFileSafe, pathExists, ensureDir, writeFile } from './utils/fs.js';
 import { getRemoteUrl } from './utils/git.js';
-import { log } from './utils/logger.js';
+import { log } from '@teamai/shared/log';
 import { acquireLock, releaseLock } from './update.js';
 import { getMemberConfig, mergeMemberConfig } from './members.js';
 

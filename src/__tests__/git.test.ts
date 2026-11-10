@@ -64,7 +64,7 @@ vi.mock('../utils/git-discovery.js', () => ({
   repositoryStamp: vi.fn(async () => null),
 }));
 
-vi.mock('@teamai/tool-core/log', () => ({
+vi.mock('@teamai/shared/log', () => ({
   log: {
     info: vi.fn(),
     success: vi.fn(),
@@ -882,7 +882,7 @@ describe('pullRepo', () => {
     mockGit.raw.mockResolvedValue('2\n');
     const result = await pullRepo('/tmp/x');
     expect(result).toBe('reset to origin (diverged)');
-    const { log: testLog } = await import('../utils/logger.js');
+    const { log: testLog } = await import('@teamai/shared/log');
     expect(testLog.warn).toHaveBeenCalled();
   });
 });

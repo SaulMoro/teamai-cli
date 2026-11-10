@@ -1,5 +1,5 @@
 import path from 'node:path';
-import { log } from './utils/logger.js';
+import { log } from '@teamai/shared/log';
 import { listDirs, pathExists } from './utils/fs.js';
 import { SkillsHandler } from './resources/skills.js';
 import { loadTagsConfig } from './utils/tags.js';

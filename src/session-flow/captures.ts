@@ -16,7 +16,7 @@ import { DeliveredSkillInfoSchema, deliveredTeamSkills, type DeliveredSkillInfo 
 import { getDataHome, type DeliverySelection, type LocalConfig } from '../types.js';
 import { acquireLock, releaseLock } from '../update.js';
 import { getHeadState, type HeadState } from '../utils/git.js';
-import { log } from '../utils/logger.js';
+import { log } from '@teamai/shared/log';
 import { AgentSession } from './agent-session.js';
 import { OptionalString } from '@teamai/tool-core/sessions/fs';
 import type { Session } from '@teamai/tool-core/sessions/ir';

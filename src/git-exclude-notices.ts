@@ -4,7 +4,7 @@ import { updateFileLocked } from './git-exclude.js';
 import { getDataHome, isJsonObject, type GlobalOptions, type JsonObject, type JsonValue, type LocalConfig } from './types.js';
 import { pathExists, readFileSafe } from './utils/fs.js';
 import { getUserHome } from '@teamai/shared/home';
-import { log } from './utils/logger.js';
+import { log } from '@teamai/shared/log';
 import { warnOnce } from './utils/warn-once.js';
 
 // ─── What a background pull could not say about git exclude blocks (#915) ──

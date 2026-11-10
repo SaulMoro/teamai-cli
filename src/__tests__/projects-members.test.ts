@@ -20,7 +20,7 @@ vi.mock('../utils/reports-branch.js', () => ({
   readableReportsWorktree: (...args: unknown[]) => reportsMocks.readableReportsWorktree(...args),
 }));
 
-vi.mock('@teamai/tool-core/log', () => ({
+vi.mock('@teamai/shared/log', () => ({
   log: {
     info: vi.fn(),
     success: vi.fn(),

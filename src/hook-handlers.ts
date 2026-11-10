@@ -18,7 +18,7 @@ import type { GlobalOptions, LocalConfig, WebhookPayload } from './types.js';
 import type { DriverName } from './workflow/driver-name.js';
 import type { GitHookEvent } from './git-hook.js';
 import { deriveDispatchSessionId, deriveSessionId } from './utils/session-id.js';
-import { log } from './utils/logger.js';
+import { log } from '@teamai/shared/log';
 import { normalizeToolName } from './utils/tool-names.js';
 import { resolveHookCwd } from './utils/hook-cwd.js';
 import { pathExists } from './utils/fs.js';

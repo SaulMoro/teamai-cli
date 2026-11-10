@@ -44,7 +44,7 @@ import { pathExists, readFileSafe, readJson, writeJson } from './utils/fs.js';
 import { splitFrontmatter } from './utils/frontmatter.js';
 import { getUserHome } from '@teamai/shared/home';
 import { resolveHookCwd } from './utils/hook-cwd.js';
-import { log } from './utils/logger.js';
+import { log } from '@teamai/shared/log';
 import { deriveSessionId } from './utils/session-id.js';
 import { namedReads } from './utils/shell-command.js';
 import { classifyToolCall } from './utils/tool-call.js';

@@ -119,7 +119,7 @@ vi.mock('../config.js', async (importOriginal) => ({
   }),
 }));
 
-vi.mock('@teamai/tool-core/log', () => ({
+vi.mock('@teamai/shared/log', () => ({
   log: { info: vi.fn(), success: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
   setStderrOnly: vi.fn().mockReturnValue(false),
 }));
@@ -198,7 +198,7 @@ import { buildAdoptedSummary, buildHandlerRegistry, filterHandlersForConfig } fr
 import { createDispatcher } from '../hook-dispatch.js';
 import { GIT_HOOK_EVENTS } from '../git-hook.js';
 import type { JsonValue, LocalConfig } from '../types.js';
-import { log } from '../utils/logger.js';
+import { log } from '@teamai/shared/log';
 
 /** The scope hook-dispatch resolved for the hook's cwd, handed to every handler. */
 // Recall on through the member's switch: `/tmp` holds no teamai.yaml to turn it on for the team, and the recall handlers do nothing while it is off.

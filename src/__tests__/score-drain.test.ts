@@ -27,7 +27,7 @@ import { z } from 'zod';
 import { encodeCwdClaude } from '@teamai/tool-core/sessions/fs';
 import { getReportsDir, REPORTS_LOCK_FILENAME, type LocalConfig } from '../types.js';
 import { acquireLock, releaseLock } from '../update.js';
-import { log } from '../utils/logger.js';
+import { log } from '@teamai/shared/log';
 import { AGENT_SESSION_ENV } from '../utils/session-id.js';
 import * as cliPaths from '@teamai/shared/cli-path';
 import { leaseNext, parseReport, reportAttempt, startRun } from '../workflow/engine.js';

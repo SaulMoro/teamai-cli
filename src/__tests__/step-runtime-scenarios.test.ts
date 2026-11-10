@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { buildSync } from 'esbuild';
 import { z } from 'zod';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { log } from '../utils/logger.js';
+import { log } from '@teamai/shared/log';
 import { hostStepRuntime } from '../workflow/runtimes/host.js';
 import { toolsLaunchDeps } from '../workflow/runtimes/sources.js';
 import { stepLauncher, toolsStepRuntime } from '@teamai/runtime-tools';

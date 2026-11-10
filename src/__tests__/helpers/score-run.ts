@@ -13,7 +13,7 @@ import { confinedOffers } from '../../workflow/confined-launch.js';
 import { runConfinedStep } from '../../workflow/confined-step.js';
 import { RunIdSchema } from '../../workflow/store.js';
 import { LeaseWireSchema } from '../../workflow/lease-wire.js';
-import { log } from '../../utils/logger.js';
+import { log } from '@teamai/shared/log';
 
 const external: DriverIdentity = { kind: 'external', machine: 'judge', workspace: '/judge' };
 const LeaseSchema = z.object({ attempt: z.string(), revision: z.number(), step: z.string(), prompt: z.string().optional() });

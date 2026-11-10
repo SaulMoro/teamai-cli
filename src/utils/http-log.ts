@@ -11,7 +11,7 @@
  */
 
 import { z } from 'zod';
-import { log } from './logger.js';
+import { log } from '@teamai/shared/log';
 import type { JsonValue } from '../types.js';
 
 /** Header names whose values must be masked before logging. */

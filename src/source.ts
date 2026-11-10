@@ -8,7 +8,7 @@ import { loadTeamConfig, autoDetectInit, loadLocalConfig, detectProjectConfig } 
 import { assertAttachedTeamRepo, createGit, DetachedTeamRepoError, pullRepo } from './utils/git.js';
 import { parseFrontmatter } from './utils/frontmatter.js';
 import { detectProvider, getProvider } from './providers/index.js';
-import { log, spinner } from './utils/logger.js';
+import { log, spinner } from '@teamai/shared/log';
 import {
   pathExists,
   readFileSafe,

@@ -1,5 +1,5 @@
 import fs from 'node:fs';
-import { setSilent } from '../src/utils/logger.js';
+import { setSilent } from '@teamai/shared/log';
 import { loadCommandTable } from './command-table.js';
 import path from 'node:path';
 import { TOOL_SUPPORT_PAGES, renderToolSupportPage } from './tool-support.js';

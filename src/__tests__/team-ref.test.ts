@@ -459,7 +459,7 @@ it('matches removal names to handler names for flat and namespaced resources', a
 it('reports a detached-clone refusal when upgrading a wiki', async () => {
   const upgrade = await import('../codebase-upgrade-wiki.js');
   const { codebaseCmd } = await import('../codebase-cmd.js');
-  const { log } = await import('../utils/logger.js');
+  const { log } = await import('@teamai/shared/log');
   const refusal = new gitModule.DetachedTeamRepoError('main');
   vi.spyOn(upgrade, 'upgradeCodebaseWiki').mockRejectedValueOnce(refusal);
   const errorLog = vi.spyOn(log, 'error').mockImplementation(() => {});

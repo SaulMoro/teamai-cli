@@ -14,7 +14,7 @@ import { sweepLeftovers } from '../workflow/leftovers.js';
 import { runCopyToMerge } from '../workflow/workspace.js';
 import { getReportsDir, REPORTS_LOCK_FILENAME } from '../types.js';
 import { acquireLock, releaseLock } from '../update.js';
-import { log } from '../utils/logger.js';
+import { log } from '@teamai/shared/log';
 import { fakeGh } from './helpers/fake-gh.js';
 import type { LocalConfig } from '../types.js';
 import type { RunState } from '../workflow/types.js';

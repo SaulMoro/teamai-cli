@@ -20,7 +20,7 @@ vi.mock('../config.js', async (importOriginal) => {
   };
 });
 
-import { log, setStderrOnly } from '../utils/logger.js';
+import { log, setStderrOnly } from '@teamai/shared/log';
 import { acquireLock, releaseLock } from '../update.js';
 import { leaseNext, startRun } from '../workflow/engine.js';
 import { publishRun, resumeRun } from '../workflow/handoff.js';

@@ -57,7 +57,7 @@ import {
 } from './utils/fs.js';
 import { mapStrings, parseJson, type JsonSyntax } from '@teamai/shared/json';
 import { isPlainJson, parseJsonAs } from './utils/json.js';
-import { log } from './utils/logger.js';
+import { log } from '@teamai/shared/log';
 import { warnOnce } from './utils/warn-once.js';
 import { loadProjectMcpManifest } from './utils/mcp-manifest.js';
 import { isOnPath, SAFE_BIN_RE, type LookPathOptions } from '@teamai/shared/lookpath';

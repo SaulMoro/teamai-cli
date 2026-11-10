@@ -11,7 +11,7 @@ import { loadLocalConfigForScope } from '../config.js';
 import { teamRefBlocker, type TeamRefBlock } from '../team-ref.js';
 import { isSelfMode, type LocalConfig } from '../types.js';
 import { sameEnvName } from '../resources/env-key.js';
-import { log } from '../utils/logger.js';
+import { log } from '@teamai/shared/log';
 import { leaseDeadline } from '../workflow/limits.js';
 import { checkLabel, checkVerdict, type Added, type CheckOutput } from '../scorers/check.js';
 import { restoreProtected, writeAdded, type CheckRun } from '../scorers/check-run.js';

@@ -5,7 +5,7 @@ import { z } from 'zod';
 import { getCurrentVersion } from '../package-info.js';
 import type { JsonValue } from '../types.js';
 import { writeFileAtomic } from './fs.js';
-import { log } from './logger.js';
+import { log } from '@teamai/shared/log';
 
 /**
  * What git answered, remembered under a stamp that changes whenever the answer

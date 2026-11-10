@@ -31,7 +31,7 @@ import type { SimpleGit, StatusResult } from 'simple-git';
 import { createGitWithBlockTimeout, isGitRepo, commitSkippingHooks, isDedicatedRepoRoot, gitCommonDir, checkoutLocation } from './git.js';
 import { acquireLock, releaseLock } from '../update.js';
 import { ensureDir, writeFile, pathExists } from './fs.js';
-import { isSilent, log } from './logger.js';
+import { isSilent, log } from '@teamai/shared/log';
 import { projectsRootDir } from './partition.js';
 import {
   WORKTREE_DIRNAMES,

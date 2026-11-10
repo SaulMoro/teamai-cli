@@ -12,7 +12,7 @@ import { RUN_MODES, type RunMode, type SessionRun } from './launch-context.js';
 import { addOutcomeStats } from './outcomes.js';
 import { SessionOutcomes, type FoldInput } from './session-outcomes.js';
 import { writeFile, readFileSafe, ensureDir, pathExists, readJson, writeJson } from './utils/fs.js';
-import { log } from './utils/logger.js';
+import { log } from '@teamai/shared/log';
 import type { UserStats, UserModeStats, UserInterventionStats, SessionMetrics, DashboardEvent, LocalConfig, RequestCostMetrics, UserVotesV2 } from './types.js';
 import type { TokenUsage } from '@teamai/tool-core/tokens';
 import { getVotesDir, getDataHome, getReportsDir, usesBranchWorktree, JsonValueSchema, parseUserStats, JsonObjectSchema } from './types.js';

@@ -6,7 +6,7 @@ import { readRegularFileSync } from '@teamai/shared/regular-file';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { getUserHome, expandHome } from '@teamai/shared/home';
-import { log } from './utils/logger.js';
+import { log } from '@teamai/shared/log';
 import { parseYaml } from '@teamai/shared/yaml';
 import { type ToolId } from './tools.js';
 import { channelsOf } from './tool-registry.js';

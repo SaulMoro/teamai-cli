@@ -34,7 +34,7 @@ import { nearestGitEntry, resolveAnchors } from './utils/git.js';
 import { getUserHome } from '@teamai/shared/home';
 import { EPHEMERAL_CONFIG_ENV } from './launch-context.js';
 import { resolvePartitionDir, writeAnchorFile } from './utils/partition.js';
-import { log } from './utils/logger.js';
+import { log } from '@teamai/shared/log';
 import { listRoleIds, loadRolesManifest, RolesManifestNotFoundError } from './roles.js';
 import { loadRoleAssignmentsIfPresent, resolveAssignedRoles, ROLE_ASSIGNMENTS_FILE } from './role-assignments.js';
 import { warnOnce } from './utils/warn-once.js';

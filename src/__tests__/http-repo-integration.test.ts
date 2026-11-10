@@ -6,7 +6,7 @@ import YAML from 'yaml';
 import { startMockServer, type MockServerHandle } from './helpers/mock-server.js';
 import { installFakeCodex, readFakeCodexState } from './helpers/fake-codex.js';
 import * as gitHook from '../git-hook.js';
-import { log } from '../utils/logger.js';
+import { log } from '@teamai/shared/log';
 
 let tmpDir: string;
 let originalHome: string;

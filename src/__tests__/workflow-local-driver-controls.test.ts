@@ -10,7 +10,7 @@ import { AgentSession } from '../session-flow/agent-session.js';
 import type { Session } from '@teamai/tool-core/sessions/ir';
 import { SyncManager, defaultSyncMeta, getRepoIdentity } from '../session-flow/sync.js';
 import { getDataHome, getReportsDir, type LocalConfig, type TeamaiConfig } from '../types.js';
-import { log } from '../utils/logger.js';
+import { log } from '@teamai/shared/log';
 import { leaseNext, reportAttempt } from '../workflow/engine.js';
 import { cancelRun, respondProvenance, respondToHitl, retryStep } from '../workflow/run-controls.js';
 import { type StepLauncher, type StepRunResult, type StepRun } from '@teamai/runtime-tools';

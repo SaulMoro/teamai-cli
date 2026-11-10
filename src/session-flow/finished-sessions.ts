@@ -19,7 +19,7 @@ import { GeneratedQuestions } from '../scorers/generated-questions.js';
 import { driverIdentity } from '../driver-identity.js';
 import { getDataHome, type LocalConfig } from '../types.js';
 import { pathExists } from '../utils/fs.js';
-import { log } from '../utils/logger.js';
+import { log } from '@teamai/shared/log';
 import { readWorkspaceChildren } from '../workspace-children.js';
 import { runDeadline } from '../workflow/limits.js';
 import { durationMs } from '../workflow/parse.js';

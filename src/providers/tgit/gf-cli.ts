@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { ensureDir } from '../../utils/fs.js';
-import { log, spinner } from '../../utils/logger.js';
+import { log, spinner } from '@teamai/shared/log';
 import { isInteractive } from '../../utils/prompt.js';
 import { getTeamaiHomeDir } from '../../types.js';
 import { z } from 'zod';

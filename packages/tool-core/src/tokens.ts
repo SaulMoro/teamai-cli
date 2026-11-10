@@ -3,7 +3,7 @@ import type { FileHandle } from 'node:fs/promises';
 import readline from 'node:readline';
 import { openRegularFile } from '@teamai/shared/regular-file';
 import type { JsonValue } from '@teamai/shared/json';
-import { log } from './log.js';
+import { log } from '@teamai/shared/log';
 
 /**
  * Token usage breakdown for a session/user. Claude Code and CodeBuddy usage is

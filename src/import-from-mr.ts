@@ -15,7 +15,7 @@ import { extractRepoUrlFromMrUrl, fetchMR, formatMrThreads, parseLearningDraft }
 import { RUN_DIR_ENV } from '@teamai/runtime-protocol';
 import type { LocalConfig } from './types.js';
 import type { ShortcutEnd } from './workflow-commands.js';
-import { log, spinner } from './utils/logger.js';
+import { log, spinner } from '@teamai/shared/log';
 import { readRegularFile } from '@teamai/shared/regular-file';
 
 const WORKFLOW = 'teamai-import-from-mr';

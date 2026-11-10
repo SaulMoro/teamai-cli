@@ -5,7 +5,7 @@ import fse from 'fs-extra';
 import { parseYaml } from '@teamai/shared/yaml';
 import { ensureDir, expandHome, listFilesRecursive, readFileSafe } from './fs.js';
 import { normalizeRepoUrlForCompare, redactGitCredentials, remotesMatch } from './git.js';
-import { log } from './logger.js';
+import { log } from '@teamai/shared/log';
 import { acquireLock, releaseLock } from '../update.js';
 import { getDataHome, getTeamaiHomeDir, isSelfMode, LocalConfigSchema, type LocalConfig } from '../types.js';
 import { readRegularFile } from '@teamai/shared/regular-file';

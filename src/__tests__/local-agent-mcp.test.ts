@@ -6,7 +6,7 @@ import fse from 'fs-extra';
 import { parse } from 'smol-toml';
 import { execFileSync } from 'node:child_process';
 
-vi.mock('@teamai/tool-core/log', () => ({
+vi.mock('@teamai/shared/log', () => ({
   log: {
     info: vi.fn(),
     success: vi.fn(),
@@ -710,7 +710,7 @@ describe('local-agent: MCP install/uninstall commands', () => {
   });
 
   it('names the Codex config it stops updating after a mapping change', async () => {
-    const { log } = await import('../utils/logger.js');
+    const { log } = await import('@teamai/shared/log');
     const { entryHash, renderCodexBlock } = await import('../resources/mcp-format.js');
     const old = path.join(tmpDir, 'old-codex', 'config.toml');
     const block = renderCodexBlock({ name: 'clawpro', transport: 'http', url: 'https://clawpro.example.com/mcp' });
@@ -1132,7 +1132,7 @@ describe('local-agent: MCP install/uninstall commands', () => {
       await fse.writeFile(excludeFile, '');
       await fse.remove(await workspaceFile('managed-mcp-files.json'));
       await fse.chmod(excludeFile, 0o444);
-      const { log } = await import('../utils/logger.js');
+      const { log } = await import('@teamai/shared/log');
       vi.mocked(log.warn).mockClear();
       try {
         await runResponse({ cmds: [] }, 'codebuddy', wsPath);

@@ -26,7 +26,7 @@ async function freshProcess() {
     resetWarnOnce: (await import('../utils/warn-once.js')).resetWarnOnce,
     activeRoleIds: (await import('../roles.js')).activeRoleIds,
     loadRoleAssignments: (await import('../role-assignments.js')).loadRoleAssignments,
-    log: (await import('../utils/logger.js')).log,
+    log: (await import('@teamai/shared/log')).log,
   };
 }
 

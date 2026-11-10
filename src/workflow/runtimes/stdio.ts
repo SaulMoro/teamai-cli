@@ -2,7 +2,7 @@ import type { ChildProcess } from 'node:child_process';
 import readline from 'node:readline';
 import { spawnCommand } from '@teamai/shared/exec';
 import { redact } from '@teamai/shared/redact';
-import { log } from '../../utils/logger.js';
+import { log } from '@teamai/shared/log';
 import { EXITED_STDOUT_CHARS, RUNTIME_PROTOCOL, RUNTIME_PROTOCOL_ENV, STDOUT_CUT, type Can, type OpId, type RuntimeFailure, type RuntimeRequest } from '@teamai/runtime-protocol';
 import { parseRuntimeLine, type HandleEvent, type OpEvent, type Shown } from './protocol.js';
 import type { Accepted, ExecEnd, ExecEvents, Initialized, Opened, PromptEnd, Reattached, StepRuntime, WakeEnd } from '@teamai/runtime-protocol/step-runtime';

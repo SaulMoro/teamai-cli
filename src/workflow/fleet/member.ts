@@ -10,7 +10,7 @@ import path from 'node:path';
 import type { HandoffOwner } from '../snapshot.js';
 import type { LocalConfig } from '../../types.js';
 import { errnoCode } from '../../utils/fs.js';
-import { log } from '../../utils/logger.js';
+import { log } from '@teamai/shared/log';
 import { stopRecordedGroup } from '@teamai/shared/process-group';
 import { shellArgv, startGroupedCommand, STOPPED_EXIT_CODE, type GroupedCommand, type GroupedCommandExit } from '../shell-command.js';
 import { attemptHoldingSession, attemptRun, attemptRuntimePath } from '../runtimes/attempt.js';

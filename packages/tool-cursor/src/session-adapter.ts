@@ -43,7 +43,7 @@ import {
 import { cleanTitleText, fallbackTitle, titleFromCandidates, titleFromUserText, isRenderableText, visibleUserText } from '@teamai/tool-core/sessions/title';
 import { cursorComposerExists, registerCursorComposer, unregisterCursorComposer, type CursorComposerMessage, type CursorComposerTool } from './cursor-store.js';
 import { assertSafeSessionFileId, deriveTargetSessionId } from '@teamai/tool-core/sessions/ids';
-import { log } from '@teamai/tool-core/log';
+import { log } from '@teamai/shared/log';
 import type { JsonlRecord } from '@teamai/shared/json';
 
 // ---------------------------------------------------------------------------

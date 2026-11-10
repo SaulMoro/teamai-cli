@@ -18,7 +18,7 @@ import {
   type LocalConfig,
   type TeamaiConfig,
 } from '../types.js';
-import { log } from '../utils/logger.js';
+import { log } from '@teamai/shared/log';
 
 const teamConfig: TeamaiConfig = TeamaiConfigSchema.parse({ team: 't', repo: 'r' });
 

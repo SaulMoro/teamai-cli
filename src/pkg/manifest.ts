@@ -8,7 +8,7 @@ import { z } from 'zod';
 
 import { getDataHome, getTeamaiHome, isSelfMode, type JsonValue, type LocalConfig, isJsonObject } from '../types.js';
 import { pathExists, readFileSafe, writeFile } from '../utils/fs.js';
-import { log } from '../utils/logger.js';
+import { log } from '@teamai/shared/log';
 import {
   PackageLockSchema,
   PackageManifestSchema,

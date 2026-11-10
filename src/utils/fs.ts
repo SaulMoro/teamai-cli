@@ -4,7 +4,7 @@ import crypto from 'node:crypto';
 import path from 'node:path';
 import { z } from 'zod';
 import { isJsonObject } from '../types.js';
-import { log } from './logger.js';
+import { log } from '@teamai/shared/log';
 import { expandHome } from '@teamai/shared/home';
 import { parseJson, type JsonSyntax } from '@teamai/shared/json';
 import { editJsonText, isPlainJson, parseJsonAs } from './json.js';

@@ -9,7 +9,7 @@ import { z } from 'zod';
 import { loadState, saveState, loadLocalConfig, loadTeamConfig, resolveConfigForDir } from './config.js';
 import { resolveEffectiveUpdatePolicy, VERSION_CHECK_TIMEOUT, INSTALL_TIMEOUT, HOOK_REFRESH_TIMEOUT } from './update-policy.js';
 import { resolveTeamaiEntryScript } from './builtin-hooks.js';
-import { log } from './utils/logger.js';
+import { log } from '@teamai/shared/log';
 import { errnoCode, expandHome, ensureDir } from './utils/fs.js';
 import { getTeamaiHomeDir, getUpdateLockPath, JsonValueSchema, type LocalConfig } from './types.js';
 import { askConfirmation, isInteractive } from './utils/prompt.js';

@@ -19,7 +19,7 @@ import type { LocalConfig, TeamaiConfig } from './types.js';
 import { withTimeout } from './utils/async.js';
 import { captureTail, detachChild } from '@teamai/shared/exec';
 import { resolveAnchors } from './utils/git.js';
-import { log } from './utils/logger.js';
+import { log } from '@teamai/shared/log';
 import { assertSafePath } from './utils/path-safety.js';
 import { closePrompt } from './utils/prompt.js';
 import { redactWithEnv } from '@teamai/shared/redact';

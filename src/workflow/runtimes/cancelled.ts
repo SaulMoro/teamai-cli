@@ -1,7 +1,7 @@
 import fs from 'node:fs/promises';
 import { resolveRunMode } from '../../launch-context.js';
 import type { LocalConfig } from '../../types.js';
-import { log } from '../../utils/logger.js';
+import { log } from '@teamai/shared/log';
 import type { RunStatus, WorkflowFailure } from '../types.js';
 import { existingCheckout } from '../run-location.js';
 import { attemptDir, AttemptIdSchema, attemptsDir, readRun, type AttemptId, type RunId, type RunLock } from '../store.js';

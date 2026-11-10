@@ -6,7 +6,7 @@ import matter from 'gray-matter';
 import { z } from 'zod';
 import { errnoCode, expandHome, readFileSafe, readJson, writeJsonAtomic, listFiles, pathExists, isDraft, isIgnored } from './fs.js';
 import { tokenize, wordSegments, MAX_TOKENIZE_CHARS } from './tokenizer.js';
-import { log } from './logger.js';
+import { log } from '@teamai/shared/log';
 import { teamRuleBody, teamRuleData } from '../resources/team-rule.js';
 import {
   SEARCH_INDEX_VERSION,

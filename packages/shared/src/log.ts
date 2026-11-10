@@ -1,6 +1,6 @@
 import chalk from 'chalk';
 import type { Ora } from 'ora';
-import { writeToFile } from '@teamai/shared/debug-log';
+import { writeToFile } from './debug-log.js';
 
 let verboseEnabled = false;
 let silentMode = false;

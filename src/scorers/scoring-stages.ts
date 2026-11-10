@@ -6,7 +6,7 @@
  */
 import type { ScorerDefinition, ScorerLabel } from './definition.js';
 import type { Decider, RunSubject } from './label.js';
-import { log } from '../utils/logger.js';
+import { log } from '@teamai/shared/log';
 import { runCheckAt } from './check-run.js';
 import { runPasses } from '../workflow/loop.js';
 import { deliveredCi } from '../workflow/pr-delivery.js';

@@ -2,7 +2,7 @@ import { resolveConfigForDir } from '../../config.js';
 import { LAUNCHED_BY_ENV, resolveRunMode, RUN_MODE_ENV, type LaunchedBy } from '../../launch-context.js';
 import type { LocalConfig } from '../../types.js';
 import { resolveCliPath } from '@teamai/shared/cli-path';
-import { log } from '../../utils/logger.js';
+import { log } from '@teamai/shared/log';
 import { CallError, memberTools, type MemberTool } from '../../tool-launch/member-tools.js';
 import type { TokenUsage } from '../../tool-launch/stdout.js';
 import { addTokens } from '@teamai/tool-core/stdout';

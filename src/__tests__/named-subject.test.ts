@@ -24,7 +24,7 @@ import { defaultSyncMeta, getRepoIdentity, SyncManager } from '../session-flow/s
 import { pushedSession } from '../session-flow/scoring.js';
 import type { ArchivedEvidence } from '../session-flow/session-evidence.js';
 import { getReportsDir, type LocalConfig } from '../types.js';
-import { log } from '../utils/logger.js';
+import { log } from '@teamai/shared/log';
 import { leaseNext, reportAttempt, startRun } from '../workflow/engine.js';
 import type { WorkflowEnvelope } from '../workflow/types.js';
 

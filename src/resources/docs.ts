@@ -4,7 +4,7 @@ import fse from 'fs-extra';
 import { ResourceHandler } from './base.js';
 import { installScopeName, isSelfMode, resolveBaseDir, type ResourceItem, type TeamaiConfig, type LocalConfig } from '../types.js';
 import { expandHome, isDraft, listDirs, pruneEmptyDirs } from '../utils/fs.js';
-import { log } from '../utils/logger.js';
+import { log } from '@teamai/shared/log';
 import { caseFoldKey } from '../manifest-schema.js';
 import { resolveResourceNamespaces } from '../resource-namespaces.js';
 import { describeKeptEntry, describeMembersDirLeft, isLink, isTeamaiCopy, isTeamaiSkillCopy } from './delivered-copies.js';

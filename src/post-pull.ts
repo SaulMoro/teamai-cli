@@ -24,7 +24,7 @@ import { spawn, type ChildProcess, type StdioOptions } from 'node:child_process'
 
 import { loadTeamConfig } from './config.js';
 import { withTimeout } from './utils/async.js';
-import { log } from './utils/logger.js';
+import { log } from '@teamai/shared/log';
 import { captureTail, detachChild } from '@teamai/shared/exec';
 import { assertSafePath } from './utils/path-safety.js';
 import { redactWithEnv } from '@teamai/shared/redact';

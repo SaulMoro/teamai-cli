@@ -4,7 +4,7 @@ import path from 'node:path';
 import os from 'node:os';
 import fse from 'fs-extra';
 
-vi.mock('@teamai/tool-core/log', () => ({
+vi.mock('@teamai/shared/log', () => ({
   log: {
     info: vi.fn(),
     success: vi.fn(),
@@ -220,7 +220,7 @@ describe('classifySkill', () => {
   });
 
   it.each(['malformed', 'unreadable'])('warns when source provenance cannot be determined: %s', async (failure) => {
-    const { log } = await import('../utils/logger.js');
+    const { log } = await import('@teamai/shared/log');
     vi.mocked(log.warn).mockClear();
     await fse.outputJson(getSourceManifestPath('partner', fx.localConfig), {
       lastPull: '2026-01-01T00:00:00Z', installedSkills: ['external-skill'],

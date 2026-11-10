@@ -20,7 +20,7 @@ vi.mock('../utils/fs.js', () => ({
   readFileSafe: vi.fn(async () => null),
 }));
 
-vi.mock('@teamai/tool-core/log', () => ({
+vi.mock('@teamai/shared/log', () => ({
   log: {
     info: vi.fn(),
     success: vi.fn(),

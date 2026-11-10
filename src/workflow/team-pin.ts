@@ -10,7 +10,7 @@ import path from 'node:path';
 import type { z } from 'zod';
 import { getBusinessRoot, getKnowledgeDir, isSelfMode, type LocalConfig } from '../types.js';
 import { isSameRealPath, writeFileAtomic } from '../utils/fs.js';
-import { log } from '../utils/logger.js';
+import { log } from '@teamai/shared/log';
 import { withTeamRevision } from './cache.js';
 import { runsDir, TeamPinSchema } from './store.js';
 import type { RunState } from './types.js';

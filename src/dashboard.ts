@@ -3,7 +3,7 @@ import { dashboardWorkspaces, ownSessionEvents, workspaceEvents, type DashboardW
 import fs from 'node:fs';
 import path from 'node:path';
 import { z } from 'zod';
-import { log } from './utils/logger.js';
+import { log } from '@teamai/shared/log';
 import { ensureDir } from './utils/fs.js';
 import { dataHomeKey, readEvents, readLocalRequestRecords, readSessionOutcomes, rebuildSessions, appendEvent, memberEvents, sessionRuns } from './dashboard-collector.js';
 import { isProcessAlive } from './pid-monitor.js';

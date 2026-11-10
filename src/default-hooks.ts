@@ -5,7 +5,7 @@ import { packageRoot } from './package-info.js';
 import { DeliveredFolders } from './resources/delivered-folders.js';
 import { FolderFiles, type FolderFile } from './resources/folder-files.js';
 import { isJsonObject, type JsonObject, type JsonValue, type LocalConfig, type TeamaiConfig } from './types.js';
-import { log } from './utils/logger.js';
+import { log } from '@teamai/shared/log';
 import { parseYaml } from '@teamai/shared/yaml';
 
 // ─── Default hooks (#1787) ───────────────────────────────

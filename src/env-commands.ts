@@ -1,7 +1,7 @@
 import { requireInit, detectProjectConfig, describeUnreadableConfig, loadTeamConfig, NotInitializedError } from './config.js';
 import { DetachedTeamRepoError, pullRepo } from './utils/git.js';
 import { pathExists } from './utils/fs.js';
-import { log, spinner } from './utils/logger.js';
+import { log, spinner } from '@teamai/shared/log';
 import { EnvHandler, envEntryReader, unknownEnvVariableKeys, type EnvVariable, type EnvYaml } from './resources/env.js';
 import { ENV_KEY_RE, envName, envValue, sameEnvName } from './resources/env-key.js';
 import {

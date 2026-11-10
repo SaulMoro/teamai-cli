@@ -9,7 +9,7 @@ import { listLearningFiles } from '../utils/learnings-roots.js';
 import { parseFrontmatter } from '../utils/frontmatter.js';
 import { tokenize } from '../utils/tokenizer.js';
 import { readUserVotes } from '../votes.js';
-import { log } from '../utils/logger.js';
+import { log } from '@teamai/shared/log';
 
 export interface StaleEntry {
   docId: string;

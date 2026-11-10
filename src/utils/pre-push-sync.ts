@@ -18,7 +18,7 @@ import { getFileContentAtRev, getFileContentWhenAdded } from './git.js';
 import { installOf, locate, ownOf, writable } from '../locate.js';
 import { ruleFileExtensionForTool, ruleFormatForTool, teamRuleNameForFile, usesCopilotInstructions } from '../resources/rule-format.js';
 import { EXCLUDED_RULE_NAMES } from '../builtin-rules.js';
-import { log } from './logger.js';
+import { log } from '@teamai/shared/log';
 import { placedResourcePath } from '../push-namespaces.js';
 import { recordDelivered, type DeliveredHashes } from '../resources/delivered-copies.js';
 

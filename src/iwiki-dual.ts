@@ -12,7 +12,7 @@ import { extractReply } from '@teamai/tool-core/reply';
 
 import type { IWikiDocument } from './utils/iwiki-client.js';
 import { appendPendingReview } from './review-store.js';
-import { log } from './utils/logger.js';
+import { log } from '@teamai/shared/log';
 import { readRegularFile } from '@teamai/shared/regular-file';
 
 /** How much of each page the AI tool is shown. */

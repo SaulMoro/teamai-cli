@@ -6,7 +6,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { refreshRoleAssignment } from '../config.js';
 import { driveByDefault } from '../default-driver.js';
 import { getUserConfigPath, LocalConfigSchema, type LocalConfig } from '../types.js';
-import { log } from '../utils/logger.js';
+import { log } from '@teamai/shared/log';
 
 const dirs: string[] = [];
 const machineFile = getUserConfigPath;

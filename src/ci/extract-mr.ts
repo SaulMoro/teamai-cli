@@ -12,7 +12,7 @@ import { z } from 'zod';
 import { ImportInputError } from '../import-from-repo.js';
 import { ImportLearnings } from '../import-local.js';
 import { getDefaultBranch, pushRepoDirectly } from '../utils/git.js';
-import { log } from '../utils/logger.js';
+import { log } from '@teamai/shared/log';
 import type { LearningDraft } from '../types.js';
 import { githubApiUrl, postOrUpdateMrComment, postIndividualComments, postCodebaseGraphComment, parseMrUrl } from './mr-comment.js';
 import { readRejections, shouldWrite } from './read-rejections.js';

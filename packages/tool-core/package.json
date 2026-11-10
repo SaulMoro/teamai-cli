@@ -10,7 +10,6 @@
     "./formats/*": "./src/formats/*.ts",
     "./instance": "./src/instance.ts",
     "./launch": "./src/launch.ts",
-    "./log": "./src/log.ts",
     "./registry": "./src/registry.ts",
     "./reply": "./src/reply.ts",
     "./sessions/*": "./src/sessions/*.ts",

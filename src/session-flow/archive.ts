@@ -9,7 +9,7 @@ import path from 'node:path';
 import { knownSecrets } from '../env-resolution.js';
 import { isSelfMode, type LocalConfig } from '../types.js';
 import { createGit, getDefaultBranch } from '../utils/git.js';
-import { log } from '../utils/logger.js';
+import { log } from '@teamai/shared/log';
 import { updateReports } from '../utils/reports-branch.js';
 import { getAdapter } from './adapters/index.js';
 import { AgentSession, noAdapter, recordedToolRoots, writeCopyOnce } from './agent-session.js';

@@ -20,7 +20,7 @@ import { loadTeamConfig } from '../config.js';
 import type { LocalConfig } from '../types.js';
 import { getDataHome, isJsonObject, isUsageReportEnabled, type JsonValue } from '../types.js';
 import { parseJson } from '@teamai/shared/json';
-import { log } from '../utils/logger.js';
+import { log } from '@teamai/shared/log';
 import { redactJson } from '@teamai/shared/redact';
 import { acquireLock, releaseLock } from '../update.js';
 import { launchTargetOf } from '../tool-launch/tools.js';

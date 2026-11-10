@@ -20,7 +20,7 @@ import { TryScorer } from './scorers/try-scorer.js';
 import type { JsonObject, LocalConfig } from './types.js';
 import { isSameRealPath } from './utils/fs.js';
 import { createGit } from './utils/git.js';
-import { log, setStderrOnly } from './utils/logger.js';
+import { log, setStderrOnly } from '@teamai/shared/log';
 import { durationMs } from './workflow/parse.js';
 import { isIsolated } from './workflow/workspace.js';
 

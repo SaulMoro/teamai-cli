@@ -8,7 +8,7 @@ vi.mock('node:fs/promises', async (importOriginal) => {
   return { ...actual, readFile: vi.fn(actual.readFile) };
 });
 
-vi.mock('@teamai/tool-core/log', () => ({
+vi.mock('@teamai/shared/log', () => ({
   log: {
     info: vi.fn(),
     success: vi.fn(),
@@ -20,7 +20,7 @@ vi.mock('@teamai/tool-core/log', () => ({
 }));
 
 import { readFile } from 'node:fs/promises';
-import { log } from '../utils/logger.js';
+import { log } from '@teamai/shared/log';
 import { buildIndex, loadIndex } from '../utils/search-index.js';
 
 /** Reads finish in any order, but the index and its warning follow the listing (#1239). */

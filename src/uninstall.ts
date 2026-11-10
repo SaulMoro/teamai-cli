@@ -96,7 +96,7 @@ import {
   pruneEmptyDirs,
 } from './utils/fs.js';
 import { listQueuesIn } from './utils/pending-learnings.js';
-import { log } from './utils/logger.js';
+import { log } from '@teamai/shared/log';
 import { askConfirmation } from './utils/prompt.js';
 import { getUserHome } from '@teamai/shared/home';
 import { gitCommonDir, listWorktrees } from './utils/git.js';

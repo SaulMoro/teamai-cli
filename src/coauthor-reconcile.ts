@@ -19,7 +19,7 @@ import {
   writeFile,
   pathExists,
 } from './utils/fs.js';
-import { log } from './utils/logger.js';
+import { log } from '@teamai/shared/log';
 import { hookSyntaxOf } from './tool-registry.js';
 import type { JsonSyntax } from '@teamai/shared/json';
 

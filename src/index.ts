@@ -1,7 +1,7 @@
 import { createRequire } from 'node:module';
 import { format } from 'node:util';
 import { Command, Option } from 'commander';
-import { setVerbose, setSilent, setStderrOnly, log, writeInfoLine } from './utils/logger.js';
+import { setVerbose, setSilent, setStderrOnly, log, writeInfoLine } from '@teamai/shared/log';
 import { ignoreTypeOfServiceRefusal } from '@teamai/shared/type-of-service';
 import { applyNonInteractiveGitEnv } from './utils/git-env.js';
 import { ensureBundledRuntimeOnPath } from './bundled-runtime.js';

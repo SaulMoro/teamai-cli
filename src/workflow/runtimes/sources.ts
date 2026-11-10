@@ -13,7 +13,7 @@ import { shippedRuntimeFile } from '../../default-drivers.js';
 import { personalDir, resolveDriver, teamItem, type ResolvedDriver } from './definitions.js';
 import { LOCAL_DRIVER } from '../driver-name.js';
 import { fleetStepRuntime, shadowedFleetEntries, type OpenWake } from '../fleet/owner.js';
-import { log } from '../../utils/logger.js';
+import { log } from '@teamai/shared/log';
 import { stdioStepRuntime } from './stdio.js';
 import { type InitInstance, type RuntimeFailure, type RuntimeOptions } from '@teamai/runtime-protocol';
 import { acceptToolCommand, instanceHomeDir } from '../../tool-instances.js';

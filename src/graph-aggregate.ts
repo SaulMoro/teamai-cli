@@ -2,7 +2,7 @@
 import path from 'node:path';
 import { readdir } from 'node:fs/promises';
 import fs from 'fs-extra';
-import { log } from './utils/logger.js';
+import { log } from '@teamai/shared/log';
 import { caseFoldKey } from './manifest-schema.js';
 import { readRegularFile } from '@teamai/shared/regular-file';
 

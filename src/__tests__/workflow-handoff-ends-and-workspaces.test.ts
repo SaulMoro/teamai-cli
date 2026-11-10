@@ -4,7 +4,7 @@ import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { LocalConfig } from '../types.js';
 import { acquireLock, releaseLock } from '../update.js';
-import { log } from '../utils/logger.js';
+import { log } from '@teamai/shared/log';
 import { updateReports } from '../utils/reports-branch.js';
 import * as workflowCache from '../workflow/cache.js';
 import { syncScorersThenWorkflows } from '../scorers/team-sync.js';

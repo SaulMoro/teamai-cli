@@ -11,7 +11,7 @@ import { expandHome, listFilesRecursive, pathExists, readFileIfExists, readFileS
 import { acquireLock, releaseLock } from './update.js';
 import { detectProjectConfig, readConfigFrom } from './config.js';
 import { getUserHome } from '@teamai/shared/home';
-import { log } from './utils/logger.js';
+import { log } from '@teamai/shared/log';
 import { acquireQueueLock, countQueued, pendingLearningsDir, queueOwner, sameQueueOwner, setAsideCheckoutQueue, withQueueLock, type QueueOwner } from './utils/pending-learnings.js';
 
 /**

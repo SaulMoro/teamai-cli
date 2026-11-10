@@ -6,7 +6,7 @@ import { parseDriverDefinition, resolveDriver } from '../workflow/runtimes/defin
 import { openDriver } from '../workflow/runtimes/sources.js';
 import { shippedDriverFile } from '../default-drivers.js';
 import { getTeamaiHomeDir, type LocalConfig } from '../types.js';
-import { log } from '../utils/logger.js';
+import { log } from '@teamai/shared/log';
 
 const dirs: string[] = [];
 

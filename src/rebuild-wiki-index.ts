@@ -4,7 +4,7 @@ import path from 'node:path';
 import { z } from 'zod';
 import { pathExists } from './utils/fs.js';
 import { lenientList } from '@teamai/shared/json';
-import { log } from './utils/logger.js';
+import { log } from '@teamai/shared/log';
 import { HOT_TEMPLATE } from './wiki-engine/adapters/templates.js';
 import { readRegularFile } from '@teamai/shared/regular-file';
 

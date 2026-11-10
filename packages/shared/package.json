@@ -9,6 +9,7 @@
     "./exec": "./src/exec.ts",
     "./home": "./src/home.ts",
     "./json": "./src/json.ts",
+    "./log": "./src/log.ts",
     "./lookpath": "./src/lookpath.ts",
     "./process-group": "./src/process-group.ts",
     "./redact": "./src/redact.ts",

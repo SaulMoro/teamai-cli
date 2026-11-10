@@ -168,7 +168,7 @@ function settingsReinitKeeps(file: LocalConfig | null, remote: string) {
   return remotesMatch(repo.remote, remote) ? settings : anyTeamSettings;
 }
 
-import { log, spinner } from './utils/logger.js';
+import { log, spinner } from '@teamai/shared/log';
 import {
   CLAUDE_TOOL_ID,
   detectToolRoot,

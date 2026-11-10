@@ -4,7 +4,7 @@ import path from 'node:path';
 import matter from 'gray-matter';
 
 import { listLearningFiles, type LearningFile } from './learnings-roots.js';
-import { log } from './logger.js';
+import { log } from '@teamai/shared/log';
 import { readRegularFile } from '@teamai/shared/regular-file';
 
 /** 英文停用词集合 */

@@ -13,7 +13,7 @@ import path from 'node:path';
 import fse from 'fs-extra';
 import { assertAttachedTeamRepo, createGit, createGitWithBlockTimeout, getDefaultBranch, getHeadCommit, hasCommits, readBlobs } from './git.js';
 import { pathExists } from './fs.js';
-import { log } from './logger.js';
+import { log } from '@teamai/shared/log';
 import {
   ForeignCheckoutError,
   createBranchWorktree,

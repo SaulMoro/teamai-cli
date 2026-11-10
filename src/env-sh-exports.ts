@@ -16,7 +16,7 @@ import { z } from 'zod';
 import { envName } from './resources/env-key.js';
 import type { JsonValue } from './types.js';
 import { readFileSafe, writeJsonAtomic } from './utils/fs.js';
-import { log } from './utils/logger.js';
+import { log } from '@teamai/shared/log';
 
 const RECORD_FILE = 'env.sh.exports.json';
 const KEPT_PER_KEY = 20;

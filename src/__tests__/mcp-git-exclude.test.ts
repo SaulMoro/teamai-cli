@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 
-vi.mock('@teamai/tool-core/log', () => ({
+vi.mock('@teamai/shared/log', () => ({
   log: { debug: vi.fn(), error: vi.fn(), info: vi.fn(), success: vi.fn(), warn: vi.fn(), dim: vi.fn() },
 }));
 
@@ -46,7 +46,7 @@ vi.mock('../utils/fs.js', async (importOriginal) => {
 
 import { MCP_EXCLUDE_END, MCP_EXCLUDE_START, carriesLocalAgentCredential, ensureExcludedFromGit, excludeFromGit, removeMcpGitExclude, updateFileLocked } from '../mcp-git-exclude.js';
 import { acquireLock, releaseLock } from '../update.js';
-import { log } from '../utils/logger.js';
+import { log } from '@teamai/shared/log';
 
 describe('teamai block in .git/info/exclude (#882)', () => {
   let repo: string;

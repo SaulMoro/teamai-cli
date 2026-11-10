@@ -5,7 +5,7 @@ import { gitTracks, gitUntracked } from '../git-exclude.js';
 import type { DeliveryRecorder } from '../git-exclude-delivered.js';
 import type { AgentModelRecords, CopyOrigin, DeliveryTarget, ResourceItem } from '../types.js';
 import { fileHash, isDraft, listFilesRecursive, remove } from '../utils/fs.js';
-import { log } from '../utils/logger.js';
+import { log } from '@teamai/shared/log';
 import { resolveReal } from '../utils/path-safety.js';
 import { historicalVersions, matchesHistory, readBlob, readRenderedBlob } from '../utils/team-history.js';
 import { isUneditedGeneratedSkill } from '../workflow/discovery/generated-marker.js';

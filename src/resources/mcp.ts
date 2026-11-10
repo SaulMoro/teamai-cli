@@ -6,7 +6,7 @@ import { parseYaml } from '@teamai/shared/yaml';
 import { ResourceHandler } from './base.js';
 import type { JsonValue, LocalConfig, McpServerDef, ResourceItem, TeamaiConfig } from '../types.js';
 import { listDirs, readFileSafe, writeFile } from '../utils/fs.js';
-import { log } from '../utils/logger.js';
+import { log } from '@teamai/shared/log';
 import { pushRepoResourceItem, scanRepoResourceForPush } from './repo-resource.js';
 import {
   entryFileAbsolutePath, entryFilePath, listEntryFiles, missingTopLevelKeyReason, readEntryFileText, unknownEntryKeys, type EntryFileRead, type ResolvedEntry,

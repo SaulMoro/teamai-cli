@@ -25,7 +25,7 @@
 import path from 'node:path';
 import { generatedFileState, writeIfChanged, remove } from './utils/fs.js';
 import { earlierHookAdapterDir, hookAdapterDir } from './locate.js';
-import { log } from './utils/logger.js';
+import { log } from '@teamai/shared/log';
 import { resolveCliEntry } from './builtin-hooks.js';
 import { bridgedTeamHookFile } from './bridged-team-hooks.js';
 

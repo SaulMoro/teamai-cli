@@ -9,7 +9,7 @@ import type { WikiLintSeverity } from './codebase-wiki-lint.js';
 import type { TeamwikiTarget } from './utils/teamwiki-root.js';
 import type { ShortcutEnd } from './workflow-commands.js';
 import { DetachedTeamRepoError } from './utils/git.js';
-import { log } from './utils/logger.js';
+import { log } from '@teamai/shared/log';
 
 /** The component list of an evidence `_manifest.json`, which deep enrichment needs at least one of. */
 const EvidenceComponentsSchema = z.object({ components: z.array(z.unknown()).optional().catch(undefined) });

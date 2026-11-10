@@ -4,7 +4,7 @@ import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { LocalConfig } from '../types.js';
 import { acquireLock, releaseLock } from '../update.js';
-import { log } from '../utils/logger.js';
+import { log } from '@teamai/shared/log';
 import * as reportsBranch from '../utils/reports-branch.js';
 import { updateReports } from '../utils/reports-branch.js';
 import { leaseNext, reportAttempt, startRun } from '../workflow/engine.js';

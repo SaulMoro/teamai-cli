@@ -4,7 +4,7 @@ import path from 'node:path';
 import { toolHome } from './tool-home.js';
 import readline from 'node:readline';
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
-import { log } from './utils/logger.js';
+import { log } from '@teamai/shared/log';
 import { deriveDispatchSessionId } from './utils/session-id.js';
 import { resolveHookCwd } from './utils/hook-cwd.js';
 import { ensureDir } from './utils/fs.js';

@@ -3,7 +3,7 @@ import path from 'node:path';
 import os from 'node:os';
 import fse from 'fs-extra';
 
-vi.mock('@teamai/tool-core/log', () => ({
+vi.mock('@teamai/shared/log', () => ({
   log: {
     info: vi.fn(),
     success: vi.fn(),
@@ -14,7 +14,7 @@ vi.mock('@teamai/tool-core/log', () => ({
   },
 }));
 
-import { log } from '../utils/logger.js';
+import { log } from '@teamai/shared/log';
 import { buildIndex, loadIndex, type BuildIndexOptions } from '../utils/search-index.js';
 
 /**

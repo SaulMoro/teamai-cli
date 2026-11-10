@@ -5,7 +5,7 @@ import path from 'node:path';
 import fse from 'fs-extra';
 import YAML from 'yaml';
 
-vi.mock('@teamai/tool-core/log', () => ({
+vi.mock('@teamai/shared/log', () => ({
   log: { info: vi.fn(), success: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn(), dim: vi.fn() },
   spinner: vi.fn(() => ({ start: vi.fn().mockReturnThis(), succeed: vi.fn(), fail: vi.fn() })),
 }));
@@ -234,7 +234,7 @@ describe('source physical destination ownership', () => {
     const outside = path.join(root, 'outside.md');
     await fse.writeFile(outside, 'outside');
     await fse.symlink(outside, path.join(home, '.teamai/source-repos', id, 'repo', 'skills', 'foo', 'linked.md'));
-    const { log } = await import('../utils/logger.js');
+    const { log } = await import('@teamai/shared/log');
     vi.mocked(log.warn).mockClear();
 
     await pullSources(config, { force: true });
@@ -265,7 +265,7 @@ describe('source physical destination ownership', () => {
     await fse.writeFile(mine, '# Original source: foo\n');
     await fse.remove(skillFile);
     await fse.symlink(mine, skillFile);
-    const { log } = await import('../utils/logger.js');
+    const { log } = await import('@teamai/shared/log');
 
     await publish(producer, ['foo'], 'Updated source');
     await pullSources(config, { force: true });

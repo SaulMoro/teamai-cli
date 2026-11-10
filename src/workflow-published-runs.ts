@@ -8,7 +8,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { DefaultWorkflows } from './default-workflows.js';
 import type { WorkflowEnv } from './env-resolution.js';
-import { log } from './utils/logger.js';
+import { log } from '@teamai/shared/log';
 import { getReportsDir, usesBranchWorktree, type LocalConfig } from './types.js';
 import { describeWorkflow, type WorkflowDescription } from './workflow/describe.js';
 import { canFor, ceilingOf, isLeft, listOf, localReason, personClauses } from './workflow/drivers/skill/skill-driver.js';

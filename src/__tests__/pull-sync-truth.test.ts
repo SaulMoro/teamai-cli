@@ -32,7 +32,7 @@ vi.mock('../utils/git.js', async (importOriginal) => ({
   resolveAnchors: vi.fn().mockResolvedValue(null),
 }));
 
-vi.mock('@teamai/tool-core/log', () => ({
+vi.mock('@teamai/shared/log', () => ({
   log: {
     info: vi.fn(),
     success: vi.fn(),
@@ -76,7 +76,7 @@ vi.mock('../update.js', () => ({
 
 import { checkoutKey, pull } from '../pull.js';
 import { detectProjectConfig, loadLocalConfigForScope, loadTeamConfig, loadStateForScope, saveStateForScope } from '../config.js';
-import { log } from '../utils/logger.js';
+import { log } from '@teamai/shared/log';
 import type { TeamaiConfig, LocalConfig } from '../types.js';
 import { recordGitHookFailure, readGitHookFailure } from '../git-hook.js';
 import { reconcileTeamHooksForConfig } from '../hooks.js';

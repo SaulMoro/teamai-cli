@@ -14,7 +14,7 @@ import { readFolderMarker, Resources, RESOURCE_LAYOUTS, type ResourceDiagnostic 
 import { loadRolesManifestIfPresent } from '../roles.js';
 import { getBusinessRoot, getDataHome, getKnowledgeDir, isSelfMode, managedMcpWorkspaceId, type LocalConfig } from '../types.js';
 import { readFileSafe, remove, writeJsonAtomic } from '../utils/fs.js';
-import { log } from '../utils/logger.js';
+import { log } from '@teamai/shared/log';
 import { type SyncScorerOptions } from '../scorers/cache.js';
 import { formatUnknownScorer, syncScorersThenWorkflows, type SyncScoredWorkflowsResult, type UnknownScorer } from '../scorers/team-sync.js';
 import { dropsKeptVersion, workflowFileNames } from '../workflow/cache.js';

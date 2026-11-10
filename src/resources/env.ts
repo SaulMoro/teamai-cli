@@ -9,7 +9,7 @@ import { loadStateForScope } from '../config.js';
 import type { JsonValue, ResourceItem, ResourceItemStatus, TeamaiConfig, LocalConfig } from '../types.js';
 import { TEAMAI_ENV_START, TEAMAI_ENV_END, getDataHome, isJsonObject, getEnvBackupPath, getTeamaiHome, isSelfMode } from '../types.js';
 import { pathExists, readFileIfExists, readFileSafe, writeFile, ensureDir, fileContentEqual, remove, symlinkTarget } from '../utils/fs.js';
-import { log } from '../utils/logger.js';
+import { log } from '@teamai/shared/log';
 import { envShExportsPath, envShMarker, isEnvShMarker, recordEnvShExports } from '../env-sh-exports.js';
 import { ENV_KEY_RE, envNamePattern, envNamePatternKey, envTable, sameEnvName } from './env-key.js';
 import { SECRETS_LAYOUT } from './secrets.js';

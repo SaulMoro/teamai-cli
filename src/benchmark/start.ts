@@ -31,7 +31,7 @@ import { git } from '../workflow/worktree.js';
 import { addedOf, compileBundle, freezePlan, trialScorersOf, type BenchmarkEstimate, type BenchmarkPlan, type CompiledBundle, type PinnedRubric, type PlannedArm } from './plan.js';
 import { isMixedTask } from './calibration.js';
 import { estimateOf, judgeCallsOf } from './estimate.js';
-import { log } from '../utils/logger.js';
+import { log } from '@teamai/shared/log';
 import { defaultsArmOf, parseSuite, type Arm, type Suite, type Task, type TaskCheck, TaskJudge } from './suite.js';
 import { coveredDelivery, coveredSkillName, teamFilesAt } from './team-without.js';
 import { pinArmWorkflow, type PinnedArmWorkflow } from './arm-workflow.js';

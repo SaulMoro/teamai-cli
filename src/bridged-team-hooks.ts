@@ -20,7 +20,7 @@ import { type HookAdapterId } from '@teamai/tool-core/definition';
 import { channelsOf } from './tool-registry.js';
 import { areTeamHooksDisabled, getTeamaiHomeDir, JsonValueSchema, TEAMAI_AGENT_HOOK_PREFIX } from './types.js';
 import { readJsonObject } from './utils/fs.js';
-import { log } from './utils/logger.js';
+import { log } from '@teamai/shared/log';
 
 /** How a host reads a bridge's answer. */
 type ReplyFormat =

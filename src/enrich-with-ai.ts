@@ -4,7 +4,7 @@ import { writeFile, mkdir } from 'node:fs/promises';
 import { z } from 'zod';
 import { extractReply } from '@teamai/tool-core/reply';
 
-import { log } from './utils/logger.js';
+import { log } from '@teamai/shared/log';
 import { assertSafeResourceName, assertWithinRoot } from './utils/path-safety.js';
 import { SourceManifestSchema } from './wiki-engine/code-knowledge/code-collector.js';
 import { loadFactsCache, loadInterfacesCache } from './wiki-engine/code-knowledge/code-incremental.js';

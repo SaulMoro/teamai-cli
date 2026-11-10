@@ -5,7 +5,7 @@ import { z } from 'zod';
 
 import { errnoCode } from './fs.js';
 import { getUserHome } from '@teamai/shared/home';
-import { log } from './logger.js';
+import { log } from '@teamai/shared/log';
 import { readRegularFile } from '@teamai/shared/regular-file';
 
 // ─── Constants ───────────────────────────────────────────

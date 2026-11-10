@@ -28,7 +28,7 @@ import { fakeAgent, type FakeAgent } from '@teamai/tool-testing/fake-agent';
 import { claudeFake } from '@teamai/tool-claude/testing';
 import os from 'node:os';
 import { openSessionArchive } from '../session-flow/archive.js';
-import { log } from '../utils/logger.js';
+import { log } from '@teamai/shared/log';
 import { sessionArchiveRoot } from '../session-flow/session-cmd-shared.js';
 import { getRepoIdentity, SyncManager } from '../session-flow/sync.js';
 

@@ -10,7 +10,7 @@ vi.mock('../utils/git.js', async (importOriginal) => ({
   listWorktrees: vi.fn().mockResolvedValue([]),
 }));
 
-vi.mock('@teamai/tool-core/log', () => ({
+vi.mock('@teamai/shared/log', () => ({
   log: { info: vi.fn(), success: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn(), persist: vi.fn() },
 }));
 
@@ -424,7 +424,7 @@ hooks:
     await writeYaml(`hooks:${lint}`);
     await reconcileTeamHooksForConfig(teamConfig, localConfig());
     const before = await claudeLocal();
-    const { log } = await import('../utils/logger.js');
+    const { log } = await import('@teamai/shared/log');
     vi.mocked(log.warn).mockClear();
 
     await writeYaml(`hook:${lint}`);
@@ -1672,7 +1672,7 @@ describe('reconcileHooks — an unrecorded team hook entry, judged by the team\'
     const installed = await commands();
     expect(installed.length).toBeGreaterThan(0);
     await fse.writeJson(manifestPath, {});
-    const { log } = await import('../utils/logger.js');
+    const { log } = await import('@teamai/shared/log');
     vi.mocked(log.warn).mockClear();
 
     await reconcileHooks(file, tool, [stop('v2')], { manifestPath, teamHookProjectRoot: root, teamHookHistory: async () => [stop('v1'), stop('v2')] });

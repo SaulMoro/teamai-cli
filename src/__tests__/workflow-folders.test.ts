@@ -10,7 +10,7 @@ import { DefaultWorkflows } from '../default-workflows.js';
 import { getHandler } from '../resources/index.js';
 import { RESOURCE_LAYOUTS, Resources } from '../resources/resolver.js';
 import { getDataHome } from '../types.js';
-import { log } from '../utils/logger.js';
+import { log } from '@teamai/shared/log';
 import { folderOf, loadCachedWorkflow, namespaceConflictOf } from '../workflow/cache.js';
 import { _setDriverPollMs, runLocalDriver, type DriverRuntimes } from '../workflow/drivers/local/local-driver.js';
 import { hostStepRuntime } from '../workflow/runtimes/host.js';

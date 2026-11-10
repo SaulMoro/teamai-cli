@@ -13,7 +13,7 @@ import type { ToolId } from './tools.js';
 import { DEFAULT_TOOL_PATHS, getTeamaiHomeDir, rerootToolPaths, ToolPathsSchema, type TeamaiConfig } from './types.js';
 import { writeJsonAtomic } from './utils/fs.js';
 import { getUserHome } from '@teamai/shared/home';
-import { log } from './utils/logger.js';
+import { log } from '@teamai/shared/log';
 import { errorOnce, warnOnce } from './utils/warn-once.js';
 import { parseYaml } from '@teamai/shared/yaml';
 import { readRegularFile } from '@teamai/shared/regular-file';

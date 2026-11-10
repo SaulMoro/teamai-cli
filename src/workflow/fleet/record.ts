@@ -14,7 +14,7 @@ import { OpIdSchema, RuntimeDisplaySchema, type OpId, type RuntimeDisplay } from
 import { sanitizeGitUrl } from '@teamai/shared/redact';
 import { getReportsDir, type LocalConfig } from '../../types.js';
 import { gitRoot } from '../../utils/branch-worktree.js';
-import { log } from '../../utils/logger.js';
+import { log } from '@teamai/shared/log';
 import { writeJsonAtomic } from '../../utils/fs.js';
 import { getCurrentVersion } from '../../package-info.js';
 import { fetchReportsOriginFile, updateReports, type ReportsChange } from '../../utils/reports-branch.js';

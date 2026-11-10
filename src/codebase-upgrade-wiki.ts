@@ -7,7 +7,7 @@ import matter from 'gray-matter';
 import { autoDetectInit } from './config.js';
 import { publishTeamwikiViaMR, refreshTeamwikiIndexes } from './import-codebase.js';
 import { DetachedTeamRepoError } from './utils/git.js';
-import { log } from './utils/logger.js';
+import { log } from '@teamai/shared/log';
 import { pathExists } from './utils/fs.js';
 import { readRegularFile } from '@teamai/shared/regular-file';
 

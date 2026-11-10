@@ -28,7 +28,7 @@ vi.mock('../utils/git.js', async (importOriginal) => ({
   pullRepo: vi.fn().mockResolvedValue('Already up to date.'),
 }));
 
-vi.mock('@teamai/tool-core/log', () => ({
+vi.mock('@teamai/shared/log', () => ({
   log: {
     info: vi.fn(),
     success: vi.fn(),
@@ -58,7 +58,7 @@ vi.mock('../update.js', () => ({
 import crypto from 'node:crypto';
 import { checkoutKey, pull } from '../pull.js';
 import { loadLocalConfigForScope, loadTeamConfig, detectProjectConfig, loadStateForScope, saveStateForScope } from '../config.js';
-import { log } from '../utils/logger.js';
+import { log } from '@teamai/shared/log';
 import { StateSchema, type TeamaiConfig, type LocalConfig } from '../types.js';
 import { commitTeamRepo } from './helpers/team-repo-history.js';
 

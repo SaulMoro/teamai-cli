@@ -8,7 +8,7 @@ import { commandSignalPolicy, exitLike, stepEnvironment, terminalReachesCommand,
 import { knownSecrets, resolveWorkflowEnv, type WorkflowEnv } from '../../../env-resolution.js';
 import { resolveRunMode, type RunMode } from '../../../launch-context.js';
 import type { LocalConfig, TeamaiConfig } from '../../../types.js';
-import { log, PROGRESS_STREAMS_ENV, streamOfLine, withoutStreamMarks } from '../../../utils/logger.js';
+import { log, PROGRESS_STREAMS_ENV, streamOfLine, withoutStreamMarks } from '@teamai/shared/log';
 import { redact } from '@teamai/shared/redact';
 import { openSessionArchive } from '../../../session-flow/archive.js';
 import { agentEvidence, attemptEnv } from '../../attempt-marker.js';

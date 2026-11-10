@@ -29,7 +29,7 @@ import { execCommand } from '@teamai/shared/exec';
 import { GIT_REPOSITORY_ENV } from './utils/git-env.js';
 import { readFileIfExists, readJson, remove, writeJson } from './utils/fs.js';
 import { gitFindsNoRepository } from './utils/git-discovery.js';
-import { log } from './utils/logger.js';
+import { log } from '@teamai/shared/log';
 
 export const GIT_HOOK_EVENTS = ['post-checkout', 'post-merge', 'post-rewrite'] as const;
 

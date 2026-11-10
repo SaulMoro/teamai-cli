@@ -25,7 +25,7 @@ import { createDispatcher, HookStdinSchema, stdinString, type Dispatcher, type H
 import { buildHandlerRegistry, filterHandlersForConfig } from './hook-handlers.js';
 import { resolveHookCwd } from './utils/hook-cwd.js';
 import { windowsPowerShell } from './utils/powershell.js';
-import { log, setSilent, setStderrOnly } from './utils/logger.js';
+import { log, setSilent, setStderrOnly } from '@teamai/shared/log';
 import { clearGitHookRepositoryEnv, GIT_HOOK_TOOL } from './git-hook.js';
 import { deriveDispatchSessionId } from './utils/session-id.js';
 import { claudeHookRunsInAnotherHost } from './claude-hook-host.js';

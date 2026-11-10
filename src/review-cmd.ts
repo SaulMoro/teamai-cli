@@ -13,7 +13,7 @@ import { z } from 'zod';
 
 import { patchManagedSection } from './section-patcher.js';
 import type { GlobalOptions } from './types.js';
-import { log } from './utils/logger.js';
+import { log } from '@teamai/shared/log';
 import {
     loadPendingReview,
     removePendingReview,

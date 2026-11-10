@@ -4,7 +4,7 @@ import chalk from 'chalk';
 import { packageRoot } from './package-info.js';
 import { listFilesRecursive, pathExists } from './utils/fs.js';
 import { readSkillDescription } from './agent-skills.js';
-import { log, setStderrOnly } from './utils/logger.js';
+import { log, setStderrOnly } from '@teamai/shared/log';
 import type { TeamaiInit } from './config.js';
 
 // ─── CLI-served skill content ────────────────────────────

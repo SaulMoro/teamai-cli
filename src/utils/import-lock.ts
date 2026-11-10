@@ -4,7 +4,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { z } from 'zod';
 import { memberHome } from '@teamai/shared/home';
-import { log } from './logger.js';
+import { log } from '@teamai/shared/log';
 import { withFileLock } from '../update.js';
 import { readRegularFile } from '@teamai/shared/regular-file';
 

@@ -12,7 +12,7 @@ import { z } from 'zod';
 import { knownSecrets } from '../env-resolution.js';
 import { getReportsDir, REPORTS_BRANCH, usesBranchWorktree, type LocalConfig, type TeamaiConfig } from '../types.js';
 import { errnoCode } from '../utils/fs.js';
-import { log } from '../utils/logger.js';
+import { log } from '@teamai/shared/log';
 import { sanitizeGitUrl } from '@teamai/shared/redact';
 import { listCachedWorkflows } from './cache.js';
 import { WorkflowFolder } from './folder.js';

@@ -7,7 +7,7 @@ import { pushedSession, nativeSession, type NamedSession, type SessionDemand } f
 import { safeText } from '../session-flow/session-cmd-shared.js';
 import { firstPrompt } from '../session-flow/session-work.js';
 import type { LocalConfig } from '../types.js';
-import { log } from '../utils/logger.js';
+import { log } from '@teamai/shared/log';
 import { redact } from '@teamai/shared/redact';
 import { judgeablePasses } from '../workflow/judge-work.js';
 import { findRunConfig } from '../workflow/run-location.js';

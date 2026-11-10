@@ -7,7 +7,7 @@ import { startedByPasses } from './scorers/engine-hooks.js';
 import { FINISHED_WORKFLOW } from './scorers/judging-workflows.js';
 import { PassScoring } from './scorers/pass-scoring.js';
 import { Subject } from './scorers/subject.js';
-import { log, PROGRESS_STREAMS_ENV, setStderrOnly, writeInfoLine } from './utils/logger.js';
+import { log, PROGRESS_STREAMS_ENV, setStderrOnly, writeInfoLine } from '@teamai/shared/log';
 import { collectEnvSecrets, redact, redactJson } from '@teamai/shared/redact';
 import { admitStart, parseNextPayload, parseReport, parseResponsePayload, resumableSessions, withIgnored, type ParsedResponsePayload } from './workflow/engine.js';
 import { resumeOrPublish, retryCommand } from './workflow/runtimes/retry-command.js';

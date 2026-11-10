@@ -47,7 +47,7 @@ vi.mock('../config.js', async (importOriginal) => ({
   resolveConfigForDir: vi.fn(),
 }));
 
-vi.mock('@teamai/tool-core/log', () => ({
+vi.mock('@teamai/shared/log', () => ({
   log: {
     info: vi.fn(),
     success: vi.fn(),
@@ -101,7 +101,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { loadState, saveState, loadLocalConfig, loadTeamConfig, resolveConfigForDir } from '../config.js';
-import { log } from '../utils/logger.js';
+import { log } from '@teamai/shared/log';
 import { askConfirmation } from '../utils/prompt.js';
 
 import {

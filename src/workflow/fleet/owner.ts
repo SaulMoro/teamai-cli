@@ -16,7 +16,7 @@ import { safeText } from '../../session-flow/session-cmd-shared.js';
 import { getRepoIdentity } from '../../session-flow/sync.js';
 import { readableReportsWorktree } from '../../utils/reports-branch.js';
 import type { LocalConfig } from '../../types.js';
-import { log } from '../../utils/logger.js';
+import { log } from '@teamai/shared/log';
 import { durationMs } from '../parse.js';
 import { budgetLeft, leaseContext } from '../engine.js';
 import { answerQuestion, attemptRef, cancelAttempt, expireClaim, isHeld, fleetFailure, lastGoneWork, leaseEnv, leaseInputs, leasePrompt, leaseValues, markOffered, noteWake, offerAttempt, readAttemptRecord, readOfferedMarker, DEFAULT_FLEET_POOL, type Claimed, type FleetError, type FleetLease, type FleetRecord, type FleetResult, type WakeNote } from './record.js';

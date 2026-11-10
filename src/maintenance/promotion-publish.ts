@@ -12,7 +12,7 @@ import { listLearningFiles } from '../utils/learnings-roots.js';
 import { parseJson } from '@teamai/shared/json';
 import { createPrWithFallback } from '../push.js';
 import { getProvider } from '../providers/index.js';
-import { log } from '../utils/logger.js';
+import { log } from '@teamai/shared/log';
 import { resolveMaintenancePaths } from './paths.js';
 import { fetchPromotionRefs, findPromotionCandidates, markPromoted, writePromotion, type PromotionCandidate, type PromotionCategory } from './promote.js';
 

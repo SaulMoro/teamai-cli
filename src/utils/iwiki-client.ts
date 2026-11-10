@@ -9,7 +9,7 @@ import https from 'node:https';
 import { z } from 'zod';
 
 import type { JsonValue } from '../types.js';
-import { log } from './logger.js';
+import { log } from '@teamai/shared/log';
 
 // ─── 常量 ──────────────────────────────────────────────────
 

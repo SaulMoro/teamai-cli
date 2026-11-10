@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { readRegularFile } from '@teamai/shared/regular-file';
 import { z } from 'zod';
-import { log } from './utils/logger.js';
+import { log } from '@teamai/shared/log';
 import { HookStdinSchema, type HookStdin } from './hook-dispatch.js';
 import {
   DEFAULT_TOOL_PATHS,

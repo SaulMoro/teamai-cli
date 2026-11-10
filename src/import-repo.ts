@@ -12,7 +12,7 @@ import {
     ensureCacheRoot,
 } from './utils/repo-cache.js';
 import { touchCacheEntry } from './utils/cache-index.js';
-import { log } from './utils/logger.js';
+import { log } from '@teamai/shared/log';
 import { hasFrontmatter, stripFrontmatter } from './utils/frontmatter.js';
 import { resolveTeamwiki } from './utils/teamwiki-root.js';
 import { SourceManifestSchema } from './wiki-engine/code-knowledge/code-collector.js';

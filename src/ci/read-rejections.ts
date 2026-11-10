@@ -13,7 +13,7 @@ import { tgitFetch } from '../providers/tgit/rest-auth.js';
 import { getGitLabToken } from '../providers/gitlab/gitlab-api.js';
 import { parseGitLabMRUrl } from '../providers/gitlab/mr-fetch.js';
 import { paginateGitLab } from './gitlab-paginate.js';
-import { log } from '../utils/logger.js';
+import { log } from '@teamai/shared/log';
 
 const API_TIMEOUT_MS = 15_000;
 

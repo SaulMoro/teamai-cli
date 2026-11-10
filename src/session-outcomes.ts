@@ -22,7 +22,7 @@ import { FINISHED_AFTER_MS } from './session-flow/session-work.js';
 import { getDataHome, type DashboardEvent, type LocalConfig, type UserOutcomeStats } from './types.js';
 import { pathExists, readJson, writeJson } from './utils/fs.js';
 import { checkoutForRepoAnchor, getCurrentBranch, getDefaultBranch, getHeadCommit } from './utils/git.js';
-import { log } from './utils/logger.js';
+import { log } from '@teamai/shared/log';
 import { CommitIdSchema } from './workflow/delivery-schema.js';
 import { findDelivered } from './workflow/pr-delivery.js';
 import { PrUrlSchema } from './workflow/pr-url.js';

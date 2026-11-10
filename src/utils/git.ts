@@ -11,7 +11,7 @@ import { execCommand } from '@teamai/shared/exec';
 import { errnoCode } from './fs.js';
 import { GitAnswers } from './git-answers.js';
 import { gitFindsNoRepository, linkedWorktreesStamp, repositoryStamp } from './git-discovery.js';
-import { log } from './logger.js';
+import { log } from '@teamai/shared/log';
 
 /** What simple-git accepts as a custom binary without its unsafe opt-in. */
 const SIMPLE_GIT_SAFE_BINARY = /^([a-z]:)?([a-z0-9/.\\_~-]+)$/i;

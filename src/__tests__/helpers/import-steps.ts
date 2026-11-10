@@ -6,7 +6,7 @@ import { z } from 'zod';
 
 import { ImportFromRepo } from '../../import-from-repo.js';
 import { RUN_DIR_ENV } from '@teamai/runtime-protocol';
-import { log } from '../../utils/logger.js';
+import { log } from '@teamai/shared/log';
 import type { ShortcutEnd, ShortcutRun } from '../../workflow-commands.js';
 
 /** What the AI work of each item answers in place of the tool. */

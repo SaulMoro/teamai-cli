@@ -15,7 +15,7 @@ import { splitRuleFrontmatter } from './team-rule.js';
 import { ruleFolderReachOf } from '../tool-registry.js';
 import type { LocalConfig, ResourceItem, TeamaiConfig } from '../types.js';
 import { pathExists, readJsonObject, writeJson } from '../utils/fs.js';
-import { log } from '../utils/logger.js';
+import { log } from '@teamai/shared/log';
 import { warnOnce } from '../utils/warn-once.js';
 
 /** The marker and base text of a rule folder. */

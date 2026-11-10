@@ -35,7 +35,7 @@ vi.mock('@teamai/runtime-tools', async (importOriginal) => {
 
 import { knownSecrets } from '../env-resolution.js';
 import { resolveProjectDataHome } from '../config.js';
-import { setStderrOnly } from '../utils/logger.js';
+import { setStderrOnly } from '@teamai/shared/log';
 import { startRun } from '../workflow/engine.js';
 import { readRun } from '../workflow/store.js';
 import { workflowResume, workflowStart } from '../workflow-commands.js';

@@ -6,7 +6,7 @@ import { afterEach, describe, expect, it, onTestFinished, vi } from 'vitest';
 import { type StepLauncher, type StepRunResult } from '@teamai/runtime-tools';
 import { _setDriverPollMs, runLocalDriver } from '../workflow/drivers/local/local-driver.js';
 import { readRun } from '../workflow/store.js';
-import { log } from '../utils/logger.js';
+import { log } from '@teamai/shared/log';
 import { dirs, parallelFixture, projectAiTool, toolPaths } from './helpers/workflow-local-driver-fixture.js';
 import { dirs as handoffDirs, onGitHub, originFile, startIn, team } from './helpers/workflow-handoff-fixture.js';
 

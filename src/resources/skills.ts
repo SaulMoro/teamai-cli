@@ -5,7 +5,7 @@ import { ResourceHandler, type ScanForPushOptions } from './base.js';
 import type { CopyOrigin, PendingPush, ResourceItem, ResourceItemStatus, DeliveryTarget, TeamaiConfig, LocalConfig } from '../types.js';
 import { getPushignorePath, resolveBaseDir, scopedToolPaths, SELF_KNOWLEDGE_SCAN_KEY } from '../types.js';
 import { isDraft, listDirs, listFilesRecursive, pathExists, copyDir, remove, pruneEmptyDirs, dirContentEqual, dirTeamSubsetEqual, fileContentEqual, fileHash, getDirLatestMtime, readFileSafe, writeFile } from '../utils/fs.js';
-import { log } from '../utils/logger.js';
+import { log } from '@teamai/shared/log';
 import { debugOnce, warnOnce } from '../utils/warn-once.js';
 import { getFileContentWhenAdded, isPastVersionOf } from '../utils/git.js';
 import { isCliOwnedSkillName } from '../cli-skill-names.js';

@@ -4,7 +4,7 @@ import https from 'node:https';
 import { z } from 'zod';
 
 import { type JsonValue, type MRData, type MRFetchOptions, type MRThread } from '../../types.js';
-import { log } from '../../utils/logger.js';
+import { log } from '@teamai/shared/log';
 import { pruneThreads } from '../mr-threads.js';
 import { ghExec } from './gh-cli.js';
 

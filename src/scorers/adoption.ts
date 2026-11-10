@@ -17,7 +17,7 @@ import { adoptionCandidates, creditAdoptionVerdicts, recalledDocsForSession } fr
 import type { RecalledDoc } from '../recall-log.js';
 import type { LocalConfig } from '../types.js';
 import { knowledgeRoots } from '../utils/learnings-roots.js';
-import { log } from '../utils/logger.js';
+import { log } from '@teamai/shared/log';
 import { defaultScorerRubric, scorerSourceHash } from './cache.js';
 import type { GeneratedQuestion, QuestionFamily, QuestionLookup } from './generated-questions.js';
 

@@ -31,7 +31,7 @@ vi.mock('../update.js', () => ({
   withFileLock: async <T>(_lock: string, _wait: unknown, body: () => Promise<T>) => ({ held: true, value: await body() }),
 }));
 
-vi.mock('@teamai/tool-core/log', () => ({
+vi.mock('@teamai/shared/log', () => ({
   log: {
     persist: vi.fn(),
     info: vi.fn(),
@@ -58,7 +58,7 @@ import { teamRuleToJoycodeRule } from '../resources/joycode-rule.js';
 import { pull } from '../pull.js';
 import { uninstall } from '../uninstall.js';
 import { buildChecks, resolveDoctorContext } from '../doctor.js';
-import { log } from '../utils/logger.js';
+import { log } from '@teamai/shared/log';
 import {
   autoDetectInit, detectProjectConfig, loadLocalConfig, loadLocalConfigForScope, loadStateForScope, loadTeamConfig, saveStateForScope,
 } from '../config.js';

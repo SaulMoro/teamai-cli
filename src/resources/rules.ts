@@ -2,7 +2,7 @@ import path from 'node:path';
 import { ResourceHandler, type PlacementRecords } from './base.js';
 import type { CopyOrigin, ResourceItem, ResourceItemStatus, DeliveryTarget, TeamaiConfig, LocalConfig } from '../types.js';
 import { isDraft, listFilesRecursive, pathExists, copyFile, ensureDir, remove, fileContentEqual, getFileMtime, listDirs, readFileSafe, writeFile, pruneEmptyDirs, fileHash } from '../utils/fs.js';
-import { log } from '../utils/logger.js';
+import { log } from '@teamai/shared/log';
 import { RESOURCE_LAYOUTS, Resources, type ResourceDiagnostic } from './resolver.js';
 import { RuleFolders } from './rule-folders.js';
 import { FolderFiles } from './folder-files.js';

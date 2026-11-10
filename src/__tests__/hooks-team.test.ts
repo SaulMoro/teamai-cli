@@ -15,7 +15,7 @@ vi.mock('../utils/fs.js', () => ({
   ensureDir: vi.fn(),
 }));
 
-vi.mock('@teamai/tool-core/log', () => ({
+vi.mock('@teamai/shared/log', () => ({
   log: { info: vi.fn(), success: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
 }));
 

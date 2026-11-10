@@ -26,7 +26,7 @@
 import path from 'node:path';
 import { hookSourceMatches } from './utils/hook-source.js';
 import { writeIfChanged, pathExists, readFileSafe, remove } from './utils/fs.js';
-import { log } from './utils/logger.js';
+import { log } from '@teamai/shared/log';
 import { earlierHookAdapterDir, hookAdapterDir } from './locate.js';
 import { toolHome } from './tool-home.js';
 import { isGitExcludeEnabled, type LocalConfig, type TeamaiConfig } from './types.js';

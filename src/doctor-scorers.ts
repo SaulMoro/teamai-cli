@@ -11,7 +11,7 @@ import { scopeScoring, upvoteJudgeAliasNotes, type SessionScoring } from './scor
 import { RUN_MODES } from './launch-context.js';
 import { SessionPolicy, type PolicySource } from './session-flow/session-policy.js';
 import type { LocalConfig } from './types.js';
-import { isSilent, setSilent } from './utils/logger.js';
+import { isSilent, setSilent } from '@teamai/shared/log';
 import { syncTeamDefinitions } from './benchmark/suite-cache.js';
 import { formatUnknownScorer } from './scorers/team-sync.js';
 
