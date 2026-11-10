@@ -52,6 +52,11 @@ vi.mock('@teamai/shared/log', () => ({
   })),
 }));
 
+vi.mock('@teamai/shared/regular-file', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@teamai/shared/regular-file')>();
+
+  return { ...actual, copyRegularTree: vi.fn(actual.copyRegularTree) };
+});
 vi.mock('../source.js', () => ({ pullSources: vi.fn().mockResolvedValue(undefined) }));
 vi.mock('../hooks.js', () => ({
   injectHooksToAllTools: vi.fn().mockResolvedValue(undefined),
@@ -82,6 +87,7 @@ import { recordGitHookFailure, readGitHookFailure } from '../git-hook.js';
 import { reconcileTeamHooksForConfig } from '../hooks.js';
 import { reconcileMcpForConfig } from '../mcp-reconcile.js';
 import { commitTeamRepo } from './helpers/team-repo-history.js';
+import { copyRegularTree } from '@teamai/shared/regular-file';
 
 describe('pull reports what reached the tool directory (#585)', () => {
   let tmpDir: string;
@@ -226,7 +232,7 @@ describe('pull reports what reached the tool directory (#585)', () => {
       commitTeamRepo(repoPath, 'stale');
       await fse.remove(path.join(repoPath, 'docs', 'stale.md'));
       commitTeamRepo(repoPath, 'remove stale');
-      if (failure === 'copy') ioSpy = vi.spyOn(fse, 'copy').mockRejectedValueOnce(new Error('copy failed'));
+      if (failure === 'copy') ioSpy = vi.mocked(copyRegularTree).mockRejectedValueOnce(new Error('copy failed'));
       if (failure === 'prune') ioSpy = vi.spyOn(fse, 'unlink').mockRejectedValueOnce(new Error('prune failed'));
       if (failure === 'unsafe destination') teamConfig.sharing.docs.localDir = homeDir;
       // A file in place of the source directory makes its scan fail without
