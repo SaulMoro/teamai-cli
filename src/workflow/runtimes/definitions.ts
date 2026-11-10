@@ -9,7 +9,8 @@ import { resolveResourceNamespaces } from '../../resource-namespaces.js';
 import { getKnowledgeDir, getTeamaiHomeDir, type LocalConfig } from '../../types.js';
 import { JsonValueSchema } from '@teamai/shared/json';
 import { parseYaml } from '@teamai/shared/yaml';
-import { LOCAL_DRIVER, parseDriver, type DriverName } from '../driver-name.js';
+import { HOST_DRIVER, LOCAL_DRIVER, parseDriver, type DriverName } from '../driver-name.js';
+import { log } from '@teamai/shared/log';
 import type { WorkflowFailure } from '../types.js';
 import { readRegularFile } from '@teamai/shared/regular-file';
 
@@ -19,7 +20,8 @@ import { readRegularFile } from '@teamai/shared/regular-file';
 //  an optional default tool. It is found, first match wins, in the member's own ~/.teamai/drivers/<name>.yaml, in the
 //  team repo's drivers/ (and drivers/<namespace>/ for each active namespace), in the user scope's team repo when the
 //  start is in a project, and in the definitions teamai ships (drivers/ in the package, every name prefixed teamai-).
-//  `--driver x` and `--driver teamai-x` both run the shipped teamai-x when no definition is named x.
+//  `--driver x` and `--driver teamai-x` both run the shipped teamai-x when no definition is named x. `--driver host` runs
+//  the definition teamai builds in, with no runtime, and reads no file.
 //
 
 /** The prefix of every definition teamai ships, as of every default workflow. */
@@ -28,8 +30,9 @@ const SHIPPED_PREFIX = 'teamai-';
 const RUNTIME_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 
 /**
- * Name `name` as a definition takes it, or why it cannot: a name `parseDriver` reads as a driver outside teamai. Every
- * other name is teamai's own driver, or none, so a driver teamai adds is refused here until a case below takes it.
+ * Name `name` as a definition takes it, or why it cannot: a name `parseDriver` reads as a driver outside teamai, but
+ * `host`, which teamai builds in. Every other name is teamai's own driver, or none, so a driver teamai adds is refused
+ * here until a case below takes it.
  */
 function definitionName(name: string): { ok: true; name: DriverName } | { ok: false; reason: string } {
   const parsed = parseDriver(name);
@@ -43,6 +46,8 @@ function definitionName(name: string): { ok: true; name: DriverName } | { ok: fa
       return { ok: false, reason: `"${name}" is a name teamai keeps for its own driver` };
     default: {
       const definition: { external: DriverName } = parsed.driver;
+
+      if (definition.external === HOST_DRIVER) return { ok: false, reason: `"${name}" is a name teamai keeps for its own driver` };
 
       return { ok: true, name: definition.external };
     }
@@ -74,15 +79,15 @@ export const DriverDefinitionSchema = z.object({
 
 export type DriverDefinition = z.infer<typeof DriverDefinitionSchema>;
 
-/** Where a definition came from, which decides whether its runtimes need a person's acceptance. */
-export type DefinitionSource = 'personal' | 'team' | 'shipped';
+/** Where a definition came from, which decides whether its runtimes need a person's acceptance. `builtin`: `host`, which no file holds. */
+export type DefinitionSource = 'personal' | 'team' | 'shipped' | 'builtin';
 
 export interface ResolvedDriver {
   /** The definition's canonical name: the stored name, `teamai-x` for a shipped `x`. */
   name: string;
   definition: DriverDefinition;
   source: DefinitionSource;
-  /** The file it was read from, for messages. */
+  /** The file it was read from, for messages; for `host`, which no file holds, what it is. */
   file: string;
   /** The config whose team repo holds the definition's team runtimes. */
   config: LocalConfig;
@@ -214,16 +219,47 @@ async function fromTeam(config: LocalConfig, name: string): Promise<Lookup> {
   return read(found.at, 'team', config);
 }
 
+/** `host`: the definition teamai builds in, with no runtime, so only the host slot runs. */
+const HOST_DEFINITION: DriverDefinition = {
+  schemaVersion: 'v1alpha1',
+  name: HOST_DRIVER,
+  description: 'Run commands, gates and workflows whose steps need no AI tool, on this machine, and refuse a step that needs one.',
+  runtimes: [],
+};
+
+/**
+ * The built-in `host`, after saying of each member's or team's `host.yaml` that it is not read, so no team repoints it
+ * and no file keeps it from running.
+ */
+async function hostDriver(config: LocalConfig, { personal, user }: { personal: boolean; user: LocalConfig | null }): Promise<ResolvedDriver> {
+  const mine = path.join(personalDir('drivers'), `${HOST_DRIVER}.yaml`);
+  const own = personal && await fs.lstat(mine).then(() => true, () => false) ? [mine] : [];
+
+  const teams = await Promise.all([config, ...(user ? [user] : [])].map(async (scope) => {
+    const found = await teamItem(scope, path.join(getKnowledgeDir(scope), 'drivers'), HOST_DRIVER, '.yaml');
+
+    return found.kind === 'found' ? [found.at] : found.kind === 'conflict' ? [found.first, found.second] : [];
+  }));
+
+  for (const file of [...own, ...teams.flat()]) {
+    log.warn(`Driver definition ${file} is not read: host is teamai's built-in driver, which runs only commands, gates and workflows whose steps need no AI tool, and no file replaces it. Rename the file and the name in it.`);
+  }
+
+  return { name: HOST_DRIVER, definition: HOST_DEFINITION, source: 'builtin', file: 'teamai\'s built-in host driver', config };
+}
+
 /**
  * The definition `--driver <name>` runs from `config`, or why none runs. `personal: false` skips the member's own
  * definitions, for a run handed over from another member.
  */
 export async function resolveDriver(config: LocalConfig, name: string, { personal }: { personal: boolean }): Promise<{ ok: true; driver: ResolvedDriver } | { ok: false; failure: WorkflowFailure }> {
   // `local` is no definition's name: it runs `teamai-local`, the member's, then the team's, then teamai's.
+  const user = config.scope === 'project' ? await loadLocalConfigForScope('user', undefined, { dryRun: true }) : null;
+
+  if (name === HOST_DRIVER) return { ok: true, driver: await hostDriver(config, { personal, user }) };
   const named = name === LOCAL_DRIVER ? { ok: true as const } : definitionName(name);
 
   if (!named.ok) return { ok: false, failure: { code: 'driver_not_found', message: `No driver definition can be named "${name}": ${named.reason}.` } };
-  const user = config.scope === 'project' ? await loadLocalConfigForScope('user', undefined, { dryRun: true }) : null;
   const shipped = name.startsWith(SHIPPED_PREFIX) ? name : `${SHIPPED_PREFIX}${name}`;
 
   const sources = (candidate: string): Array<() => Promise<Lookup>> => [

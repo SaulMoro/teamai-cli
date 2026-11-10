@@ -682,12 +682,14 @@ async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, given: 
   // commands run on the host runtime, and its prompt steps' tools launch on `tools`, so a run takes its steps in the
   // order it always did. A definition with none has the host command slot last, which takes no prompt step but answer
   // steps. While another runtime runs commands, the slot here takes only the command steps of teamai's own workflows,
-  // so a team's command never runs here in place of that runtime.
+  // so a team's command never runs here in place of that runtime. With no runtime of the definition open, as on the
+  // built-in `host`, the slot runs alone and calls no AI tool, so it takes no answer step either.
   const definedSlots = defined.runtimes.map(toSlot);
   const inProcess = definedSlots.find((slot) => slot.kind === 'tools');
+  const isHostAlone = definedSlots.length === 0;
 
   const hostSlot: RuntimeSlot = inProcess ?? {
-    kind: 'host', use: 'host', runtime: hostRuntime, can: { ...hostCan, prompt: false, tools: [], confined: [] }, launchesAgents: false, engine: { logins: [] }, credentials: {}, found: [],
+    kind: 'host', use: 'host', runtime: hostRuntime, can: { ...hostCan, prompt: false, ...(isHostAlone && { answer: false as const }), tools: [], confined: [] }, launchesAgents: false, engine: { logins: [] }, credentials: {}, found: [],
   };
 
   const runsCommands = definedSlots.some((slot) => slot.kind === 'external' && slot.can.exec !== false);
@@ -697,9 +699,10 @@ async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, given: 
   const slots: [RuntimeSlot, ...RuntimeSlot[]] = [firstSlot, ...otherSlots];
   const offerOf = (slot: RuntimeSlot): RuntimeOffer => ({ runtime: slot.use, can: slot.can, ...(slot.kind !== 'external' && { inProcess: true }), ...(slot.unavailable && { unavailable: slot.unavailable }) });
   const sole: SoleDriver = { driver: defined.driver, offers: [offerOf(slots[0]), ...otherSlots.map(offerOf)] };
-  // Started or resumed from an agent session, with no terminal here, on a runtime a person reaches through its app: a
-  // gate is relayed to that session rather than decided, and the loop stops at it once nothing it started still runs.
-  const relay = !canHitl && mode === 'attended' && agentEvidence(process.env).kind !== 'none' && slots.some((slot) => slot.can.hitl === true);
+  // Started or resumed from an agent session, with no terminal here, on a runtime a person reaches through its app, or
+  // on the host slot alone, which the session started in the background: a gate is relayed to that session rather than
+  // decided, and the loop stops at it once nothing it started still runs.
+  const relay = !canHitl && mode === 'attended' && agentEvidence(process.env).kind !== 'none' && (isHostAlone || slots.some((slot) => slot.can.hitl === true));
   const driver = driverIdentity('local', cwd);
   // The runtime each open attempt runs on, and the handle of its place, until its report is recorded or its place abandoned.
   const slotOf = new Map<string, RuntimeSlot>();

@@ -6402,3 +6402,39 @@ describe('a workflow step leased whole', () => {
     expect(lease.step).toBe('check.look');
   });
 });
+
+describe('a run whose only driver runs nothing but the host slot, as the built-in host does', () => {
+  const HOST: SoleDriver = { driver: 'host', offers: [{ runtime: 'host', inProcess: true, can: { tools: [], prompt: false, answer: false } }] };
+  const refusal = (step: string, what: string): unknown => ({ error: { code: 'requirement_unmet', message: `Step "${step}" ${what}, and driver "host" launches no AI tool: it runs only commands, gates and workflows whose steps need none. Run the workflow with --driver local.` } });
+
+  it.each([
+    { kind: 'a prompt step', steps: '  - id: review\n    prompt: Review it.\n', step: 'review', what: 'runs a prompt' },
+    { kind: 'an interactive step', steps: '  - id: pair\n    prompt: Pair on it.\n    interactive: true\n', step: 'pair', what: 'runs a prompt' },
+    { kind: 'an answer step', steps: '  - id: ask\n    answer: Name one color.\n    output: { color: string }\n', step: 'ask', what: 'is an answer step, which asks your AI tool' },
+    { kind: 'a prompt step of a workflow it runs', steps: '  - id: fix\n    workflow: fix\n', step: 'fix.work', what: 'runs a prompt' },
+  ])('refuses a start with $kind, naming it and --driver local, and creates no run', async ({ steps, step, what }) => {
+    const { config } = testConfig();
+    fs.writeFileSync(path.join(config.repo.localPath, 'workflows', 'build.yaml'), graph(steps));
+    fs.writeFileSync(path.join(config.repo.localPath, 'workflows', 'fix.yaml'), workflow('fix', '  - id: work\n    prompt: Fix it.\n'));
+    await syncScorersThenWorkflows(config);
+
+    expect(await startRun(config, 'build', {}, { secrets: await knownSecrets(config), alone: HOST })).toEqual(refusal(step, what));
+    expect(fs.existsSync(runsDir(config)) ? fs.readdirSync(runsDir(config)) : []).toHaveLength(0);
+  });
+
+  it('starts a run of commands and a gate', async () => {
+    const { config } = testConfig();
+    fs.writeFileSync(path.join(config.repo.localPath, 'workflows', 'build.yaml'), graph('  - id: build\n    command: node -e "0"\n  - id: ship\n    needs: [build]\n    approve: { message: Ship it? }\n    command: node -e "0"\n'));
+    await syncScorersThenWorkflows(config);
+
+    expect(await startRun(config, 'build', {}, { secrets: await knownSecrets(config), alone: HOST })).toMatchObject({ data: { status: 'running' } });
+  });
+
+  it('fails a prompt step it meets later, as of a workflow a step produces, rather than leave it waiting', async () => {
+    const { config, runId } = await startBuild(graph('  - id: review\n    prompt: Review it.\n'));
+
+    await leaseNext(config, runId, driverA, { can: HOST.offers[0].can, alone: HOST });
+
+    expect(await readRun(config, runId)).toMatchObject({ steps: [{ id: 'review', status: 'failed', failure: (refusal('review', 'runs a prompt') as { error: object }).error }] });
+  });
+});

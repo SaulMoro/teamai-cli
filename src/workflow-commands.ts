@@ -978,7 +978,7 @@ async function closeDriver(opened: OpenedDriver | undefined): Promise<void> {
  * The run's only driver as a start checks its strict requirements before the run exists: each runtime of the
  * definition `opened`, else `tools` alone, `tools` giving what `localStrict` says and an external one what it offered,
  * off this host. A definition with no `tools` has the host slot last, which gives what `localStrict` says and takes no
- * prompt step. Unsaid is not met.
+ * prompt step, nor an answer step when it runs alone, as on the built-in `host`. Unsaid is not met.
  */
 function soleDriver(opened: OpenedDriver | undefined, localStrict: ReturnType<typeof localStrictCan>): SoleDriver {
   if (!opened) return { driver: 'local', offers: [{ runtime: 'tools', inProcess: true, can: localStrict }] };
@@ -987,10 +987,10 @@ function soleDriver(opened: OpenedDriver | undefined, localStrict: ReturnType<ty
     ? { runtime: entry.use, inProcess: true, can: localStrict }
     : { runtime: entry.use, can: { network: entry.can.network ?? false, isolation: entry.can.isolation ?? 'none', env: entry.can.env ?? false, remote: true } });
 
-  const [first, ...rest] = opened.runtimes;
-  const host = opened.runtimes.some((entry) => entry.kind === 'tools') ? [] : [{ runtime: 'host', inProcess: true as const, can: { ...localStrict, prompt: false as const } }];
+  const host: SoleDriver['offers'][number] = { runtime: 'host', inProcess: true, can: { ...localStrict, prompt: false, ...(opened.runtimes.length === 0 && { answer: false as const }) } };
+  const [first = host, ...rest] = opened.runtimes.some((entry) => entry.kind === 'tools') ? opened.runtimes.map(offer) : [...opened.runtimes.map(offer), host];
 
-  return { driver: opened.driver.name, offers: [offer(first), ...rest.map(offer), ...host] };
+  return { driver: opened.driver.name, offers: [first, ...rest] };
 }
 
 /** Aborts on the first SIGINT or SIGTERM, so `teamai benchmark try` stops the setup or check it runs. A second one ends the process. */

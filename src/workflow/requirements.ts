@@ -143,7 +143,7 @@ const ENFORCEMENT = {
   model: 'strict',
   /** A step pinned to this host (`Offer.pinned`): a driver here (`can.remote` is not set). */
   host: 'strict',
-  /** A prompt step: the driver takes prompts (`can.prompt` is not false). */
+  /** A prompt step: the driver takes prompts (`can.prompt` is not false); an answer step: it takes answers (`can.answer` is not false). */
   prompt: 'strict',
   /** A command step that is not pinned to the host: the driver takes it (`can.commands` is not `pinned`). */
   commands: 'strict',
@@ -166,6 +166,8 @@ type BestEffortKey = KeysOf<'bestEffort'>;
  * driver definition, which no driver or runtime declares in `can`.
  * - `remote`: the runtime runs steps away from this host, so it takes no command step pinned to the host.
  * - `prompt: false`: it takes no prompt step, only answer steps, as the host command slot of a definition with no `local`.
+ * - `answer: false`: it takes no answer step either, which calls the member's tool, as the host slot of a definition
+ *   with no runtime open, such as the built-in `host`.
  * - `commands: 'pinned'`: of command steps, it takes only those pinned to the host, since another runtime of the
  *   definition runs commands. A prompt it takes still brings its setup, which runs where the prompt runs.
  * - `fullAccess`: the tools its init reports in `permissions` as running without permission prompts. Of a runtime
@@ -177,7 +179,7 @@ type BestEffortKey = KeysOf<'bestEffort'>;
  *   member does from its own team env, so this host needs none for the step, only for its setup, which runs here.
  */
 export type DriverCan = Omit<Can, 'env'> & {
-  env?: DriverEnv; remote?: true; prompt?: false; commands?: 'pinned'; fullAccess?: readonly string[]; labels?: readonly string[]; workflow?: true;
+  env?: DriverEnv; remote?: true; prompt?: false; answer?: false; commands?: 'pinned'; fullAccess?: readonly string[]; labels?: readonly string[]; workflow?: true;
 };
 
 /** How far a driver's `env` reaches, none first: the protocol's values, then `member`, which a fleet entry declares. */
@@ -532,7 +534,7 @@ export function negotiate(offer: Offer, can: DriverCan, allow: Allow, env: EnvFa
     ...(offer.executor === 'command' && can.exec === false ? ['exec' as const] : []),
     ...(offer.executor === 'workflow' && can.workflow !== true ? ['workflow' as const] : []),
     ...(pinned && can.remote ? ['host' as const] : []),
-    ...(offer.executor === 'prompt' && !offer.answer && can.prompt === false ? ['prompt' as const] : []),
+    ...(offer.executor === 'prompt' && (offer.answer === true ? can.answer === false : can.prompt === false) ? ['prompt' as const] : []),
     ...(can.commands === 'pinned' && offer.executor === 'command' && !pinned ? ['commands' as const] : []),
     // Setup runs as a command, so a driver that runs none runs no setup either, whatever it says of setup.
     ...(offer.setup && (!can.setup || can.exec === false) ? ['setup' as const] : []),

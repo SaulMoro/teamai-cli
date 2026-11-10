@@ -1948,22 +1948,37 @@ function isPlainLocal(sole: SoleDriver): boolean {
 }
 
 /**
- * Each step of `definition` a runtime offering `can` holds back for a strict key, with the first key it lacks, as
- * describe holds it, or `never` for a step that runtime never takes: one pinned to this host off it, or a prompt step on
- * the host slot.
+ * What a runtime offering `can` holds back of `definition`, as describe holds it. `strict`: each step it holds for a
+ * strict key, with the first key it lacks, or `never` for a step that runtime never takes: one pinned to this host off
+ * it, or a prompt or answer step on the host slot. `prompts`: each step it holds for want of a prompt, with whether it
+ * is an answer step.
  */
-function strictlyHeld(definition: WorkflowDefinition, workflows: Record<string, WorkflowDefinition>, can: DriverCan): Map<string, 'isolation' | 'network' | 'never'> {
+function heldOn(definition: WorkflowDefinition, workflows: Record<string, WorkflowDefinition>, can: DriverCan) {
   const none = new Set<string>();
   const { facts } = describeWorkflow({ definition, source: 'team', workflows, ceiling: 1, can, allow: {}, env: { declared: none, secrets: none, present: none } });
-  const held = new Map<string, 'isolation' | 'network' | 'never'>();
+  const strict = new Map<string, 'isolation' | 'network' | 'never'>();
+  const prompts = new Map<string, { isAnswer: boolean }>();
 
   for (const { step, missing } of facts.held) {
-    if (missing.includes('isolation')) held.set(step, 'isolation');
-    else if (missing.includes('network')) held.set(step, 'network');
-    else if (missing.includes('host') || missing.includes('prompt')) held.set(step, 'never');
+    if (missing.includes('isolation')) strict.set(step, 'isolation');
+    else if (missing.includes('network')) strict.set(step, 'network');
+    else if (missing.includes('host') || missing.includes('prompt')) strict.set(step, 'never');
+
+    if (missing.includes('prompt')) prompts.set(step, { isAnswer: facts.runs.some((run) => run.step === step && run.answer === true) });
   }
 
-  return held;
+  return { strict, prompts };
+}
+
+/**
+ * Why step `step` runs on no runtime of the run's only driver `driver`, none of which takes a prompt or an answer: no
+ * AI tool runs on it, as on the built-in `host`, whose host slot answers no answer step, since that calls the member's tool.
+ */
+function launchesNoAiTool(driver: string, { step, isAnswer }: { step: string; isAnswer: boolean }): WorkflowFailure {
+  return {
+    code: 'requirement_unmet',
+    message: `Step "${step}" ${isAnswer ? 'is an answer step, which asks your AI tool' : 'runs a prompt'}, and driver "${driver}" launches no AI tool: it runs only commands, gates and workflows whose steps need none. Run the workflow with --driver local.`,
+  };
 }
 
 /** What `can` gets of step `state` confined to the directory `rendered` names; undefined for a step not confined. */
@@ -1980,11 +1995,17 @@ async function confinedFor(
 }
 
 /**
- * Why the run's only driver could never take a step of `definition` for a strict `isolation` or `network`: every one
- * of its runtimes lacks it. A step one runtime can take for them is judged at `next`.
+ * Why the run's only driver could never take a step of `definition`: none of its runtimes takes the prompt or answer
+ * it is, or every one lacks a strict `isolation` or `network` for it. A step one runtime can take for them is judged at
+ * `next`.
  */
 function strictlyUnmet(definition: WorkflowDefinition, workflows: Record<string, WorkflowDefinition>, sole: SoleDriver): string | undefined {
-  const helds = sole.offers.map((offer) => strictlyHeld(definition, workflows, offer.can));
+  const judged = sole.offers.map((offer) => heldOn(definition, workflows, offer.can));
+  const [mineJudged, ...othersJudged] = judged;
+  const promptless = mineJudged && [...mineJudged.prompts].find(([step]) => othersJudged.every((other) => other.prompts.has(step)));
+
+  if (promptless) return launchesNoAiTool(sole.driver, { step: promptless[0], isAnswer: promptless[1].isAnswer }).message;
+  const helds = judged.map((held) => held.strict);
   const [mine = new Map<string, 'isolation' | 'network' | 'never'>(), ...others] = helds;
   // A step every runtime holds, at least one of them for a strict key: the others may never take it at all.
   const id = [...mine.keys()].find((step) => others.every((held) => held.has(step)) && helds.some((held) => held.get(step) !== 'never'));
@@ -2026,7 +2047,9 @@ function strictlyUnmet(definition: WorkflowDefinition, workflows: Record<string,
  */
 function beyondSoleDriver(
   sole: SoleDriver,
-  { step, tool, isNamed, labels, missing, missingOn }: { step: string; tool: string | undefined; isNamed: boolean; labels: readonly string[]; missing: readonly Missing[]; missingOn: (can: DriverCan) => readonly Missing[] | undefined },
+  { step, tool, isNamed, isAnswer, labels, missing, missingOn }: {
+    step: string; tool: string | undefined; isNamed: boolean; isAnswer: boolean; labels: readonly string[]; missing: readonly Missing[]; missingOn: (can: DriverCan) => readonly Missing[] | undefined;
+  },
 ): WorkflowFailure | undefined {
   const others = sole.offers.length === 1 ? [missing] : sole.offers.map((offer) => missingOn(offer.can));
 
@@ -2036,6 +2059,9 @@ function beyondSoleDriver(
 
   if (helds.some((held) => held.some((key) => key.startsWith('policy.')))) return undefined;
   const lackedByAll = missing.filter((key) => helds.every((held) => held.includes(key)));
+
+  // No runtime takes a prompt or an answer, as on the built-in `host`: a step of a workflow a step produced meets it here.
+  if (lackedByAll.includes('prompt')) return launchesNoAiTool(sole.driver, { step, isAnswer });
 
   // A runtime that cannot run the tool now says why and what to do; every refusal of the step quotes it.
   const reasons = tool === undefined ? [] : sole.offers.flatMap((offer) => (offer.unavailable?.[tool] === undefined ? [] : [`${offer.runtime}: ${offer.unavailable[tool]}`]));
@@ -2632,7 +2658,7 @@ export async function leaseNext(config: LocalConfig, runId: string, driver: Driv
           if (terms.kind === 'hold' && options.alone && definition.workflow === undefined) {
             const tool = promptTool(definition, context.toolFor);
 
-            const beyond = beyondSoleDriver(options.alone, { step: state.id, tool, isNamed: definition.tool !== undefined, labels: mergeRequirements(located.scope.requires, definition.requires).labels ?? [], missing: terms.missing, missingOn });
+            const beyond = beyondSoleDriver(options.alone, { step: state.id, tool, isNamed: definition.tool !== undefined, isAnswer: definition.answer !== undefined, labels: mergeRequirements(located.scope.requires, definition.requires).labels ?? [], missing: terms.missing, missingOn });
 
             if (beyond) {
               failStep(state, beyond, run.revision);

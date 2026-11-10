@@ -350,12 +350,15 @@ export type OpenedRuntime =
   | { kind: 'external'; use: string; runtime: StepRuntime<DriverCan>; can: DriverCan; launchesAgents: boolean; engine: EngineOptions; credentials: Record<string, string>; found: string[]; masks: Record<string, string>; optionsFrom: string; unavailable?: Record<string, string>; isThrough?: true; wakes?: true; keepsConversations?: true; runsOnToolHome?: true }
 ;
 
-/** A driver definition ready to drive: each of its runtimes, in definition order. The caller disposes them once the drive ends. */
+/**
+ * A driver definition ready to drive: each of its runtimes, in definition order, none for the built-in `host`. The
+ * caller disposes them once the drive ends.
+ */
 export interface OpenedDriver {
   driver: ResolvedDriver;
   /** The name the definition was asked for, such as `t3` for the shipped `teamai-t3`: what a person types again. */
   asked: string;
-  runtimes: [OpenedRuntime, ...OpenedRuntime[]];
+  runtimes: OpenedRuntime[];
 }
 
 /** Ends the connection to each external runtime of `opened`. */
@@ -653,11 +656,7 @@ export async function openDriver(config: LocalConfig, name: string, { personal, 
     opened.push(one.opened);
   }
 
-  const [first, ...rest] = opened;
-
-  if (!first) return { ok: false, failure: { code: 'driver_invalid', message: `Driver definition ${driver.file} lists no runtime. Add one under runtimes and start again.` } };
-
-  return { ok: true, opened: { driver, asked: name, runtimes: [first, ...rest] } };
+  return { ok: true, opened: { driver, asked: name, runtimes: opened } };
 }
 
 /**

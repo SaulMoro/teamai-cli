@@ -1754,3 +1754,53 @@ steps:
     expect(closedAt(asked, one.handle)).toBeGreaterThan(-1);
   }, 30_000);
 });
+
+describe('the built-in host driver, whose only runtime is the host slot', () => {
+  const onHost = async (config: LocalConfig, workspace: string): Promise<DriverRuntimes> => {
+    const opened = await openDriver(config, 'host', { personal: true, mode: 'attended', canAsk: false, purpose: 'run', checkout: workspace });
+    if (!opened.ok) throw new Error(opened.failure.message);
+
+    return { driver: opened.opened.driver.name, asked: opened.opened.asked, runtimes: opened.opened.runtimes };
+  };
+
+  it('runs commands and a gate on the host slot, and records host as the driver and the runtime of each step', async () => {
+    const { config, workspace, runId } = await workflowFixture(`schemaVersion: v1alpha1
+name: build
+description: Build, then ship.
+steps:
+  - id: build
+    command: node -e "process.exit(0)"
+  - id: ship
+    needs: [build]
+    approve: { message: Ship the build? }
+    command: node -e "process.exit(0)"
+`);
+    const asked: string[] = [];
+
+    expect(await runLocalDriver(config, runId, workspace, { runtimes: await onHost(config, workspace), hitl: true, question: async (hitl) => { asked.push(hitl.step); return 'yes'; } }))
+      .toMatchObject({ data: { done: { outcome: 'succeeded' } } });
+    expect(asked).toEqual(['ship']);
+    expect(await readRun(config, runId)).toMatchObject({ driveOptions: { driver: 'host' }, steps: [{ id: 'build', status: 'succeeded', runtime: 'host' }, { id: 'ship', status: 'succeeded', runtime: 'host' }] });
+  });
+
+  it('fails an answer step, which asks the member\'s AI tool, naming it and --driver local, and launches no tool', async () => {
+    const { config, workspace, runId } = await workflowFixture(`schemaVersion: v1alpha1
+name: build
+description: Ask.
+steps:
+  - id: ask
+    answer: Name one color.
+    output: { color: string }
+`);
+    const adapter: StepLauncher = {
+      run: async () => { throw new Error('no tool may launch on host'); },
+      runInteractive: async () => { throw new Error('no tool may launch on host'); },
+    };
+
+    expect(await runLocalDriver(config, runId, workspace, { adapter, runtimes: await onHost(config, workspace) })).toMatchObject({ data: { done: { outcome: 'failed' } } });
+    expect(await readRun(config, runId)).toMatchObject({ steps: [{ id: 'ask', status: 'failed', failure: {
+      code: 'requirement_unmet',
+      message: 'Step "ask" is an answer step, which asks your AI tool, and driver "host" launches no AI tool: it runs only commands, gates and workflows whose steps need none. Run the workflow with --driver local.',
+    } }] });
+  });
+});

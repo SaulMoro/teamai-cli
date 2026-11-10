@@ -132,3 +132,27 @@ describe('a runtime through another in a definition', () => {
     expect(parseDriverDefinition('drivers/boxed.yaml', through('sandbox', 'sandbox'))).toMatchObject({ ok: false, failure: { code: 'driver_invalid', message: expect.stringContaining('runtimes.0.through: A runtime runs through another runtime, not through itself') } });
   });
 });
+
+describe('the host driver, which teamai builds in', () => {
+  const open = (config: LocalConfig, name: string) => openDriver(config, name, { personal: true, mode: 'unattended', canAsk: false, purpose: 'run', checkout: config.repo.localPath });
+
+  it('opens --driver host with no runtime, so only the host slot runs, whatever teamai-local the team ships', async () => {
+    const team = teamWith(['teamai-local']);
+
+    expect(await open(team, 'host')).toMatchObject({ ok: true, opened: { asked: 'host', driver: { name: 'host', source: 'builtin', definition: { runtimes: [] } }, runtimes: [] } });
+  });
+
+  it('refuses a definition named host, and says it read neither the member\'s nor the team\'s drivers/host.yaml', async () => {
+    const team = teamWith(['host']);
+    const personal = path.join(getTeamaiHomeDir(), 'drivers', 'host.yaml');
+    fs.mkdirSync(path.dirname(personal), { recursive: true });
+    fs.writeFileSync(personal, definition('host'));
+    const warn = vi.spyOn(log, 'warn').mockImplementation(() => {});
+
+    expect(parseDriverDefinition('drivers/host.yaml', definition('host'))).toMatchObject({ ok: false, failure: { code: 'driver_invalid', message: expect.stringContaining('"host" is a name teamai keeps for its own driver') } });
+    expect(await open(team, 'host')).toMatchObject({ ok: true, opened: { driver: { name: 'host', source: 'builtin' }, runtimes: [] } });
+    expect(warn.mock.calls.map(([line]) => line)).toEqual([personal, path.join(team.repo.localPath, 'drivers', 'host.yaml')].map((file) => (
+      `Driver definition ${file} is not read: host is teamai's built-in driver, which runs only commands, gates and workflows whose steps need no AI tool, and no file replaces it. Rename the file and the name in it.`
+    )));
+  });
+});

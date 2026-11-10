@@ -1,7 +1,7 @@
 /**
  * The name of a workflow driver, as `--driver` and `workflows.driver` give it. teamai reserves `local`, `none`, `skill`
  * and `fleet`, exactly as written. Any other name in the format is a driver definition a member, the team or teamai
- * provides.
+ * provides, except `host`, the definition teamai builds in, which no file defines.
  */
 import { z } from 'zod';
 
@@ -16,6 +16,12 @@ export const LOCAL_DRIVER = DriverNameSchema.parse('local');
 
 /** The definition the local driver runs: the member's, then the team's, then teamai's `drivers/teamai-local.yaml`. */
 export const LOCAL_DEFINITION = DriverNameSchema.parse('teamai-local');
+
+/**
+ * The definition teamai builds in, with no runtime: only the host slot runs, so a run on it runs commands, gates and
+ * workflows whose steps need no AI tool. No member's or team's file defines it, so no team repoints it.
+ */
+export const HOST_DRIVER = DriverNameSchema.parse('host');
 
 /** The driver a name stands for: one of teamai's own, or a driver definition outside it. */
 export type Driver = 'local' | 'skill' | 'none' | { external: DriverName };
