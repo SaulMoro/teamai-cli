@@ -3,7 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { parseDriverDefinition, resolveDriver } from '../workflow/runtimes/definitions.js';
-import { openDriver } from '../workflow/runtimes/sources.js';
+import { acceptRuntime, openDriver } from '../workflow/runtimes/sources.js';
 import { RESERVED_DRIVERS } from '../workflow/reserved-drivers.js';
 import { shippedDriverFile } from '../default-drivers.js';
 import { getTeamaiHomeDir, type LocalConfig } from '../types.js';
@@ -14,6 +14,7 @@ const dirs: string[] = [];
 afterEach(() => {
   vi.restoreAllMocks();
   fs.rmSync(path.join(getTeamaiHomeDir(), 'drivers'), { recursive: true, force: true });
+  fs.rmSync(path.join(getTeamaiHomeDir(), 'trust'), { recursive: true, force: true });
   for (const dir of dirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true });
 });
 
@@ -178,14 +179,21 @@ describe('a run that needs no AI tool and the runtimes that run no command', () 
 
   const open = (config: LocalConfig, needsAiTool: boolean) => openDriver(config, 'agents', { personal: true, mode: 'unattended', canAsk: false, purpose: 'run', checkout: config.repo.localPath, needsAiTool });
 
-  it('does not open a team runtime whose manifest says it runs no command, for a run that needs no AI tool', async () => {
-    expect(await open(teamWithRuntime({ teamai: { exec: false } }), false)).toMatchObject({ ok: true, opened: { runtimes: [] } });
+  it('does not open a team runtime whose manifest says it runs no command, for a run that needs no AI tool, once its revision is accepted here', async () => {
+    const team = teamWithRuntime({ teamai: { exec: false } });
+    const dir = path.join(team.repo.localPath, 'runtimes', 'agents');
+    const source = { kind: 'team' as const, name: 'agents', executable: path.join(dir, 'runtime'), dir, relative: 'runtimes/agents' };
+    expect(await acceptRuntime(source, { mode: 'attended', canAsk: true, ask: async () => true })).toEqual({ ok: true });
+
+    expect(await open(team, false)).toMatchObject({ ok: true, opened: { runtimes: [] } });
   });
 
-  it('opens it for a run that needs an AI tool, and opens a team runtime whose manifest does not say, or says it runs commands', async () => {
+  it('opens it for a run that needs an AI tool or before its revision is accepted, and opens a team runtime whose manifest does not say, or says it runs commands', async () => {
     const unaccepted = { ok: false, failure: { code: 'runtime_not_accepted' } };
 
     expect(await open(teamWithRuntime({ teamai: { exec: false } }), true)).toMatchObject(unaccepted);
+    // What a revision no one accepted declares decides nothing, so it cannot move the commands to the host slot.
+    expect(await open(teamWithRuntime({ teamai: { exec: false } }), false)).toMatchObject(unaccepted);
     expect(await open(teamWithRuntime(), false)).toMatchObject(unaccepted);
     expect(await open(teamWithRuntime({ name: 'agents' }), false)).toMatchObject(unaccepted);
     expect(await open(teamWithRuntime({ teamai: { exec: true } }), false)).toMatchObject(unaccepted);

@@ -19,7 +19,7 @@ teamai 自带的运行时则建立在 `@teamai/runtime-kit` 之上：它的请�
 
 把打包好的文件放在 teamai 查找运行时的位置，比如团队仓库中的 `runtimes/<name>/runtime`（[teamai 在哪里查找](workflow-advanced.md#驱动定义和步骤运行时)），再在驱动定义中用 `use: <name>` 指定它。
 
-不运行命令的运行时（如 T3 和 Paseo 只运行提示）在该文件旁的 `package.json` 中声明：`{ "teamai": { "exec": false } }`，与其 `init` 的 `can.exec: false` 一致。这样，不需要 AI 工具的运行就不会启动它，其命令在本机运行。没有这项声明的运行时照常启动。
+不运行命令的运行时（如 T3 和 Paseo 只运行提示）在该文件旁的 `package.json` 中声明：`{ "teamai": { "exec": false } }`，与其 `init` 的 `can.exec: false` 一致。这样，不需要 AI 工具的运行就不会启动它，其命令在本机运行。没有这项声明的运行时照常启动；你尚未接受的版本的团队运行时也照常启动。声明了 `exec: false` 而其 `init` 却提供命令能力的运行时，启动时会失败，并指出该文件。
 
 ## 用场景测试套件测试它
 

@@ -1399,6 +1399,18 @@ steps:
       expect(sends()).toEqual([]);
     });
 
+    it('refuses at start a runtime whose manifest says it runs no command while its init offers commands', async () => {
+      const manifest = path.join(os.homedir(), '.teamai', 'runtimes', 'toy', 'package.json');
+      fs.writeFileSync(manifest, JSON.stringify({ teamai: { exec: false } }));
+      onTestFinished(() => fs.rmSync(manifest, { force: true }));
+      writeDefinition('toymislabeled', [{ use: 'toy', options: { state } }, { use: 'local' }]);
+
+      const ran = await runCLI(['workflow', 'start', 'mixed', '--driver', 'toymislabeled'], repo, env());
+
+      expect(envelope(ran)).toMatchObject({ error: { code: 'runtime_failed', message: expect.stringContaining(`Runtime "toy" of driver "toymislabeled" declares exec: false in ${manifest}, but its init does not offer can.exec: false, so it runs commands`) } });
+      expect(sends()).toEqual([]);
+    });
+
     it('refuses at start a login on a runtime that launches agents its own way', async () => {
       writeDefinition('agentlogin', [{ use: 'toy', options: { state, credentials: { codex: 'login' }, agent: { output: { ok: true } } } }], { tool: 'codex' });
 

@@ -177,6 +177,10 @@ export async function askAtTerminal(question: string): Promise<boolean | undefin
   }
 }
 
+function isAcceptedIn(trust: z.infer<typeof TrustFileSchema>, dir: string, revision: string): boolean {
+  return trust.accepted.some((entry) => entry.dir === dir && entry.revision === revision);
+}
+
 /**
  * Whether `source` may be spawned on this machine. Only a team runtime needs it: its revision must be one a person
  * accepted here. `mode` attended with a person at the terminal (`canAsk`) asks and records a yes; otherwise an
@@ -187,7 +191,7 @@ export async function acceptRuntime(source: RuntimeSource, { mode, canAsk, ask =
   const revision = await runtimeRevision(source.dir);
   const trust = await readTrust();
 
-  if (trust.accepted.some((entry) => entry.dir === source.dir && entry.revision === revision)) return { ok: true };
+  if (isAcceptedIn(trust, source.dir, revision)) return { ok: true };
   const short = revision.slice(0, 12);
   const files = (await fs.readdir(source.dir, { recursive: true })).sort();
 
@@ -533,6 +537,17 @@ async function openRuntime(driver: ResolvedDriver, use: string, options: Runtime
     return { ok: false, failure: badOption(driver, use, 'credentials', `${use} does not offer can.env, so it cannot keep a credential to the processes it is for`) };
   }
 
+  // A run that needs no AI tool skips a runtime by this declaration, so one its init contradicts is never trusted.
+  if (ready.ok && source.kind !== 'path' && source.exec === false && ready.can.exec !== false) {
+    await runtime.dispose();
+    const manifest = source.kind === 'shipped' ? 'teamai\'s package.json' : path.join(path.dirname(source.executable), 'package.json');
+
+    return {
+      ok: false,
+      failure: { code: 'runtime_failed', message: `Runtime "${source.name}" of driver "${driver.name}" declares exec: false in ${manifest}, but its init does not offer can.exec: false, so it runs commands. A run that needs no AI tool would skip it and run its commands on the host. Make the two agree.` },
+    };
+  }
+
   if (ready.ok && !ready.launchesAgents && ready.can.exec === false) {
     await runtime.dispose();
 
@@ -641,13 +656,17 @@ async function openComposed(driver: ResolvedDriver, names: { inner: string; oute
 /**
  * Whether a run that needs no AI tool skips `entry` of `driver`: a runtime whose manifest declares it runs no command
  * (`exec: false`, as t3 and paseo do, their offer tests pinning it to their `init`). Such a run gives it no step, so it
- * is never opened, and the commands run on the host slot. A runtime that declares nothing is opened.
+ * is never opened, and the commands run on the host slot. A runtime that declares nothing is opened, and so is a team
+ * runtime at a revision no one accepted here, since what that revision declares must not decide where commands run.
  */
 async function isSkippedWithoutAi(driver: ResolvedDriver, entry: DriverDefinition['runtimes'][number]): Promise<boolean> {
   if (entry.through !== undefined) return false;
   const located = await locateRuntime(driver, entry.use);
 
-  return located.ok && located.source.kind !== 'builtin' && located.source.kind !== 'path' && located.source.exec === false;
+  if (!located.ok || located.source.kind === 'builtin' || located.source.kind === 'path' || located.source.exec !== false) return false;
+  const { source } = located;
+
+  return source.kind !== 'team' || isAcceptedIn(await readTrust(), source.dir, await runtimeRevision(source.dir));
 }
 
 /**
