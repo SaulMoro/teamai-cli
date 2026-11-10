@@ -175,6 +175,12 @@ const RefusalSchema = z.object({ code: z.string(), message: z.string() });
 
 type Refusal = z.infer<typeof RefusalSchema>;
 
+/**
+ * The refusals of a repeated launch that prove T3 launched nothing for its clientRequestId: the checks a new launch runs
+ * (the project, the worktree, the provider instance, the mode the sign-in allows), which T3 skips for a launch it accepted.
+ */
+const LAUNCHED_NOTHING: ReadonlySet<string> = new Set(['invalid_request', 'runtime_mode_escalation_denied']);
+
 /** A tool call T3 refused or could not answer, with T3's own message. */
 export class T3Error extends Error {
   readonly tool: string;
@@ -190,6 +196,11 @@ export class T3Error extends Error {
   /** T3 no longer has the thread, such as one the person deleted: nothing of it runs, and nothing is left to settle. */
   get threadGone(): boolean {
     return this.refusal?.code === 'thread_not_found';
+  }
+
+  /** T3 refused a launch with a check a new launch runs, so it launched nothing. Any other failure may follow a launch. */
+  get launchedNothing(): boolean {
+    return this.refusal !== undefined && LAUNCHED_NOTHING.has(this.refusal.code);
   }
 
   /** T3 refused a tool that acts on another machine because Linked environments is off in its Labs settings. */

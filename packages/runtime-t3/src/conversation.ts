@@ -44,12 +44,6 @@ const IDLE_POLL_MS = 2_000;
 /** How often a turn sent to a thread whose earlier run had ended is checked until T3 shows the turn's own run. */
 const TURN_POLL_MS = 250;
 
-/**
- * The refusals of a repeated launch that prove T3 launched nothing for its clientRequestId: the checks a new launch runs
- * (the project, the worktree, the provider instance, the mode the sign-in allows), which T3 skips for a launch it accepted.
- */
-export const LAUNCHED_NOTHING: ReadonlySet<string> = new Set(['invalid_request', 'runtime_mode_escalation_denied']);
-
 export const TERMINAL: ReadonlySet<string> = new Set<Waited['status']>(['completed', 'interrupted', 'failed', 'cancelled', 'rolled_back']);
 
 /**
@@ -872,7 +866,7 @@ export function conversations({ serving, adder }: { serving: Serving; adder: Ins
     } catch (error) {
       const why = error instanceof Error ? error.message : String(error);
       // Only a check a new launch runs proves T3 launched nothing; a judge's copy fails before its idle thread is briefed.
-      const refused = !state.thread && error instanceof T3Error && error.refusal !== undefined && LAUNCHED_NOTHING.has(error.refusal.code) ? error.refusal : undefined;
+      const refused = !state.thread && error instanceof T3Error && error.launchedNothing ? error.refusal : undefined;
 
       if (error instanceof T3Error && error.threadGone && state.thread?.turnOf) {
         await finish({ op: request.op, state: 'failed', failure: { code: 'tool_failed', message: `The T3 thread ${threadLink(s.environment, state.thread.threadId)} ("${state.thread.title}"), whose conversation this step continues, left T3 Code while teamai sent it the step. Run the step again; it starts a new thread.` } }, true);
@@ -934,7 +928,7 @@ export function conversations({ serving, adder }: { serving: Serving; adder: Ins
     } catch (error) {
       // T3 answers a launch it accepted before any check a new launch needs, so only such a check's refusal proves it
       // launched nothing. Any other answer, such as orchestration_error, may come from the lookup itself.
-      if (!(error instanceof T3Error && error.refusal !== undefined && LAUNCHED_NOTHING.has(error.refusal.code))) throw error;
+      if (!(error instanceof T3Error && error.launchedNothing)) throw error;
     }
 
     // A close may have removed the place while T3 answered: its record is not written again.
