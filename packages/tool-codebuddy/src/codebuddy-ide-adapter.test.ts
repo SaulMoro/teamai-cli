@@ -19,7 +19,7 @@ vi.mock('node:os', async (importOriginal) => {
 });
 
 import { CodeBuddyIdeAdapter } from './codebuddy-ide-adapter.js';
-import { buildWorkspace, defaultInstanceHistory, ideDataIn, instanceHistory, md5 } from './testing/ide-history.js';
+import { buildWorkspace, defaultInstanceHistory, ideDataIn, instanceHistory, md5, workspaceFolderOf } from './testing/ide-history.js';
 
 /**
  * CodeBuddy IDE 适配器测试。
@@ -174,10 +174,12 @@ describe('CodeBuddyIdeAdapter', () => {
     const still = await adapter.readSession({ sessionId: sourceId, projectPath: cwdA });
     expect(still.title).not.toBe('should not clobber');
 
+    // 写入时两个 IDE 实例都写了，删除要两个都清掉
+    const targetWsDirs = [instanceHistory(tmpHome), defaultInstanceHistory(tmpHome)].map((r) => path.join(r, workspaceFolderOf(targetCwd)));
+    expect(targetWsDirs.map((wsDir) => fs.existsSync(path.join(wsDir, writtenId)))).toEqual([true, true]);
+
     expect(await adapter.deleteSession(writtenId, targetCwd)).toBe(true);
 
-    // 写入时两个 IDE 实例都写了，删除要两个都清掉
-    const targetWsDirs = [instanceHistory(tmpHome), defaultInstanceHistory(tmpHome)].map((r) => path.join(r, md5(targetCwd)));
     for (const wsDir of targetWsDirs) {
       expect(fs.existsSync(path.join(wsDir, writtenId))).toBe(false);
     }
