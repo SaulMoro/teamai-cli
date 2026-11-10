@@ -24,7 +24,8 @@ function globPattern(glob: string): RegExp {
   return new RegExp(`^${source.replaceAll('.*/', '(?:.*/)?')}$`);
 }
 
-const repoConfig = ConfigSchema.parse(JSON.parse(fs.readFileSync(path.join(REPO, '.oxlintrc.json'), 'utf8').replace(/^\s*\/\/.*$/gm, '')));
+const rawConfig: unknown = JSON.parse(fs.readFileSync(path.join(REPO, '.oxlintrc.json'), 'utf8').replace(/^\s*\/\/.*$/gm, ''));
+const repoConfig = ConfigSchema.parse(rawConfig);
 const cycleRule = (override: z.infer<typeof OverrideSchema>) => override.rules['import/no-cycle'];
 const { plugins } = repoConfig;
 const [guard, ...more] = repoConfig.overrides.filter((override) => Array.isArray(cycleRule(override)));
@@ -56,6 +57,9 @@ describe('the import cycle guard', () => {
   it('is one override, scoped to production source, that allows type-only cycles, with the import plugin on for the whole config', () => {
     expect(plugins).toContain('import');
     expect(more).toEqual([]);
+    // Any other setting, such as "warn" or 0, would weaken the guard where it applies without being listed.
+    expect(repoConfig.overrides.map(cycleRule).filter((setting) => setting !== undefined && !Array.isArray(setting) && setting !== 'off')).toEqual([]);
+    expect(z.object({ rules: z.record(z.string(), z.unknown()) }).parse(rawConfig).rules['import/no-cycle']).toBeUndefined();
     expect(guard).toMatchObject({ files: ['src/**', 'packages/*/src/**'], rules: { 'import/no-cycle': ['error', { ignoreTypes: true }] } });
   });
 
