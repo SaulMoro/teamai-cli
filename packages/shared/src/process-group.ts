@@ -154,11 +154,12 @@ type Recorded = z.infer<typeof RecordedSchema>;
 const SPAWN_LEEWAY_MS = 10_000;
 
 /**
- * Whether `recorded` names a process in the pid namespace `namespace`, this process's: a pid recorded in another one
- * (a container and its host sharing a home) names another process here.
+ * Whether a pid recorded in pid namespace `recorded` names another process in `own`, this process's: a container and
+ * its host sharing a home each read the other's pids as their own. A record that names no namespace is judged by its
+ * start alone, which tells one process from another wherever it was read.
  */
-function isOwnNamespace(recorded: Recorded, namespace: string | undefined): boolean {
-  return !('startTicks' in recorded) || recorded.pidNamespace === namespace;
+export function isOtherPidNamespace(recorded: string | undefined, own: string | undefined): boolean {
+  return recorded !== undefined && recorded !== own;
 }
 
 /** Whether `live`, when the recorded pid's process started, names the process `recorded` names. */
@@ -250,7 +251,7 @@ export async function stopRecordedGroup(dir: string): Promise<void> {
   for (const file of await recordedGroups(dir)) {
     const recorded = await readGroup(file);
 
-    if (recorded === undefined || !isOwnNamespace(recorded, namespace)) {
+    if (recorded === undefined || ('pidNamespace' in recorded && isOtherPidNamespace(recorded.pidNamespace, namespace))) {
       // Nothing here to stop: a pid recorded in another pid namespace names another process here.
     } else if (recorded.tree) await stopTree(recorded);
     else await stopGroup(recorded);

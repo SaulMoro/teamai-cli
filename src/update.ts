@@ -6,7 +6,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import fse from 'fs-extra';
 import { readRegularFile, readRegularFileSync, NotRegularFileError } from '@teamai/shared/regular-file';
-import { ownPidNamespace, processStartedAt, processStartTicks } from '@teamai/shared/process-group';
+import { isOtherPidNamespace, ownPidNamespace, processStartedAt, processStartTicks } from '@teamai/shared/process-group';
 import { z } from 'zod';
 import { loadState, saveState, loadLocalConfig, loadTeamConfig, resolveConfigForDir } from './config.js';
 import { resolveEffectiveUpdatePolicy, VERSION_CHECK_TIMEOUT, INSTALL_TIMEOUT, HOOK_REFRESH_TIMEOUT } from './update-policy.js';
@@ -610,7 +610,7 @@ export async function isHolderGone(holder: LockHolder): Promise<boolean> {
 
   // Written in another pid namespace, as by a container sharing this home: the live process with that pid here is not
   // the one the lock names, and its start says nothing about the holder.
-  if (holder.pidNamespace !== undefined && holder.pidNamespace !== (await (ownIdentity ??= readOwnIdentity())).pidNamespace) return false;
+  if (isOtherPidNamespace(holder.pidNamespace, (await (ownIdentity ??= readOwnIdentity())).pidNamespace)) return false;
 
   if (holder.startTicks !== undefined) {
     const ticks = await processStartTicks(holder.pid);

@@ -393,6 +393,21 @@ it.runIf(process.platform === 'linux')('leaves a recorded group alone when its r
   }
 });
 
+it.runIf(process.platform === 'linux')('stops a recorded group whose record has its start but no pid namespace, as a teamai that could not read its namespace writes', async () => {
+  const records = fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-stop-no-namespace-'));
+  const group = await detachedGroup();
+  try {
+    fs.writeFileSync(path.join(records, `group-${group.pid}.json`), JSON.stringify({ pid: group.pid, startTicks: kernelStartTicks(group.pid) }));
+
+    await stopRecordedGroup(records);
+
+    expect(group.alive()).toBe(false);
+  } finally {
+    try { process.kill(-group.pid, 'SIGKILL'); } catch { /* Already stopped. */ }
+    fs.rmSync(records, { recursive: true, force: true });
+  }
+});
+
 it.runIf(process.platform === 'linux')('stops a group an earlier teamai recorded with the start ps printed', async ({ skip }) => {
   const records = fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-stop-lstart-'));
   const group = await detachedGroup();
