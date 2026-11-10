@@ -52,7 +52,7 @@ export async function t3OnFakeServer(): Promise<{
   const serve = async (state: string): Promise<void> => {
     const runtimeFile = path.join(state, 't3-home', 'userdata', 'server-runtime.json');
     const server = spawn(process.execPath, [fake, path.join(state, 't3-state')], {
-      env: { ...process.env, FAKE_T3_STATE: path.join(state, 't3-state'), T3CODE_HOME: path.join(state, 't3-home'), FAKE_T3_HOME: path.join(state, 'home') },
+      env: { ...process.env, FAKE_T3_STATE: path.join(state, 't3-state'), T3CODE_HOME: path.join(state, 't3-home'), FAKE_T3_HOME: path.join(state, 'home'), FAKE_T3_PARENT: String(process.pid) },
       stdio: 'ignore', detached: false,
     });
     const exited = new Promise<void>((resolve) => { server.once('exit', () => resolve()); });

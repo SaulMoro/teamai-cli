@@ -690,5 +690,9 @@ httpServer.listen(0, '127.0.0.1', () => {
 
 process.on('SIGTERM', () => { httpServer.close(); process.exit(0); });
 
-// A test that removes its state is done with this server.
-setInterval(() => { if (!fs.existsSync(STATE)) process.exit(0); }, 500);
+// A test that removes its state is done with this server, and so is one whose process is gone before its teardown ran,
+// as when its worker is killed: the server is then reparented, and would outlive the test with its state. The test's
+// process names itself (FAKE_T3_PARENT), since it may be gone before this server reads its own parent.
+const parent = Number(process.env.FAKE_T3_PARENT ?? process.ppid);
+
+setInterval(() => { if (!fs.existsSync(STATE) || process.ppid !== parent) process.exit(0); }, 500);
