@@ -1,15 +1,16 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import { setTimeout as sleep } from 'node:timers/promises';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { leaseNext, startRun } from '../workflow/engine.js';
-import { answerCancel, answerQuestion, cancelAttempt, claimAttempt, expireClaim, finishAttempt, lastGoneWork, leaveOffer, leaseEnv, leaseValues, listOffers, listOpenAttempts, markOffered, offerAttempt, readAttemptRecord, readOfferedMarker, recordProgress, woken } from '../workflow/fleet/record.js';
+import { answerCancel, answerQuestion, cancelAttempt, claimAttempt, expireClaim, finishAttempt, lastGoneWork, leaveOffer, leaseEnv, leaseValues, listOffers, listOpenAttempts, markOffered, offerAttempt, readAttemptRecord, readOfferedMarker, recordProgress, woken, type FleetRecord, type HeldAttempt } from '../workflow/fleet/record.js';
 import { startGroupedCommand } from '../workflow/shell-command.js';
 import { publishRun } from '../workflow/handoff.js';
 import { definitionHash } from '../workflow/snapshot.js';
 import { attemptDir, AttemptIdSchema, installOwner, readRun, RunIdSchema, takeRunLock, type AttemptId, type RunId } from '../workflow/store.js';
 import { memberPlace, takeFleetAttempt, type MemberPlace } from '../workflow/fleet/member.js';
 import type { OpenedDriver, OpenedRuntime } from '../workflow/runtimes/sources.js';
-import { fleetStepRuntime, shadowedFleetEntries } from '../workflow/fleet/owner.js';
+import { CANCEL_WRITE_MS, cancelFleetAttempt, fleetStepRuntime, shadowedFleetEntries } from '../workflow/fleet/owner.js';
 import { RuntimeOptionsSchema, WAKE_COMMAND } from '@teamai/runtime-protocol';
 import { hostStepRuntime } from '../workflow/runtimes/host.js';
 import { newOpId, type StepRuntime } from '@teamai/runtime-protocol/step-runtime';
@@ -18,9 +19,11 @@ import { stdioStepRuntime } from '../workflow/runtimes/stdio.js';
 import { TOY_RUNTIME } from './helpers/toy-runtime.js';
 import type { OpId } from '@teamai/runtime-protocol';
 import { attemptRuntimePath } from '../workflow/runtimes/attempt.js';
-import { readableReportsWorktree, updateReports } from '../utils/reports-branch.js';
+import { readableReportsWorktree, reportsBranch, updateReports } from '../utils/reports-branch.js';
+import { acquireLock, releaseLock } from '../update.js';
+import { REPORTS_LOCK_FILENAME } from '../types.js';
 import { syncScorersThenWorkflows } from '../scorers/team-sync.js';
-import { dirs, git, start, startIn, team, WORKSPACES, type Member } from './helpers/workflow-handoff-fixture.js';
+import { dirs, git, receiveHook, start, startIn, team, WORKSPACES, type Member } from './helpers/workflow-handoff-fixture.js';
 import { fakeAgent, type FakeAgent } from '@teamai/tool-testing/fake-agent';
 import { claudeFake } from '@teamai/tool-claude/testing';
 import os from 'node:os';
@@ -1169,7 +1172,7 @@ describe('where a member runs an attempt', () => {
  * Alice starts workflow `slow` and leases its step, which the fleet runtime of her install offers to pool `gpu`, with
  * `wake` as given when there is one. Each runtime it opens goes to `opened`, for the test to dispose.
  */
-async function ownerOffering(opened: StepRuntime<DriverCan>[], wake?: () => Promise<{ runtime: StepRuntime<DriverCan>; wakes: boolean }>) {
+async function ownerOffering(opened: StepRuntime<DriverCan>[], wake?: () => Promise<{ runtime: StepRuntime<DriverCan>; wakes: boolean }>, { staleAfter = '60s' }: { staleAfter?: string } = {}) {
   const acme = team({ slow: SLOW });
   const [alice, bob] = [await acme.member('alice'), await acme.member('bob')];
   const run = RunIdSchema.parse(await startIn(alice, 'slow'));
@@ -1179,7 +1182,7 @@ async function ownerOffering(opened: StepRuntime<DriverCan>[], wake?: () => Prom
   const open = async () => {
     const runtime = fleetStepRuntime({ config: alice.config, masks: {}, ...(wake && { openWake: async () => ({ ok: true as const, ...(await wake()) }) }) });
     opened.push(runtime);
-    const ready = await runtime.init({ options: { stale_after: '60s', pool: 'gpu', ...(wake && { wake: { use: 'toy' } }) }, mode: 'unattended', checkout: alice.checkout });
+    const ready = await runtime.init({ options: { stale_after: staleAfter, pool: 'gpu', ...(wake && { wake: { use: 'toy' } }) }, mode: 'unattended', checkout: alice.checkout });
     const place = ready.ok ? await runtime.open({ op: newOpId(), run, attempt, credentials: {} }, async () => undefined) : undefined;
     const exec = (op: OpId) => {
       if (place?.kind !== 'ready') throw new Error('the fleet runtime opened no place');
@@ -1190,8 +1193,142 @@ async function ownerOffering(opened: StepRuntime<DriverCan>[], wake?: () => Prom
     return { runtime, ready, exec };
   };
 
-  return { alice, bob, run, attempt, open };
+  return { alice, bob, run, attempt, open, origin: acme.origin };
 }
+
+describe('a cancel the owner cannot write into the attempt\'s record at once', () => {
+  const opened: StepRuntime<DriverCan>[] = [];
+  const releases: Array<() => Promise<void>> = [];
+
+  afterEach(async () => {
+    vi.useRealTimers();
+    for (const release of releases.splice(0)) await release();
+    await Promise.all(opened.splice(0).map(async (runtime) => runtime.dispose()));
+  });
+
+  /** Takes `member`'s teamai-reports lock, as `workflow cancel` holds it while it publishes the run; the answer gives it back. */
+  async function holdReportsLock(member: Member): Promise<() => Promise<void>> {
+    const lock = path.join(path.dirname(reportsBranch.dir(member.config)), REPORTS_LOCK_FILENAME);
+    await eventually(async () => ((await acquireLock(lock)) ? true : undefined));
+    const release = async () => releaseLock(lock);
+    releases.push(release);
+
+    return release;
+  }
+
+  /** How `end` settled within `ms`, or `waiting`. */
+  const within = async <T>(end: Promise<T>, ms: number): Promise<T | 'waiting'> => Promise.race([end, sleep(ms).then(() => 'waiting' as const)]);
+
+  /** This process's clock, moved on so the cancel's deadline is behind it, as the minute it waits would. */
+  const passTheDeadline = () => vi.setSystemTime(Date.now() + CANCEL_WRITE_MS + 1_000);
+
+  /** The record of `attempt` as `member` reads it, once it is in state `state`. */
+  const recordIn = async (member: Member, run: RunId, attempt: AttemptId, state: FleetRecord['state']) => eventually(async () => {
+    await readableReportsWorktree(member.config);
+    const read = await readAttemptRecord(member.config, run, attempt);
+
+    return read.ok && read.value !== 'absent' && read.value.state === state ? read.value : undefined;
+  }, 60_000);
+
+  it('ends the owner\'s cancel cancel_failed at the deadline while a publish holds teamai-reports past it, and leaves the offer for workflow cancel', async () => {
+    const { alice, bob, run, attempt, open } = await ownerOffering(opened);
+    const { runtime, exec } = await open();
+    const op = newOpId();
+    const ended = exec(op);
+    await recordIn(bob, run, attempt, 'offered');
+    await holdReportsLock(alice);
+    vi.useFakeTimers({ toFake: ['Date'], shouldAdvanceTime: true });
+    const cancelled = runtime.cancel(op);
+
+    expect(await within(ended, 3_000)).toBe('waiting');
+    passTheDeadline();
+    expect(await within(ended, 15_000)).toMatchObject({ kind: 'failed', failure: { code: 'cancel_failed', message: expect.stringMatching(/another write held teamai-reports.* Run teamai workflow cancel r[0-9a-f]+ again\.$/) } });
+    await cancelled;
+    expect(await recordIn(bob, run, attempt, 'offered')).toMatchObject({ state: 'offered' });
+  }, 60_000);
+
+  it('writes the cancel once a publish that held teamai-reports for 2 s lets it go', async () => {
+    const { alice, bob, run, attempt, open } = await ownerOffering(opened);
+    const { runtime, exec } = await open();
+    const op = newOpId();
+    const ended = exec(op);
+    await recordIn(bob, run, attempt, 'offered');
+    const release = await holdReportsLock(alice);
+    const cancelled = runtime.cancel(op);
+    await sleep(2_000);
+    await release();
+
+    expect(await within(ended, 15_000)).toMatchObject({ kind: 'cancelled' });
+    await cancelled;
+    expect(await recordIn(bob, run, attempt, 'withdrawn')).toMatchObject({ state: 'withdrawn' });
+  }, 60_000);
+
+  it('ends the owner\'s cancel cancel_failed at the deadline while the member\'s progress keeps the claim fresh and no cancel write lands', async () => {
+    const { alice, bob, run, attempt, open, origin } = await ownerOffering(opened, undefined, { staleAfter: '30m' });
+    const { runtime, exec } = await open();
+    const op = newOpId();
+    const ended = exec(op);
+    const offered = await recordIn(bob, run, attempt, 'offered');
+    if (offered.state !== 'offered') throw new Error(`no offer: ${offered.state}`);
+    const claimed = await claimAttempt(bob.config, offered, await installOwner(bob.config));
+    if (!claimed.ok) throw new Error(claimed.error.message);
+    let isBeating = true;
+
+    const beats = (async () => {
+      for (let held: HeldAttempt = claimed.value; isBeating;) {
+        const beat = await recordProgress(bob.config, held, held.pushed);
+        if (!beat.ok) return beat.error.code;
+        held = beat.value;
+        await sleep(200);
+      }
+
+      return 'stopped';
+    })();
+
+    await recordIn(alice, run, attempt, 'claimed');
+    // origin refuses each cancel, as when the member's progress lands before every one.
+    receiveHook(origin, 'while read old new ref; do git log --format=%s "$old..$new" | grep -q "^\\[teamai\\] Cancel attempt" && exit 1; done; exit 0');
+    vi.useFakeTimers({ toFake: ['Date'], shouldAdvanceTime: true });
+    const cancelled = runtime.cancel(op);
+
+    expect(await within(ended, 4_000)).toBe('waiting');
+    passTheDeadline();
+    expect(await within(ended, 15_000)).toMatchObject({ kind: 'failed', failure: { code: 'cancel_failed', message: expect.stringContaining(`Run teamai workflow cancel ${run} again.`) } });
+    await cancelled;
+    isBeating = false;
+    expect(await beats).toBe('stopped');
+    receiveHook(origin, 'exit 0');
+    expect(await recordIn(alice, run, attempt, 'claimed')).toMatchObject({ member: { user: 'bob' } });
+  }, 60_000);
+
+  it('writes the cancel of workflow cancel with no live driver once the publish holding teamai-reports lets it go', async () => {
+    const acme = team();
+    const [alice, bob] = [await acme.member('alice'), await acme.member('bob')];
+    const offered = await offer(alice);
+    if (!offered.ok) throw new Error(offered.error.message);
+    const release = await holdReportsLock(alice);
+    const asked = cancelFleetAttempt(alice.config, RUN, ATTEMPT);
+    await sleep(2_000);
+    await release();
+
+    expect(await asked).toEqual({ ok: true, message: `Withdrew attempt ${ATTEMPT} of run ${RUN}, which no fleet member had taken.` });
+    expect(await recordIn(bob, RUN, ATTEMPT, 'withdrawn')).toMatchObject({ state: 'withdrawn' });
+  }, 60_000);
+
+  it('says to cancel again when workflow cancel with no live driver cannot write its cancel by the deadline', async () => {
+    const acme = team();
+    const alice = await acme.member('alice');
+    const offered = await offer(alice);
+    if (!offered.ok) throw new Error(offered.error.message);
+    await holdReportsLock(alice);
+    vi.useFakeTimers({ toFake: ['Date'], shouldAdvanceTime: true });
+    const asked = cancelFleetAttempt(alice.config, RUN, ATTEMPT);
+
+    expect(await within(asked, 2_000)).toBe('waiting');
+    passTheDeadline();
+    expect(await within(asked, 15_000)).toEqual({ ok: false, message: expect.stringMatching(new RegExp(`another write held teamai-reports.* Run teamai workflow cancel ${RUN} again\\.$`)) });
+  }, 60_000);
+});
 
 describe('the reasons members give for leaving an offer', () => {
   const opened: StepRuntime<DriverCan>[] = [];
