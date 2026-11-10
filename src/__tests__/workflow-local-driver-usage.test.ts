@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it, onTestFinished, vi } from 'vitest';
-import { type LocalToolAdapter, type LocalToolResult } from '../workflow/steps/local-tool-adapter.js';
+import { type StepLauncher, type StepRunResult } from '@teamai/runtime-tools';
 import { _setDriverPollMs, runLocalDriver } from '../workflow/drivers/local/local-driver.js';
 import { readRun } from '../workflow/store.js';
 import { log } from '../utils/logger.js';
@@ -64,7 +64,7 @@ steps:
 `;
 
 /** What Claude Code's older text says of a limit that resets at `resetsAt`, in whole seconds since the epoch. */
-function claudeLimit(resetsAt: number): LocalToolResult {
+function claudeLimit(resetsAt: number): StepRunResult {
   return { started: true, exitCode: 1, failure: { code: 'usage_limited', message: `claude hit its usage limit: Claude AI usage limit reached|${Math.ceil(resetsAt / 1000)}` } };
 }
 
@@ -85,7 +85,7 @@ describe('a usage limit across the parallel steps of a run, under the local driv
       warn(message);
     });
 
-    const adapter: LocalToolAdapter = {
+    const adapter: StepLauncher = {
       runInteractive: vi.fn(),
       run: vi.fn(async (_tool, input) => {
         const step = input.prompt.includes('first') ? 'one' : input.prompt.includes('second') ? 'two' : 'three';
@@ -141,7 +141,7 @@ steps:
       warn(message);
     });
 
-    const adapter: LocalToolAdapter = {
+    const adapter: StepLauncher = {
       runInteractive: vi.fn(),
       run: vi.fn(async (_tool, input) => {
         const step = input.prompt.includes('first') ? 'one' : 'two';
@@ -192,7 +192,7 @@ steps:
     projectAiTool(config, 'hermes');
     const resetsAt = Math.ceil((Date.now() + 4000) / 1000) * 1000;
     let launches = 0;
-    const adapter: LocalToolAdapter = {
+    const adapter: StepLauncher = {
       runInteractive: vi.fn(),
       run: vi.fn(async () => {
         launches += 1;
@@ -243,7 +243,7 @@ steps:
       text: string
 `, 1);
     projectAiTool(config, 'hermes');
-    const adapter: LocalToolAdapter = { runInteractive: vi.fn(), run: vi.fn() };
+    const adapter: StepLauncher = { runInteractive: vi.fn(), run: vi.fn() };
 
     expect(await runLocalDriver(config, runId, workspace, { adapter, toolPaths })).toMatchObject({ data: { done: { outcome: 'succeeded' } } });
 
@@ -288,7 +288,7 @@ steps:
     projectAiTool(config, 'claude');
     const resetsAt = Math.ceil((Date.now() + 3000) / 1000) * 1000;
     let launches = 0;
-    const adapter: LocalToolAdapter = {
+    const adapter: StepLauncher = {
       runInteractive: vi.fn(),
       run: vi.fn(async () => {
         launches += 1;
@@ -318,7 +318,7 @@ steps:
 `;
 
   /** Codex's text for a limit that resets two days from now, past the wait an unattended run gives it. */
-  const weekly: LocalToolResult = { started: true, exitCode: 1, failure: { code: 'usage_limited', message: 'claude hit its usage limit: You\'ve hit your usage limit. Try again in 2 days 3 hours 4 minutes.' } };
+  const weekly: StepRunResult = { started: true, exitCode: 1, failure: { code: 'usage_limited', message: 'claude hit its usage limit: You\'ve hit your usage limit. Try again in 2 days 3 hours 4 minutes.' } };
 
   it('offers an unattended run on teamai-reports when the limit resets past its wait, and leaves the step pending', async () => {
     const acme = team({ fix: FIX });
@@ -326,7 +326,7 @@ steps:
     onGitHub(acme.business, [ci]);
     ci.config.workflows = { tools: { default: 'claude' } };
     const runId = await startIn(ci, 'fix');
-    const adapter: LocalToolAdapter = { runInteractive: vi.fn(), run: vi.fn(async () => weekly) };
+    const adapter: StepLauncher = { runInteractive: vi.fn(), run: vi.fn(async () => weekly) };
     const info = vi.spyOn(log, 'info');
     vi.stubEnv('TEAMAI_MODE', 'unattended');
 
@@ -341,7 +341,7 @@ steps:
 
   it('stops an unattended run whose limit resets past its wait and that it cannot offer, naming both ways on, with the step pending', async () => {
     const { config, workspace, runId } = await parallelFixture(FIX.replace('name: fix', 'name: build'), 1);
-    const adapter: LocalToolAdapter = { runInteractive: vi.fn(), run: vi.fn(async () => weekly) };
+    const adapter: StepLauncher = { runInteractive: vi.fn(), run: vi.fn(async () => weekly) };
     vi.stubEnv('TEAMAI_MODE', 'unattended');
 
     const stopped = await runLocalDriver(config, runId, workspace, { adapter, toolPaths });
@@ -356,7 +356,7 @@ steps:
     onGitHub(acme.business, [alice]);
     alice.config.workflows = { tools: { default: 'claude' } };
     const runId = await startIn(alice, 'fix');
-    const adapter: LocalToolAdapter = { runInteractive: vi.fn(), run: vi.fn(async () => weekly) };
+    const adapter: StepLauncher = { runInteractive: vi.fn(), run: vi.fn(async () => weekly) };
     const info = vi.spyOn(log, 'info');
     attendedAt(['offer']);
 
@@ -373,7 +373,7 @@ steps:
     const { config, workspace, runId } = await parallelFixture(FIX.replace('name: fix', 'name: build'), 1);
     const resetsAt = Math.ceil((Date.now() + 2000) / 1000) * 1000;
     const launched: number[] = [];
-    const adapter: LocalToolAdapter = {
+    const adapter: StepLauncher = {
       runInteractive: vi.fn(),
       run: vi.fn(async () => {
         launched.push(Date.now());
@@ -391,7 +391,7 @@ steps:
 
   it('stops when the person closes the question, naming resume here and publish elsewhere', async () => {
     const { config, workspace, runId } = await parallelFixture(FIX.replace('name: fix', 'name: build'), 1);
-    const adapter: LocalToolAdapter = { runInteractive: vi.fn(), run: vi.fn(async () => weekly) };
+    const adapter: StepLauncher = { runInteractive: vi.fn(), run: vi.fn(async () => weekly) };
     attendedAt([]);
 
     expect(await runLocalDriver(config, runId, workspace, { adapter, toolPaths })).toEqual({ error: {

@@ -8,15 +8,14 @@ import type { AttemptRun } from '../runtimes/attempt.js';
 import { type ExecEvents } from '@teamai/runtime-protocol/step-runtime';
 import { withRetry } from '../runtimes/retry-command.js';
 import { PROMPT_FAILURE_CODES, type PlaceView, type PromptLease, type RuntimeFailure } from '@teamai/runtime-protocol';
-import { launchEnv } from '../../launch-context.js';
 import { MAX_TIMER_MS } from '../../utils/timer.js';
 import { AttemptResult } from '../attempt-result.js';
 import { attemptResultPath, runScratchDir, type AttemptId, type RunId } from '../store.js';
 import type { WorkflowFailure } from '../types.js';
 import { git } from '../worktree.js';
 import type { LocalConfig } from '../../types.js';
-import { withoutPrompt, type ToolClosed, type ToolLauncher } from '@teamai/tool-launch/run-step-launch';
-import { agentPrompt, type LocalToolAdapter, type LocalToolResult, type LocalToolRun } from './local-tool-adapter.js';
+import { stepPrompt, withoutPrompt, type ToolClosed, type ToolLauncher } from '@teamai/tool-launch/run-step-launch';
+import type { StepLauncher, StepRun, StepRunResult } from '@teamai/runtime-tools';
 
 // ─── The local loop's steps on a step runtime ────────────
 //
@@ -345,18 +344,18 @@ export function runtimePrompter(run: AttemptRun, { view, runId, step, tool, prov
   isThroughOuter?: boolean;
   /** The conversation of an earlier attempt's prompt the step continues, in the place teamai held open for it. */
   continues?: NonNullable<PromptLease['continue']>;
-}): LocalToolAdapter {
+}): StepLauncher {
   const given = toolCredentials(credentials, unset);
 
   // `extended` is the shipped tool `tool` is, or extends; a runtime may report the session under either name.
-  const launch = async (extended: string, input: LocalToolRun, signal: AbortSignal | undefined, interactive: boolean): Promise<LocalToolResult> => {
+  const launch = async (extended: string, input: StepRun, signal: AbortSignal | undefined, interactive: boolean): Promise<StepRunResult> => {
     const opened = await run.open(view, { tool, credentials: given, ...(isThroughOuter && { unset }) });
 
     if (!opened.ok) return { started: false, exitCode: 1, failure: opened.failure };
     const unready = await setUp(undefined);
 
     if (unready) return { started: false, exitCode: 1, failure: unready };
-    const lease: PromptLease = { step, tool, prompt: agentPrompt(input), result: input.resultPath, permissions: input.unattended ? 'unattended' : 'approval-required', interactive };
+    const lease: PromptLease = { step, tool, prompt: stepPrompt(input, { inPrompt: true }), result: input.resultPath, permissions: input.unattended ? 'unattended' : 'approval-required', interactive };
 
     if (input.model) lease.model = input.model.effort ? { name: input.model.name, effort: input.model.effort } : { name: input.model.name };
 
@@ -367,7 +366,7 @@ export function runtimePrompter(run: AttemptRun, { view, runId, step, tool, prov
     if (input.maxTurns !== undefined) lease.maxTurns = input.maxTurns;
     const env = stringEnv(input.env ?? {});
 
-    if (input.launch) Object.assign(env, launchEnv(input.launch));
+    if (input.launchEnv) Object.assign(env, input.launchEnv);
     env.TEAMAI_WORKFLOW_RESULT = input.resultPath;
     let accepted = false;
     let timedOut = false;
@@ -415,7 +414,7 @@ export function runtimePrompter(run: AttemptRun, { view, runId, step, tool, prov
         const fresh = input.resume !== undefined && end.resumed !== true ? { startedFresh: true as const } : {};
 
         if (uncollected) return { started: true, exitCode: 1, session: end.session.id, failure: uncollected, ...fresh };
-        const ran: LocalToolResult = { started: true, exitCode: 0, session: end.session.id, ...fresh };
+        const ran: StepRunResult = { started: true, exitCode: 0, session: end.session.id, ...fresh };
 
         if ('output' in end.result) ran.output = end.result.output;
 
@@ -427,7 +426,7 @@ export function runtimePrompter(run: AttemptRun, { view, runId, step, tool, prov
       }
 
       case 'cancelled': {
-        const cancelled: LocalToolResult = { started: true, exitCode: 143, failure: { code: 'tool_failed', message: `${tool} was stopped before it wrote a workflow result` } };
+        const cancelled: StepRunResult = { started: true, exitCode: 143, failure: { code: 'tool_failed', message: `${tool} was stopped before it wrote a workflow result` } };
 
         if (timedOut) cancelled.stoppedBy = 'timeout';
 

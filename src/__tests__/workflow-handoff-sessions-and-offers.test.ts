@@ -16,7 +16,7 @@ import { claimOffered, claimRun, publishRun, resumeRun, settledSteps } from '../
 import { pendingRecords, queueRunRecord } from '../workflow/records.js';
 import { runLocalDriver } from '../workflow/drivers/local/local-driver.js';
 import { cancelRun } from '../workflow/run-controls.js';
-import type { LocalToolAdapter } from '../workflow/steps/local-tool-adapter.js';
+import { type StepLauncher } from '@teamai/runtime-tools';
 import { installOwner, readRun } from '../workflow/store.js';
 import { PublishedRuns, type Taker } from '../workflow-published-runs.js';
 import type { WorkflowDefinition, WorkflowEnvelope } from '../workflow/types.js';
@@ -139,7 +139,7 @@ steps:
     bob.config.workflows = { tools: { default: 'claude' } };
     expect(await claimRun(bob.config, runId, { checkout: bob.checkout })).toMatchObject({ ok: true, value: { ownership: 'claimed' } });
     const resumed: Array<string | undefined> = [];
-    const tool: LocalToolAdapter = {
+    const tool: StepLauncher = {
       runInteractive: vi.fn(),
       run: vi.fn(async (_name, input) => {
         resumed.push(input.resume);
@@ -237,7 +237,7 @@ steps:
     fs.writeFileSync(lock, '');
     const warn = vi.spyOn(log, 'warn');
     const resumed: Array<string | undefined> = [];
-    const tool: LocalToolAdapter = {
+    const tool: StepLauncher = {
       runInteractive: vi.fn(),
       run: vi.fn(async (_name, input) => {
         resumed.push(input.resume);
@@ -494,7 +494,7 @@ steps:
     member.config.workflows = { tools: { default: 'claude' } };
     expect(await claimRun(member.config, runId, { checkout: member.checkout })).toMatchObject({ ok: true, value: { ownership: 'claimed' } });
     const resumed: Array<string | undefined> = [];
-    const tool: LocalToolAdapter = {
+    const tool: StepLauncher = {
       runInteractive: vi.fn(),
       run: vi.fn(async (_name, input) => {
         resumed.push(input.resume);
@@ -589,7 +589,7 @@ steps:
    * A Claude Code stand-in that answers each prompt with `replies[prompt]`: in the session it resumes, as Claude Code
    * does, or in a session of its own. It reports the session it ran in.
    */
-  function claudeTool(replies: Record<string, string>, seen: Seen[]): LocalToolAdapter {
+  function claudeTool(replies: Record<string, string>, seen: Seen[]): StepLauncher {
     return {
       runInteractive: vi.fn(),
       run: vi.fn(async (_name, input) => {
@@ -607,7 +607,7 @@ steps:
    * Drives the run on `member`'s machine until it asks for an approval nobody there gives. With `approve`, the first
    * approval it asks for is given, so the step behind it runs here.
    */
-  async function driveHere(member: Member, runId: string, tool: LocalToolAdapter, approve: boolean): Promise<WorkflowEnvelope> {
+  async function driveHere(member: Member, runId: string, tool: StepLauncher, approve: boolean): Promise<WorkflowEnvelope> {
     member.config.workflows = { tools: { default: 'claude' } };
     let asked = 0;
     const question = async (): Promise<string> => {

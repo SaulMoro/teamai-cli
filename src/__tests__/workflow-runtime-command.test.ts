@@ -3,7 +3,8 @@ import os from 'node:os';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { runtimeCommand, runtimeLauncher } from '../workflow/steps/runtime-steps.js';
-import { toolAdapter } from '../workflow/steps/local-tool-adapter.js';
+import { stepLauncher } from '@teamai/runtime-tools';
+import { toolsLaunchDeps } from '../workflow/runtimes/sources.js';
 import type { AttemptRun } from '../workflow/runtimes/attempt.js';
 
 /** An attempt on a step runtime whose `cancel`, like the real one, stops only an exec it has sent. */
@@ -127,7 +128,7 @@ describe('the timeout of a prompt\'s tool exec\'d on a step runtime', () => {
     });
 
     try {
-      const ran = await toolAdapter(launcher, () => 'claude', () => null).run('claude', { prompt: 'review', cwd: dir, resultPath, secrets: {}, timeoutMs: 200 });
+      const ran = await stepLauncher(toolsLaunchDeps(), { start: launcher, resolveTool: () => 'claude', resolveInstanceCommand: () => null }).run('claude', { prompt: 'review', cwd: dir, resultPath, secrets: {}, expected: undefined, timeoutMs: 200 });
 
       expect(ran).toMatchObject({ started: true, exitCode: 0, output: { ok: true } });
       expect(ran).not.toHaveProperty('stoppedBy');
@@ -163,7 +164,7 @@ describe('the idle limit of a prompt\'s tool exec\'d on a step runtime', () => {
     });
 
     try {
-      const ran = await toolAdapter(launcher, () => 'claude', () => null).run('claude', { prompt: 'review', cwd: dir, resultPath, secrets: {}, idleTimeoutMs: 200 });
+      const ran = await stepLauncher(toolsLaunchDeps(), { start: launcher, resolveTool: () => 'claude', resolveInstanceCommand: () => null }).run('claude', { prompt: 'review', cwd: dir, resultPath, secrets: {}, expected: undefined, idleTimeoutMs: 200 });
 
       expect(ran).toMatchObject({ started: true, exitCode: 0, output: { ok: true } });
       expect(ran.failure).toBeUndefined();

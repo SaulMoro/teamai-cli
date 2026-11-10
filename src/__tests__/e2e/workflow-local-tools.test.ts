@@ -106,7 +106,7 @@ describe('the local driver, end to end', () => {
   it('resumes a run whose teamai was killed while its headless prompt ran, and runs the step to the end', async () => {
     fs.rmSync(launches, { force: true });
     const before = runIds();
-    const child = spawn(process.execPath, [CLI, 'workflow', 'start', 'oneprompt', '--driver', 'local', '--tools', 'default=claude'], { cwd: repo, env: { ...process.env, ...env({ FAKE_TOOL_HOLD_MS: '60000' }), FORCE_COLOR: '0' }, stdio: 'ignore' });
+    const child = spawn(process.execPath, [CLI, 'workflow', 'start', 'oneprompt', '--driver', 'local', '--tools', 'default=claude'], { cwd: repo, env: { ...process.env, ...env({ FAKE_TOOL_HOLD_MS: '10000' }), FORCE_COLOR: '0' }, stdio: 'ignore' });
     const deadline = Date.now() + 30_000;
 
     while (launched().length === 0 && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 50));

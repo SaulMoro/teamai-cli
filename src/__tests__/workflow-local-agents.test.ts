@@ -5,7 +5,7 @@ import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { syncScorersThenWorkflows } from '../scorers/team-sync.js';
 import { getDataHome, TeamaiConfigSchema, type LocalConfig, type TeamaiConfig } from '../types.js';
-import type { LocalToolRun } from '../workflow/steps/local-tool-adapter.js';
+import { type StepRun } from '@teamai/runtime-tools';
 
 const state = vi.hoisted(() => ({
   config: undefined as LocalConfig | undefined,
@@ -24,13 +24,13 @@ vi.mock('../config.js', async (importOriginal) => {
   };
 });
 
-vi.mock('../workflow/steps/local-tool-adapter.js', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('../workflow/steps/local-tool-adapter.js')>();
-  const run = async (_tool: string, input: LocalToolRun) => {
+vi.mock('@teamai/runtime-tools', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@teamai/runtime-tools')>();
+  const run = async (_tool: string, input: StepRun) => {
     state.runs.push({ agent: input.agent });
     return { started: true as const, exitCode: 0 };
   };
-  return { ...actual, createLocalToolAdapter: () => ({ run, runInteractive: run }) };
+  return { ...actual, toolsStepRuntime: (deps: Parameters<typeof actual.toolsStepRuntime>[0]) => actual.toolsStepRuntime({ ...deps, launcher: { run, runInteractive: run } }) };
 });
 
 import { knownSecrets } from '../env-resolution.js';

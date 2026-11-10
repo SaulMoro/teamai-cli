@@ -51,6 +51,9 @@ const RUNTIME_KIT = 'runtime-kit';
 /** The test support every runtime's tests share. */
 const RUNTIME_TEST_KIT = 'runtime-testing';
 
+/** The runtimes teamai runs in its own process, which src/ imports by name: they ship inside teamai-cli. */
+const IN_PROCESS = new Set(['runtime-tools']);
+
 /**
  * The workspace imports the protocol may make: the levels and the home it names, and the usage it carries. Anything
  * more would put a tool's or a runtime's facts in the contract every runtime and teamai parse with.
@@ -153,8 +156,8 @@ export default defineRule({
         for (const [name, folder] of packagesByName(root)) {
           if (specifier !== name && !specifier.startsWith(`${name}/`)) continue;
 
-          if (inApp && folder.startsWith('runtime-') && folder !== RUNTIME_PROTOCOL && !(folder === RUNTIME_TEST_KIT && isTest)) {
-            context.report({ node, message: `src/ never imports a runtime package: teamai reaches a runtime only through its executable over stdio, and reads its lines with @teamai/runtime-protocol. ${from} -> ${specifier}.` });
+          if (inApp && folder.startsWith('runtime-') && folder !== RUNTIME_PROTOCOL && !IN_PROCESS.has(folder) && !(folder === RUNTIME_TEST_KIT && isTest)) {
+            context.report({ node, message: `src/ never imports a runtime package but ${[...IN_PROCESS].map((runtime) => `@teamai/${runtime}`).join(', ')}, which runs in teamai's process: teamai reaches any other runtime only through its executable over stdio, and reads its lines with @teamai/runtime-protocol. ${from} -> ${specifier}.` });
           }
 
           // A family's ./testing entry holds its recordings for the fake agents tests run; nothing that ships loads it, and

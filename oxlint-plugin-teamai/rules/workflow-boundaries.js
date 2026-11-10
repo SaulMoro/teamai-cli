@@ -103,9 +103,8 @@ const ENTRIES = [
     entries: {
       'prompt.ts': ['src/workflow/drivers/local/local-driver.ts', 'src/workflow/fleet/member.ts', 'src/workflow-published-runs.ts'],
       'runtime-steps.ts': ['src/workflow/drivers/local/local-driver.ts'],
-      'local-tool-adapter.ts': ['src/workflow/drivers/local/local-driver.ts'],
     },
-    testEntries: ['prompt.ts', 'local-tool-adapter.ts', 'runtime-steps.ts'],
+    testEntries: ['prompt.ts', 'runtime-steps.ts'],
   },
   // The fleet: the owner's side is a step runtime, the member's a command's; the records are read by publish too.
   {

@@ -12,11 +12,14 @@ import { checkoutRecordKey, type CheckoutRecord } from '../pull.js';
 import { encodeCwdClaude } from '@teamai/tool-core/sessions/fs';
 import { type JsonValue, type LocalConfig, type TeamaiConfig } from '../types.js';
 import { log } from '../utils/logger.js';
-import { createLocalToolAdapter, type LocalToolAdapter, type LocalToolResult, type LocalToolRun, type ToolSpawn } from '../workflow/steps/local-tool-adapter.js';
+import { type StepLauncher, type StepRunResult, type StepRun, type ToolSpawn } from '@teamai/runtime-tools';
+import { hostLauncher } from './helpers/host-launcher.js';
 import { _setDriverPollMs, runLocalDriver } from '../workflow/drivers/local/local-driver.js';
 import { type WorkflowRunRecord } from '../workflow/records.js';
 import { AttemptIdSchema, readRun, RunIdSchema } from '../workflow/store.js';
 import { readAttemptRuntime } from '../workflow/runtimes/attempt.js';
+import { openDriver } from '../workflow/runtimes/sources.js';
+import { personalDir } from '../workflow/runtimes/definitions.js';
 import { cancelRun } from '../workflow/run-controls.js';
 import { stdioStepRuntime } from '../workflow/runtimes/stdio.js';
 import type { DriverRuntimes } from '../workflow/drivers/local/local-driver.js';
@@ -49,8 +52,8 @@ function claudeBeside(workspace: string, options: Omit<Parameters<typeof fakeAge
 describe('local workflow prompt driver', () => {
   it('runs a prompt with a private result path and stores metadata', async () => {
     const { config, workspace, runId } = await fixture();
-    let input: LocalToolRun | undefined;
-    const adapter: LocalToolAdapter = {
+    let input: StepRun | undefined;
+    const adapter: StepLauncher = {
       runInteractive: vi.fn(),
       run: vi.fn(async (_tool, value) => {
         input = value;
@@ -86,13 +89,13 @@ describe('local workflow prompt driver', () => {
   it('records how long the tool ran and the cost it stated, and neither for a tool that never started', async () => {
     const ran = await fixture();
     const unstarted = await fixture();
-    const adapter: LocalToolAdapter = { runInteractive: vi.fn(), run: vi.fn(async () => {
+    const adapter: StepLauncher = { runInteractive: vi.fn(), run: vi.fn(async () => {
       await new Promise((resolve) => setTimeout(resolve, 60));
       return { started: true as const, exitCode: 0, output: { ok: true }, cost: { amount: 0.25, unit: 'USD' } };
     }) };
 
     await runLocalDriver(ran.config, ran.runId, ran.workspace, { adapter, toolPaths });
-    await runLocalDriver(unstarted.config, unstarted.runId, unstarted.workspace, { adapter: createLocalToolAdapter(undefined, () => null), toolPaths });
+    await runLocalDriver(unstarted.config, unstarted.runId, unstarted.workspace, { adapter: hostLauncher(undefined, () => null), toolPaths });
 
     const stored = await readRun(ran.config, ran.runId);
     const step = typeof stored === 'object' && stored.steps[0]?.status === 'succeeded' ? stored.steps[0] : undefined;
@@ -110,8 +113,8 @@ describe('local workflow prompt driver', () => {
     for (const [name, value] of Object.entries(env)) vi.stubEnv(name, value);
     onTestFinished(() => { vi.unstubAllEnvs(); });
     const { config, workspace, runId } = await fixture();
-    let input: LocalToolRun | undefined;
-    const adapter: LocalToolAdapter = { runInteractive: vi.fn(), run: vi.fn(async (_tool, value) => {
+    let input: StepRun | undefined;
+    const adapter: StepLauncher = { runInteractive: vi.fn(), run: vi.fn(async (_tool, value) => {
       input = value;
       return { started: true as const, exitCode: 0 };
     }) };
@@ -120,7 +123,7 @@ describe('local workflow prompt driver', () => {
 
     expect(input?.env?.TEAMAI_MODE).toBe(mode);
     // What the launched session's hook records (#1384), and the pass's own record of the mode it ran in.
-    expect(sessionRun({ ...input?.env, ...(input?.launch ? launchEnv(input.launch) : {}) })).toEqual({ runMode: mode, launchedBy: 'workflow' });
+    expect(sessionRun({ ...input?.env, ...input?.launchEnv })).toEqual({ runMode: mode, launchedBy: 'workflow' });
     expect(await readRun(config, runId)).toMatchObject({ steps: [{ runMode: mode }] });
   });
 
@@ -140,7 +143,7 @@ describe('local workflow prompt driver', () => {
     if (project) projectAiTool(config, project);
     if (machine) memberAiTool(machine);
     const tools: string[] = [];
-    const adapter: LocalToolAdapter = { runInteractive: vi.fn(), run: vi.fn(async (tool: string) => { tools.push(tool); return { started: true as const, exitCode: 0 }; }) };
+    const adapter: StepLauncher = { runInteractive: vi.fn(), run: vi.fn(async (tool: string) => { tools.push(tool); return { started: true as const, exitCode: 0 }; }) };
 
     await runLocalDriver(config, runId, workspace, { adapter, toolPaths, tools: flags });
 
@@ -161,7 +164,7 @@ steps:
     onTestFinished(fakeClaude(path.dirname(workspace), '2.1.301'));
     config.workflows = { tools: { default: 'codex' } };
     const tools: string[] = [];
-    const adapter: LocalToolAdapter = { runInteractive: vi.fn(), run: vi.fn(async (tool: string) => { tools.push(tool); return { started: true as const, exitCode: 0 }; }) };
+    const adapter: StepLauncher = { runInteractive: vi.fn(), run: vi.fn(async (tool: string) => { tools.push(tool); return { started: true as const, exitCode: 0 }; }) };
 
     await runLocalDriver(config, runId, workspace, { adapter, toolPaths, tools: { default: 'codex' } });
 
@@ -174,7 +177,7 @@ steps:
     const { config, workspace, runId } = await fixture();
     config.workflows = { tools: {} };
     const file = projectAiTool(config, 'gemini');
-    const adapter: LocalToolAdapter = { runInteractive: vi.fn(), run: vi.fn() };
+    const adapter: StepLauncher = { runInteractive: vi.fn(), run: vi.fn() };
 
     await runLocalDriver(config, runId, workspace, { adapter, toolPaths });
 
@@ -188,7 +191,7 @@ steps:
     vi.stubEnv('TEAMAI_AI_TOOL', 'gemini');
     onTestFinished(() => { vi.unstubAllEnvs(); });
     const { config, workspace, runId } = await fixture();
-    const adapter: LocalToolAdapter = { runInteractive: vi.fn(), run: vi.fn() };
+    const adapter: StepLauncher = { runInteractive: vi.fn(), run: vi.fn() };
 
     await runLocalDriver(config, runId, workspace, { adapter, toolPaths });
 
@@ -201,7 +204,7 @@ steps:
   it('fails without a configured tool and does not invoke the adapter', async () => {
     const { config, workspace, runId } = await fixture();
     config.workflows = undefined;
-    const adapter: LocalToolAdapter = { runInteractive: vi.fn(), run: vi.fn() };
+    const adapter: StepLauncher = { runInteractive: vi.fn(), run: vi.fn() };
 
     const done = await runLocalDriver(config, runId, workspace, { adapter, toolPaths });
 
@@ -214,7 +217,7 @@ steps:
 
   it('fails before spawn when a deployed agent is missing', async () => {
     const { config, workspace, runId } = await fixture('reviewer');
-    const adapter: LocalToolAdapter = { runInteractive: vi.fn(), run: vi.fn() };
+    const adapter: StepLauncher = { runInteractive: vi.fn(), run: vi.fn() };
 
     await runLocalDriver(config, runId, workspace, { adapter, toolPaths });
 
@@ -236,8 +239,8 @@ model: gateway-model
 ---
 Follow the review checklist.
 `);
-    let input: LocalToolRun | undefined;
-    const adapter: LocalToolAdapter = {
+    let input: StepRun | undefined;
+    const adapter: StepLauncher = {
       runInteractive: vi.fn(),
       run: vi.fn(async (_tool, value) => {
         input = value;
@@ -285,8 +288,8 @@ model: wrong-model
 ---
 Do not use this copy.
 `);
-    let input: LocalToolRun | undefined;
-    const adapter: LocalToolAdapter = {
+    let input: StepRun | undefined;
+    const adapter: StepLauncher = {
       runInteractive: vi.fn(),
       run: vi.fn(async (_tool, value) => {
         input = value;
@@ -309,7 +312,7 @@ Do not use this copy.
 
   it('keeps repository changes and reports read_only_dirty', async () => {
     const { config, workspace, runId } = await fixture();
-    const adapter: LocalToolAdapter = {
+    const adapter: StepLauncher = {
       runInteractive: vi.fn(),
       run: vi.fn(async () => {
         fs.writeFileSync(path.join(workspace, 'left-behind.txt'), 'inspect me\n');
@@ -329,7 +332,7 @@ Do not use this copy.
     const { config, workspace, runId } = await fixture();
     const tracked = path.join(workspace, 'tracked.txt');
     fs.writeFileSync(tracked, 'already dirty\n');
-    const adapter: LocalToolAdapter = {
+    const adapter: StepLauncher = {
       runInteractive: vi.fn(),
       run: vi.fn(async () => {
         fs.writeFileSync(tracked, 'changed again\n');
@@ -353,7 +356,7 @@ Do not use this copy.
     fs.writeFileSync(existing, 'before\n');
     fs.writeFileSync(path.join(directory, 'keep.txt'), 'unchanged\n');
     const changed = change === 'add' ? path.join(directory, 'new.txt') : existing;
-    const adapter: LocalToolAdapter = {
+    const adapter: StepLauncher = {
       runInteractive: vi.fn(),
       run: vi.fn(async () => {
         if (change === 'remove') fs.rmSync(changed);
@@ -376,7 +379,7 @@ Do not use this copy.
     const { config, workspace, runId } = await fixture();
     fs.mkdirSync(path.join(workspace, 'notes'));
     fs.writeFileSync(path.join(workspace, 'notes', 'draft.txt'), 'before\n');
-    const adapter: LocalToolAdapter = {
+    const adapter: StepLauncher = {
       runInteractive: vi.fn(),
       run: vi.fn(async () => ({ started: true as const, exitCode: 0, output: { ok: true } })),
     };
@@ -389,7 +392,7 @@ Do not use this copy.
     const { config, workspace, runId } = await fixture();
     const dirty = path.join(workspace, 'dirty-before.txt');
     fs.writeFileSync(dirty, 'remove me\n');
-    const adapter: LocalToolAdapter = {
+    const adapter: StepLauncher = {
       runInteractive: vi.fn(),
       run: vi.fn(async () => {
         fs.rmSync(dirty);
@@ -415,8 +418,8 @@ description = "Reviews changes."
 developer_instructions = "Implement the change."
 model = "gpt-5.4"
 `);
-    let input: LocalToolRun | undefined;
-    const adapter: LocalToolAdapter = {
+    let input: StepRun | undefined;
+    const adapter: StepLauncher = {
       runInteractive: vi.fn(),
       run: vi.fn(async (_selected, value) => {
         input = value;
@@ -459,7 +462,7 @@ steps:
     const agents = path.join(workspace, '.codex-internal/agents');
     fs.mkdirSync(agents, { recursive: true });
     fs.writeFileSync(path.join(agents, 'reviewer.toml'), 'name = "reviewer"\ndescription = "Reviews changes."\ndeveloper_instructions = "Review the change."\n');
-    const adapter: LocalToolAdapter = {
+    const adapter: StepLauncher = {
       runInteractive: vi.fn(),
       run: vi.fn(async () => ({ started: true as const, exitCode: 0, output: { ok: true } })),
     };
@@ -481,8 +484,8 @@ steps:
     fs.mkdirSync(path.join(xdg, 'opencode', 'agents'), { recursive: true });
     fs.writeFileSync(path.join(xdg, 'opencode', 'agents', 'reviewer.md'), '---\ndescription: Reviews changes.\nmode: subagent\n---\n\nReview the change.\n');
     const userConfig: LocalConfig = { ...config, scope: 'user', workflows: { tools: { reviewer: 'opencode' } } };
-    let input: LocalToolRun | undefined;
-    const adapter: LocalToolAdapter = {
+    let input: StepRun | undefined;
+    const adapter: StepLauncher = {
       runInteractive: vi.fn(),
       run: vi.fn(async (_selected, value) => {
         input = value;
@@ -514,7 +517,7 @@ developer_instructions = "Read only."
 sandbox_mode = "read-only"
 `);
     const warn = vi.spyOn(log, 'warn').mockImplementation(() => undefined);
-    const adapter: LocalToolAdapter = {
+    const adapter: StepLauncher = {
       runInteractive: vi.fn(),
       run: vi.fn(async () => ({ started: true as const, exitCode: 0, output: { ok: true } })),
     };
@@ -532,7 +535,7 @@ sandbox_mode = "read-only"
 
   it('stores a structured child failure', async () => {
     const { config, workspace, runId } = await fixture();
-    const adapter: LocalToolAdapter = {
+    const adapter: StepLauncher = {
       runInteractive: vi.fn(),
       run: vi.fn(async () => ({
         started: true as const,
@@ -551,9 +554,45 @@ sandbox_mode = "read-only"
   it('publishes the failure code it sets when the tool is not on PATH', async () => {
     const { config, workspace, runId } = await fixture();
 
-    await runLocalDriver(config, runId, workspace, { adapter: createLocalToolAdapter(undefined, () => null), toolPaths });
+    await runLocalDriver(config, runId, workspace, { adapter: hostLauncher(undefined, () => null), toolPaths });
 
     expect(await endRecord(config)).toMatchObject({ status: 'failed', failure: { code: 'tool_unavailable' } });
+  });
+
+  it('runs a headless Claude prompt step on a member\'s own definition that lists only the tools runtime', async () => {
+    const { config, workspace, runId } = await workflowFixture(`schemaVersion: v1alpha1
+name: build
+description: Review the project.
+steps:
+  - id: review
+    prompt: Review this project.
+    budget: { tokens: 5 }
+    on_limit: end_turn
+    output:
+      ok: boolean
+`);
+    // The tool writes its result, then streams a message that spends 12 input and 3 output tokens, past the step's
+    // budget of 5, and goes on.
+    const claude = claudeBeside(workspace, { before: `
+      const resultPath = [prompt, ...args].join(' ').match(/as JSON to (\\S+)\\. /)[1];
+      fs.writeFileSync(resultPath, JSON.stringify({ output: { ok: true } }));
+      await say(JSON.stringify({ type: 'system', subtype: 'init', session_id: 'session-over', model: 'claude-sonnet-4-5' }));
+      await say(JSON.stringify({ type: 'stream_event', event: { type: 'message_start', message: { id: 'message-1', usage: { input_tokens: 12, output_tokens: 3 } } } }));
+      return hang();
+    ` });
+    fs.mkdirSync(personalDir('drivers'), { recursive: true });
+    onTestFinished(() => fs.rmSync(personalDir('drivers'), { recursive: true, force: true }));
+    fs.writeFileSync(path.join(personalDir('drivers'), 'mine.yaml'), 'schemaVersion: v1alpha1\nname: mine\nruntimes:\n  - use: tools\n');
+    const opened = await openDriver(config, 'mine', { personal: true, mode: 'attended', canAsk: false, purpose: 'run', checkout: workspace });
+    if (!opened.ok) throw new Error(opened.failure.message);
+
+    const done = await runLocalDriver(config, runId, workspace, {
+      adapter: hostLauncher(undefined, () => claude.executable), toolPaths, runtimes: { driver: 'mine', asked: 'mine', runtimes: opened.opened.runtimes },
+    });
+
+    expect(claude.calls()).toHaveLength(1);
+    expect(await readRun(config, runId)).toMatchObject({ steps: [{ id: 'review', status: 'succeeded', tool: 'claude', outputs: { ok: true }, session: 'session-over', tokens: { input: 12, output: 3 }, limit: 'budget' }] });
+    expect(done).toMatchObject({ data: { done: { outcome: 'succeeded' } } });
   });
 
   it('stops a Claude prompt step that prints nothing for workflows.idle_timeout, and fails it naming the limit', async () => {
@@ -562,7 +601,7 @@ sandbox_mode = "read-only"
     const claude = claudeBeside(workspace, { always: ['hang'] });
     const started = Date.now();
 
-    await runLocalDriver(config, runId, workspace, { adapter: createLocalToolAdapter(undefined, () => claude.executable), toolPaths });
+    await runLocalDriver(config, runId, workspace, { adapter: hostLauncher(undefined, () => claude.executable), toolPaths });
 
     expect(Date.now() - started).toBeLessThan(15_000);
     expect(await readRun(config, runId)).toMatchObject({
@@ -578,7 +617,7 @@ sandbox_mode = "read-only"
     config.workflows = { tools: { default: 'claude' }, idle_timeout: `${idleMs / 1000}s` };
     const claude = claudeBeside(workspace, { answer: '{"ok":true}', always: ['slow'], slowMs: idleMs / 2 });
 
-    await runLocalDriver(config, runId, workspace, { adapter: createLocalToolAdapter(undefined, () => claude.executable), toolPaths });
+    await runLocalDriver(config, runId, workspace, { adapter: hostLauncher(undefined, () => claude.executable), toolPaths });
 
     expect(await readRun(config, runId)).toMatchObject({ steps: [{ id: 'review', status: 'succeeded', outputs: { ok: true } }] });
   });
@@ -588,7 +627,7 @@ sandbox_mode = "read-only"
     config.workflows = { tools: { default: 'claude' }, idle_timeout: 'soon' };
     const claude = claudeBeside(workspace, { answer: '{"ok":true}' });
 
-    await runLocalDriver(config, runId, workspace, { adapter: createLocalToolAdapter(undefined, () => claude.executable), toolPaths });
+    await runLocalDriver(config, runId, workspace, { adapter: hostLauncher(undefined, () => claude.executable), toolPaths });
 
     expect(claude.calls()).toEqual([]);
     expect(await readRun(config, runId)).toMatchObject({
@@ -602,7 +641,7 @@ sandbox_mode = "read-only"
       before: 'fs.writeFileSync(process.env.TEAMAI_WORKFLOW_RESULT, JSON.stringify({ failure: { code: "secret-x", message: "secret-x happened" } }));',
     });
 
-    await runLocalDriver(config, runId, workspace, { adapter: createLocalToolAdapter(undefined, () => claude.executable), toolPaths });
+    await runLocalDriver(config, runId, workspace, { adapter: hostLauncher(undefined, () => claude.executable), toolPaths });
 
     expect(await readRun(config, runId)).toMatchObject({ steps: [{ status: 'failed', failure: { code: 'secret-x' } }] });
     const record = await endRecord(config);
@@ -673,7 +712,7 @@ steps:
     prompt: Review this project.
 ${agent ? `    agent: ${agent}\n` : ''}`;
 
-  const reports = (result: Partial<Extract<LocalToolResult, { started: true }>> = {}): LocalToolAdapter => ({
+  const reports = (result: Partial<Extract<StepRunResult, { started: true }>> = {}): StepLauncher => ({
     runInteractive: vi.fn(),
     run: vi.fn(async () => ({ started: true as const, exitCode: 0, ...result })),
   });
@@ -716,7 +755,7 @@ ${agent ? `    agent: ${agent}\n` : ''}`;
      * A Claude pass that runs `during`, then writes a session whose main thread loads `main` and whose subagent loads
      * `subagent` through the skill tool, after a pass before it that loaded `earlier` when the pass resumes one.
      */
-    const loading = (workspace: string, { main, subagent, earlier }: { main: string; subagent: string; earlier?: string }, during = () => {}): LocalToolAdapter => ({
+    const loading = (workspace: string, { main, subagent, earlier }: { main: string; subagent: string; earlier?: string }, during = () => {}): StepLauncher => ({
       runInteractive: vi.fn(),
       run: vi.fn(async () => {
         during();
@@ -796,15 +835,15 @@ ${agent ? `    agent: ${agent}\n` : ''}`;
 
   it('launches the tool bound to its checkout, so its session-start hook keeps the delivery', async () => {
     const { config, workspace, runId } = await observed(reviewStep('reviewer'));
-    let input: LocalToolRun | undefined;
-    const adapter: LocalToolAdapter = { runInteractive: vi.fn(), run: vi.fn(async (_tool, value) => {
+    let input: StepRun | undefined;
+    const adapter: StepLauncher = { runInteractive: vi.fn(), run: vi.fn(async (_tool, value) => {
       input = value;
       return { started: true as const, exitCode: 0 };
     }) };
 
     await runLocalDriver(config, runId, workspace, { adapter, toolPaths });
 
-    expect(input?.launch).toEqual({ by: 'workflow', tool: 'claude', checkout: await checkoutRecordKey(config) });
+    expect(input?.launchEnv).toEqual(launchEnv({ by: 'workflow', tool: 'claude', checkout: String(await checkoutRecordKey(config)) }));
   });
 
   it('publishes the --model a Codex launch passed as the requested model', async () => {
@@ -815,7 +854,7 @@ ${agent ? `    agent: ${agent}\n` : ''}`;
       return spawn(process.execPath, ['-e', 'require("fs").writeFileSync(process.env.TEAMAI_WORKFLOW_RESULT, "{}")'], options);
     };
 
-    await runLocalDriver(config, runId, workspace, { adapter: createLocalToolAdapter(codex, () => process.execPath), toolPaths: codexToolPaths });
+    await runLocalDriver(config, runId, workspace, { adapter: hostLauncher(codex, () => process.execPath), toolPaths: codexToolPaths });
 
     expect(argv).toEqual(expect.arrayContaining(['--model', 'gpt-5.4']));
     expect((await entry(config))?.agent).toMatchObject({
@@ -927,7 +966,7 @@ steps:
   it('records no observation of a tool that never started', async () => {
     const { config, workspace, runId } = await observed(reviewStep('reviewer'));
 
-    await runLocalDriver(config, runId, workspace, { adapter: createLocalToolAdapter(undefined, () => null), toolPaths });
+    await runLocalDriver(config, runId, workspace, { adapter: hostLauncher(undefined, () => null), toolPaths });
 
     expect((await entry(config))?.agent).toEqual({ definition: { name: 'reviewer' } });
   });
@@ -936,7 +975,7 @@ steps:
     const { config, workspace, runId } = await observed(`${reviewStep('reviewer')}    loop: { back_to: review, while: "length(steps.review.passes) < 3", max_iterations: 3 }
 `);
     let pass = 0;
-    const adapter: LocalToolAdapter = { runInteractive: vi.fn(), run: vi.fn(async () => ({ started: true as const, exitCode: 0, model: `claude-model-${++pass}` })) };
+    const adapter: StepLauncher = { runInteractive: vi.fn(), run: vi.fn(async () => ({ started: true as const, exitCode: 0, model: `claude-model-${++pass}` })) };
 
     await runLocalDriver(config, runId, workspace, { adapter, toolPaths });
 
@@ -1242,7 +1281,7 @@ steps:
     const { config, workspace, runId } = await workflowFixture(inOneWorkspace(PAIR.replace('    prompt: Make the change you planned.\n', '    prompt: Make the change you planned.\n    tool: codex\n')));
     const toy = await toyDriver(path.dirname(workspace), { can: { tools: ['claude'] } });
     const local = { kind: 'local' as const, use: 'local' as const, engine: { logins: [] } };
-    const adapter: LocalToolAdapter = {
+    const adapter: StepLauncher = {
       run: async () => ({ started: true, exitCode: 0, session: 'codex-session', output: { ok: true } }),
       runInteractive: async () => ({ started: false, exitCode: 1, failure: { code: 'tool_failed', message: 'not interactive' } }),
     };

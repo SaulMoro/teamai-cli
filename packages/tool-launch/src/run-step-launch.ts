@@ -44,8 +44,11 @@ export interface StepLaunchInput {
   resultPath: string;
   /** What the run masks: a result kept from the tool's stdout is masked with it before it is written. */
   secrets: Record<string, string>;
-  /** What the result instruction asks the output to be, in words. */
-  expected: string;
+  /**
+   * What the result instruction asks the output to be, in words. `undefined`: the prompt already carries the
+   * instruction, as a runtime's prompt lease does, and the tool gets it as it is.
+   */
+  expected: string | undefined;
   /** The definition the step runs as. `settings` are the deployed OpenCode file's other fields, such as `mode` and `variant`. */
   agent?: { name: string; instructions: string; model?: string; settings?: { readonly [key: string]: AgentSetting } };
   /** The model and effort the launch passes. */
@@ -135,6 +138,8 @@ type ResultFile = ToolReport & { failure?: StepFailure };
 
 /** The step's prompt, and the instruction to write the result file. */
 function resultInstruction(input: Pick<StepLaunchInput, 'resultPath' | 'expected'>, prompt: string): string {
+  if (input.expected === undefined) return prompt;
+
   return `${prompt}\n\nWrite the workflow result as JSON to ${input.resultPath}. `
     + `Use this shape: {"output":...}, where output is ${input.expected}. `
     + 'Leave failure out unless the step failed; then add "failure":{"code":"...","message":"..."}.';

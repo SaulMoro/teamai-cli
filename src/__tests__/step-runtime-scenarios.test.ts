@@ -9,6 +9,8 @@ import { z } from 'zod';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { log } from '../utils/logger.js';
 import { localStepRuntime } from '../workflow/runtimes/local.js';
+import { toolsLaunchDeps } from '../workflow/runtimes/sources.js';
+import { stepLauncher, toolsStepRuntime } from '@teamai/runtime-tools';
 import { stdioStepRuntime } from '../workflow/runtimes/stdio.js';
 import { composedStepRuntime } from '../workflow/runtimes/composed.js';
 import type { OpId, OpState, RuntimeDisplay, RuntimeFailure, RuntimeOptions } from '@teamai/runtime-protocol';
@@ -454,8 +456,11 @@ interface PromptSubject {
   reportsUsage?: false;
   /** The failure a prompt ends with when its agent fails with `failure`; absent: that failure as it is. */
   failure?(failure: RuntimeFailure): RuntimeFailure;
-  /** The directories the runtime keeps its records of `state` in. */
-  journal(state: string): string[];
+  /**
+   * The directories the runtime keeps its records of `state` in. Absent: it keeps them in its process alone, so a
+   * restarted one finds none, and the scenarios of a restart and of a journal it cannot write do not run for it.
+   */
+  journal?(state: string): string[];
   /** How the runtime still answers a prompt whose end it cannot journal (`<kind> <failure code>`), where that is not its true end. */
   unjournaledEnd?: string;
   /** Stops what the subject's fakes run for `state` beside the runtime, such as an app's server, before the leak check. */
@@ -472,7 +477,46 @@ interface PromptSubject {
 const T3 = await t3OnFakeServer();
 const paseo = await paseoOnFakeDaemon();
 
+/**
+ * The fake `claude` of a tools subject, in `state`'s bin, which does what the suite's `agent` says, as the toy's agent
+ * does: waits for `release`, holds for `hold_ms`, ends failed with `fail`, writes `result` or `output` to the result file
+ * the prompt names, and states `usage`.
+ */
+function fakeClaudeAgent(state: string, agent: JsonValue): void {
+  fakeAgent(claudeFake, { bin: path.join(state, 'bin'), before: `
+    const told = ${JSON.stringify(agent)};
+    const session = args.includes('--resume') ? args[args.indexOf('--resume') + 1] : randomUUID();
+    if (told.release) while (!fs.existsSync(told.release)) await sleep(20);
+    if (told.hold_ms) return hang();
+    if (told.fail) {
+      await say(JSON.stringify({ type: 'result', subtype: 'success', is_error: true, result: told.fail.message, session_id: session }));
+      process.exit(1);
+    }
+    const resultAt = [prompt, ...args].join(' ').match(/as JSON to (\\S+)\\.(?:\\s|$)/)[1];
+    const written = told.result ?? (told.output === undefined ? undefined : { output: told.output });
+    if (written !== undefined) fs.writeFileSync(resultAt, JSON.stringify(written));
+    const billed = { input_tokens: told.usage?.input ?? 0, output_tokens: told.usage?.output ?? 0 };
+    await say(JSON.stringify({ type: 'result', subtype: 'success', is_error: false, result: 'Done.', session_id: session, usage: billed }));
+    process.exit(0);
+  ` });
+}
+
 const PROMPT_SUBJECTS: PromptSubject[] = [
+  {
+    name: 'tools on the fake claude',
+    start: (state) => toolsStepRuntime<DriverCan>({
+      can: { exec: false, tools: ['claude'] },
+      launch: toolsLaunchDeps(),
+      launcher: stepLauncher(toolsLaunchDeps(), { resolveTool: () => path.join(state, 'bin', 'claude') }),
+    }),
+    options: (state, agent) => {
+      fakeClaudeAgent(state, agent);
+
+      return {};
+    },
+    // A tool that exits failing is a failed launch, whatever it printed: the launch names its exit.
+    failure: () => ({ code: 'tool_failed', message: expect.any(String) }),
+  },
   {
     name: 'toy over stdio, prompt only',
     start: () => stdioStepRuntime({ name: 'toy', command: process.execPath, args: [TOY_RUNTIME] }),
@@ -661,7 +705,7 @@ describe.each(PROMPT_SUBJECTS)('StepRuntime prompt scenarios: $name', (subject) 
     expect(fs.existsSync(path.join(worktree, 'ran'))).toBe(false);
   });
 
-  it(subject.unjournaledEnd === undefined ? 'answers the true end of a prompt whose end it cannot journal, says so, and reports it on reattach until close' : `still answers a prompt whose end it cannot journal with ${subject.unjournaledEnd}, not its true end`, async () => {
+  it.runIf(subject.journal !== undefined)(subject.unjournaledEnd === undefined ? 'answers the true end of a prompt whose end it cannot journal, says so, and reports it on reattach until close' : `still answers a prompt whose end it cannot journal with ${subject.unjournaledEnd}, not its true end`, async () => {
     const warned = vi.spyOn(log, 'warn');
     const release = path.join(dir, 'release');
     const runtime = await start({ release, output: { verdict: 'approve' } });
@@ -672,7 +716,7 @@ describe.each(PROMPT_SUBJECTS)('StepRuntime prompt scenarios: $name', (subject) 
     const ended = runtime.prompt(request, { onAccepted: ({ display }) => { accepted = true; shown ||= display !== undefined; }, onDisplay: () => { shown = true; } });
     // A runtime that shows its agent has journaled that agent by then: only the end is left to journal.
     expect(await until(() => accepted && (subject.display === undefined || shown))).toBe(true);
-    const journal = subject.journal(state);
+    const journal = subject.journal?.(state) ?? [];
 
     try {
       for (const root of journal) setDirModes(root, 0o500);
@@ -706,7 +750,7 @@ describe.each(PROMPT_SUBJECTS)('StepRuntime prompt scenarios: $name', (subject) 
     expect(await until(() => accepted)).toBe(true);
     const after = await start(agent);
     const second = after.prompt(request, {});
-    const journal = subject.journal(state);
+    const journal = subject.journal?.(state) ?? [];
 
     try {
       for (const root of journal) setDirModes(root, 0o500);
@@ -721,7 +765,7 @@ describe.each(PROMPT_SUBJECTS)('StepRuntime prompt scenarios: $name', (subject) 
     }
   });
 
-  it('reattaches after its own restart with a finished prompt, and a repeated prompt reads the same outcome', async () => {
+  it.runIf(subject.journal !== undefined)('reattaches after its own restart with a finished prompt, and a repeated prompt reads the same outcome', async () => {
     const first = await start({ output: { verdict: 'approve' }, usage: { input: 10 } });
     const handle = await opened(first);
     const request = promptRequest(handle);
@@ -735,7 +779,7 @@ describe.each(PROMPT_SUBJECTS)('StepRuntime prompt scenarios: $name', (subject) 
     expect(await second.prompt(request, {})).toEqual(finished);
   });
 
-  it('reconnects to a prompt its own restart left running: reattach reads it running, and the repeated prompt ends finished', async () => {
+  it.runIf(subject.journal !== undefined)('reconnects to a prompt its own restart left running: reattach reads it running, and the repeated prompt ends finished', async () => {
     // The agent works until the test releases it, so it is still running when the runtime restarts.
     const release = path.join(dir, 'release');
     const agent = { release, output: { verdict: 'approve' } };

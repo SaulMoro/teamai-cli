@@ -13,7 +13,8 @@ import { getDataHome, getReportsDir, type LocalConfig, type TeamaiConfig } from 
 import { log } from '../utils/logger.js';
 import { leaseNext, reportAttempt } from '../workflow/engine.js';
 import { cancelRun, respondProvenance, respondToHitl, retryStep } from '../workflow/run-controls.js';
-import { createLocalToolAdapter, type LocalToolAdapter, type LocalToolResult, type LocalToolRun } from '../workflow/steps/local-tool-adapter.js';
+import { type StepLauncher, type StepRunResult, type StepRun } from '@teamai/runtime-tools';
+import { hostLauncher } from './helpers/host-launcher.js';
 import { _setDriverPollMs, runLocalDriver } from '../workflow/drivers/local/local-driver.js';
 import { localStepRuntime } from '../workflow/runtimes/local.js';
 import type { ExecEnd, StepRuntime } from '@teamai/runtime-protocol/step-runtime';
@@ -104,7 +105,7 @@ fs.writeFileSync(process.env.TEAMAI_WORKFLOW_RESULT, '{"output":{"ok":true}}');
 process.stdout.write(${JSON.stringify(STDOUT[tool])} + '\\n');
 `, { mode: 0o755 });
     const done = await runLocalDriver(config, runId, workspace, {
-      adapter: createLocalToolAdapter(undefined, () => executable),
+      adapter: hostLauncher(undefined, () => executable),
       toolPaths: Object.fromEntries(Object.entries(AGENT_FILES).map(([name, { dir }]) => [name, { agents: dir }])) as TeamaiConfig['toolPaths'],
     });
     const argv = fs.existsSync(argvFile)
@@ -428,7 +429,7 @@ steps:
 `);
     config.workflows!.max_parallel = 2;
     const question = vi.fn(async () => 'yes');
-    const adapter: LocalToolAdapter = {
+    const adapter: StepLauncher = {
       runInteractive: vi.fn(),
       run: vi.fn(async () => {
         await new Promise((resolve) => setTimeout(resolve, 1500));
@@ -517,9 +518,9 @@ steps:
   it('polls and aborts a cancelled prompt while the adapter is running', async () => {
     const { config, workspace, runId } = await fixture();
     let aborted = false;
-    const adapter: LocalToolAdapter = {
+    const adapter: StepLauncher = {
       runInteractive: vi.fn(),
-      run: vi.fn<LocalToolAdapter['run']>((_tool, _input, signal) => new Promise<LocalToolResult>((resolve) => {
+      run: vi.fn<StepLauncher['run']>((_tool, _input, signal) => new Promise<StepRunResult>((resolve) => {
         signal!.addEventListener('abort', () => {
           aborted = true;
           resolve({ started: true, exitCode: 1 });
@@ -540,7 +541,7 @@ steps:
     prompt: Work together.
     interactive: true
 `);
-    const adapter: LocalToolAdapter = {
+    const adapter: StepLauncher = {
       run: vi.fn(),
       runInteractive: vi.fn(async () => ({ started: true as const, exitCode: 0 })),
     };
@@ -558,12 +559,12 @@ steps:
     prompt: Plan it.
     max_turns: 3
 ${interactive ? '    interactive: true\n' : ''}`;
-    const inputs: LocalToolRun[] = [];
-    const ran = vi.fn(async (_tool: string, input: LocalToolRun) => {
+    const inputs: StepRun[] = [];
+    const ran = vi.fn(async (_tool: string, input: StepRun) => {
       inputs.push(input);
       return { started: true as const, exitCode: 0, tokens: { input: 1, output: 1 } };
     });
-    const adapter: LocalToolAdapter = { run: ran, runInteractive: ran };
+    const adapter: StepLauncher = { run: ran, runInteractive: ran };
     const headless = await workflowFixture(yaml(false));
     const codex = await workflowFixture(yaml(false));
     codex.config.workflows = { tools: { default: 'codex' } };
@@ -678,8 +679,8 @@ steps:
     prompt: Explain it.
 `);
     config.workflows = { tools: { default: 'claude' }, sandbox: true };
-    const inputs: LocalToolRun[] = [];
-    const ran = vi.fn(async (_tool: string, input: LocalToolRun) => {
+    const inputs: StepRun[] = [];
+    const ran = vi.fn(async (_tool: string, input: StepRun) => {
       inputs.push(input);
       return { started: true as const, exitCode: 0 };
     });
@@ -835,7 +836,7 @@ steps:
   it('masks a result file that is not valid JSON', async () => {
     const { config, workspace, runId } = await fixture();
     vi.stubEnv('DEPLOY_TOKEN', 'deploy-secret-value-1082');
-    const adapter: LocalToolAdapter = { runInteractive: vi.fn(), run: vi.fn<LocalToolAdapter['run']>(async (_tool, input) => {
+    const adapter: StepLauncher = { runInteractive: vi.fn(), run: vi.fn<StepLauncher['run']>(async (_tool, input) => {
       fs.mkdirSync(path.dirname(input.resultPath), { recursive: true });
       fs.writeFileSync(input.resultPath, '{"output":{"token":"deploy-secret-value-1082');
       return { started: true, exitCode: 1, failure: { code: 'tool_failed', message: 'claude wrote no result' } };
@@ -849,7 +850,7 @@ steps:
     const { config, workspace, runId } = await fixture();
     const secret = 'deploy"secret\\value-1082';
     vi.stubEnv('DEPLOY_TOKEN', secret);
-    const adapter: LocalToolAdapter = { runInteractive: vi.fn(), run: vi.fn<LocalToolAdapter['run']>(async (_tool, input) => {
+    const adapter: StepLauncher = { runInteractive: vi.fn(), run: vi.fn<StepLauncher['run']>(async (_tool, input) => {
       fs.mkdirSync(path.dirname(input.resultPath), { recursive: true });
       fs.writeFileSync(input.resultPath, `{"output":{"token":${JSON.stringify(secret)}`);
       return { started: true, exitCode: 1, failure: { code: 'tool_failed', message: 'claude wrote no result' } };
@@ -868,7 +869,7 @@ steps:
       if (ran) throw new Error('snapshot failed');
       return snapshot(dir, run);
     });
-    const adapter: LocalToolAdapter = { runInteractive: vi.fn(), run: vi.fn<LocalToolAdapter['run']>(async (_tool, input) => {
+    const adapter: StepLauncher = { runInteractive: vi.fn(), run: vi.fn<StepLauncher['run']>(async (_tool, input) => {
       fs.mkdirSync(path.dirname(input.resultPath), { recursive: true });
       fs.writeFileSync(input.resultPath, JSON.stringify({ output: { token: 'deploy-secret-value-1082' } }));
       ran = true;
@@ -885,7 +886,7 @@ steps:
     vi.stubEnv('DEPLOY_TOKEN', 'deploy-secret-value-1082');
     vi.spyOn(envExec, 'exitLike').mockImplementation(() => {});
     const before = new Set(process.listeners('SIGTERM'));
-    const adapter: LocalToolAdapter = { runInteractive: vi.fn(), run: vi.fn<LocalToolAdapter['run']>((_tool, input, signal) => new Promise((resolve) => {
+    const adapter: StepLauncher = { runInteractive: vi.fn(), run: vi.fn<StepLauncher['run']>((_tool, input, signal) => new Promise((resolve) => {
       fs.mkdirSync(path.dirname(input.resultPath), { recursive: true });
       fs.writeFileSync(input.resultPath, JSON.stringify({ output: { token: 'deploy-secret-value-1082' } }));
       signal?.addEventListener('abort', () => resolve({ started: true, exitCode: 1 }));
@@ -918,9 +919,9 @@ steps:
 `);
     let interactive = false;
     const overlaps: boolean[] = [];
-    const adapter: LocalToolAdapter = {
+    const adapter: StepLauncher = {
       run: vi.fn(),
-      runInteractive: vi.fn<LocalToolAdapter['runInteractive']>(async () => {
+      runInteractive: vi.fn<StepLauncher['runInteractive']>(async () => {
         interactive = true;
         await new Promise((resolve) => setTimeout(resolve, 2300));
         interactive = false;
@@ -948,7 +949,7 @@ steps:
       signal.addEventListener('abort', () => { aborted = true; reject(new Error('aborted')); });
       void knownSecrets(config).then((secrets) => respondToHitl(config, runId, secrets, { step: 'pair', choice: 'yes', provenance: respondProvenance({ kind: 'terminal', caller: { tty: false, evidence: { kind: 'none' } } }) }));
     }));
-    const adapter: LocalToolAdapter = { run: vi.fn(), runInteractive: vi.fn<LocalToolAdapter['runInteractive']>(async () => {
+    const adapter: StepLauncher = { run: vi.fn(), runInteractive: vi.fn<StepLauncher['runInteractive']>(async () => {
       abortedBeforeLaunch = aborted;
       return { started: true, exitCode: 0 };
     }) };
@@ -966,7 +967,7 @@ steps:
     prompt: Fix the build with me.
     interactive: true
 `);
-    const adapter: LocalToolAdapter = { run: vi.fn(), runInteractive: vi.fn<LocalToolAdapter['runInteractive']>(async () => {
+    const adapter: StepLauncher = { run: vi.fn(), runInteractive: vi.fn<StepLauncher['runInteractive']>(async () => {
       fs.writeFileSync(path.join(workspace, 'tracked.txt'), 'fixed\n');
       return { started: true, exitCode: 0 };
     }) };
@@ -984,7 +985,7 @@ steps:
     interactive: true
 `);
     await leaseNext(config, runId, driverIdentity('local', workspace), { can: { hitl: true } });
-    const adapter: LocalToolAdapter = { run: vi.fn(), runInteractive: vi.fn<LocalToolAdapter['runInteractive']>(async () => ({ started: true, exitCode: 0 })) };
+    const adapter: StepLauncher = { run: vi.fn(), runInteractive: vi.fn<StepLauncher['runInteractive']>(async () => ({ started: true, exitCode: 0 })) };
     expect(await runLocalDriver(config, runId, workspace, { hitl: false, adapter })).toMatchObject({ data: { done: { outcome: 'failed' } } });
     expect(adapter.runInteractive).not.toHaveBeenCalled();
     expect(await readRun(config, runId)).toMatchObject({ steps: [{ id: 'pair', status: 'failed', failure: {
@@ -1007,7 +1008,7 @@ steps:
     const exit = vi.spyOn(envExec, 'exitLike').mockImplementation(() => {});
     const before = new Set(process.listeners('SIGINT'));
     let aborted = false;
-    const adapter: LocalToolAdapter = { run: vi.fn(), runInteractive: vi.fn<LocalToolAdapter['runInteractive']>(async (_tool, _input, signal) => {
+    const adapter: StepLauncher = { run: vi.fn(), runInteractive: vi.fn<StepLauncher['runInteractive']>(async (_tool, _input, signal) => {
       signal!.addEventListener('abort', () => { aborted = true; });
       for (const handler of process.listeners('SIGINT')) if (!before.has(handler)) handler('SIGINT');
       for (const handler of process.listeners('SIGQUIT')) handler('SIGQUIT');
@@ -1034,7 +1035,7 @@ steps:
   const exit = vi.spyOn(envExec, 'exitLike').mockImplementation(() => {});
   const before = new Set(process.listeners(signalName));
   let reason: unknown;
-  const adapter: LocalToolAdapter = { run: vi.fn(), runInteractive: vi.fn<LocalToolAdapter['runInteractive']>((_tool, _input, signal) => new Promise((resolve) => {
+  const adapter: StepLauncher = { run: vi.fn(), runInteractive: vi.fn<StepLauncher['runInteractive']>((_tool, _input, signal) => new Promise((resolve) => {
     signal!.addEventListener('abort', () => { reason = signal!.reason; resolve({ started: true, exitCode: 1 }); });
     for (const handler of process.listeners(signalName)) if (!before.has(handler)) handler(signalName);
   })) };
@@ -1066,7 +1067,7 @@ steps:
     if (ran) return Promise.resolve('yes');
     return new Promise<string>((_resolve, reject) => signal.addEventListener('abort', () => { closed = true; reject(new Error('closed')); }));
   });
-  const adapter: LocalToolAdapter = { run: vi.fn(), runInteractive: vi.fn<LocalToolAdapter['runInteractive']>(async () => {
+  const adapter: StepLauncher = { run: vi.fn(), runInteractive: vi.fn<StepLauncher['runInteractive']>(async () => {
     closedBeforeLaunch = closed;
     ran = true;
     return { started: true, exitCode: 0 };
@@ -1119,7 +1120,7 @@ steps:
   config.workflows!.max_parallel = 2;
   let ran = false;
   const askedAfterTool: boolean[] = [];
-  const adapter: LocalToolAdapter = { run: vi.fn(), runInteractive: vi.fn<LocalToolAdapter['runInteractive']>(async () => {
+  const adapter: StepLauncher = { run: vi.fn(), runInteractive: vi.fn<StepLauncher['runInteractive']>(async () => {
     ran = true;
     return { started: true, exitCode: 0 };
   }) };
@@ -1181,7 +1182,7 @@ steps:
   }
 
   /** A tool that records the session each run resumes, and reports none of its own. */
-  function recordingTool(resumed: Array<string | undefined>): LocalToolAdapter {
+  function recordingTool(resumed: Array<string | undefined>): StepLauncher {
     return {
       runInteractive: vi.fn(),
       run: vi.fn(async (_tool, input) => {
@@ -1463,7 +1464,7 @@ ${timeout}`);
     vi.spyOn(envExec, 'terminalReachesCommand').mockResolvedValue(true);
     const exit = vi.spyOn(envExec, 'exitLike').mockImplementation(() => {});
     const before = new Set(process.listeners('SIGINT'));
-    const adapter: LocalToolAdapter = { run: vi.fn(), runInteractive: vi.fn<LocalToolAdapter['runInteractive']>(async () => ({ started: true, exitCode: 0 })) };
+    const adapter: StepLauncher = { run: vi.fn(), runInteractive: vi.fn<StepLauncher['runInteractive']>(async () => ({ started: true, exitCode: 0 })) };
     const driving = runLocalDriver(config, runId, workspace, { hitl: true, adapter });
     const pid = await setupPid(pidFile);
     for (const handler of process.listeners('SIGINT')) if (!before.has(handler)) handler('SIGINT');

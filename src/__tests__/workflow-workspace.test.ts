@@ -17,13 +17,13 @@ import * as engine from '../workflow/engine.js';
 import { leaseNext, parseReport, reportAttempt, startRun } from '../workflow/engine.js';
 import { _setDriverPollMs, runLocalDriver } from '../workflow/drivers/local/local-driver.js';
 import { cancelRun, respondProvenance, respondToHitl, retryStep } from '../workflow/run-controls.js';
-import type { LocalToolAdapter } from '../workflow/steps/local-tool-adapter.js';
+import { type StepLauncher } from '@teamai/runtime-tools';
 import { parseWorkflow } from '../workflow/parse.js';
 import { readRun, updateRun } from '../workflow/store.js';
 import type { DriverIdentity, RunState } from '../workflow/types.js';
 import { branchName, stepRoleOf } from '../workflow/workspace.js';
 import { applyBaseConfig, ensureWorktree, git as workflowGit, hooksPath, pushIfOrigin, readMemberConfig, untrustedGit, worktreePath, type MemberRemote } from '../workflow/worktree.js';
-import { launchHoldsCheckout } from '../launch-context.js';
+import { launchHoldsCheckout, readLaunch } from '../launch-context.js';
 import { teamDelivery } from '../pull.js';
 import { pendingRecords } from '../workflow/records.js';
 import { knownSecrets } from '../env-resolution.js';
@@ -456,7 +456,7 @@ steps:
     workspace: read-only
 `);
     config.workflows = { tools: { default: 'claude' }, max_parallel: 1 };
-    const adapter: LocalToolAdapter = {
+    const adapter: StepLauncher = {
       async run() {
         return { started: false, exitCode: 1, failure: { code: 'tool_failed', message: 'headless is not used' } };
       },
@@ -565,7 +565,7 @@ steps:
 `);
     config.workflows = { tools: { default: 'claude' }, max_parallel: 1 };
     git(['remote', 'add', 'origin', path.join(path.dirname(workspace), 'missing.git')], workspace);
-    const adapter: LocalToolAdapter = {
+    const adapter: StepLauncher = {
       async runInteractive() {
         return { started: false, exitCode: 1, failure: { code: 'tool_failed', message: 'interactive is not used' } };
       },
@@ -1274,7 +1274,7 @@ steps:
     workspace: new
     prompt: Read the team skill.
 `);
-    const adapter: LocalToolAdapter = {
+    const adapter: StepLauncher = {
       async runInteractive() {
         return { started: false, exitCode: 1, failure: { code: 'tool_failed', message: 'interactive is not used' } };
       },
@@ -1319,13 +1319,14 @@ steps:
     fs.appendFileSync(path.join(workspace, '.claude', 'skills', 'fe-skill', 'SKILL.md'), 'Member edit.\n');
     let holds: boolean | undefined;
     let revision: string | undefined;
-    const adapter: LocalToolAdapter = {
+    const adapter: StepLauncher = {
       async runInteractive() {
         return { started: false, exitCode: 1, failure: { code: 'tool_failed', message: 'interactive is not used' } };
       },
       async run(_tool, input) {
         const own = await detectProjectConfig(input.cwd);
-        holds = own && input.launch ? await launchHoldsCheckout(own, input.launch) : false;
+        const launch = readLaunch(input.launchEnv ?? {});
+        holds = own && launch ? await launchHoldsCheckout(own, launch) : false;
         const delivery = own ? await teamDelivery(own, 'claude') : undefined;
         revision = delivery?.complete ? delivery.commit : undefined;
         return { started: true, exitCode: 0 };
@@ -2075,7 +2076,7 @@ steps:
     fs.writeFileSync(path.join(workspace, 'AGENTS.md'), 'base\n');
     execFileSync('git', ['add', 'AGENTS.md'], { cwd: workspace });
     execFileSync('git', ['-c', 'user.name=Test', '-c', 'user.email=test@example.com', 'commit', '-qm', 'agents'], { cwd: workspace });
-    const adapter: LocalToolAdapter = {
+    const adapter: StepLauncher = {
       async runInteractive() {
         return { started: false, exitCode: 1, failure: { code: 'tool_failed', message: 'interactive is not used' } };
       },
@@ -2115,7 +2116,7 @@ steps:
     fs.writeFileSync(path.join(workspace, 'AGENTS.md'), 'base\n');
     execFileSync('git', ['add', 'AGENTS.md'], { cwd: workspace });
     execFileSync('git', ['-c', 'user.name=Test', '-c', 'user.email=test@example.com', 'commit', '-qm', 'agents'], { cwd: workspace });
-    const adapter: LocalToolAdapter = {
+    const adapter: StepLauncher = {
       async runInteractive() {
         return { started: false, exitCode: 1, failure: { code: 'tool_failed', message: 'interactive is not used' } };
       },
@@ -2255,7 +2256,7 @@ steps:
     const opened = await retryStep(config, runId, await knownSecrets(config), 'work.ask');
     expect(opened, JSON.stringify(opened)).toMatchObject({ data: { retried: { pass: 2 } } });
     config.workflows = { tools: { default: 'claude' }, max_parallel: 1 };
-    const adapter: LocalToolAdapter = {
+    const adapter: StepLauncher = {
       async runInteractive() {
         return { started: false, exitCode: 1, failure: { code: 'tool_failed', message: 'interactive is not used' } };
       },
@@ -2325,7 +2326,7 @@ steps:
     fs.writeFileSync(path.join(workspace, 'AGENTS.md'), 'base\n');
     execFileSync('git', ['add', 'AGENTS.md'], { cwd: workspace });
     execFileSync('git', ['-c', 'user.name=Test', '-c', 'user.email=test@example.com', 'commit', '-qm', 'agents'], { cwd: workspace });
-    const adapter: LocalToolAdapter = {
+    const adapter: StepLauncher = {
       async runInteractive() {
         return { started: false, exitCode: 1, failure: { code: 'tool_failed', message: 'interactive is not used' } };
       },
@@ -2366,7 +2367,7 @@ steps:
     fs.writeFileSync(path.join(workspace, 'note.txt'), 'base\n');
     execFileSync('git', ['add', 'note.txt'], { cwd: workspace });
     execFileSync('git', ['-c', 'user.name=Test', '-c', 'user.email=test@example.com', 'commit', '-qm', 'note'], { cwd: workspace });
-    const adapter: LocalToolAdapter = {
+    const adapter: StepLauncher = {
       async runInteractive() {
         return { started: false, exitCode: 1, failure: { code: 'tool_failed', message: 'interactive is not used' } };
       },
@@ -2477,7 +2478,7 @@ steps:
     fs.writeFileSync(path.join(workspace, 'note.txt'), 'base\n');
     execFileSync('git', ['add', 'note.txt'], { cwd: workspace });
     execFileSync('git', ['-c', 'user.name=Test', '-c', 'user.email=test@example.com', 'commit', '-qm', 'note'], { cwd: workspace });
-    const adapter: LocalToolAdapter = {
+    const adapter: StepLauncher = {
       async runInteractive() {
         return { started: false, exitCode: 1, failure: { code: 'tool_failed', message: 'interactive is not used' } };
       },
@@ -2540,7 +2541,7 @@ steps:
     fs.writeFileSync(path.join(workspace, 'AGENTS.md'), 'base\n');
     execFileSync('git', ['add', 'AGENTS.md'], { cwd: workspace });
     execFileSync('git', ['-c', 'user.name=Test', '-c', 'user.email=test@example.com', 'commit', '-qm', 'agents'], { cwd: workspace });
-    const adapter: LocalToolAdapter = {
+    const adapter: StepLauncher = {
       async runInteractive() {
         return { started: false, exitCode: 1, failure: { code: 'tool_failed', message: 'interactive is not used' } };
       },
@@ -2616,7 +2617,7 @@ steps:
     fs.writeFileSync(path.join(workspace, 'note.txt'), 'base\n');
     execFileSync('git', ['add', 'note.txt'], { cwd: workspace });
     execFileSync('git', ['-c', 'user.name=Test', '-c', 'user.email=test@example.com', 'commit', '-qm', 'note'], { cwd: workspace });
-    const adapter: LocalToolAdapter = {
+    const adapter: StepLauncher = {
       async runInteractive() {
         return { started: false, exitCode: 1, failure: { code: 'tool_failed', message: 'interactive is not used' } };
       },
@@ -2659,7 +2660,7 @@ steps:
     execFileSync('git', ['add', 'résumé.txt'], { cwd: workspace });
     execFileSync('git', ['-c', 'user.name=Test', '-c', 'user.email=test@example.com', 'commit', '-qm', 'note'], { cwd: workspace });
     execFileSync('git', ['config', 'core.quotepath', 'true'], { cwd: workspace });
-    const adapter: LocalToolAdapter = {
+    const adapter: StepLauncher = {
       async runInteractive() {
         return { started: false, exitCode: 1, failure: { code: 'tool_failed', message: 'interactive is not used' } };
       },
@@ -2703,7 +2704,7 @@ steps:
     execFileSync('git', ['add', '.claude'], { cwd: workspace });
     execFileSync('git', ['-c', 'user.name=Test', '-c', 'user.email=test@example.com', 'commit', '-qm', 'agents'], { cwd: workspace });
     execFileSync('git', ['config', 'core.quotepath', 'true'], { cwd: workspace });
-    const adapter: LocalToolAdapter = {
+    const adapter: StepLauncher = {
       async runInteractive() {
         return { started: false, exitCode: 1, failure: { code: 'tool_failed', message: 'interactive is not used' } };
       },
@@ -2744,7 +2745,7 @@ steps:
     fs.writeFileSync(path.join(workspace, 'AGENTS.md'), 'base\n');
     execFileSync('git', ['add', 'AGENTS.md'], { cwd: workspace });
     execFileSync('git', ['-c', 'user.name=Test', '-c', 'user.email=test@example.com', 'commit', '-qm', 'agents'], { cwd: workspace });
-    const adapter: LocalToolAdapter = {
+    const adapter: StepLauncher = {
       async runInteractive() {
         return { started: false, exitCode: 1, failure: { code: 'tool_failed', message: 'interactive is not used' } };
       },
@@ -2786,7 +2787,7 @@ steps:
     fs.writeFileSync(path.join(workspace, 'AGENTS.md'), 'base\n');
     execFileSync('git', ['add', 'AGENTS.md'], { cwd: workspace });
     execFileSync('git', ['-c', 'user.name=Test', '-c', 'user.email=test@example.com', 'commit', '-qm', 'agents'], { cwd: workspace });
-    const adapter: LocalToolAdapter = {
+    const adapter: StepLauncher = {
       async runInteractive() {
         return { started: false, exitCode: 1, failure: { code: 'tool_failed', message: 'interactive is not used' } };
       },
@@ -2828,7 +2829,7 @@ steps:
     execFileSync('git', ['add', 'note.txt'], { cwd: workspace });
     execFileSync('git', ['-c', 'user.name=Test', '-c', 'user.email=test@example.com', 'commit', '-qm', 'note'], { cwd: workspace });
     let calls = 0;
-    const adapter: LocalToolAdapter = {
+    const adapter: StepLauncher = {
       async runInteractive() {
         return { started: false, exitCode: 1, failure: { code: 'tool_failed', message: 'interactive is not used' } };
       },
@@ -2884,7 +2885,7 @@ steps:
     execFileSync('git', ['add', 'note.txt'], { cwd: workspace });
     execFileSync('git', ['-c', 'user.name=Test', '-c', 'user.email=test@example.com', 'commit', '-qm', 'note'], { cwd: workspace });
     let calls = 0;
-    const adapter: LocalToolAdapter = {
+    const adapter: StepLauncher = {
       async runInteractive() {
         return { started: false, exitCode: 1, failure: { code: 'tool_failed', message: 'interactive is not used' } };
       },
@@ -3283,7 +3284,7 @@ ${steps}`, steps.startsWith('inputs:') ? { items: ['a', 'b'] } : undefined);
     execFileSync('git', ['-c', 'user.name=Test', '-c', 'user.email=test@example.com', 'commit', '-qm', 'verify'], { cwd: workspace });
     const base = git(['rev-parse', 'HEAD'], workspace).trim();
     config.workflows = { tools: { default: 'claude' }, max_parallel: 1 };
-    const adapter: LocalToolAdapter = {
+    const adapter: StepLauncher = {
       async runInteractive() {
         return { started: false, exitCode: 1, failure: { code: 'tool_failed', message: 'interactive is not used' } };
       },
@@ -3672,7 +3673,7 @@ steps:
     execFileSync('git', ['init', '-q', '--bare', origin]);
     git(['remote', 'add', 'origin', origin], workspace);
     config.workflows = { tools: { default: 'claude' }, max_parallel: 1 };
-    const adapter: LocalToolAdapter = {
+    const adapter: StepLauncher = {
       async runInteractive() {
         return { started: false, exitCode: 1, failure: { code: 'tool_failed', message: 'interactive is not used' } };
       },

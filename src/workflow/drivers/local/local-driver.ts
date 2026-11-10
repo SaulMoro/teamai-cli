@@ -18,7 +18,7 @@ import { LeaseWireSchema } from '../../lease-wire.js';
 import { type DecidedCan, type DriverCan, type Missing } from '../../requirements.js';
 import { callerProvenance, respondProvenance, respondToHitl, type ResponseInput } from '../../run-controls.js';
 import { isRecord } from '../../expression.js';
-import { createLocalToolAdapter, type LocalToolAdapter } from '../../steps/local-tool-adapter.js';
+import { toolsStepRuntime, type StepLauncher } from '@teamai/runtime-tools';
 import { failureReport, launchToolFor, runPromptStep, type AskPerson, type StagedLease } from '../../steps/prompt.js';
 import { failedCommand, placeView, runtimeCommand, runtimeSetup, runtimeStepEnv, type StartedCommand } from '../../steps/runtime-steps.js';
 import { attemptRun, HeldPlace, isExecRuntimeTool, readAttemptRuntime, attemptRuntimePath, maskAttemptResults, type AttemptRun } from '../../runtimes/attempt.js';
@@ -26,7 +26,7 @@ import { localStepRuntime } from '../../runtimes/local.js';
 import { writeHeldSteps, type HeldSteps } from '../../runtimes/held.js';
 import { closeAfterSweep, stopOnRecordedDriver } from '../../runtimes/cancelled.js';
 import { loginHolder, loginLockFile, releaseLogin } from '../../runtimes/login.js';
-import { type EngineOptions, type OpenedDriver } from '../../runtimes/sources.js';
+import { toolsLaunchDeps, type EngineOptions, type OpenedDriver } from '../../runtimes/sources.js';
 import { newOpId, type ExecAnswer, type ExecQuestion, type StepRuntime } from '@teamai/runtime-protocol/step-runtime';
 import { resumeOrPublish, retryCommand } from '../../runtimes/retry-command.js';
 import { credentialSecrets } from '../../runtimes/sources.js';
@@ -202,7 +202,8 @@ export interface LocalDriverOptions {
   tools?: Record<string, string>;
   /** The team's `toolPaths`, as teamai.yaml states them. */
   toolPaths?: TeamaiConfig['toolPaths'];
-  adapter?: LocalToolAdapter;
+  /** Runs each prompt step's tool here in place of the `tools` runtime's own launch. */
+  adapter?: StepLauncher;
   /** Where the tools a step confined to a directory runs on are looked up: PATH unless given. */
   resolveTool?: (executable: string) => string | null;
   /** Called with the runs each report the engine took answers its settled passes started, which the caller drives. */
@@ -231,11 +232,12 @@ export interface DriverRuntimes {
 }
 
 /**
- * One runtime the loop offers: `local`, which launches on this machine as the loop always did, or an external one, such
- * as `fleet`, whose steps go through an `AttemptRun`. Each is reached through the `StepRuntime` interface for its offer
- * and the lifecycle of its attempts' places.
+ * One runtime the loop offers: `local`, which launches on this machine as the loop always did, or the host command slot;
+ * `tools`, which launches the member's tools in this process; or an external one, such as `fleet`, whose steps go
+ * through an `AttemptRun`. Each is reached through the `StepRuntime` interface for its offer and the lifecycle of its
+ * attempts' places.
  */
-type RuntimeSlot = SlotBase & { kind: 'local' | 'external' };
+type RuntimeSlot = SlotBase & { kind: 'local' | 'tools' | 'external' };
 
 interface SlotBase {
   use: string;
@@ -639,10 +641,19 @@ async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, given: 
   const hostLabels = config.workflows?.labels;
   const hostCan: DriverCan = hostLabels ? { ...localReady.can, labels: hostLabels } : localReady.can;
 
+  // `tools` runs prompt steps and no command. Its slot still offers exec: a prompt step's setup runs in this process, on
+  // the host, before its tool starts, as on `local`; the host command slot is offered before it, so it takes no command.
+  const toolsRuntime = toolsStepRuntime<DriverCan>({ can: { ...hostCan, exec: false }, launch: toolsLaunchDeps(), ...(options.adapter && { launcher: options.adapter }) });
+  const toolsReady = await toolsRuntime.init({ options: {}, mode });
+
+  if (!toolsReady.ok) return { error: { code: 'runtime_failed', message: toolsReady.failure.message } };
+
   const toSlot = (entry: OpenedDriver['runtimes'][number]): RuntimeSlot => {
     switch (entry.kind) {
       case 'local':
-        return { kind: 'local', use: 'local', runtime: local, can: hostCan, launchesAgents: false, engine: entry.engine, credentials: {}, found: [] };
+        return entry.use === 'tools'
+          ? { kind: 'tools', use: 'tools', runtime: toolsRuntime, can: { ...toolsReady.can, exec: true }, launchesAgents: false, engine: entry.engine, credentials: {}, found: [] }
+          : { kind: 'local', use: 'local', runtime: local, can: hostCan, launchesAgents: false, engine: entry.engine, credentials: {}, found: [] };
       case 'external':
         return {
           kind: 'external', use: entry.use, runtime: entry.runtime, launchesAgents: entry.launchesAgents, engine: entry.engine, credentials: entry.credentials, found: entry.found,
@@ -666,9 +677,10 @@ async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, given: 
     }
   }
 
-  // Every definition has a host command slot: its `local`, or else one here that takes no prompt step but answer steps, last. While another
-  // runtime runs commands, it takes only the command steps of teamai's own workflows, so a team's command never runs
-  // here in place of that runtime.
+  // Every definition has a host command slot: its `local`, or else one here that takes no prompt step but answer steps:
+  // before the definition's first `tools`, which takes the prompt steps it does not, else last. While another runtime
+  // runs commands, it takes only the command steps of teamai's own workflows, so a team's command never runs here in
+  // place of that runtime, and nor does it on `tools`.
   const definedSlots = defined.runtimes.map(toSlot);
   const listedHost = definedSlots.find((slot) => slot.kind === 'local');
 
@@ -676,9 +688,13 @@ async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, given: 
     kind: 'local', use: 'host', runtime: local, can: { ...hostCan, prompt: false, tools: [], confined: [] }, launchesAgents: false, engine: { logins: [] }, credentials: {}, found: [],
   };
 
-  const runsCommands = definedSlots.some((slot) => slot.kind !== 'local' && slot.can.exec !== false);
-  const host: RuntimeSlot = runsCommands ? { ...hostSlot, can: { ...hostSlot.can, commands: 'pinned' } } : hostSlot;
-  const [firstSlot = host, ...otherSlots] = listedHost ? definedSlots.map((slot) => (slot === listedHost ? host : slot)) : [...definedSlots, host];
+  const runsCommands = definedSlots.some((slot) => slot.kind === 'external' && slot.can.exec !== false);
+  const pinned = (slot: RuntimeSlot): RuntimeSlot => (runsCommands ? { ...slot, can: { ...slot.can, commands: 'pinned' } } : slot);
+  const host = pinned(hostSlot);
+  const definedOrder = definedSlots.map((slot) => (slot === listedHost ? host : slot.kind === 'tools' ? pinned(slot) : slot));
+  const toolsAt = definedOrder.findIndex((slot) => slot.kind === 'tools');
+  const ordered = listedHost ? definedOrder : toolsAt === -1 ? [...definedOrder, host] : [...definedOrder.slice(0, toolsAt), host, ...definedOrder.slice(toolsAt)];
+  const [firstSlot = host, ...otherSlots] = ordered;
   const slots: [RuntimeSlot, ...RuntimeSlot[]] = [firstSlot, ...otherSlots];
   const offerOf = (slot: RuntimeSlot): RuntimeOffer => ({ runtime: slot.use, can: slot.can, ...(slot.unavailable && { unavailable: slot.unavailable }) });
   const sole: SoleDriver = { driver: defined.driver, offers: [offerOf(slots[0]), ...otherSlots.map(offerOf)] };
@@ -689,7 +705,8 @@ async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, given: 
   // The runtime each open attempt runs on, and the handle of its place, until its report is recorded or its place abandoned.
   const slotOf = new Map<string, RuntimeSlot>();
   const attemptRuns = new Map<string, AttemptRun>();
-  const localHandles = new Map<string, string>();
+  // The place of each attempt on a runtime in this process, by the runtime that opened it.
+  const localHandles = new Map<string, { runtime: StepRuntime<DriverCan>; handle: string }>();
 
   const runOf = (lease: StagedLease): AttemptRun | undefined => {
     const slot = slotOf.get(lease.attempt);
@@ -732,16 +749,16 @@ async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, given: 
     }
   };
 
-  /** Binds a lease to the runtime it was offered on. A `local` attempt's place is opened at once: it is the host's. */
+  /** Binds a lease to the runtime it was offered on. An attempt in this process has its place opened at once: it is the host's. */
   const bind = async (lease: StagedLease, slot: RuntimeSlot): Promise<void> => {
     slotOf.set(lease.attempt, slot);
     sayFellPast(lease, slot);
 
-    if (slot.kind !== 'local') return;
+    if (slot.kind === 'external') return;
     const view = { worktree: lease.cwd ?? root, readonly: [], result: path.dirname(attemptResultPath(config, runId, lease.attempt)), runDir: runScratchDir(config, runId), toolHome: {} };
     const opened = await slot.runtime.open({ op: newOpId(), run: runId, attempt: lease.attempt, view, credentials: {} }, async () => {});
 
-    if (opened.kind === 'ready') localHandles.set(lease.attempt, opened.handle);
+    if (opened.kind === 'ready') localHandles.set(lease.attempt, { runtime: slot.runtime, handle: opened.handle });
   };
 
   // The handle of the last place each external runtime closed for this run, which it is sent again once teamai removed
@@ -761,7 +778,7 @@ async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, given: 
 
     if (slot && closingHandle !== undefined && !notClosed) lastClosed.set(slot, closingHandle);
 
-    if (handle !== undefined) await local.close(handle);
+    if (handle !== undefined) await handle.runtime.close(handle.handle);
 
     // A closed attempt holds no login, whatever stopped it before its write-back. One whose place stays open may
     // still run its tool, so it keeps the login until a person stops that tool.
@@ -850,7 +867,7 @@ async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, given: 
   // A driver killed before cleanup, of this run or any other, left clones behind. The runtimes that ran in them, which
   // that driver can no longer tell, hear of it at a close.
   await closeAfterSweep(config, await sweepClones(config));
-  const adapter = options.adapter ?? createLocalToolAdapter();
+  const adapter = toolsRuntime.launcher;
   const archive = openSessionArchive(config);
   // With no workflows.max_parallel the driver runs one step at a time, except the items of a for_each that declares
   // max_parallel, which `next` leases beside each other (`isOneAtATime`); a run that may have them runs in parallel.

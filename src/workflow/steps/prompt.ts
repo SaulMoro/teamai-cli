@@ -10,7 +10,7 @@ import { toolExtrasFor, type AgentSpec } from '../../resources/agent-format.js';
 import { observeLaunch, type ToolLaunch, type Used } from '../../agent-observation.js';
 import { detectProjectConfig } from '../../config.js';
 import { type WorkflowEnv } from '../../env-resolution.js';
-import { workflowLaunch, type RunMode } from '../../launch-context.js';
+import { launchEnv, workflowLaunch, type RunMode } from '../../launch-context.js';
 import type { LocalConfig, TeamaiConfig } from '../../types.js';
 import { writeJsonAtomic } from '../../utils/fs.js';
 import { log } from '../../utils/logger.js';
@@ -23,11 +23,12 @@ import { type ReportInput } from '../engine.js';
 import { type LeaseWire } from '../lease-wire.js';
 import { setsLimit } from '../requirements.js';
 import { budgeted, idleLimit } from '../limits.js';
-import { createLocalToolAdapter, toolAdapter, type LocalToolAdapter, type LocalToolResult, type LocalToolRun } from './local-tool-adapter.js';
+import { stepLauncher, type StepLauncher, type StepRun, type StepRunResult } from '@teamai/runtime-tools';
+import { expectedOutput } from '../output.js';
 import { placeView, runtimeLauncher, runtimePrompter, runtimeSetup, runtimeStepEnv } from './runtime-steps.js';
 import { attemptHoldingSession, attemptToolHome, EXEC_RUNTIME_TOOLS, isExecRuntimeTool, seedMemberModel, seedToolHome, toolHomeVariable, type AttemptRun, type HeldPlace } from '../runtimes/attempt.js';
 import { ensureLogin, holdLogin, loginWaitFile, releaseLogin, writeLoginBack, type LoginTool } from '../runtimes/login.js';
-import { credentialsForTool } from '../runtimes/sources.js';
+import { credentialsForTool, toolsLaunchDeps } from '../runtimes/sources.js';
 import { withRetry } from '../runtimes/retry-command.js';
 import { storeDirOf } from '../../session-flow/adapters/index.js';
 import { attemptDir, attemptResultPath, type RunLock } from '../store.js';
@@ -128,10 +129,10 @@ function ignoredCodexSettings(agent: AgentSpec): string[] {
   return agent.tools?.length ? ['tools', ...extras] : extras;
 }
 
-function definitionRun(tool: LaunchTool, name: string, agent: AgentSpec): NonNullable<LocalToolRun['agent']> {
+function definitionRun(tool: LaunchTool, name: string, agent: AgentSpec): NonNullable<StepRun['agent']> {
   const settings = launchAdapterIdOf(tool) === 'opencode' ? toolExtrasFor(agent, 'opencode') : undefined;
 
-  const run: NonNullable<LocalToolRun['agent']> = { name, instructions: agent.instructions };
+  const run: NonNullable<StepRun['agent']> = { name, instructions: agent.instructions };
 
   if (agent.model) run.model = agent.model;
 
@@ -251,12 +252,12 @@ export type PromptRuntime = {
  * step runtime `onRuntime`. A failure before the launch gives the place up and reports the step failed. `secrets` are
  * the values its output is masked of; `askPerson` asks the person at the terminal, when one answers.
  */
-export async function runPromptStep({ config, lock, driver, lease, adapter = createLocalToolAdapter(), tools = {}, toolPaths, archive, signal, mode, staged, secrets, askPerson, onRuntime }: {
+export async function runPromptStep({ config, lock, driver, lease, adapter = stepLauncher(toolsLaunchDeps()), tools = {}, toolPaths, archive, signal, mode, staged, secrets, askPerson, onRuntime }: {
   config: LocalConfig;
   lock: RunLock;
   driver: DriverIdentity;
   lease: StagedLease;
-  adapter?: LocalToolAdapter;
+  adapter?: StepLauncher;
   /** The `--tools` flags, by agent and `default`. */
   tools?: Record<string, string>;
   toolPaths?: TeamaiConfig['toolPaths'];
@@ -473,16 +474,15 @@ export async function runPromptStep({ config, lock, driver, lease, adapter = cre
 
   if (lease.interactive && !onRuntime) log.info(`Step "${lease.step}" opens ${launched} here for interactive work.`);
 
-  const input: LocalToolRun = {
+  const input: StepRun = {
     prompt: lease.prompt!,
     cwd,
     resultPath: resultFile,
     secrets,
+    expected: expectedOutput(lease.output),
     // The lease `env` is set over the step's environment, as a command's is.
     env: { ...lease.processEnv ?? process.env, ...lease.env, ...attemptEnv(config, lock.run, lease.attempt, mode) },
   };
-
-  if (lease.output) input.output = lease.output;
 
   let launcher = adapter;
 
@@ -504,10 +504,12 @@ export async function runPromptStep({ config, lock, driver, lease, adapter = cre
     const scoped = runtimeStepEnv(lease, lease.processEnv ?? {}, { config, run: lock.run, mode });
     input.env = { ...scoped.env, [toolHome.variable]: toolHome.dir };
     const view = await placeView(config, lock.run, lease.attempt, cwd, toolHome);
-    launcher = toolAdapter(runtimeLauncher(onRuntime.run, { view, tool: launched, toolHome: { tool: toolHome.tool, dir: toolHome.dir }, unset: scoped.unset, credentials: credentialsForTool(onRuntime.credentials, onRuntime.found, toolHome.tool), setUp }), (command) => command, (command) => command);
+    const start = runtimeLauncher(onRuntime.run, { view, tool: launched, toolHome: { tool: toolHome.tool, dir: toolHome.dir }, unset: scoped.unset, credentials: credentialsForTool(onRuntime.credentials, onRuntime.found, toolHome.tool), setUp });
+    // The runtime finds the command where it runs it.
+    launcher = stepLauncher(toolsLaunchDeps(), { start, resolveTool: (command) => command, resolveInstanceCommand: (command) => command });
   }
 
-  if (launch) input.launch = launch;
+  if (launch) input.launchEnv = launchEnv(launch);
 
   if (resume) input.resume = resume.id;
 
@@ -684,14 +686,14 @@ async function promptPickedThere({ config, lock, driver, lease, onRuntime, signa
  * in the checkout is held any more, and they are removed.
  */
 async function timedLaunch({ launch, tool, input, signal, unfinished }: {
-  launch: LocalToolAdapter['run'];
+  launch: StepLauncher['run'];
   tool: LaunchTool;
-  input: LocalToolRun;
+  input: StepRun;
   signal: AbortSignal;
   unfinished: string;
-}): Promise<{ result: LocalToolResult; durationMs: number }> {
+}): Promise<{ result: StepRunResult; durationMs: number }> {
   const started = performance.now();
-  let result: LocalToolResult;
+  let result: StepRunResult;
 
   try {
     result = await launch(tool, input, signal);

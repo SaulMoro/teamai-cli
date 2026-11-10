@@ -13,6 +13,7 @@ const workspace = {
   'packages/runtime-kit/package.json': JSON.stringify({ name: '@teamai/runtime-kit', private: true }),
   'packages/runtime-testing/package.json': JSON.stringify({ name: '@teamai/runtime-testing', private: true }),
   'packages/runtime-t3/package.json': JSON.stringify({ name: '@teamai/runtime-t3', private: true }),
+  'packages/runtime-tools/package.json': JSON.stringify({ name: '@teamai/runtime-tools', private: true }),
   'packages/shared/package.json': JSON.stringify({ name: '@teamai/shared', private: true }),
   'packages/tool-claude/package.json': JSON.stringify({ name: '@teamai/tool-claude', private: true }),
   'packages/tool-codex/package.json': JSON.stringify({ name: '@teamai/tool-codex', private: true }),
@@ -112,6 +113,13 @@ rule.invalid('still rejects a test importing the rest of a family', `import { fa
 rule.valid('allows a package importing its own files', `import { definition } from './definition.js';`, inWorkspace('packages/tool-core/src/sessions.ts'));
 
 rule.valid('allows a package importing another package by name', `import { definition } from '@teamai/tool-core/definition';`, inWorkspace('packages/runtime-sandbox/src/index.ts'));
+
+rule.valid('allows src/ importing the runtime teamai runs in its own process', `import { toolsStepRuntime } from '@teamai/runtime-tools';`, inWorkspace('src/workflow/runtimes/sources.ts'));
+
+rule.invalid('rejects src/ importing a runtime that runs as its own executable', `import { runtime } from '@teamai/runtime-sandbox';`, (output) => {
+  expect(output).toContain('src/ never imports a runtime package but @teamai/runtime-tools');
+  expect(output).toContain('src/x.ts -> @teamai/runtime-sandbox');
+}, inWorkspace('src/x.ts'));
 
 rule.valid('allows src/ importing the runtime protocol', `import { RuntimeRequestSchema } from '@teamai/runtime-protocol';`, inWorkspace('src/workflow/runtimes/stdio.ts'));
 
@@ -222,7 +230,7 @@ rule.invalid('rejects src/ test support importing the kit', `import { opLedger }
 const launchLibrary = { 'packages/tool-launch/package.json': JSON.stringify({ name: '@teamai/tool-launch', private: true }), 'packages/tool-launch/src/run-step-launch.ts': 'export const run = 1;' };
 
 rule.valid('reads the launch library as no tool family, so src/ imports it', `import { run } from '@teamai/tool-launch/run-step-launch';
-export const launched = run;`, inWorkspace('src/workflow/steps/local-tool-adapter.ts', launchLibrary));
+export const launched = run;`, inWorkspace('src/workflow/steps/prompt.ts', launchLibrary));
 
 rule.valid('allows the launch library the tool contract', `import type { StepLaunch } from '@teamai/tool-core/launch';
 export type Step = StepLaunch;`, inWorkspace('packages/tool-launch/src/step.ts', launchLibrary));

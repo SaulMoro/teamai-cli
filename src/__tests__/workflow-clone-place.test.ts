@@ -13,7 +13,7 @@ import { syncScorersThenWorkflows } from '../scorers/team-sync.js';
 import { knownSecrets, resolveWorkflowEnv } from '../env-resolution.js';
 import type { LocalConfig } from '../types.js';
 import { _setDriverPollMs, runLocalDriver } from '../workflow/drivers/local/local-driver.js';
-import type { LocalToolAdapter } from '../workflow/steps/local-tool-adapter.js';
+import { type StepLauncher } from '@teamai/runtime-tools';
 import { toolPaths } from './helpers/workflow-local-driver-fixture.js';
 import { startRun } from '../workflow/engine.js';
 import { claimRun } from '../workflow/handoff.js';
@@ -360,7 +360,7 @@ describe('a clone place', () => {
     config.workflows = { ...config.workflows, tools: { default: 'claude' } };
     const resetsAt = Date.now() + 1500;
     const found: string[][] = [];
-    const adapter: LocalToolAdapter = {
+    const adapter: StepLauncher = {
       runInteractive: vi.fn(),
       run: vi.fn(async (_tool, input) => {
         found.push(fs.readdirSync(input.cwd).filter((file) => file !== '.git').sort());
@@ -385,7 +385,7 @@ describe('a clone place', () => {
     const resetsAt = Date.now() + 1500;
     // Whether each attempt's tool found the note the first one left.
     const found: boolean[] = [];
-    const adapter: LocalToolAdapter = {
+    const adapter: StepLauncher = {
       runInteractive: vi.fn(),
       run: vi.fn(async (_tool, input) => {
         const note = path.join(input.cwd, 'rules', 'half.md');

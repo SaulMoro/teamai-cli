@@ -7,7 +7,7 @@ import { type LocalConfig } from '../types.js';
 import { leaseNext, reportAttempt } from '../workflow/engine.js';
 import { LeaseIdSchema } from '../workflow/lease-wire.js';
 import { cancelRun, respondProvenance, respondToHitl, retryStep } from '../workflow/run-controls.js';
-import { type LocalToolAdapter } from '../workflow/steps/local-tool-adapter.js';
+import { type StepLauncher } from '@teamai/runtime-tools';
 import { _setDriverPollMs, runLocalDriver } from '../workflow/drivers/local/local-driver.js';
 import { driverIdentity } from '../driver-identity.js';
 import { attemptDir, readRun, RunIdSchema } from '../workflow/store.js';
@@ -148,7 +148,7 @@ ${workspaceLine}    prompt: Implement the right half.
     let running = 0;
     let overlap = 0;
     const together = (): boolean => running === 2;
-    const adapter: LocalToolAdapter = {
+    const adapter: StepLauncher = {
       runInteractive: vi.fn(),
       run: vi.fn(async () => {
         running += 1;
@@ -182,7 +182,7 @@ steps:
       ok: boolean
 `, 2);
     const commandExitedFirst: boolean[] = [];
-    const adapter: LocalToolAdapter = {
+    const adapter: StepLauncher = {
       runInteractive: vi.fn(),
       run: vi.fn(async () => {
         commandExitedFirst.push(fs.existsSync(path.join(workspace, '..', 'slow.done')));
@@ -247,7 +247,7 @@ steps:
 ${steps(mark)}`, 2);
     const exists = (name: string): boolean => fs.existsSync(path.join(markers, name));
     const seen: string[] = [];
-    const adapter: LocalToolAdapter = {
+    const adapter: StepLauncher = {
       runInteractive: vi.fn(),
       run: vi.fn(async () => {
         for (const deadline = Date.now() + 3000; Date.now() < deadline && !overlaps.every(exists);) await new Promise((resolve) => setTimeout(resolve, 20));
@@ -288,7 +288,7 @@ steps:
     needs: [w]
     command: node -e "process.exit(0)"
 `, 2);
-    const adapter: LocalToolAdapter = { runInteractive: vi.fn(), run: vi.fn(async () => ({ started: true as const, exitCode: 0, output: { ok: true } })) };
+    const adapter: StepLauncher = { runInteractive: vi.fn(), run: vi.fn(async () => ({ started: true as const, exitCode: 0, output: { ok: true } })) };
 
     const done = await runLocalDriver(config, runId, workspace, { adapter, toolPaths });
 
@@ -452,7 +452,7 @@ setInterval(() => {}, 1000);
     execFileSync('git', ['add', 'lingering.js', 'finish.js'], { cwd: workspace });
     execFileSync('git', ['-c', 'user.name=Test', '-c', 'user.email=test@example.com', 'commit', '-qm', 'scripts'], { cwd: workspace });
     const commandExitedFirst: boolean[] = [];
-    const adapter: LocalToolAdapter = {
+    const adapter: StepLauncher = {
       runInteractive: vi.fn(),
       run: vi.fn(async () => {
         commandExitedFirst.push(fs.existsSync(path.join(workspace, '..', 'markers', 'lingering.exited')));
@@ -615,7 +615,7 @@ steps:
       if ('data' in leased) running.push((leased.data.lease as { attempt: string }).attempt);
     }
     const logAtPrompt: string[] = [];
-    const adapter: LocalToolAdapter = {
+    const adapter: StepLauncher = {
       runInteractive: vi.fn(),
       run: vi.fn(async () => {
         logAtPrompt.push(fs.readFileSync(path.join(workspace, '..', 'log.txt'), 'utf8'));
