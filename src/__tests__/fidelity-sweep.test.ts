@@ -32,7 +32,6 @@ import { degradeThinkingBlocks, fidelityFromSession } from '../session-flow/migr
 import type { Session, Message } from '@teamai/tool-core/sessions/ir';
 import type { AgentAdapter } from '@teamai/tool-core/sessions/base';
 import { encodeCwdClaude } from '@teamai/tool-core/sessions/fs';
-import { getUserDataBase } from '@teamai/tool-core/formats/ide-history';
 
 // ---------------------------------------------------------------------------
 // 报告容器
@@ -289,8 +288,8 @@ function clearIdeData(): void {
 }
 
 function ideHistoryRoot(): string {
-  const base = getUserDataBase();
-  if (!base) throw new Error('CodeBuddy IDE data dir is unavailable');
+  const base = process.env.TEAMAI_CODEBUDDY_IDE_DATA;
+  if (!base) throw new Error('TEAMAI_CODEBUDDY_IDE_DATA is not set for the CodeBuddy IDE fixtures');
   const root = path.join(base, 'ext-x', 'CodeBuddyIDE', 'ext-x', 'history');
   fs.mkdirSync(root, { recursive: true });
   return root;

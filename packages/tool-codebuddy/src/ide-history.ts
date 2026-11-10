@@ -21,18 +21,18 @@
  * Design principle: this module is an **enhancement**. Any failure degrades silently and must never block the main migration flow.
  */
 
-import { assertSafeSessionFileId } from '../sessions/ids.js';
+import { assertSafeSessionFileId } from '@teamai/tool-core/sessions/ids';
 import { readRegularFileSync } from '@teamai/shared/regular-file';
 import * as crypto from 'node:crypto';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { z } from 'zod';
-import type { ContentBlock, Session, ToolArguments } from '../sessions/ir.js';
-import { imagePlaceholderText } from '../sessions/ir.js';
-import { mayReadLocalImageFile, OptionalString, safeFileName } from '../sessions/fs.js';
-import { JsonValueSchema, type JsonValue, JsonObjectSchema } from '../json.js';
-import { isInjectedText, titleFromUserText , visibleUserText } from '../sessions/title.js';
+import type { ContentBlock, Session, ToolArguments } from '@teamai/tool-core/sessions/ir';
+import { imagePlaceholderText } from '@teamai/tool-core/sessions/ir';
+import { mayReadLocalImageFile, OptionalString, safeFileName } from '@teamai/tool-core/sessions/fs';
+import { JsonValueSchema, type JsonValue, JsonObjectSchema } from '@teamai/tool-core/json';
+import { isInjectedText, titleFromUserText , visibleUserText } from '@teamai/tool-core/sessions/title';
 
 // ---------------------------------------------------------------------------
 // Types

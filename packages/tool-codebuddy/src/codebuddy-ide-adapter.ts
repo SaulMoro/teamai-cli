@@ -36,7 +36,7 @@ import {
   type IdeBlock,
   type IdeConversationEntry,
   type IdeMessageParsed,
-} from '@teamai/tool-core/formats/ide-history';
+} from './ide-history.js';
 import { cutTitle, isInjectedText, titleFromCandidates } from '@teamai/tool-core/sessions/title';
 import { deriveTargetSessionId } from '@teamai/tool-core/sessions/ids';
 import { readRegularFileSync } from '@teamai/shared/regular-file';

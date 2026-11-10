@@ -1,5 +1,5 @@
 import path from 'node:path';
-import { hashWorkspace } from '@teamai/tool-core/formats/ide-history';
+import { workspaceFolderOf } from './testing/ide-history.js';
 import { encodeCwdCodeBuddy } from '@teamai/tool-core/sessions/fs';
 import { describeFamily, fixtureText, type ReplayTarget } from '@teamai/tool-testing/conformance';
 import { family } from './index.js';
@@ -32,7 +32,7 @@ const codebuddyIdeTranscript = {
   sessionId: '7c9e66797425440d944be07fc1f90ae7',
   env: (store: string) => ({ TEAMAI_CODEBUDDY_IDE_DATA: store }),
   files: ({ store, cwd, sessionId }: ReplayTarget) => {
-    const workspace = path.join(store, 'ext-a', 'CodeBuddyIDE', 'ext-a', 'history', hashWorkspace(cwd) ?? 'unhashable');
+    const workspace = path.join(store, 'ext-a', 'CodeBuddyIDE', 'ext-a', 'history', workspaceFolderOf(cwd));
     const conversation = path.join(workspace, sessionId);
 
     return [
