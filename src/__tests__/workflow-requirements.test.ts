@@ -129,7 +129,11 @@ describe('the workflows teamai ships', () => {
     const ownSteps = (definition: Shipped): Reached[] => reached(definition, new Map());
     const shape = shipped.map((definition) => {
       const own = ownSteps(definition);
-      const wholeHere = !own.some((at) => movable(at) || stepWorkflow(at.step)?.kind === 'named');
+      const wholeHere = !own.some((at) => {
+        const child = stepWorkflow(at.step);
+
+        return movable(at) || child?.kind === 'named' || child?.kind === 'from';
+      });
       const declared = own.filter((at) => at.step.requires?.host === true).map((at) => at.path);
 
       return { file: definition.name, wholeHere, fileDefault: definition.defaults?.requires?.host === true, declared };
