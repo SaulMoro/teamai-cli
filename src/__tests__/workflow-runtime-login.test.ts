@@ -174,6 +174,21 @@ describe('an attempt a killed teamai left running on its step runtime', () => {
     lease: { step: 'review', tool: 'codex', prompt: 'p', result: path.join(root, 'out', 'result.json'), permissions: 'unattended', interactive: false }, env: {}, unset: [], credentials: {}, cwd: root,
   }, {});
 
+  it('keeps the limit a prompt that finished before the restart was stopped at, as the runtime kept it', async () => {
+    const op = newOpId();
+    const runtime: StepRuntime<DriverCan> = {
+      ...runtimeSeeing([]),
+      reattach: async () => ({ kind: 'alive', ops: [{ op, state: 'finished', session: { tool: 'codex', id: 's-1' }, result: { output: { ok: true } }, stopped: 'budget' }] }),
+    };
+    const saved = { runtime: runtime.name, driver: 'd', phase: 'running', open: { op: newOpId(), handle: 'h1' }, prompt: { op } } satisfies AttemptRuntimeRecord;
+    const dir = attemptDir(config(), RUN, FIRST);
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, 'runtime.json'), JSON.stringify(saved));
+
+    expect(await resumePrompt(runtime)).toMatchObject({ kind: 'finished', session: { id: 's-1' }, stopped: 'budget' });
+    expect(prompts).toBe(0);
+  });
+
   it('keeps the recovered agent link while a prompt reconnects and after it finishes without another display', async () => {
     const op = newOpId();
     const workspace = { label: 'Workspace', url: 'https://example.com/workspace/1' };

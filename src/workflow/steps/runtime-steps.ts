@@ -424,6 +424,25 @@ export function runtimePrompter(run: AttemptRun, { view, runId, step, tool, prov
 
         if (end.usage) ran.tokens = end.usage;
 
+        // A tool stopped silent is a failure, as teamai's own launch reports it; a budget or a timeout is a limit.
+        switch (end.stopped) {
+          case undefined:
+            break;
+          case 'budget':
+          case 'timeout':
+            ran.stoppedBy = end.stopped;
+            break;
+          case 'idle':
+            ran.exitCode = 1;
+            ran.failure = { code: 'tool_failed', message: `${tool} printed nothing for ${(input.idleTimeoutMs ?? 0) / 1000}s, longer than its idle limit (workflows.idle_timeout). Raise the limit if this tool works silently for longer.` };
+            break;
+          default: {
+            const unhandled: never = end.stopped;
+
+            return unhandled;
+          }
+        }
+
         return ran;
       }
 

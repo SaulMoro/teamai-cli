@@ -11,7 +11,7 @@ import type { PromptEnd } from '@teamai/runtime-protocol/step-runtime';
  * An attempt on a runtime that launches agents its own way. Like the real one, `cancel` stops only the prompt it has
  * sent: `beforeSend` runs first, as an open or a reattach does, and a prompt not cancelled finishes on the next turn.
  */
-function promptOnlyRun({ duringOpen, beforeSend, result = { output: { ok: true } } }: { duringOpen?: () => void; beforeSend?: () => Promise<void>; result?: Extract<PromptEnd, { kind: 'finished' }>['result'] } = {}): { run: AttemptRun; cancels: () => number } {
+function promptOnlyRun({ duringOpen, beforeSend, result = { output: { ok: true } }, stopped }: { duringOpen?: () => void; beforeSend?: () => Promise<void>; result?: Extract<PromptEnd, { kind: 'finished' }>['result']; stopped?: Extract<PromptEnd, { kind: 'finished' }>['stopped'] } = {}): { run: AttemptRun; cancels: () => number } {
   let sent: ((end: PromptEnd) => void) | undefined;
   let cancels = 0;
 
@@ -29,7 +29,7 @@ function promptOnlyRun({ duringOpen, beforeSend, result = { output: { ok: true }
       return new Promise<PromptEnd>((resolve) => {
         sent = resolve;
         events.onAccepted?.({});
-        setImmediate(() => resolve({ kind: 'finished', session: { tool: 'claude', id: 's-1' }, result }));
+        setImmediate(() => resolve({ kind: 'finished', session: { tool: 'claude', id: 's-1' }, result, ...(stopped && { stopped }) }));
       });
     },
     cancel: async () => {
@@ -77,6 +77,23 @@ describe('a prompt step on a runtime that launches agents its own way', () => {
 
     expect(ran).toMatchObject({ exitCode: 143, stoppedBy: 'timeout' });
     expect(cancels()).toBe(1);
+  });
+
+  it.each(['budget', 'timeout'] as const)('stops at the limit, %s, at which the runtime says it stopped the tool', async (stopped) => {
+    const { run } = promptOnlyRun({ stopped });
+
+    const ran = await runtimePrompter(run, { view, runId: RunIdSchema.parse('r0123abcd'), step: 'review', tool: 'claude', provided: [], unset: [], credentials: {}, setUp: async () => undefined }).run('claude', { prompt: 'Review.', expected: undefined, cwd: dir, resultPath: path.join(dir, 'result.json'), secrets: {} }, undefined);
+
+    expect(ran).toMatchObject({ exitCode: 0, session: 's-1', stoppedBy: stopped });
+  });
+
+  it('fails a tool the runtime stopped at its idle limit, as teamai\'s own launch fails one', async () => {
+    const { run } = promptOnlyRun({ stopped: 'idle' });
+
+    const ran = await runtimePrompter(run, { view, runId: RunIdSchema.parse('r0123abcd'), step: 'review', tool: 'claude', provided: [], unset: [], credentials: {}, setUp: async () => undefined }).run('claude', { prompt: 'Review.', expected: undefined, cwd: dir, resultPath: path.join(dir, 'result.json'), idleTimeoutMs: 30_000, secrets: {} }, undefined);
+
+    expect(ran).toMatchObject({ exitCode: 1, session: 's-1', failure: { code: 'tool_failed', message: 'claude printed nothing for 30s, longer than its idle limit (workflows.idle_timeout). Raise the limit if this tool works silently for longer.' } });
+    expect('stoppedBy' in ran).toBe(false);
   });
 
   it('says it started fresh when the runtime resumed no session, even when its place could not be collected', async () => {
