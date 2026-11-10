@@ -468,7 +468,7 @@ describe('the fleet', () => {
     const started = teamai('alice', ['workflow', 'start', 'split', '--driver', 'build-fleet'], (pid) => { alicePid = pid; });
     await waitOn(() => offeredRuns().length > 0, 60_000, () => alicePid, started);
     const [run = ''] = offeredRuns();
-    // `here` needs nothing of `remote`, so it ran on Alice's local while the offer waited for a member.
+    // `here` needs nothing of `remote`, so it ran on Alice's tools, a prompt step in her teamai, while the offer waited for a member.
     await waitOn(() => runStateOf('alice', run).steps.find((step) => step.id === 'here')?.status === 'succeeded', 60_000, () => alicePid, started);
     expect(fs.readFileSync(launchesOf('alice'), 'utf8').trim().split('\n')).toHaveLength(1);
     expect(records(run).map((record) => record.state)).toEqual(['offered']);
@@ -496,7 +496,7 @@ describe('the fleet', () => {
     const resumed = await resuming;
     expect(resumed.envelope(), said(resumed)).toMatchObject({ data: { done: { outcome: 'succeeded' } } });
     const steps = runStateOf('alice', run).steps;
-    expect(steps.map((step) => [step.id, step.status, step.runtime])).toEqual([['remote', 'succeeded', 'fleet'], ['here', 'succeeded', 'local'], ['after', 'succeeded', 'fleet']]);
+    expect(steps.map((step) => [step.id, step.status, step.runtime])).toEqual([['remote', 'succeeded', 'fleet'], ['here', 'succeeded', 'tools'], ['after', 'succeeded', 'fleet']]);
     // The workflow's branch has Bob's commit; only Alice moved it.
     const branches = originGit('for-each-ref', '--format=%(refname:short)', 'refs/heads/teamai/').split('\n');
     const remoteBranch = branches.find((branch) => branch.includes('remote')) ?? '';

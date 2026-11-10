@@ -921,7 +921,8 @@ steps:
       const ran = await runCLI(['workflow', 'start', 'hostprompt2', '--driver', 'toyandhost'], repo, env());
 
       const [review] = readRunState(runOf(ran)).steps;
-      expect(review, ran.stderr).toMatchObject({ status: 'succeeded', runtime: 'local' });
+      // A prompt step in teamai's process is recorded on tools, whatever name the definition gives that entry.
+      expect(review, ran.stderr).toMatchObject({ status: 'succeeded', runtime: 'tools' });
       expect(toyOpens()).toBe(0);
     });
   });
