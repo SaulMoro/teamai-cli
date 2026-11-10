@@ -138,9 +138,11 @@ describe('the local driver, end to end', () => {
     expect(recall).toMatchObject({ status: 'succeeded', resumed: { tool: 'claude', id: session } });
     expect(launched().map((launch) => launch.resumed)).toEqual([undefined, session]);
     expect(ran.stderr).not.toContain('did not continue');
-    // No attempt kept a record of a runtime, as a place held for a conversation keeps one.
+    // Each attempt recorded that it ran in teamai's process, and none kept an external runtime's record, as a place held
+    // for a conversation keeps one.
     const attempts = path.join(runsOf(repo), runId, 'attempts');
-    expect(fs.readdirSync(attempts).filter((attempt) => fs.existsSync(path.join(attempts, attempt, 'runtime.json')))).toEqual([]);
+    const records = fs.readdirSync(attempts).map((attempt): unknown => JSON.parse(fs.readFileSync(path.join(attempts, attempt, 'runtime.json'), 'utf8')));
+    expect(records).toEqual([{ runtime: 'tools', driver: 'teamai-local', inProcess: true }, { runtime: 'tools', driver: 'teamai-local', inProcess: true }]);
   });
 
   it('refuses a strict sandbox step with the text the local driver always gave', async () => {

@@ -9,6 +9,9 @@ import { hasPython, TYPED_TERMINAL } from '../helpers/in-terminal.js';
 import { TOY_RUNTIME } from '../helpers/toy-runtime.js';
 import { attemptOf, CLAUDE_SESSIONS, CLI, CODEBUDDY_SESSIONS, envelope, fakeTool, runCLI, type Ran } from '../helpers/step-runtime-e2e.js';
 
+/** Whether `record`, an attempt's runtime.json, says the attempt ran in teamai's process. */
+const isInProcessRecord = (record: unknown): boolean => typeof record === 'object' && record !== null && 'inProcess' in record && record.inProcess === true;
+
 describe('workflow steps on a step runtime a driver definition chooses', () => {
   let sandbox: string;
   let repo: string;
@@ -362,8 +365,14 @@ Judge the review.
       expect(judge).toMatchObject({ status: 'succeeded', confined: { tool: 'claude', isolation: 'best-effort', access: 'read' } });
       const judgeRecord = path.join(attemptsOf(scoring), attemptOf(judge), 'runtime.json');
       expect(JSON.parse(fs.readFileSync(judgeRecord, 'utf8'))).toMatchObject({ runtime: 'toy', driver: 'toyjudge', phase: 'closed' });
-      // teamai's own steps ran on the host: none has a step runtime's record.
-      const onRuntime = steps.filter((step) => 'attempt' in step && fs.existsSync(path.join(attemptsOf(scoring), attemptOf(step), 'runtime.json'))).map((step) => step.id);
+      // teamai's own steps ran on the host: each record of one says it ran in teamai's process, and only the judge has a
+      // step runtime's record.
+      const recordOf = (step: (typeof steps)[number]): unknown => {
+        const file = path.join(attemptsOf(scoring), attemptOf(step), 'runtime.json');
+
+        return fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, 'utf8')) : undefined;
+      };
+      const onRuntime = steps.filter((step) => 'attempt' in step && recordOf(step) !== undefined && !isInProcessRecord(recordOf(step))).map((step) => step.id);
       expect(onRuntime).toEqual([judge?.id]);
       // The judge's place was opened with no view of the host, and its agent read only the evidence directory.
       expect(toyOpenViews(state)).toContain(null);
