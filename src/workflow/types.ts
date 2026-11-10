@@ -632,7 +632,8 @@ export interface DriveOptions {
 
 /**
  * Why a branch of a settled run stays: a pull request uses it, it holds the run's final copy, no branch that stays holds
- * its tip, or the host has it checked out in the checkout, which keeps it there though origin deleted it.
+ * its tip, or the session host has it checked out in the checkout, which keeps it there though origin deleted it. The
+ * value `host` names the session host; run state and `--json` keep that spelling.
  */
 export type KeptBranchReason = 'pr' | 'final' | 'unmerged' | 'host';
 
