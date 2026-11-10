@@ -16,8 +16,12 @@ const IGNORED_NAMES = new Set([
   '.git',
 ]);
 
+/** A copy's staging folder beside its destination (`copyDir`, and `moveRegularTree` across filesystems): `.<name>.<8 hex>.staging`. */
+const STAGING_NAME = /^\..+\.[0-9a-f]{8}\.staging$/;
+
+/** Whether a scan or a copy passes `name` over: caches, git's folder, and a staging folder a copy cut short left. */
 export function isIgnored(name: string): boolean {
-  return IGNORED_NAMES.has(name) || name.endsWith('.pyc');
+  return IGNORED_NAMES.has(name) || name.endsWith('.pyc') || STAGING_NAME.test(name);
 }
 
 /**
@@ -292,6 +296,16 @@ export async function copyDir(
 ): Promise<void> {
   const destExpanded = expandHome(dest);
   const srcExpanded = expandHome(src);
+  let there: fse.Stats | undefined;
+
+  try {
+    there = await fse.lstat(destExpanded);
+  } catch (error) {
+    if (errnoCode(error) !== 'ENOENT') throw error;
+  }
+
+  if (there !== undefined && !there.isDirectory() && !there.isSymbolicLink()) throw new Error(`${destExpanded} is not a folder, so teamai does not copy the folder ${srcExpanded} over it`);
+  await removeStaleStaging(destExpanded);
   const staging = path.join(path.dirname(destExpanded), `.${path.basename(destExpanded)}.${crypto.randomBytes(4).toString('hex')}.staging`);
 
   try {
@@ -309,13 +323,6 @@ export async function copyDir(
         return false;
       },
     });
-    let there: fse.Stats | undefined;
-
-    try {
-      there = await fse.lstat(destExpanded);
-    } catch (error) {
-      if (errnoCode(error) !== 'ENOENT') throw error;
-    }
 
     if (there?.isSymbolicLink()) await fse.remove(destExpanded);
 
@@ -323,6 +330,22 @@ export async function copyDir(
     else await copyRegularTree(staging, destExpanded);
   } finally {
     await fse.remove(staging);
+  }
+}
+
+/** How old a staging folder is before it counts as one a crash left: a copy takes seconds. */
+const STALE_STAGING_MS = 60 * 60 * 1000;
+
+/** Removes the staging folders beside `dest` that a copy of it cut short left over an hour ago. */
+async function removeStaleStaging(dest: string): Promise<void> {
+  const parent = path.dirname(dest);
+  const prefix = `.${path.basename(dest)}.`;
+
+  for (const name of await fse.readdir(parent).catch(() => [])) {
+    if (!name.startsWith(prefix) || !/^[0-9a-f]{8}\.staging$/.test(name.slice(prefix.length))) continue;
+    const left = await fse.lstat(path.join(parent, name)).catch(() => undefined);
+
+    if (left !== undefined && left.mtimeMs + STALE_STAGING_MS < Date.now()) await fse.remove(path.join(parent, name));
   }
 }
 

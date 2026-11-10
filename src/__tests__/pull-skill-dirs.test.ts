@@ -120,6 +120,30 @@ describe('a pull and the homes the env moves', () => {
     }
   });
 
+  it('delivers no staging folder a copy cut short left in the team checkout, as a skill of its own', async () => {
+    await fse.ensureDir(path.join(home, '.config', 'opencode'));
+    await fse.outputFile(path.join(repo, 'skills', '.deploy.1a2b3c4d.staging', 'SKILL.md'), '---\nname: deploy\ndescription: d\n---\nHalf copied.\n');
+
+    await pull({});
+
+    expect(await fse.readdir(path.join(home, '.config', 'opencode', 'skills'))).not.toContainEqual(expect.stringContaining('staging'));
+    expect(await fse.readFile(path.join(home, '.config', 'opencode', 'skills', 'deploy', 'SKILL.md'), 'utf8')).toContain('Deploy.');
+  });
+
+  it('removes a staging folder a copy cut short left beside a skill an hour ago, and keeps a newer one a copy may still be writing', async () => {
+    const skills = path.join(home, '.config', 'opencode', 'skills');
+    const [stale, fresh] = ['.deploy.1a2b3c4d.staging', '.deploy.5e6f7a8b.staging'].map((name) => path.join(skills, name));
+    for (const left of [stale, fresh]) await fse.outputFile(path.join(left, 'SKILL.md'), 'Half copied.\n');
+    const twoHoursAgo = new Date(Date.now() - 2 * 3_600_000);
+    await fse.utimes(stale, twoHoursAgo, twoHoursAgo);
+
+    await pull({});
+
+    expect(await fse.pathExists(stale)).toBe(false);
+    expect(await fse.pathExists(fresh)).toBe(true);
+    expect(await fse.readFile(path.join(skills, 'deploy', 'SKILL.md'), 'utf8')).toContain('Deploy.');
+  });
+
   it('records an env-moved home that exists on the first pull that sees it, and keeps an existing record', async () => {
     const xdg = path.join(tmp, 'xdg');
     await fse.ensureDir(path.join(xdg, 'opencode'));
