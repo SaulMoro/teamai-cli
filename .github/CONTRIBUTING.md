@@ -124,10 +124,10 @@ What `npm run lint` reports, and the fix:
 
 | You wrote | `npm run lint` says | Fix |
 |---|---|---|
-| `path.join(process.env.HOME ?? '', '.teamai')` in `src/sync-cache.ts` | `teamai(home-env): Read the user home through getUserHome() in src/utils/home.ts so USERPROFILE and platform fallbacks remain supported.` | `path.join(getUserHome(), '.teamai')` |
+| `path.join(process.env.HOME ?? '', '.teamai')` in `src/sync-cache.ts` | `teamai(home-env): Read the user home through getUserHome() in @teamai/shared/home so USERPROFILE and platform fallbacks remain supported.` | `path.join(getUserHome(), '.teamai')` |
 | `execFileSync('gh', ['pr', 'merge', String(pr), '--auto'])` in `src/providers/github/` | `teamai(no-provider-merge): Providers and workflow delivery must not merge, accept or enable auto-merge on pull requests.` | Leave merging to a maintainer; providers only find and create requests. |
 | `import { startRun } from '../../engine.js'` in `src/workflow/drivers/skill/report.ts` | `teamai(workflow-boundaries): Workflow module boundary forbids src/workflow/drivers/skill/report.ts -> src/workflow/engine.ts.` | Import from `protocol.ts`, which the skill driver may use. |
-| `const team = YAML.parse(text)` in `src/config.ts` | `teamai(yaml-parse): Parse YAML with parseYaml() from @teamai/tool-core/yaml: it returns JSON values, where yaml's parse turns !!set, !!binary and !!timestamp into a Set, Buffer or Date.` | `const team = parseYaml(text)`, then a zod schema. |
+| `const team = YAML.parse(text)` in `src/config.ts` | `teamai(yaml-parse): Parse YAML with parseYaml() from @teamai/shared/yaml: it returns JSON values, where yaml's parse turns !!set, !!binary and !!timestamp into a Set, Buffer or Date.` | `const team = parseYaml(text)`, then a zod schema. |
 | `` `push failed: ${(e as Error).message}` `` | `` teamai(require-safety-comment-for-type-assertion): This type assertion has no `SAFETY:` justification. `` | `` `push failed: ${e instanceof Error ? e.message : String(e)}` `` |
 | `typeof lock.pid === 'number' ? lock.pid : undefined` on a parsed lock file | `` teamai(no-runtime-typeof): A `typeof` check narrows a representation without establishing its contract. `` | Parse the file once: `LockSchema.safeParse(parseYaml(text))`, with `pid: z.number().optional()`. |
 

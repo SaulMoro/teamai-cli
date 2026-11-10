@@ -13,10 +13,10 @@ describe('teamai/uncached-entry', () => {
   rule.invalid('rejects a package import in the fast path', `import { z } from 'zod';`, (output) => {
     expect(output).toContain('runs before the CLI bundle loads');
   });
-  rule.invalid('rejects a bundle module in the fast path', `import { log } from './utils/logger.js';`);
+  rule.invalid('rejects a bundle module in the fast path', `import { log } from './utils/fs.js';`);
   rule.invalid('rejects a dynamic import of a bundle module', `const { TOOLS } = await import('./tools.js');`);
   rule.invalid('rejects a re-export of a bundle module', `export { launchedBy } from './launch-context.js';`);
-  rule.invalid('rejects a bundle module in the entry', `import { log } from './utils/logger.js';`, undefined, { filename: 'src/bin.ts' });
+  rule.invalid('rejects a bundle module in the entry', `import { log } from './utils/fs.js';`, undefined, { filename: 'src/bin.ts' });
   rule.invalid('rejects a bundle module in a helper the entry loads', `import { getCurrentVersion } from '../../../src/package-info.js';`, undefined, inWorkspace('packages/shared/src/debug-log.ts'));
   rule.invalid('rejects a workspace package module outside UNCACHED', `import { log } from '@teamai/shared/log';`, (output) => {
     expect(output).toContain('Import @teamai/shared/log from code the CLI bundle runs instead');

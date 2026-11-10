@@ -8,7 +8,7 @@ Tracking: workflow-first (#1589), connected drivers (`docs/designs/connected-dri
 
 The code for every tool teamai supports is spread across the repository by concern, not by tool:
 - the `TOOLS` descriptor table (`src/tools.ts`), whose type check lists every table that must decide a new tool;
-- launch adapters (`src/tool-launch/adapters.ts`);
+- launch adapters (`LAUNCH_ADAPTERS`);
 - session platforms and session adapters (`src/session-flow/adapters/`);
 - token formats (`src/token-usage/`);
 - writers for MCP, hooks, rules, blocks and agents (`src/resources/` and others);
