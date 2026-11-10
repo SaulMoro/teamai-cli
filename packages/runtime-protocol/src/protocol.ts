@@ -1,6 +1,6 @@
 import { getUserHome } from '@teamai/tool-core/home';
 import { ACCESS_LEVELS, CONFINED_LEVELS } from '@teamai/tool-core/launch';
-import type { TokenUsage } from '@teamai/tool-core/stdout';
+import type { TokenUsage, ToolReport } from '@teamai/tool-core/stdout';
 import { z } from 'zod';
 
 // ─── Runtime protocol 1 ──────────────────────────────────
@@ -565,7 +565,7 @@ const finishedPrompt = {
   /** The model the tool ran on, as the tool named it. */
   model: z.string().min(1).optional(),
   /** What the tool said the run cost, as it said it. */
-  cost: z.object({ amount: z.number().nonnegative(), unit: z.string().min(1) }).strict().optional(),
+  cost: (z.object({ amount: z.number().nonnegative(), unit: z.string().min(1) }).strict() satisfies z.ZodType<NonNullable<ToolReport['cost']>>).optional(),
   /** A confined prompt's: the level and access the runtime kept. */
   confined: ConfinedKeptSchema.optional(),
   /**
@@ -573,7 +573,10 @@ const finishedPrompt = {
    * new one, so teamai links no session to the one the step asked to resume.
    */
   resumed: z.boolean().optional(),
-  /** The limit of the lease's `limits` at which the runtime stopped the tool. Absent: the tool ended on its own. */
+  /**
+   * The limit of the lease's `limits` at which the runtime stopped the tool. Absent: the tool ended on its own. teamai
+   * ends the step at `budget` or `timeout`, and fails it `tool_failed` at `idle`, as its own launch fails a silent tool.
+   */
   stopped: z.enum(['budget', 'timeout', 'idle']).optional(),
 };
 
