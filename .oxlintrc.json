@@ -98,6 +98,9 @@
     // A step writes the paths the engine reads; a FIFO it leaves there would block a plain read past every deadline.
     // Files that still read teamai's own config or state with a plain read are counted in the baseline, which only shrinks.
     "teamai/regular-file-reads": ["error", { "baseline": "oxlint-plugin-teamai/rules/regular-file-reads.baseline.json" }],
+    // Opening a FIFO for writing blocks until a reader comes, as a read blocks until a writer does.
+    // Files not converted yet go in stillAppends, a list that only shrinks.
+    "teamai/step-path-writes": ["error", { "stillAppends": ["src/workflow/drivers/skill/journal.ts"] }],
     // getUserHome owns the HOME / USERPROFILE fallback that keeps Windows paths safe.
     "teamai/home-env": "error",
     "teamai/learnings-root": "error",
