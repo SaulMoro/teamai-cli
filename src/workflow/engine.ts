@@ -2,14 +2,14 @@ import { createHash, randomBytes } from 'node:crypto';
 import { LOCAL_DEFINITION, LOCAL_DRIVER } from './driver-name.js';
 import { retryCommand, stepArgument } from './runtimes/retry-command.js';
 import fs from 'node:fs/promises';
-import { join, resolve, sep } from 'node:path';
+import { join, resolve } from 'node:path';
 import { z } from 'zod';
 import { CanSchema } from '@teamai/runtime-protocol';
 import { parseReportedAgent, parseReportedUsed, settleObservation, type ReportedAgent, type Used } from '../agent-observation.js';
 import { loadTeamConfig } from '../config.js';
 import { DefaultWorkflows } from '../default-workflows.js';
 import { DriverSchema, sameDriver } from '../driver-identity.js';
-import { resolveRunMode, RunModeSchema, WORKFLOW_DIR_ENV, type RunMode } from '../launch-context.js';
+import { resolveRunMode, RunModeSchema, type RunMode } from '../launch-context.js';
 import { log } from '../utils/logger.js';
 import { execCommand } from '../utils/exec.js';
 import { checkoutLocation, getDefaultBranch } from '../utils/git.js';
@@ -572,13 +572,10 @@ function leaseData(
 
   if (definition.workflow !== undefined) wire.workflow = true;
 
-  const folder = rendered.folder === undefined ? undefined : WorkflowFolder.dir(config, rendered.folder);
-
-  // Every process of the step gets the folder, as it gets $TEAMAI_RUN_DIR, which no env the step names replaces. Its
-  // path uses forward slashes on Windows too, which Git Bash, node and PowerShell all read.
   if (rendered.env) wire.env = rendered.env;
 
-  if (folder !== undefined) wire.env = { ...wire.env, [WORKFLOW_DIR_ENV]: folder.split(sep).join('/') };
+  // No env the step names replaces the folder's.
+  if (rendered.folder !== undefined) wire.env = { ...wire.env, ...WorkflowFolder.env(config, rendered.folder) };
 
   if (rendered.prompt !== undefined) wire.prompt = rendered.prompt;
 

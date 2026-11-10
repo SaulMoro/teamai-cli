@@ -290,8 +290,8 @@ steps:
  * Alice starts workflow `mark` and offers its step with `forge` applied to the offer; Bob, with the team's workflows,
  * takes it. Answers what Bob's take answered, and the record Alice reads then.
  */
-async function takeForged(forge: (forged: Pick<Parameters<typeof offerAttempt>[1], 'lease' | 'definition' | 'values'>) => void, before?: (members: { alice: Member; bob: Member }) => Promise<void>, workflow = MARK, place: MemberPlace = HERE, inputs: Record<string, string> = {}) {
-  const acme = team({ mark: workflow });
+async function takeForged(forge: (forged: Pick<Parameters<typeof offerAttempt>[1], 'lease' | 'definition' | 'values'>) => void, before?: (members: { alice: Member; bob: Member }) => Promise<void>, workflow: string | { folder: Record<string, string> } = MARK, place: MemberPlace = HERE, inputs: Record<string, string> = {}) {
+  const acme = typeof workflow === 'string' ? team({ mark: workflow }) : team({}, Object.fromEntries(Object.entries(workflow.folder).map(([file, text]) => [`workflows/mark/${file}`, text])));
   const [alice, bob] = [await acme.member('alice'), await acme.member('bob')];
   await before?.({ alice, bob });
   const started = await startRun(alice.config, 'mark', { mark: 'made.txt', ...inputs }, { secrets: {} });
@@ -433,6 +433,19 @@ describe('a member taking a prompt attempt', () => {
 
     expect(taken).toMatchObject({ data: { ran: { step: 'write', exit_code: 1 } } });
     expect(record).toMatchObject({ state: 'finished', result: { exitCode: 1, stderr: expect.stringContaining('the offer\'s inputs differ from what workflow "mark" renders from the offer\'s values for step "write"') } });
+  });
+
+  it('runs an inline workflow step of a workflow folder in a nested run that reads the folder\'s files', async () => {
+    const folder = { 'WORKFLOW.yaml': INLINE_MARK.replace('echo written > "$MARK"', 'cp "$TEAMAI_WORKFLOW_DIR/mark.txt" "$MARK"'), 'mark.txt': 'written\n' };
+    const { taken, record, alice } = await takeForged((forged) => {
+      forged.lease = { kind: 'workflow', step: 'write', inputs: { mark: 'made.txt' }, env: {} };
+      forged.values = { inputs: { mark: 'made.txt' } };
+    }, undefined, { folder }, { ...HERE, workflow: { kind: 'here' } }, { note: 'kept' });
+
+    expect(taken).toMatchObject({ data: { ran: { step: 'write', exit_code: 0 } } });
+    const to = record?.state === 'finished' ? record.result.to ?? '' : '';
+    git(alice.checkout, 'fetch', '-q', 'origin', to);
+    expect(git(alice.checkout, 'show', `${to}:made.txt`)).toBe('written');
   });
 
   it('runs on the tool\'s own default model when the step\'s model renders empty, as the owner\'s driver would, not on the defaults\' model', async () => {
@@ -614,6 +627,16 @@ describe('a member taking an attempt', () => {
     const to = record?.state === 'finished' ? record.result.to : undefined;
     expect(to).toEqual(expect.any(String));
     for (const remote of mirrors) expect(git(remote, 'for-each-ref', '--format=%(objectname)', 'refs/heads/teamai/attempts')).toBe(to);
+  });
+
+  it('runs a step of a workflow folder with the folder\'s files, which it keeps in its own data home', async () => {
+    const folder = { 'WORKFLOW.yaml': MARK.replace('echo written > "$MARK"', 'cp "$TEAMAI_WORKFLOW_DIR/mark.txt" "$MARK"'), 'mark.txt': 'written\n' };
+    const { taken, record, alice } = await takeForged((forged) => { forged.lease = { ...forged.lease, kind: 'command', command: 'cp "$TEAMAI_WORKFLOW_DIR/mark.txt" "$MARK"' }; }, undefined, { folder });
+
+    expect(taken).toMatchObject({ data: { ran: { step: 'write', exit_code: 0 } } });
+    const to = record?.state === 'finished' ? record.result.to ?? '' : '';
+    git(alice.checkout, 'fetch', '-q', 'origin', to);
+    expect(git(alice.checkout, 'show', `${to}:made.txt`)).toBe('written');
   });
 
   it('refuses a step of a workflow a from step admitted, naming that step, and runs nothing', async () => {

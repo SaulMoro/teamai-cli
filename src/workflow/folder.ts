@@ -3,6 +3,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { FOLDER_MARKERS } from '../folder-markers.js';
 import { FolderFiles, type FolderFilesRead } from '../resources/folder-files.js';
+import { WORKFLOW_DIR_ENV } from '../launch-context.js';
 import { getDataHome, type LocalConfig } from '../types.js';
 import { pathExists } from '../utils/fs.js';
 import { createGit } from '../utils/git.js';
@@ -114,6 +115,16 @@ function dir(config: LocalConfig, sourceHash: string): string | undefined {
 }
 
 /**
+ * What every process of a step of the folder with `sourceHash` gets, as it gets $TEAMAI_RUN_DIR: the folder's {@link dir},
+ * with forward slashes on Windows too, which Git Bash, node and PowerShell all read. Nothing for a malformed hash.
+ */
+function env(config: LocalConfig, sourceHash: string): Record<string, string> {
+  const at = dir(config, sourceHash);
+
+  return at === undefined ? {} : { [WORKFLOW_DIR_ENV]: at.split(path.sep).join('/') };
+}
+
+/**
  * Writes `files` to {@link dir} once, for every run that uses the folder with `sourceHash`: into a new sibling first,
  * renamed into place, so a run never sees a folder half written. A folder already there is kept as it is.
  */
@@ -166,4 +177,4 @@ function shipped(found: FolderFilesRead): WorkflowFolderRead {
   return fromFiles(found, new Map());
 }
 
-export const WorkflowFolder = { MAX_BYTES, read, shipped, hash, dir, pin, prune } as const;
+export const WorkflowFolder = { MAX_BYTES, read, shipped, hash, dir, env, pin, prune } as const;

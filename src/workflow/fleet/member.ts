@@ -18,7 +18,8 @@ import { stopCancelledAttempts, stopLeftAttempt } from '../runtimes/cancelled.js
 import type { OpenedDriver } from '../runtimes/sources.js';
 import type { StepRuntime } from '@teamai/runtime-protocol/step-runtime';
 import type { DriverCan } from '../requirements.js';
-import { teamCommitReach } from '../cache.js';
+import { teamCommitReach, type PinnedFolder } from '../cache.js';
+import { WorkflowFolder } from '../folder.js';
 import { retryCommand } from '../runtimes/retry-command.js';
 import { answerCancel, attemptRef, claimAttempt, finishAttempt, fleetFailure, leaveOffer, leaseEnv, leaseInputs, leasePrompt, listMemberRecords, listOffers, readAttemptRecord, recordProgress, isHeld, type Cancelling, type HeldAttempt, type Offered, type FleetError, type FleetLease, type FleetResult } from './record.js';
 import type { ExecAnswer, ExecQuestion } from '@teamai/runtime-protocol/step-runtime';
@@ -39,7 +40,7 @@ import { z } from 'zod';
 import { commandOutputs } from '../protocol.js';
 import { parseStepPath } from '../step-path.js';
 import { attemptDir, attemptOutDir, attemptResultPath, readRun, RunIdSchema, runScratchDir, takeRunLock, type AttemptId, type RunId, type RunLock } from '../store.js';
-import { isWorkflowFile, stepWorkflow, workflowRunBy, type WorkflowDefinition, type WorkflowEnvelope, type WorkflowFailure, type WorkflowStep } from '../types.js';
+import { isWorkflowFile, stepWorkflow, workflowRunBy, type RunState, type WorkflowDefinition, type WorkflowEnvelope, type WorkflowFailure, type WorkflowStep } from '../types.js';
 import { envAdvice, envScopeOf, lackedLabels, lacksTool, mergeRequirements, requiredEnvKeys, type EnvScope, type InEffect, type TurnLimits } from '../requirements.js';
 import type { LoginTool } from '../runtimes/login.js';
 import { launchToolFor, runPromptStep, type StagedLease } from '../steps/prompt.js';
@@ -753,7 +754,7 @@ function workflowRun(config: LocalConfig, { claim, trusted, place, work, from, s
 
     const created = await createRun(config, {
       name: definition.name, inputs: isJsonObject(trusted.inputs) ? trusted.inputs : undefined, sourceHash: offered.sourceHash, teamRevision: offered.teamRevision,
-      runMode: resolveRunMode(process.env), definition, workflows: {}, base: { commit: from }, checkout: work, origin: offered.origin ?? { source: 'team' }, secrets: known, nestedIn: claim.run,
+      runMode: resolveRunMode(process.env), definition, workflows: {}, folder: trusted.folder, folders: trusted.folders, base: { commit: from }, checkout: work, origin: offered.origin ?? { source: 'team' }, secrets: known, nestedIn: claim.run,
     });
 
     if (!('data' in created)) return failed(created.error);
@@ -997,7 +998,7 @@ function providedEnv({ scope, env }: ScopedEnv): Record<string, string> {
 type Trusted =
   | { kind: 'command'; command: string; env: Record<string, string>; scope: StepScope }
   | { kind: 'prompt'; step: WorkflowStep; prompt: string; model?: string; defaultModel?: string; env: Record<string, string>; limits?: TurnLimits; scope: StepScope }
-  | { kind: 'workflow'; child: WorkflowDefinition; inputs: JsonValue; isReadOnly: boolean };
+  | { kind: 'workflow'; child: WorkflowDefinition; inputs: JsonValue; isReadOnly: boolean } & Pick<RunState, 'folder' | 'folders'>;
 
 /**
  * The team's workflows the run of `offered` runs, as this member finds them: at the team commit the offer pins when the
@@ -1046,7 +1047,7 @@ async function trustedLease(config: LocalConfig, claim: HeldAttempt): Promise<Tr
     }
   }
 
-  const { step, defaultModel, requires } = defined;
+  const { step, defaultModel, requires, around } = defined;
   const scope: StepScope = { requires, runEnvKeys: [...requiredEnvKeys([found.definitions.definition, ...Object.values(found.definitions.workflows)])] };
   const rendered = leaseEnv(step, values, run);
 
@@ -1070,7 +1071,9 @@ async function trustedLease(config: LocalConfig, claim: HeldAttempt): Promise<Tr
 
       if (!isDeepStrictEqual(inputs.inputs, lease.inputs)) return { refused: `the offer's inputs differ from what workflow "${definition.name}" renders from the offer's values for step "${lease.step}".` };
 
-      return { kind: 'workflow', child: wholeRunDefinition(step, fit.child, { defaultModel, budgetLeft: lease.budget?.tokens }), inputs: inputs.inputs, isReadOnly: step.workspace === 'read-only' };
+      const folders = await pinnedFolders(config, found.definitions, isWorkflowFile(runs) ? runs.name : around);
+
+      return { kind: 'workflow', child: wholeRunDefinition(step, fit.child, { defaultModel, budgetLeft: lease.budget?.tokens }), inputs: inputs.inputs, isReadOnly: step.workspace === 'read-only', ...folders };
     }
 
     case 'command': {
@@ -1078,7 +1081,7 @@ async function trustedLease(config: LocalConfig, claim: HeldAttempt): Promise<Tr
 
       if (step.command !== lease.command) return { refused: `the offer's command differs from the one workflow "${definition.name}" defines for it.` };
 
-      return { kind: 'command', command: step.command, env: rendered.env, scope };
+      return { kind: 'command', command: step.command, env: { ...rendered.env, ...await folderEnv(config, found.definitions, around) }, scope };
     }
 
     case 'prompt': {
@@ -1090,7 +1093,7 @@ async function trustedLease(config: LocalConfig, claim: HeldAttempt): Promise<Tr
       if (texts.prompt !== lease.prompt) return { refused: `the offer's prompt differs from what workflow "${definition.name}" renders from the offer's values.` };
 
       return {
-        kind: 'prompt', step, prompt: texts.prompt, env: rendered.env, scope,
+        kind: 'prompt', step, prompt: texts.prompt, env: { ...rendered.env, ...await folderEnv(config, found.definitions, around) }, scope,
         ...(texts.model !== undefined && texts.model !== '' && { model: texts.model }),
         // A model that rendered empty asks for the tool's default, so the defaults' model does not stand in for it.
         ...(defaultModel !== undefined && texts.model !== '' && { defaultModel }),
@@ -1104,6 +1107,36 @@ async function trustedLease(config: LocalConfig, claim: HeldAttempt): Promise<Tr
       return unhandled;
     }
   }
+}
+
+/** The folder the workflow file `name` of `definitions` is written as; none for a single file. */
+function folderOfFile({ definition, folder, folders }: Definitions, name: string): PinnedFolder | undefined {
+  return name === definition.name ? folder : folders[name];
+}
+
+/**
+ * What a step of the workflow file `around` gets to read its folder, as the owner's steps do: the folder kept in this
+ * member's data home, written there first. Nothing for a single file.
+ */
+async function folderEnv(config: LocalConfig, definitions: Definitions, around: string): Promise<Record<string, string>> {
+  const folder = folderOfFile(definitions, around);
+
+  if (folder === undefined) return {};
+  await WorkflowFolder.pin(config, folder);
+
+  return WorkflowFolder.env(config, folder.sourceHash);
+}
+
+/**
+ * The folders a nested run of the workflow file `top` reads, kept in this member's data home first: its own, and those
+ * of the workflows of `definitions` it may run by name, as a run records them.
+ */
+async function pinnedFolders(config: LocalConfig, definitions: Definitions, top: string): Promise<Pick<RunState, 'folder' | 'folders'>> {
+  const own = folderOfFile(definitions, top);
+  await Promise.all([...own ? [own] : [], ...Object.values(definitions.folders)].map((folder) => WorkflowFolder.pin(config, folder)));
+  const named = Object.entries(definitions.folders);
+
+  return { ...own && { folder: own.sourceHash }, ...named.length > 0 && { folders: Object.fromEntries(named.map(([name, folder]) => [name, folder.sourceHash])) } };
 }
 
 /**
