@@ -401,6 +401,22 @@ it("judges with agy on the gateway a model switch gave it, over the member's own
   expect(invocation.env).toMatchObject({ GEMINI_API_KEY: 'gateway-key', GOOGLE_GEMINI_BASE_URL: 'https://gateway.example.test' });
 });
 
+it('reports a gateway key file it cannot read as a failed confined run, not a thrown error', async () => {
+  root = await fs.mkdtemp(path.join(os.tmpdir(), 'teamai-judge-'));
+  const evidence = path.join(root, 'evidence');
+  await fs.mkdir(evidence);
+  await fs.writeFile(path.join(evidence, 'prompt.md'), 'AGY-KEY-FILE-PROMPT');
+  vi.stubEnv('HOME', root);
+  await fs.mkdir(path.join(root, '.teamai', 'models', 'agy-env.sh'), { recursive: true });
+  const executable = await recordingFake(root, path.join(root, 'invocation.json'), 'process.exitCode = 1;');
+
+  expect(await judge({ tool: 'agy', evidence, schema: { type: 'object' } }, { resolveTool: () => executable })).toMatchObject({
+    ok: false,
+    code: 'confined_failed',
+    message: expect.stringMatching(/^agy could not run confined: .*agy-env\.sh.* Fix that, then retry\.$/),
+  });
+});
+
 it('runs Cursor in ask mode with its sandbox on, the prompt on stdin, at best-effort and with full access', async () => {
   root = await fs.mkdtemp(path.join(os.tmpdir(), 'teamai-judge-'));
   const evidence = path.join(root, 'evidence');

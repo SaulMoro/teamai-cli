@@ -171,9 +171,17 @@ export async function runConfined(input: ConfinedInput, { resolveTool = resolveC
 
   if (!executable) return { ok: false, code: 'confined_tool_unavailable', message: `The ${input.tool} executable is not available on PATH. Install it, or use another tool or driver.` };
 
+  let machine: Pick<ConfinedRequest, 'env' | 'memberEnv' | 'home'>;
+
+  // The runtime reports its own failures; what the member's machine gives the run is read here, before it starts.
+  try {
+    machine = { env: confinedEnv(input.tool), memberEnv: memberEnv(), home: toolHome(input.tool) };
+  } catch (error) {
+    return { ok: false, code: 'confined_failed', message: `${input.tool} could not run confined: ${error instanceof Error ? error.message : String(error)}. Fix that, then retry.` };
+  }
+
   const end = await launchConfined({
-    ...input, family: familyOf(input.tool), adapter: { call: launchAdapterOf(input.tool).call, confined: profileOf(input.tool) }, executable,
-    env: confinedEnv(input.tool), memberEnv: memberEnv(), home: toolHome(input.tool),
+    ...input, family: familyOf(input.tool), adapter: { call: launchAdapterOf(input.tool).call, confined: profileOf(input.tool) }, executable, ...machine,
   }, CONFINED_DEPS);
 
   if (!end.ok) return end;
