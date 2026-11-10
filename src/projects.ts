@@ -1,6 +1,6 @@
 import path from 'node:path';
 import YAML from 'yaml';
-import { parseYaml } from './utils/yaml.js';
+import { parseYaml } from '@teamai/shared/yaml';
 import { z } from 'zod';
 import { ensureDir, writeFile } from './utils/fs.js';
 import {

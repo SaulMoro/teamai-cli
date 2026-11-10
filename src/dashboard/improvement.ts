@@ -2,7 +2,7 @@
 // teamai-reports, the team repo's skills and the KB maintenance candidates.
 import fs from 'node:fs';
 import path from 'node:path';
-import { parseYaml } from '../utils/yaml.js';
+import { parseYaml } from '@teamai/shared/yaml';
 import { z } from 'zod';
 import { BUILTIN_SKILL_NAMES, LEGACY_BUILTIN_SKILL_NAMES } from '../cli-skill-names.js';
 import { DefaultScorers } from '../default-scorers.js';

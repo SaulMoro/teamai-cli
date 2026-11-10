@@ -17,7 +17,7 @@ import {
 import { firstConflict, repeatedNames, type NamespaceCandidate } from '../namespace-resolver.js';
 import { isJsonObject, type JsonValue, type LocalConfig } from '../types.js';
 import { listDirs } from '../utils/fs.js';
-import { parseYaml } from '../utils/yaml.js';
+import { parseYaml } from '@teamai/shared/yaml';
 import { deliveredMembers } from '../workspace-children.js';
 import { FolderFiles, type FolderFile } from './folder-files.js';
 import { Resources, type ResourceLayout, type TeamItem } from './resolver.js';

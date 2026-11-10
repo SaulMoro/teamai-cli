@@ -2,7 +2,7 @@ import path from 'node:path';
 import { readFile, realpath } from 'node:fs/promises';
 import { z } from 'zod';
 import YAML from 'yaml';
-import { parseYaml } from '../utils/yaml.js';
+import { parseYaml } from '@teamai/shared/yaml';
 import { ResourceHandler } from './base.js';
 import { placedCopy } from './repo-resource.js';
 import { loadStateForScope } from '../config.js';

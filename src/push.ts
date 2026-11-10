@@ -1,6 +1,6 @@
 import { chmod, readFile, stat } from 'node:fs/promises';
 import path from 'node:path';
-import { parseYaml } from './utils/yaml.js';
+import { parseYaml } from '@teamai/shared/yaml';
 import { z } from 'zod';
 import { autoDetectInit, loadStateForScope, saveStateForScope } from './config.js';
 import { assertNotReadOnly } from './read-only.js';

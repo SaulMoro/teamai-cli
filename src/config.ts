@@ -1,5 +1,5 @@
 import YAML from 'yaml';
-import { parseYaml } from './utils/yaml.js';
+import { parseYaml } from '@teamai/shared/yaml';
 import { ZodError, z } from 'zod';
 import fs from 'node:fs';
 import path from 'node:path';

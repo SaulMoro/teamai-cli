@@ -1,6 +1,6 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import { parseYaml } from '../utils/yaml.js';
+import { parseYaml } from '@teamai/shared/yaml';
 import { loadLocalConfigForScope, readConfigFrom } from '../config.js';
 import { ATTEMPT_ENV } from '../launch-context.js';
 import { LocalConfigSchema, getDataHome, type LocalConfig } from '../types.js';

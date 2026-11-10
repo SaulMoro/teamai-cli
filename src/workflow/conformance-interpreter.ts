@@ -5,7 +5,7 @@ import path from 'node:path';
 import { z } from 'zod';
 import { resolveRunMode } from '../launch-context.js';
 import { isJsonObject, type JsonValue } from '../types.js';
-import { parseYaml } from '../utils/yaml.js';
+import { parseYaml } from '@teamai/shared/yaml';
 import { agentEvidence } from './attempt-marker.js';
 import { commandOutputs, type NextPrepare, type WorkflowClient } from './protocol.js';
 import type { WorkflowRunRecord } from './records.js';

@@ -37,7 +37,7 @@ import type { Unenforced } from './requirements.js';
 import { isFailureCode, type FailureCode } from './failure-codes.js';
 import type { DriverIdentity, RunState, RunStatus, WorkflowFailure } from './types.js';
 import { definedFields } from '../utils/defined-fields.js';
-import { parseYaml } from '../utils/yaml.js';
+import { parseYaml } from '@teamai/shared/yaml';
 import { readRegularFile, writeRegularFile } from '@teamai/shared/regular-file';
 
 function hasTeamaiCode(failure: WorkflowFailure | undefined): failure is WorkflowFailure & { code: FailureCode } {

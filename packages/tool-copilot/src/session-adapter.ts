@@ -7,7 +7,7 @@ import { AgentAdapter, ToolUnavailableError, type SessionMeta, type SessionReadR
 import { toolArgumentsFrom, type ContentBlock, type Message, type Session } from '@teamai/tool-core/sessions/ir';
 import { readJsonl, resolveRealCwd } from '@teamai/tool-core/sessions/fs';
 import { JsonValueSchema } from '@teamai/shared/json';
-import { parseYaml } from '@teamai/tool-core/yaml';
+import { parseYaml } from '@teamai/shared/yaml';
 import { log } from '@teamai/tool-core/log';
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;

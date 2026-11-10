@@ -15,7 +15,7 @@ import { writeJsonAtomic } from './utils/fs.js';
 import { getUserHome } from '@teamai/shared/home';
 import { log } from './utils/logger.js';
 import { errorOnce, warnOnce } from './utils/warn-once.js';
-import { parseYaml } from './utils/yaml.js';
+import { parseYaml } from '@teamai/shared/yaml';
 import { readRegularFile } from '@teamai/shared/regular-file';
 
 // ─── Tool instances ──────────────────────────────────────

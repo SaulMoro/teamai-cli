@@ -14,6 +14,7 @@
     "./redact": "./src/redact.ts",
     "./regular-file": "./src/regular-file.ts",
     "./timer": "./src/timer.ts",
-    "./type-of-service": "./src/type-of-service.ts"
+    "./type-of-service": "./src/type-of-service.ts",
+    "./yaml": "./src/yaml.ts"
   }
 }

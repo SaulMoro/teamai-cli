@@ -4,7 +4,7 @@ import path from 'node:path';
 import YAML from 'yaml';
 import { type JsonSyntax } from '@teamai/shared/json';
 import { parseJsonAs } from '../utils/json.js';
-import { parseYaml } from '../utils/yaml.js';
+import { parseYaml } from '@teamai/shared/yaml';
 import { z } from 'zod';
 import { parse as parseToml, type TomlTable, type TomlValue } from 'smol-toml';
 import { withoutTomlBom } from '../utils/toml.js';

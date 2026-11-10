@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import fse from 'fs-extra';
-import { parseYaml } from './yaml.js';
+import { parseYaml } from '@teamai/shared/yaml';
 import { ensureDir, expandHome, listFilesRecursive, readFileSafe } from './fs.js';
 import { normalizeRepoUrlForCompare, redactGitCredentials, remotesMatch } from './git.js';
 import { log } from './logger.js';

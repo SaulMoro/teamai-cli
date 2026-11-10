@@ -29,7 +29,7 @@ import type { StoredRelation } from '../resource-relations.js';
 import { localLinkTargets } from './markdown-links.js';
 import type { FrontmatterValue } from './frontmatter.js';
 import type { ConfidenceFactors } from '../maintenance/confidence.js';
-import { parseYaml } from './yaml.js';
+import { parseYaml } from '@teamai/shared/yaml';
 
 /**
  * After this checkout's index is rebuilt by a pull. Self mode keeps one index

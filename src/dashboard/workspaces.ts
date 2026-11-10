@@ -1,7 +1,7 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
-import { parseYaml } from '../utils/yaml.js';
+import { parseYaml } from '@teamai/shared/yaml';
 import { LocalConfigSchema, getDataHome, type LocalConfig, type DashboardEvent } from '../types.js';
 import { getUserHome } from '@teamai/shared/home';
 import { checkoutForRepoAnchor, resolveAnchors } from '../utils/git.js';

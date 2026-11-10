@@ -1,5 +1,5 @@
 import path from 'node:path';
-import { parseYaml } from './utils/yaml.js';
+import { parseYaml } from '@teamai/shared/yaml';
 import { autoDetectInit } from './config.js';
 import { saveScopeSelection } from './scope-selection.js';
 import {

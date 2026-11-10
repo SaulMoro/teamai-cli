@@ -2,7 +2,7 @@ import path from 'node:path';
 import fse from 'fs-extra';
 import { z } from 'zod';
 import YAML from 'yaml';
-import { parseYaml } from '../utils/yaml.js';
+import { parseYaml } from '@teamai/shared/yaml';
 import { ResourceHandler } from './base.js';
 import type { JsonValue, LocalConfig, McpServerDef, ResourceItem, TeamaiConfig } from '../types.js';
 import { listDirs, readFileSafe, writeFile } from '../utils/fs.js';

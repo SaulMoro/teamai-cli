@@ -16,7 +16,6 @@
     "./sessions/*": "./src/sessions/*.ts",
     "./stdout": "./src/stdout.ts",
     "./tokens": "./src/tokens.ts",
-    "./usage-limit": "./src/usage-limit.ts",
-    "./yaml": "./src/yaml.ts"
+    "./usage-limit": "./src/usage-limit.ts"
   }
 }

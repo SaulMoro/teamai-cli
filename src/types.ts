@@ -7,7 +7,7 @@ import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { getUserHome, expandHome } from '@teamai/shared/home';
 import { log } from './utils/logger.js';
-import { parseYaml } from './utils/yaml.js';
+import { parseYaml } from '@teamai/shared/yaml';
 import { type ToolId } from './tools.js';
 import { channelsOf } from './tool-registry.js';
 import type { WorkspaceChildren } from './workspace-children.js';

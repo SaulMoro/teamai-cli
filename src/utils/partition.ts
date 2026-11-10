@@ -2,7 +2,7 @@ import path from 'node:path';
 import fs from 'node:fs';
 import { createHash } from 'node:crypto';
 import YAML from 'yaml';
-import { parseYaml } from './yaml.js';
+import { parseYaml } from '@teamai/shared/yaml';
 import { z } from 'zod';
 import { getUserHome } from '@teamai/shared/home';
 import { readFileSafe, writeFileAtomic, expandHome, errnoCode } from './fs.js';

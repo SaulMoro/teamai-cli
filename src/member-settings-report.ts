@@ -4,7 +4,7 @@
  * for the selected workspace.
  */
 import path from 'node:path';
-import { parseYaml } from './utils/yaml.js';
+import { parseYaml } from '@teamai/shared/yaml';
 import { z } from 'zod';
 import { hasUserScopeInstall, loadLocalConfig, loadMemberSettings, loadTeamConfig } from './config.js';
 import { RUN_MODES, type RunMode } from './launch-context.js';

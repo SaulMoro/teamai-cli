@@ -9,7 +9,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { z } from 'zod';
 import { getKnowledgeDir, isJsonObject, JsonObjectSchema, JsonValueSchema, type JsonObject, type JsonValue, type LocalConfig } from '../types.js';
-import { parseYaml } from '../utils/yaml.js';
+import { parseYaml } from '@teamai/shared/yaml';
 import { syncScorersThenWorkflows } from '../scorers/team-sync.js';
 import { loadCachedWorkflow, loadWorkflowTree, withTeamRevision, workflowsRunBy, type SyncWorkflowResult } from '../workflow/cache.js';
 import { parseWorkflow } from '../workflow/parse.js';

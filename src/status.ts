@@ -1,5 +1,5 @@
 import path from 'node:path';
-import { parseYaml } from './utils/yaml.js';
+import { parseYaml } from '@teamai/shared/yaml';
 import { autoDetectInit, loadStateForScope } from './config.js';
 import { listCachedWorkflows, resolveStart, startingAlias } from './workflow/cache.js';
 import { summarizeWorkspaceChildren } from './workspace-children.js';

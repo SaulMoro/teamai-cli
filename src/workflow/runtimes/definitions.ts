@@ -7,7 +7,7 @@ import { isSafeNamespaceSegment } from '../../manifest-schema.js';
 import { resolveNamespacedItems, type NamespaceCandidate } from '../../namespace-resolver.js';
 import { resolveResourceNamespaces } from '../../resource-namespaces.js';
 import { getKnowledgeDir, getTeamaiHomeDir, JsonValueSchema, type LocalConfig } from '../../types.js';
-import { parseYaml } from '../../utils/yaml.js';
+import { parseYaml } from '@teamai/shared/yaml';
 import { LOCAL_DRIVER, parseDriver, type DriverName } from '../driver-name.js';
 import type { WorkflowFailure } from '../types.js';
 import { readRegularFile } from '@teamai/shared/regular-file';

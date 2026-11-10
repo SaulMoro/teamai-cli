@@ -22,7 +22,7 @@ import {
   managedMcpManifestKey,
   resolveBaseDir,
 } from './types.js';
-import { parseYaml } from './utils/yaml.js';
+import { parseYaml } from '@teamai/shared/yaml';
 import { z } from 'zod';
 import { parse as parseToml } from 'smol-toml';
 import { withoutTomlBom } from './utils/toml.js';

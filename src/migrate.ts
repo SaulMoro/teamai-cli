@@ -1,7 +1,7 @@
 import path from 'node:path';
 import fse from 'fs-extra';
 import YAML from 'yaml';
-import { parseYaml } from './utils/yaml.js';
+import { parseYaml } from '@teamai/shared/yaml';
 import { z } from 'zod';
 import { isSelfMode, LocalConfigSchema, SYNC_LOCK_FILENAME, WORKTREE_DIRNAMES, type LocalConfig } from './types.js';
 import { getRemoteUrl, resolveAnchors } from './utils/git.js';

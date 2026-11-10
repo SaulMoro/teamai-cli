@@ -1,5 +1,5 @@
 import YAML from 'yaml';
-import { parseYaml } from './utils/yaml.js';
+import { parseYaml } from '@teamai/shared/yaml';
 import path from 'node:path';
 import { z } from 'zod';
 import { toolHome } from './tool-home.js';

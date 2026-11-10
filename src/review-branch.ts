@@ -28,7 +28,7 @@ import fse from 'fs-extra';
 import { findSkippedFolders, isInSkippedFolder, skippedFolderMessage, skippedFoldersIn } from './folder-markers.js';
 import { readTeamRules } from './resources/rules.js';
 import { RECALL_RULE_NAME, resolveRecall } from './builtin-rules.js';
-import { parseYaml } from './utils/yaml.js';
+import { parseYaml } from '@teamai/shared/yaml';
 import { z } from 'zod';
 
 import { resolveConfigForDir } from './config.js';

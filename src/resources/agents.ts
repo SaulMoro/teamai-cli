@@ -44,7 +44,7 @@ import {
   ParsedFieldsSchema,
 } from './agent-format.js';
 import type { ParsedValue, ParsedFields, AgentSpec, ToolName, ParseResult, MergeConflict, MergeResult, RenderResult } from './agent-format.js';
-import { parseYaml } from '../utils/yaml.js';
+import { parseYaml } from '@teamai/shared/yaml';
 
 /**
  * Extended ResourceItem for agents — carries merged spec or skip reason

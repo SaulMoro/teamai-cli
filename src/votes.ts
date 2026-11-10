@@ -4,7 +4,7 @@ import path from 'node:path';
 
 import YAML from 'yaml';
 import { z } from 'zod';
-import { parseYaml } from './utils/yaml.js';
+import { parseYaml } from '@teamai/shared/yaml';
 
 import { UserVotesSchema, UserVotesV2Schema } from './types.js';
 import { isJsonObject, type JsonValue } from './types.js';
