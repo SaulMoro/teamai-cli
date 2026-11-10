@@ -533,6 +533,12 @@ writeFileSync(${JSON.stringify(path.join(root, 'other.json'))}, JSON.stringify(a
 
     expect(await ensureLogin('codex', { step: { run: RUN, id: 'review' }, canAsk: false })).toMatchObject({ code: 'credential_missing' });
   });
+
+  it('ends the unattended refusal with a retry command the shell reads as one step path', async () => {
+    const refused = await ensureLogin('codex', { step: { run: RUN, id: 'items[1].ask me' }, canAsk: false });
+
+    expect(refused?.message).toMatch(new RegExp(`then run: teamai workflow retry ${RUN} 'items\\[1\\]\\.ask me'$`, 'u'));
+  });
 });
 
 describe('the session store of an OpenCode prompt on a runtime that launches agents', () => {

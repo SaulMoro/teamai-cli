@@ -9,6 +9,7 @@ import { log } from '../../utils/logger.js';
 import { acquireLock, releaseLock } from '../../update.js';
 import { AttemptIdSchema, RunIdSchema, type AttemptId, type RunId } from '../store.js';
 import type { WorkflowFailure } from '../types.js';
+import { retryCommand } from './retry-command.js';
 import type { LaunchTool } from '../../tool-launch/tools.js';
 import { readRegularFile } from '@teamai/shared/regular-file';
 
@@ -277,7 +278,7 @@ async function signInHeld(tool: LoginTool, { step, canAsk }: Parameters<typeof e
 
   if (await holdsLogin(file)) return undefined;
   const why = `Step "${step.id}" signs ${TOOL_NAMES[tool]} in on the login teamai keeps apart from your daily one, and ${loginHome(tool)} has no ${TOOL_NAMES[tool]} login yet.`;
-  const retry = `teamai workflow retry ${step.run} ${step.id}`;
+  const retry = retryCommand({ run: step.run, step: step.id });
 
   if (!canAsk) {
     return { code: 'credential_missing', message: `${why} An unattended run does not sign in for you. Create it once with ${loginCommand(tool)}, then run: ${retry}` };
