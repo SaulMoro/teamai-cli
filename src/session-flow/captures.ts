@@ -4,6 +4,7 @@
  */
 import { randomUUID } from 'node:crypto';
 import fs from 'node:fs/promises';
+import { readRegularFile } from '@teamai/shared/regular-file';
 import path from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
 import { z } from 'zod';
@@ -198,7 +199,7 @@ async function atStop(config: LocalConfig, tool: string, payload: HookStdin): Pr
 
 /** The end record of one session, or undefined when it has none or it does not parse. */
 async function endOf(config: LocalConfig, platform: string, sessionId: string): Promise<SessionEnd | undefined> {
-  const text = await fs.readFile(path.join(sessionDir(config, platform, sessionId), END_FILE), 'utf8').catch(() => undefined);
+  const text = await readRegularFile(path.join(sessionDir(config, platform, sessionId), END_FILE), 'utf8').catch(() => undefined);
 
   if (text === undefined) return undefined;
 
@@ -237,7 +238,7 @@ async function rewrite(config: LocalConfig, platform: string, sessionId: string,
   try {
     for (const name of (await fs.readdir(dir)).filter((fileName) => fileName.endsWith('.json') && pick(fileName))) {
       const file = path.join(dir, name);
-      const parsed = SessionCaptureSchema.safeParse(JSON.parse(await fs.readFile(file, 'utf8')));
+      const parsed = SessionCaptureSchema.safeParse(JSON.parse(await readRegularFile(file, 'utf8')));
 
       if (!parsed.success) continue;
       await fs.writeFile(`${file}.tmp`, `${JSON.stringify(change(parsed.data), null, 2)}\n`, { mode: 0o600 });
@@ -342,7 +343,7 @@ async function read(config: LocalConfig, platform: string, sessionId: string): P
   const captures: SessionCapture[] = [];
 
   for (const file of files.filter((name) => name.endsWith('.json'))) {
-    const text = await fs.readFile(path.join(dir, file), 'utf8');
+    const text = await readRegularFile(path.join(dir, file), 'utf8');
 
     try {
       const parsed = SessionCaptureSchema.safeParse(JSON.parse(text));

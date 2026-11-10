@@ -1,5 +1,6 @@
 /** Read GitHub Copilot CLI's append-only session event log without invoking the CLI. */
 import * as fs from 'node:fs';
+import { readRegularFileSync } from '@teamai/shared/regular-file';
 import * as path from 'node:path';
 import { z } from 'zod';
 import { AgentAdapter, ToolUnavailableError, type SessionMeta, type SessionReadRef } from '@teamai/tool-core/sessions/base';
@@ -50,7 +51,7 @@ interface ParsedCopilot {
 
 function workspaceCwd(filePath: string): string {
   try {
-    const stored = parseYaml(fs.readFileSync(path.join(path.dirname(filePath), 'workspace.yaml'), 'utf8'));
+    const stored = parseYaml(readRegularFileSync(path.join(path.dirname(filePath), 'workspace.yaml'), 'utf8'));
     const parsed = z.object({ cwd: z.string() }).safeParse(stored);
 
     return parsed.success ? parsed.data.cwd : '';

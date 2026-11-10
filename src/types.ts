@@ -2,6 +2,7 @@ import { z } from 'zod';
 import type { TokenSnapshotScope, TokenUsage } from '@teamai/tool-core/tokens';
 import { isJsonObject, JsonValueSchema, type JsonObject } from '@teamai/tool-core/json';
 import fs from 'node:fs';
+import { readRegularFileSync } from '@teamai/shared/regular-file';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { getUserHome, expandHome } from './utils/home.js';
@@ -2996,7 +2997,7 @@ function readTextAt(at: HomePaths, file: string): string | null {
   if (at.readTextNow !== undefined) return at.readTextNow(file);
 
   try {
-    return fs.readFileSync(file, 'utf8');
+    return readRegularFileSync(file, 'utf8');
   } catch {
     return null;
   }

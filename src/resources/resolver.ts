@@ -1,4 +1,5 @@
 import fs from 'node:fs/promises';
+import { readRegularFile } from '@teamai/shared/regular-file';
 import path from 'node:path';
 import { FOLDER_MARKERS, holdsMarker, unreadMarker } from '../folder-markers.js';
 import { isSafeNamespaceSegment } from '../manifest-schema.js';
@@ -236,7 +237,7 @@ async function entryItems<TEntry>(entryList: NonNullable<ResourceLayout<TEntry>[
   let content: string;
 
   try {
-    content = await fs.readFile(full, 'utf8');
+    content = await readRegularFile(full, 'utf8');
   } catch (error) {
     return { items: [], plain: [], diagnostics: [{ kind: 'invalid', path: relative, message: `${relative} cannot be read: ${error instanceof Error ? error.message : String(error)}` }] };
   }
@@ -390,7 +391,7 @@ function readShipped<TEntry>(layout: ResourceLayout<TEntry>, root: string): Prom
       // teamai ships every default as a file or a folder of its own.
       if (source.kind === 'entry') continue;
       const relativePath = path.relative(root, definition).split(path.sep).join('/');
-      const file: ShippedFile = { relativePath, content: await fs.readFile(definition, 'utf8') };
+      const file: ShippedFile = { relativePath, content: await readRegularFile(definition, 'utf8') };
       found.push({ name, source, file: source.kind === 'folder' ? { ...file, folder: await FolderFiles.read(source.full) } : file });
     }
 

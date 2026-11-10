@@ -129,7 +129,7 @@ async function pin(config: LocalConfig, { sourceHash, files }: { sourceHash: str
     for (const file of files) {
       const full = path.join(staging, ...file.path.split('/'));
       await fs.mkdir(path.dirname(full), { recursive: true });
-      await fs.writeFile(full, file.content, { mode: file.executable ? 0o755 : 0o644 });
+      await fs.writeFile(full, file.content, { mode: file.executable ? 0o755 : 0o644, flag: 'wx' });
     }
 
     await fs.mkdir(staging, { recursive: true });
