@@ -1663,7 +1663,7 @@ teamai 先打开外层，再打开内层。它先停止并关闭内层；内层�
 
 沙箱的提供方必须提供这次尝试的套接字：`docker`、`podman`、`sbx` 或 `bwrap`。
 
-内层的 `open` 带有 `outer`，即同一次尝试中外层的句柄，原样传递，让内层能连到外层。外层的 `open` 在 `view.toolHome` 中带上这次尝试的工具主目录，并在 `unset` 中带上提示不能拿到的变量名；重启之后，外层的 `reattach` 会再次带上提示的 `credentials`（没有时为 `{}`）和 `unset`，因为外层只把它们保存在内存里。
+[协议](runtime-protocol.md#协议)说明内层和外层的请求各带什么。
 
 ### 在其他成员的机器上运行步骤（`fleet`）
 
@@ -1749,7 +1749,7 @@ teamai workflow resume --next --pool build --driver teamai-sandbox  # 在它的�
 teamai workflow resume --next --pool build --driver teamai-t3       # 提示词步骤作为 T3 线程
 ```
 
-只有替你启动成员这件事因运行时而异：[`wake`](#在其他成员的机器上运行步骤fleet)，通过 T3 或 Paseo。
+只有替你启动成员这件事因运行时而异：`wake`，通过 [T3](runtime-t3.md#在关联的机器上唤醒-fleet-成员) 或 [Paseo](runtime-paseo.md#在其他-daemon-上唤醒-fleet-成员)。
 
 **发布和 fleet。** 两者都写入 `teamai-reports`；在循环里运行 `--next --pool` 的 CI 任务就是那个池的成员：
 
@@ -1758,7 +1758,7 @@ teamai workflow resume --next --pool build --driver teamai-t3       # 提示词�
 | `teamai workflow publish <run>` | `teamai workflow resume --next` | 认领它的安装 | 在这里开始，在 CI 里完成 |
 | 带 `use: fleet` 的定义 | `teamai workflow resume --next --pool` | 你；只有你移动工作流的分支 | 把步骤分散到多台机器 |
 
-**哪些步骤会交出去。** 由四件事决定：运行使用的定义、fleet 条目的 `can` 承诺什么、步骤的 `requires` 和 `strict`，以及总是留在本机的步骤（host 位置的步骤）。需要人的步骤也留在这里：fleet 不提供 `hitl`。要让某个步骤留在这台机器上，给它 [`requires.host`](#要求和限制)：
+**哪些步骤会交出去。** 除了 host 槽位的步骤，需要人的步骤也留在这里：fleet 不提供 `hitl`。要让其他步骤留在这台机器上，给它 [`requires.host`](#要求和限制)：
 
 ```yaml
 # workflows/test-then-deploy.yaml
@@ -1795,16 +1795,16 @@ runtimes:
 | 步骤 | 去向 |
 | --- | --- |
 | `command: npm test` | 池 `default` |
-| `requires: { labels: [computer-use] }` | 池 `e2e`；只有 `workflows.labels`（或在它 `--driver` 中运行该步骤的运行时的 `labels`）列出 `computer-use` 的成员才接 |
+| `requires: { labels: [computer-use] }` | 池 `e2e`，由标签列出 `computer-use` 的成员接 |
 | `interactive: true` | `tools`，在这里 |
 
 成员的标签是它的承诺：teamai 不检查那台机器是否真有显示器或 GPU。
 
-**并行步骤。** 每个就绪的步骤和每个 `for_each` 条目都是独立的尝试。20 个条目、`max_parallel: 10` 时，一次交出十个，三个成员每次调用各接一个，分担它们。对整个交出的 `workflow:` 步骤做 `for_each`，每个条目交出一整条流水线。
+**并行步骤。** `for_each` 有 20 个条目、`max_parallel: 10` 时，一次交出十个尝试，三个成员每次调用各接一个，分担它们。
 
 **预算。** 成员花的是自己的账号。它报告的 token 随工作一起回来，计入这里步骤外层的预算。整个交出的 `workflow:` 步骤带着提供时那些预算剩下的额度，成员在那里停下它的步骤。
 
-**信任。** 成员的可信程度和任何能推送到业务仓库及 `teamai-reports` 的人一样：它推送的内容就是步骤的工作，你的驱动把它快进合并到步骤的位置，你的评分器像评判在这里完成的工作一样评判它。`wake` 只指定能到达你信任、可以运行池中步骤的机器的运行时。
+**信任。** 成员的可信程度和任何能推送到业务仓库及 `teamai-reports` 的人一样：它推送的内容就是步骤的工作，你的驱动把它快进合并到步骤的位置，你的评分器像评判在这里完成的工作一样评判它。给 `wake` 指定的运行时，只应能到达你放心交给池中步骤的机器。
 
 ### 步骤运行时的 Codex 登录
 
@@ -1880,7 +1880,7 @@ teamai 在运行开始或继续时读取每个变量一次。未设置的变量�
 | | 任何文件：运行的记录、`runtime.json`、日志。工具打印出的值在 teamai 保存的内容里会被遮盖 |
 | 这个运行时上的评审，只限它的工具在本机受限运行时读取的名字：Claude 评审得到 `ANTHROPIC_API_KEY` 和 `ANTHROPIC_BASE_URL`，任何评审都得到 `HTTPS_PROXY`、`HTTP_PROXY`、`NO_PROXY`、`SSL_CERT_FILE` 和 `NODE_EXTRA_CA_CERTS` | 评审，任何其他名字：Claude 评审永远得不到 `OPENAI_API_KEY` |
 
-只有提供 `can.env` 的运行时接受凭据，因为只有它决定每个进程的环境。`local` 不接受：你的步骤本来就在你的环境里运行。两种情况都会在启动时被拒绝为 `bad_option`。
+只有提供 `can.env` 的运行时接受凭据，因为只有它决定每个进程的环境。`tools` 运行时不接受：你的步骤本来就在你的环境里运行。两种情况都会在启动时被拒绝为 `bad_option`。
 
 团队运行时是队友推送的代码，所以只有在这台机器上有人接受过的修订才会运行。它目录下任何文件的改动都会产生新的修订。有人值守的运行在第一次启动前会询问：
 
@@ -1943,7 +1943,7 @@ $ teamai workflow resume r48201aa --driver local
 
 ### 工具达到用量上限时
 
-teamai 自己启动的工具（在 `local` 上，或通过运行时的 `exec`）达到用量上限时，teamai 从 Claude、Codex 或 OpenCode 自己的错误中识别额度上限，并保留原文，包括重置时间。模型 API 返回的速率限制，例如 Claude 的 `API Error: Request rejected (429)`，也算一次。answer 步骤的调用也一样，它用 `ai.tool` 指定的工具。[自己启动智能体的运行时](runtime-protocol.md#自己启动智能体的运行时)自己以 `usage_limited` 结束这样的提示。
+teamai 自己启动的工具（在 `tools` 运行时上，或通过运行时的 `exec`）达到用量上限时，teamai 从 Claude、Codex 或 OpenCode 自己的错误中识别额度上限，并保留原文，包括重置时间。模型 API 返回的速率限制，例如 Claude 的 `API Error: Request rejected (429)`，也算一次。answer 步骤的调用也一样，它用 `ai.tool` 指定的工具。[自己启动智能体的运行时](runtime-protocol.md#自己启动智能体的运行时)自己以 `usage_limited` 结束这样的提示。
 
 本地驱动不会让这样的步骤失败。它交还该步骤，在额度重置前不再在驱动的任何运行时上用这个工具启动步骤；重置后在同一个工作区里再运行该步骤，工具停止前在那里做的改动都还在。用其他工具的步骤照常运行，有自己 home 的实例有自己的额度。fleet 成员也是如此，它用自己的账号登录：它遇到的额度只在 fleet 上挡住该工具，这期间本机的运行时可以运行该步骤。剩下的步骤只被额度挡住时，驱动等待重置，无人值守时最多等 6 小时。超过这个时间，或重置在它之后，驱动的 fleet 条目可以接手该步骤；否则运行会在 teamai-reports 上交出，就像只有人能处理的步骤那样。在终端里，驱动会改为询问：
 

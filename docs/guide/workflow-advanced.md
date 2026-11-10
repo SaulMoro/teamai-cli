@@ -1669,7 +1669,7 @@ A runtime takes part only when it supports it. Of the runtimes teamai ships, the
 
 The sandbox's provider must serve the attempt's socket: `docker`, `podman`, `sbx` or `bwrap`.
 
-The inner's `open` carries `outer`, the outer's handle for the same attempt, unchanged, so it can reach the outer. The outer's `open` carries the attempt's tool home in `view.toolHome` and the names the prompt goes without in `unset`; after a restart, the outer's `reattach` carries the prompt's `credentials` (`{}` when it had none) and `unset` again, since it keeps them only in memory.
+[The runtime protocol](runtime-protocol.md#the-protocol) says what the inner's and the outer's requests carry.
 
 ### Run steps on other members' machines (`fleet`)
 
@@ -1755,7 +1755,7 @@ teamai workflow resume --next --pool build --driver teamai-sandbox  # in its san
 teamai workflow resume --next --pool build --driver teamai-t3       # prompt steps as T3 threads
 ```
 
-Only starting a member for you is per runtime: [`wake`](#run-steps-on-other-members-machines-fleet), through T3 or Paseo.
+Only starting a member for you is per runtime: `wake`, through [T3](runtime-t3.md#wake-fleet-members-on-linked-machines) or [Paseo](runtime-paseo.md#wake-fleet-members-on-other-daemons).
 
 **Publish and the fleet.** Both write to `teamai-reports`, and a CI job running `--next --pool` in a loop is a member of that pool:
 
@@ -1764,7 +1764,7 @@ Only starting a member for you is per runtime: [`wake`](#run-steps-on-other-memb
 | `teamai workflow publish <run>` | `teamai workflow resume --next` | the install that claims it | start here, finish in CI |
 | a definition with `use: fleet` | `teamai workflow resume --next --pool` | you; only you move the workflow's branches | spread steps over machines |
 
-**Which steps go out.** Four things decide: the definition the run uses, what the fleet entry's `can` promises, the step's `requires` and `strict`, and what always stays on this machine (the host slot's steps). A step that needs a person stays here too: the fleet offers no `hitl`. To keep a step on this machine, give it [`requires.host`](#requirements-and-limits):
+**Which steps go out.** Beside the host slot's steps, a step that needs a person stays here: the fleet offers no `hitl`. To keep any other step on this machine, give it [`requires.host`](#requirements-and-limits):
 
 ```yaml
 # workflows/test-then-deploy.yaml
@@ -1801,12 +1801,12 @@ runtimes:
 | Step | Goes to |
 | --- | --- |
 | `command: npm test` | pool `default` |
-| `requires: { labels: [computer-use] }` | pool `e2e`; a member takes it only when `computer-use` is among its `workflows.labels`, or the `labels` of the runtime of its `--driver` that runs the step |
+| `requires: { labels: [computer-use] }` | pool `e2e`, for a member whose labels list `computer-use` |
 | `interactive: true` | `tools`, here |
 
 A member's label is its promise: teamai does not check that the machine has a display or a GPU.
 
-**Parallel steps.** Each ready step and each `for_each` item is an attempt of its own. With 20 items and `max_parallel: 10`, ten go out at once, and three members share them as each takes one per call. A `for_each` over a `workflow:` step that goes out whole sends one whole pipeline per item.
+**Parallel steps.** With a `for_each` of 20 items and `max_parallel: 10`, ten attempts go out at once, and three members share them as each takes one per call.
 
 **Budgets.** A member spends its own account. The tokens it reports come back with its work and count against the budgets around the step here. A whole `workflow:` step carries what those budgets had left when it was offered, and the member stops its steps there.
 
@@ -1886,7 +1886,7 @@ Where the values go:
 | | Any file: the run's records, `runtime.json`, logs. A value the tool prints is masked in what teamai keeps |
 | A judge on that runtime, for the names a confined run of its tool reads here: `ANTHROPIC_API_KEY` and `ANTHROPIC_BASE_URL` for a Claude judge, and for any judge `HTTPS_PROXY`, `HTTP_PROXY`, `NO_PROXY`, `SSL_CERT_FILE` and `NODE_EXTRA_CA_CERTS` | A judge, for any other name: a Claude judge never gets `OPENAI_API_KEY` |
 
-Only a runtime that offers `can.env` takes credentials, since it alone decides each process's environment. `local` takes none: your steps already run in your environment. Both are refused with `bad_option` at start.
+Only a runtime that offers `can.env` takes credentials, since it alone decides each process's environment. The `tools` runtime takes none: your steps already run in your environment. Both are refused with `bad_option` at start.
 
 A team runtime is code a teammate pushed, so it runs only at a revision someone accepted on this machine. Any change to a file under its directory makes a new revision. An attended run asks before the first spawn:
 
@@ -1949,7 +1949,7 @@ When that runtime cannot confirm the stop, the step fails `runtime_lost`, names 
 
 ### When a tool hits its usage limit
 
-When a tool teamai launches itself, on `local` or through a runtime's `exec`, hits its usage limit, teamai reads the limit in Claude's, Codex's or OpenCode's own error and keeps its text, reset time included. A rate limit the model's API answered, such as Claude's `API Error: Request rejected (429)`, counts as one too. So does an answer step's call, on the tool `ai.tool` names. A [runtime that launches agents its own way](runtime-protocol.md#a-runtime-that-launches-agents-its-own-way) ends such a prompt `usage_limited` itself.
+When a tool teamai launches itself, on the `tools` runtime or through a runtime's `exec`, hits its usage limit, teamai reads the limit in Claude's, Codex's or OpenCode's own error and keeps its text, reset time included. A rate limit the model's API answered, such as Claude's `API Error: Request rejected (429)`, counts as one too. So does an answer step's call, on the tool `ai.tool` names. A [runtime that launches agents its own way](runtime-protocol.md#a-runtime-that-launches-agents-its-own-way) ends such a prompt `usage_limited` itself.
 
 The local driver does not fail such a step. It hands the step back, and launches nothing more on that tool, on any runtime of the driver, until the limit resets; then it runs the step again, in the same workspace, with what the tool did there before it stopped. Steps on other tools go on, and an instance with a home of its own has a limit of its own. So does a fleet member, which signs in with its own account: a limit it meets holds that tool on the fleet only, and a runtime here may run the step meanwhile. Once only the limit holds the steps left, the driver waits for the reset, at most 6 hours when nobody attends. Past that, or for a reset after it, a fleet entry of the driver may take the step; otherwise the run is offered on teamai-reports, as for a step only a person can take. At a terminal, the driver asks instead:
 

@@ -161,7 +161,7 @@ What a **step runtime** answers at `init`: what it can do for a step (`can`), th
 _Avoid_: bare offer where an **offer** to other installs could be meant, capabilities (a **capability** is what an agent can do)
 
 **Host slot**:
-The **step runtime** in teamai's process that every **driver definition** keeps without listing it, recorded as `host`. It runs teamai's own command steps, an `answer:` step, `deliver: publish`, and command steps when no runtime of the definition runs commands. It launches no prompt step's tool.
+The **step runtime** in teamai's process that every **driver definition** keeps without listing it, recorded as `host`. It runs teamai's own command steps, a command step with `requires.host`, an `answer:` step, `deliver: publish`, and command steps when no runtime of the definition runs commands. It launches no prompt step's tool.
 _Avoid_: bare host where a **session host** or a **repo provider** could be meant
 
 **`tools` runtime**:

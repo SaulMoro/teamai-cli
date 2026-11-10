@@ -66,7 +66,7 @@ teamai 严格读取每个回复，包括 `init` 的回复：它不认识的键�
 ⚠ Runtime sandbox of driver teamai-sandbox cannot run claude now, so steps on claude run on runtime tools: sandbox: claude is not signed in in the sandbox. Run sbx run claude <dir>, then /login.
 ```
 
-驱动某个应用、而该应用有自己默认工具的运行时，用 `can.default_tool` 报告它，取值是它的 `can.tools` 之一。没有指定工具的提示词步骤依次取第一个已设置的：步骤的 `tool:`、`--tools <agent>=`、`workflows.tools.<agent>`、`--tools default=`、定义的 `tool`、运行时的 `can.default_tool`，然后是你自己的默认值：`TEAMAI_AI_TOOL`、`workflows.tools.default`、`ai.tool`。因此不指定工具的 `--driver t3` 会像你的 T3 一样运行，而 `local` 上仍由 `ai.tool` 选择工具。这些都没有设置时，步骤以 `tool_unconfigured` 失败；teamai 从不退回到它找到的第一个已安装工具：
+驱动某个应用、而该应用有自己默认工具的运行时，用 `can.default_tool` 报告它，取值是它的 `can.tools` 之一。没有指定工具的提示词步骤依次取第一个已设置的：步骤的 `tool:`、`--tools <agent>=`、`workflows.tools.<agent>`、`--tools default=`、定义的 `tool`、运行时的 `can.default_tool`，然后是你自己的默认值：`TEAMAI_AI_TOOL`、`workflows.tools.default`、`ai.tool`。因此不指定工具的 `--driver t3` 会像你的 T3 一样运行，而 `tools` 运行时上仍由 `ai.tool` 选择工具。这些都没有设置时，步骤以 `tool_unconfigured` 失败；teamai 从不退回到它找到的第一个已安装工具：
 
 ```text
 ← {"type":"init","ok":true,"prompt":true,"can":{"tools":["claude","codex"],"default_tool":"claude"}}
@@ -81,7 +81,7 @@ $ teamai workflow start review --driver app --tools default=codex         # --to
 → {"type":"init","protocol":1,"mode":"unattended","options":{"state":"/var/tmp/toy-state"},"credentials":{"env":["CLAUDE_CODE_OAUTH_TOKEN"],"logins":["codex"]}}
 ```
 
-如果你的运行时的提供方自己保存某个工具的登录，比如已登录 Codex 的沙箱，就在 `can` 旁边回复 `"ownLogins":["codex"]`。teamai 就不会把这份登录复制进本次尝试的工具 home，也不会发送它在成员环境里按名字找到的该工具登录变量，比如 `OPENAI_API_KEY`，或成员自己的配置在 `workflows.drivers.<name>.runtimes.<runtime>.credentials` 下声明的该工具登录变量。驱动定义声明的变量照常发送。
+如果你的运行时的提供方自己保存某个工具的登录，比如已登录 Codex 的沙箱，就在 `can` 旁边回复 `"ownLogins":["codex"]`。teamai 就不会把这份登录复制进本次尝试的工具主目录，也不会发送它在成员环境里按名字找到的该工具登录变量，比如 `OPENAI_API_KEY`，或成员自己的配置在 `workflows.drivers.<name>.runtimes.<runtime>.credentials` 下声明的该工具登录变量。驱动定义声明的变量照常发送。
 
 `init` 还会给出运行所在的检出目录 `"checkout":"/abs/path"`，teamai 也在该目录启动你的运行时。
 
@@ -110,7 +110,7 @@ $ teamai workflow start review --driver app --tools default=codex         # --to
 
 只把它们设置到进程的环境里，永远不要写到磁盘或日志里。重启后的 teamai 会随它重新发送的操作再次发送它们，所以你的运行时什么都不用保存。
 
-工作流的 `setup` 也在你的运行时上、步骤的位置里运行，先于步骤：一次 shell 的 `exec`，只带 setup 自己的键和 `"credentials":{}`，然后一次 `collect`。之后 teamai 在宿主机上检查 setup 留下的内容，和在 `local` 上一样，所以位置的副本会在取回后被检查。两者只打开一次位置，并且每次 `open` 都带上步骤的 `tool`：
+工作流的 `setup` 也在你的运行时上、步骤的位置里运行，先于步骤：一次 shell 的 `exec`，只带 setup 自己的键和 `"credentials":{}`，然后一次 `collect`。之后 teamai 在宿主机上检查 setup 留下的内容，和本机上的步骤一样，所以位置的副本会在取回后被检查。两者只打开一次位置，并且每次 `open` 都带上步骤的 `tool`：
 
 ```text
 → {"type":"open","op":"op-5d1e…","run":"r…","attempt":"a…","tool":"claude","view":{…},"credentials":{}}
@@ -122,6 +122,8 @@ $ teamai workflow start review --driver app --tools default=codex         # --to
 其他请求是 `cancel`、`collect`、`reattach` 和 `close`；`init` 回答了 `"wake":true` 的运行时还会收到 `wake`：它用请求的 `message` 在它能到达的另一台机器上启动一个 fleet 成员，以带 `where` 的 `woken` 回答，之后不再跟踪它启动的东西。在 `close` 之前，运行时对重复的 `op` 给出同样的结果。它保存 exec 打印的内容和退出方式，以及 prompt 的 `finished` 事件（包括 `resumed`），这样重启后的 teamai 可以用 `reattach` 读取。对已经结束的操作发出的 `cancel`，再次给出那个结束结果，不停止任何东西；只有 `cancel_failed` 会被替换（见下文）。teamai 收到它已不再等待的操作的结束结果时，会记录一条带计数的警告。运行时不接受的选项会让 `init` 失败为 `bad_option`，并给出那个键。
 
 对已经关闭过的句柄再次发来的 `close`，回答 `closed`。teamai 删除某次运行的克隆或团队目录后，会再关闭一次你的运行时为这次运行最后关闭的位置，这样你的运行时能在 `close` 时看到那个目录已经不在，并删除它为该目录添加的东西。
+
+在[通过另一个运行时运行](workflow-advanced.md#通过另一个运行时运行)的条目中，内层的 `open` 带有 `outer`，即同一次尝试中外层的句柄，原样传递，让内层能连到外层。外层的 `open` 在 `view.toolHome` 中带上这次尝试的工具主目录，并在 `unset` 中带上提示不能拿到的变量名；重启之后，外层的 `reattach` 会再次带上提示的 `credentials`（没有时为 `{}`）和 `unset`，因为外层只把它们保存在内存里。
 
 无法结束某个位置的运行时，用原因回答 `close`。teamai 随后把在那里运行的东西视为仍在运行：这次尝试继续持有登录，运行详情在步骤下以 *未关闭* 显示这个失败：
 
@@ -238,7 +240,7 @@ teamai 随后把每个提示步骤作为一次 `prompt` 发送。`lease.prompt` 
 | `continue` | 这个提示所延续的先前提示的对话，以 `handle` 和 `op` 给出，在你的 `init` 回答了 `"conversations":true` 时才有。你仍然持有它、且工具和工作目录相同时延续它，并回答 `"resumed":true`；否则开始新的对话，并为这个 `op` 发一条 `notice` 说明原因 |
 | `limits` | 步骤的 token `budget`、`timeoutMs` 和 `idleMs`，在你自己启动的进程上运行工具时据此停下它。做不到的就忽略：提示结束后 teamai 仍会检查预算 |
 
-`init` 的另外两个回答会改变 teamai 对你的提示所做的事。`"conversations":true` 表示提示的对话在它的位置里比提示本身活得更久：之后的步骤延续它时，teamai 会让这个位置保持打开，并给那个步骤发送 `continue`。没有它时，每个提示都开始新的对话。`"toolHome":true` 表示你在这次尝试的工具主目录（`open.view.toolHome`）里运行每个工具，就像执行工具命令的运行时那样：teamai 准备这个目录、把登录复制进去，并从那里读取会话。没有它时，你的工具把会话保存在 `local` 保存的位置。
+`init` 的另外两个回答会改变 teamai 对你的提示所做的事。`"conversations":true` 表示提示的对话在它的位置里比提示本身活得更久：之后的步骤延续它时，teamai 会让这个位置保持打开，并给那个步骤发送 `continue`。没有它时，每个提示都开始新的对话。`"toolHome":true` 表示你在这次尝试的工具主目录（`open.view.toolHome`）里运行每个工具，就像执行工具命令的运行时那样：teamai 准备这个目录、把登录复制进去，并从那里读取会话。没有它时，你的工具把会话保存在 `tools` 运行时保存的位置。
 
 `env` 包含尝试的标记，例如 `TEAMAI_WORKFLOW_ATTEMPT` 和 `TEAMAI_RUN_DIR`，以及步骤 `requires.env` 的键的值。`provided` 列出这些键。如果你的运行时的工具以明文保存 env，例如它保存的智能体配置，就丢掉这些键，保留标记：
 

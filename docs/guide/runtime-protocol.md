@@ -66,7 +66,7 @@ When a later runtime of the definition can run the tool, such as `tools`, the st
 ⚠ Runtime sandbox of driver teamai-sandbox cannot run claude now, so steps on claude run on runtime tools: sandbox: claude is not signed in in the sandbox. Run sbx run claude <dir>, then /login.
 ```
 
-A runtime that drives an app with a default tool of its own reports it as `can.default_tool`, one of its `can.tools`. A prompt step that names no tool runs on the first of: the step's `tool:`, `--tools <agent>=`, `workflows.tools.<agent>`, `--tools default=`, the definition's `tool`, the runtime's `can.default_tool`, then your own default: `TEAMAI_AI_TOOL`, `workflows.tools.default`, `ai.tool`. So `--driver t3` with no tool named runs as your T3 does, and `ai.tool` still picks the tool on `local`. With none of them set, the step fails `tool_unconfigured`; teamai never falls back to the first tool it finds installed:
+A runtime that drives an app with a default tool of its own reports it as `can.default_tool`, one of its `can.tools`. A prompt step that names no tool runs on the first of: the step's `tool:`, `--tools <agent>=`, `workflows.tools.<agent>`, `--tools default=`, the definition's `tool`, the runtime's `can.default_tool`, then your own default: `TEAMAI_AI_TOOL`, `workflows.tools.default`, `ai.tool`. So `--driver t3` with no tool named runs as your T3 does, and `ai.tool` still picks the tool on the `tools` runtime. With none of them set, the step fails `tool_unconfigured`; teamai never falls back to the first tool it finds installed:
 
 ```text
 ← {"type":"init","ok":true,"prompt":true,"can":{"tools":["claude","codex"],"default_tool":"claude"}}
@@ -110,7 +110,7 @@ The values come in the requests, on `open` and on each `exec` or `prompt` that g
 
 Set them over the process's environment only, and never write them to disk or to a log. A teamai that restarts sends them again with the operation it resends, so your runtime needs to keep none.
 
-A workflow's `setup` runs in the step's place on your runtime too, before the step: one `exec` of the shell with setup's own keys and `"credentials":{}`, then a `collect`. teamai then checks on the host what setup left, as on `local`, so a copy of the place is checked once it is back. The place is opened once for both, and every `open` names the step's `tool`:
+A workflow's `setup` runs in the step's place on your runtime too, before the step: one `exec` of the shell with setup's own keys and `"credentials":{}`, then a `collect`. teamai then checks on the host what setup left, as it does for a step on this machine, so a copy of the place is checked once it is back. The place is opened once for both, and every `open` names the step's `tool`:
 
 ```text
 → {"type":"open","op":"op-5d1e…","run":"r…","attempt":"a…","tool":"claude","view":{…},"credentials":{}}
@@ -122,6 +122,8 @@ A workflow's `setup` runs in the step's place on your runtime too, before the st
 The other requests are `cancel`, `collect`, `reattach` and `close`, and `wake` for a runtime whose `init` answered `"wake":true`: it starts a fleet member on another machine it reaches with the request's `message`, answers `woken` with `where`, and never follows what it started. A runtime answers a repeated `op` with the same result until `close`. It keeps what an exec printed and how it exited, and a prompt's `finished` event, `resumed` included, so a restarted teamai can read them with `reattach`. A `cancel` of an operation that already ended answers that end again and stops nothing; only `cancel_failed` is replaced (below). teamai logs a warning, with a count, for an end of an operation it no longer waits on. An option it does not take fails `init` with `bad_option` and the key.
 
 Answer `closed` to a `close` of a handle you already closed. Once teamai removes a clone or a team folder of a run, it closes again the last place your runtime closed for that run, so your runtime can see at a `close` that the folder is gone, and remove what it added for it.
+
+In an entry that runs [one runtime through another](workflow-advanced.md#a-runtime-through-another), the inner's `open` carries `outer`, the outer's handle for the same attempt, unchanged, so it can reach the outer. The outer's `open` carries the attempt's tool home in `view.toolHome` and the names the prompt goes without in `unset`; after a restart, the outer's `reattach` carries the prompt's `credentials` (`{}` when it had none) and `unset` again, since it keeps them only in memory.
 
 A runtime that cannot end a place answers `close` with why. teamai then treats what ran there as still running: the attempt keeps its login, and the run's details show the failure under the step as *Not closed*:
 
@@ -238,7 +240,7 @@ teamai then sends each prompt step as one `prompt`. `lease.prompt` is the whole 
 | `continue` | The conversation of an earlier prompt this one continues, as `handle` and `op`, when your `init` answered `"conversations":true`. Continue it when you still hold it, on the same tool and working directory, and say `"resumed":true`; otherwise start a new one and send one `notice` for this `op` saying why |
 | `limits` | The step's token `budget`, `timeoutMs` and `idleMs`, to stop the tool at when you run it on a process you start. Ignore what you cannot keep: teamai still checks the budget once the prompt ends |
 
-Two more answers of `init` change what teamai does for your prompts. `"conversations":true` says a prompt's conversation outlives the prompt in its place: teamai then keeps the place open while a later step continues it, and sends that step `continue`. Without it, every prompt starts a new conversation. `"toolHome":true` says you run each tool in the attempt's tool home (`open.view.toolHome`), as a runtime that execs the tool does: teamai seeds that home, copies a login into it and reads the sessions there. Without it, your tool keeps its sessions where `local` does.
+Two more answers of `init` change what teamai does for your prompts. `"conversations":true` says a prompt's conversation outlives the prompt in its place: teamai then keeps the place open while a later step continues it, and sends that step `continue`. Without it, every prompt starts a new conversation. `"toolHome":true` says you run each tool in the attempt's tool home (`open.view.toolHome`), as a runtime that execs the tool does: teamai seeds that home, copies a login into it and reads the sessions there. Without it, your tool keeps its sessions where the `tools` runtime's does.
 
 `env` holds the attempt's markers, such as `TEAMAI_WORKFLOW_ATTEMPT` and `TEAMAI_RUN_DIR`, and the values of the keys the step `requires.env`. `provided` names those keys. A runtime whose tool keeps env in plain text, such as an agent config it saves, drops them and keeps the markers:
 
