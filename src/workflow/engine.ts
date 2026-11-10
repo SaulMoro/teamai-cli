@@ -1781,13 +1781,7 @@ function offerTerms(
     unattended: step.permissions === 'unattended',
     clone: contractClone(plan?.contract) !== undefined,
     prepare: context.prepare,
-    pinned: isPinnedToHost({
-      executor,
-      answer: step.answer !== undefined,
-      inShippedWorkflow: DefaultWorkflows.named(scope.workflow) !== undefined,
-      publishes: plan?.contract !== undefined && isPublishContract(plan.contract),
-      requires,
-    }),
+    pinned: isPinnedToHost({ step, executor, inShippedWorkflow: DefaultWorkflows.named(scope.workflow) !== undefined, requires }),
     answer: step.answer !== undefined,
     ...role,
   }, context.can, context.allow, context.facts);

@@ -8,7 +8,7 @@ import { z } from 'zod';
 import { DefaultWorkflows } from '../default-workflows.js';
 import { JsonValueSchema, type JsonValue } from '../utils/json.js';
 import { expressionPaths, isRecord, parseExpression, type ExpressionPath } from './expression.js';
-import { mergeRequirements, type InEffect } from './requirements.js';
+import { isPinnedToHost, mergeRequirements, type InEffect } from './requirements.js';
 import { renderStrings, stepPaths, type TemplateContext } from './template.js';
 import { isWorkflowFile, stepWorkflow, type InlineWorkflow, type WorkflowDefinition, type WorkflowStep } from './types.js';
 import { TokenUsageSchema } from './step-state.js';
@@ -27,7 +27,7 @@ export function wholeFit(
   step: WorkflowStep, child: WorkflowDefinition | InlineWorkflow | undefined, { requires, around }: { requires: InEffect; around: string },
 ): { unfit: string } | { child: WorkflowDefinition; runs: WholeRun[] } {
   if (child === undefined) return { unfit: 'it runs no workflow this run kept' };
-  const unfit = notWhole(step, child, around);
+  const unfit = notWhole(step, child);
 
   if (unfit !== undefined) return { unfit };
   const file = isWorkflowFile(child) ? child : inlineFile(step, child);
@@ -40,8 +40,10 @@ export function wholeFit(
     return inner.prompt === undefined ? [] : [{ step: inner, executor: 'prompt', requires: inEffect(inner) }];
   });
 
-  // A step that requires the host is pinned to this machine (`isPinnedToHost`), as `notWhole` keeps the derived pins here.
-  const pinned = runs.find((run) => run.requires.host === true);
+  // A step pinned to this machine (`isPinnedToHost`) runs on no member. An inline workflow's steps are steps of the file
+  // it is written in.
+  const inShippedWorkflow = DefaultWorkflows.named(isWorkflowFile(child) ? child.name : around) !== undefined;
+  const pinned = runs.find((run) => isPinnedToHost({ step: run.step, executor: run.executor, inShippedWorkflow, requires: run.requires }));
 
   if (pinned !== undefined) return { unfit: `step "${pinned.step.id}" runs only on this machine` };
 
@@ -75,12 +77,12 @@ export function wholeRunDefinition(
 }
 
 /**
- * Why the workflow `child`, which step `step` of workflow file `around` runs, does not go whole, or undefined when it
+ * Why the workflow `child`, which step `step` runs, does not go whole, or undefined when it
  * does: its children are command, prompt or gate steps that work in the copy the step works in, with nothing a member
  * cannot run on its own: a gate the member asks the owner through the attempt's record. An inline workflow also reads
  * nothing around it but the inputs.
  */
-function notWhole(step: WorkflowStep, child: WorkflowDefinition | InlineWorkflow, around: string): string | undefined {
+function notWhole(step: WorkflowStep, child: WorkflowDefinition | InlineWorkflow): string | undefined {
   // A workflow a `from` step wrote is in no definition, so a member could not check what it runs.
   if (stepWorkflow(step)?.kind === 'from') return 'it runs the workflow a step wrote';
 
@@ -99,16 +101,12 @@ function notWhole(step: WorkflowStep, child: WorkflowDefinition | InlineWorkflow
 
   // An allowance its prompts end their turn at is counted by the owner's engine across them, which a nested run is not.
   if (step.onLimit === 'end_turn') return 'it gives its prompts a turn allowance (on_limit: end_turn)';
-  // An inline workflow's steps are steps of the file it is written in.
-  const isShipped = DefaultWorkflows.named(isWorkflowFile(child) ? child.name : around) !== undefined;
 
   for (const inner of child.steps) {
     const what = `step "${inner.id}"`;
 
     // A gate the member asks the owner through the attempt's record, whose person answers it.
     if (inner.command === undefined && inner.prompt === undefined && inner.hitl === undefined) return `${what} is neither a command, a prompt nor a gate`;
-
-    if (inner.answer !== undefined || (inner.command !== undefined && isShipped)) return `${what} runs only on this machine`;
 
     if (stepWorkflow(inner) !== undefined) return `${what} runs a workflow`;
 

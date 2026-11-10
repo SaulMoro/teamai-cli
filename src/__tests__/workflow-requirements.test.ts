@@ -45,7 +45,7 @@ steps:
   });
 
   it('pins a step to this host, on top of the pins teamai derives', () => {
-    const step = { executor: 'command' as const, answer: false, inShippedWorkflow: false, publishes: false };
+    const step = { step: {}, executor: 'command' as const, inShippedWorkflow: false };
     expect(isPinnedToHost({ ...step, requires: {} })).toBe(false);
     expect(isPinnedToHost({ ...step, requires: { host: true } })).toBe(true);
     expect(isPinnedToHost({ ...step, executor: 'prompt', requires: { host: true } })).toBe(true);

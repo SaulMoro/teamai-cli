@@ -4792,6 +4792,37 @@ steps:
   });
 });
 
+describe('a step that publishes to a teamai data branch', () => {
+  it.each([
+    { offered: 'the team workspace', workspace: ['new', 'continue', 'read-only', 'team'] as const },
+    { offered: 'no team workspace', workspace: ['new', 'continue', 'read-only'] as const },
+  ])('is held from a runtime off this host that offers $offered, as describe holds it', async ({ workspace }) => {
+    const { config } = testConfig();
+    const yaml = `schemaVersion: v1alpha1
+name: publisher
+description: Publish to a data branch.
+steps:
+  - id: publish
+    workspace: { team: { branch: teamai-reports } }
+    command: node publish.js
+    deliver: publish
+`;
+    fs.writeFileSync(path.join(config.repo.localPath, 'workflows', 'publisher.yaml'), yaml);
+    await syncScorersThenWorkflows(config);
+    const started = await startRun(config, 'publisher', {}, { secrets: await knownSecrets(config) });
+    if ('error' in started) throw new Error(started.error.message);
+    const parsed = parseWorkflow('publisher.yaml', yaml);
+    if (!parsed.ok) throw new Error('the workflow does not parse');
+    const none = new Set<string>();
+
+    const remote = await leaseNext(config, String(started.data.run), driverB, { can: { remote: true, workspace: [...workspace] } });
+    const { facts } = describeWorkflow({ definition: parsed.definition, source: 'team', workflows: {}, ceiling: 1, can: { remote: true, workspace: [...workspace] }, allow: {}, env: { declared: none, secrets: none, present: none } });
+
+    expect(remote).toMatchObject({ data: { wait: { held: [{ step: 'publish', missing: expect.arrayContaining(['host']) }] } } });
+    expect(facts.held).toEqual([expect.objectContaining({ step: 'publish', missing: expect.arrayContaining(['host']) })]);
+  });
+});
+
 describe('a prompt step with permissions: unattended', () => {
   const FIX_AND_LINT = graph(`  - id: fix
     prompt: Fix it.

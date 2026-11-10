@@ -433,8 +433,10 @@ export interface Offer {
  * - a step that declares `requires.host`, as every command step of those workflows does, so a team copy of one under
  *   another name keeps the pin. The pins above stay as a floor for a shipped step that forgets the key.
  */
-export function isPinnedToHost(step: { executor: Executor; answer: boolean; inShippedWorkflow: boolean; publishes: boolean; requires: Pick<InEffect, 'host'> }): boolean {
-  return step.answer || (step.executor === 'command' && step.inShippedWorkflow) || step.publishes || step.requires.host === true;
+export function isPinnedToHost({ step, executor, inShippedWorkflow, requires }: {
+  step: Pick<WorkflowStep, 'answer' | 'deliver'>; executor: Executor; inShippedWorkflow: boolean; requires: Pick<InEffect, 'host'>;
+}): boolean {
+  return step.answer !== undefined || (executor === 'command' && inShippedWorkflow) || step.deliver === 'publish' || requires.host === true;
 }
 
 /** What a granted lease carries besides the step itself. */
