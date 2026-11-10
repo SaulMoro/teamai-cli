@@ -139,15 +139,15 @@ function pathspecBatches(names: readonly string[]): string[][] {
  * conflicted path in git's order, or `none`: one `ls-files` per batch of names, each name a literal path.
  */
 async function stagedEntries(workspace: string, names: readonly string[], run: Git): Promise<Map<string, string>> {
-  const batches = pathspecBatches([...new Set(names)]);
-  const listings = await Promise.all(batches.map((batch) => run(workspace, ['--literal-pathspecs', 'ls-files', '-s', '-z', '--', ...batch])));
   const staged = new Map<string, string>();
 
-  batches.forEach((batch, at) => {
+  // One batch at a time: each untrusted git starts three processes, and a checkout with many untracked files has many batches.
+  for (const batch of pathspecBatches([...new Set(names)])) {
+    const listing = await run(workspace, ['--literal-pathspecs', 'ls-files', '-s', '-z', '--', ...batch]);
     const asked = new Set(batch);
     const entries = new Map<string, string[]>();
 
-    for (const record of listings[at]?.stdout.split('\0') ?? []) {
+    for (const record of listing.stdout.split('\0')) {
       const tab = record.indexOf('\t');
 
       if (tab === -1) continue;
@@ -163,7 +163,7 @@ async function stagedEntries(workspace: string, names: readonly string[], run: G
     }
 
     for (const name of batch) staged.set(name, entries.get(name)?.join(',') ?? 'none');
-  });
+  }
 
   return staged;
 }
