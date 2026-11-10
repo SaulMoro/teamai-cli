@@ -18,7 +18,10 @@ import { STEP_MODES } from './t3.js';
 //
 
 const OptionsSchema = z.object({
-  /** The T3 environment the threads run in: `local`, the T3 Code server on this machine. */
+  /**
+   * The T3 environment the threads run in: `local`, the T3 Code server on this machine, and no other, since a step's first
+   * message names this machine's paths (`firstMessage` in conversation.ts).
+   */
   environment: z.literal('local'),
   /** A T3 provider instance to run every prompt on, by its id in T3 Settings → Providers; the tool's default one otherwise. */
   instance: z.string().min(1).optional(),
@@ -43,7 +46,9 @@ export function parseOptions(raw: RuntimeOptions): { ok: true; options: T3Option
 
   const message = key === 'runtime_mode'
     ? `runtime_mode ${JSON.stringify(raw['runtime_mode'])} is not one runtime t3 takes. A step thread runs in the member's T3 default mode, or auto, never full access unless runtime_mode says so; runtime_mode sets it to auto, auto-accept-edits, approval-required or full-access. Remove it, or set one of those four`
-    : `Runtime t3 takes { environment: local, instance?, instances?, runtime_mode? }: ${issue?.message ?? 'bad options'}`;
+    : key === 'environment' && raw['environment'] !== undefined
+      ? `environment ${JSON.stringify(raw['environment'])} is not one runtime t3 runs steps in. It launches a step's thread only in environment: local, the T3 Code on this machine, because the thread's first message names this machine's paths, such as the run's scratch directory and the workflow's folder, which a linked environment does not have. Set environment: local, or offer the step to another machine with a fleet entry whose wake uses t3`
+      : `Runtime t3 takes { environment: local, instance?, instances?, runtime_mode? }: ${issue?.message ?? 'bad options'}`;
 
   return { ok: false, failure: { code: 'bad_option', message, ...(key && { key }) } };
 }

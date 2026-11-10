@@ -176,7 +176,7 @@ export function threadDisplay(thread: ThreadRecord, environment: Environment): R
 
 /**
  * The paths of `env` a prompt may name that a thread's shell lacks: T3 runs its tool in T3 Code's environment, so the
- * message carries them.
+ * message carries them. They are this machine's, which holds because options take only `environment: local`.
  */
 function pathsOf(env: Readonly<Record<string, string>>): string {
   const scratch = env[RUN_DIR_ENV];

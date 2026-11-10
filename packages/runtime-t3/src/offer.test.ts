@@ -81,6 +81,16 @@ describe('teamai-runtime-t3', () => {
       expect(t3.calls().filter((call) => call.tool === 'oauth_token')).toHaveLength(1);
     });
 
+    it('refuses an environment other than local before it signs in, since a step\'s first message names this machine\'s paths', async () => {
+      const runtime = start();
+
+      runtime.send({ type: 'init', protocol: 1, mode: 'unattended', options: { environment: 'gpu-box' } });
+
+      expect(await runtime.next((line) => line['type'] === 'init')).toMatchObject({ ok: false, error: { code: 'bad_option', key: 'environment',
+        message: 'environment "gpu-box" is not one runtime t3 runs steps in. It launches a step\'s thread only in environment: local, the T3 Code on this machine, because the thread\'s first message names this machine\'s paths, such as the run\'s scratch directory and the workflow\'s folder, which a linked environment does not have. Set environment: local, or offer the step to another machine with a fleet entry whose wake uses t3' } });
+      expect(t3.calls()).toEqual([]);
+    });
+
     it.each(['auto-accept-edits', 'approval-required'])('approves its silent sign-in with Auto access in a run whose runtime_mode is %s', async (runtimeMode) => {
       const runtime = start();
 
