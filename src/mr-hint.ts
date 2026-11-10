@@ -1,5 +1,6 @@
 import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
+import { readRegularFileSync } from '@teamai/shared/regular-file';
 import path from 'node:path';
 
 import { z } from 'zod';
@@ -104,7 +105,7 @@ function getCachePath(owner: string, repo: string): string {
  */
 function loadCache(owner: string, repo: string): HintCache {
   try {
-    const raw = fs.readFileSync(getCachePath(owner, repo), 'utf-8');
+    const raw = readRegularFileSync(getCachePath(owner, repo), 'utf-8');
     const parsed = HintCacheSchema.parse(JSON.parse(raw));
     const age = Date.now() - new Date(parsed.updatedAt).getTime();
 

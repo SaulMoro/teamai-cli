@@ -1393,7 +1393,7 @@ export async function readLocalRequestRecords(): Promise<Map<string, LocalReques
   const records = new Map<string, LocalRequestRecord>();
 
   try {
-    const content = await fs.promises.readFile(getRequestsPath(), 'utf-8');
+    const content = await readRegularFile(getRequestsPath(), 'utf-8');
 
     for (const line of content.split('\n')) {
       const record = parseRequestLine(line);
@@ -1458,7 +1458,7 @@ export async function reconcileRequestLog(
     let existing = '';
 
     try {
-      existing = await fs.promises.readFile(requestsPath, 'utf-8');
+      existing = await readRegularFile(requestsPath, 'utf-8');
     } catch {
       // First write.
     }
@@ -1584,7 +1584,7 @@ async function foldPendingEvents(eventsPath: string): Promise<void> {
     const pendingPath = path.join(dir, name);
 
     try {
-      const content = await fs.promises.readFile(pendingPath, 'utf-8');
+      const content = await readRegularFile(pendingPath, 'utf-8');
 
       if (!content.endsWith('\n')) continue;
       const timestamp = Date.parse(pendingTimestampOf(content));
@@ -1601,7 +1601,7 @@ async function foldPendingEvents(eventsPath: string): Promise<void> {
     try {
       const id = pendingIdOf(content);
       folded ??= new Set(
-        (await fs.promises.readFile(eventsPath, 'utf-8').catch(() => '')).split('\n').map(pendingIdOf).filter((i) => i !== undefined),
+        (await readRegularFile(eventsPath, 'utf-8').catch(() => '')).split('\n').map(pendingIdOf).filter((i) => i !== undefined),
       );
 
       if (id === undefined || !folded.has(id)) {
@@ -1723,7 +1723,7 @@ async function readEventsRaw(filePath: string): Promise<DashboardEvent[]> {
 async function readLogRaw(filePath: string): Promise<{ events: DashboardEvent[]; outcomes: Array<{ timestamp: string; line: string }> }> {
   const events: DashboardEvent[] = [];
   const outcomes: Array<{ timestamp: string; line: string }> = [];
-  const content = await fs.promises.readFile(filePath, 'utf-8').catch(() => '');
+  const content = await readRegularFile(filePath, 'utf-8').catch(() => '');
 
   for (const line of content.split('\n')) {
     const trimmed = line.trim();
@@ -1752,7 +1752,7 @@ export const SESSION_OUTCOME_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
 
 /** The session outcome events of the log at `eventsPath` (the default log when absent), in file order. */
 export async function readSessionOutcomes(eventsPath?: string): Promise<SessionOutcomeEvent[]> {
-  const content = await fs.promises.readFile(eventsPath ?? getEventsPath(), 'utf-8').catch(() => '');
+  const content = await readRegularFile(eventsPath ?? getEventsPath(), 'utf-8').catch(() => '');
   const outcomes: SessionOutcomeEvent[] = [];
 
   for (const line of content.split('\n')) {
@@ -2374,7 +2374,7 @@ export async function compactEvents(eventsPath?: string): Promise<void> {
     // no side files to fold it must not create the lock at all — the state it
     // would lock may be a sandbox another test (or a rolling state dir) is
     // deleting concurrently.
-    const pre = await fs.promises.readFile(filePath, 'utf-8').catch(() => null);
+    const pre = await readRegularFile(filePath, 'utf-8').catch(() => null);
 
     if (pre === null) return;
     const preLines = pre.split('\n').filter(l => l.trim());
@@ -2390,7 +2390,7 @@ export async function compactEvents(eventsPath?: string): Promise<void> {
       // Replace the file itself, not a symlink to it.
       const target = await fs.promises.realpath(filePath).catch(() => filePath);
       await removeOrphanTemps(target);
-      const content = await fs.promises.readFile(target, 'utf-8');
+      const content = await readRegularFile(target, 'utf-8');
       const lines = content.split('\n').filter(l => l.trim());
 
       if (lines.length < DASHBOARD_COMPACTION_THRESHOLD) return;

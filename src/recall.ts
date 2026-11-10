@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import path from 'node:path';
-import { existsSync, readFileSync, readdirSync } from 'node:fs';
+import { existsSync, readdirSync } from 'node:fs';
+import { readRegularFileSync } from '@teamai/shared/regular-file';
 import matter from 'gray-matter';
 import { z } from 'zod';
 import { requireInit, detectProjectConfig, describeUnreadableConfig, loadLocalConfigForScope } from './config.js';
@@ -379,7 +380,7 @@ function pageSourcePaths(pageAbsPath: string | undefined): string[] {
   if (!pageAbsPath || !existsSync(pageAbsPath)) return [];
 
   try {
-    const sources = PageSourcesSchema.parse(matter(readFileSync(pageAbsPath, 'utf-8')).data['source']);
+    const sources = PageSourcesSchema.parse(matter(readRegularFileSync(pageAbsPath, 'utf-8')).data['source']);
 
     return sources.flatMap((source) => (source !== null && source.trim() !== '' ? [source.trim()] : []));
   } catch {
@@ -434,7 +435,7 @@ function entryRuleGlobs(entry: SearchIndexEntry): string[] {
     // Braces expand here, the same pass the rule renderers run
     // (rulePaths(...).flatMap(expandBraces), src/resources/team-rule.ts), so
     // paths: ["src/{pay,other}/**"] derives edges exactly as the rule applies.
-    return rulePaths(matter(readFileSync(entry.path, 'utf-8')).data).flatMap(expandBraces);
+    return rulePaths(matter(readRegularFileSync(entry.path, 'utf-8')).data).flatMap(expandBraces);
   } catch {
     return [];
   }

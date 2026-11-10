@@ -2,7 +2,8 @@ import { findSkippedFolders, reportSkippedFolders } from './folder-markers.js';
 import { hookToolPathsForConfig, parseUserStats } from './types.js';
 import os from 'node:os';
 import path from 'node:path';
-import { readFile, realpath, stat } from 'node:fs/promises';
+import { realpath, stat } from 'node:fs/promises';
+import { readRegularFile } from '@teamai/shared/regular-file';
 import { isDeepStrictEqual } from 'node:util';
 import matter from 'gray-matter';
 import {
@@ -3434,7 +3435,7 @@ export async function resolveInstructionBlocks(
   };
 
   try {
-    const cultureContent = await readFile(culturePath, 'utf8');
+    const cultureContent = await readRegularFile(culturePath, 'utf8');
     blocks.culture = compileCulture(cultureContent) ?? undefined;
 
     if (blocks.culture === undefined) {

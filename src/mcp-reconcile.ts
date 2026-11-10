@@ -1,5 +1,6 @@
 import crypto from 'node:crypto';
 import fs from 'node:fs';
+import { readRegularFile } from '@teamai/shared/regular-file';
 import path from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
 import type {
@@ -377,13 +378,13 @@ export async function claudeProjectKey(checkoutRoot: string): Promise<string> {
   const root = await fs.promises.realpath(checkoutRoot).catch(() => path.resolve(checkoutRoot));
 
   try {
-    const dotGit = (await fs.promises.readFile(path.join(root, '.git'), 'utf8')).trim();
+    const dotGit = (await readRegularFile(path.join(root, '.git'), 'utf8')).trim();
 
     if (!dotGit.startsWith('gitdir:')) return root.normalize('NFC');
     const gitDir = path.resolve(root, dotGit.slice('gitdir:'.length).trim());
 
     const common = await fs.promises.realpath(
-      path.resolve(gitDir, (await fs.promises.readFile(path.join(gitDir, 'commondir'), 'utf8')).trim()),
+      path.resolve(gitDir, (await readRegularFile(path.join(gitDir, 'commondir'), 'utf8')).trim()),
     );
 
     return (path.basename(common) === '.git' ? path.dirname(common) : common).normalize('NFC');

@@ -1,4 +1,5 @@
-import { chmod, readFile, stat } from 'node:fs/promises';
+import { chmod } from 'node:fs/promises';
+import { openRegularFile } from '@teamai/shared/regular-file';
 import path from 'node:path';
 import { parseYaml } from '@teamai/shared/yaml';
 import { z } from 'zod';
@@ -562,9 +563,15 @@ async function hasGitModeChange(
 /** A file's bytes and permission bits, or null when it cannot be read. */
 async function readFileSnapshot(filePath: string): Promise<{ content: Buffer; mode: number } | null> {
   try {
-    const [content, stats] = await Promise.all([readFile(filePath), stat(filePath)]);
+    const handle = await openRegularFile(filePath);
 
-    return { content, mode: stats.mode & 0o777 };
+    try {
+      const [content, stats] = await Promise.all([handle.readFile(), handle.stat()]);
+
+      return { content, mode: stats.mode & 0o777 };
+    } finally {
+      await handle.close();
+    }
   } catch {
     return null;
   }

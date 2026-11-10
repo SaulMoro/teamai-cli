@@ -1,4 +1,5 @@
 import fse from 'fs-extra';
+import { readRegularFile } from '@teamai/shared/regular-file';
 import { createHash } from 'node:crypto';
 import path from 'node:path';
 import { loadStateForScope, saveStateForScope } from './config.js';
@@ -303,7 +304,7 @@ function fileFacts() {
 
   return {
     exists: once((file) => fse.lstat(file).then(() => true, () => false)),
-    bytes: once((file) => fse.readFile(file).catch(() => null)),
+    bytes: once((file) => readRegularFile(file).catch(() => null)),
     ignoredByMembersRule: once(ignoredByMembersRule),
   };
 }

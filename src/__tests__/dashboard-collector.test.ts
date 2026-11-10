@@ -2574,14 +2574,20 @@ describe('events file lock (#804)', () => {
     // lock-free pre-check read runs before it, and the realpath'd target it
     // reads under the lock differs from eventsPath() on macOS (/private
     // prefix), so both are matched by file name.
-    const realReadFile = fs.promises.readFile;
+    const realOpen = fs.promises.open;
     let reads = 0;
-    const spy = vi.spyOn(fs.promises, 'readFile').mockImplementation(async (file, options) => {
-      const content = await realReadFile(file, options);
-      if (path.basename(String(file)) === 'events.jsonl' && fs.existsSync(`${eventsPath()}.lock`) && ++reads === 2) {
-        await appendEvent(event('live-b', { monitorPid: process.pid }));
-      }
-      return content;
+    const spy = vi.spyOn(fs.promises, 'open').mockImplementation(async (...args: Parameters<typeof fs.promises.open>) => {
+      const handle = await realOpen(...args);
+      if (path.basename(String(args[0])) !== 'events.jsonl') return handle;
+      const realRead = handle.readFile.bind(handle);
+      vi.spyOn(handle, 'readFile').mockImplementation(async (options) => {
+        const content = await realRead(options);
+        if (fs.existsSync(`${eventsPath()}.lock`) && ++reads === 2) {
+          await appendEvent(event('live-b', { monitorPid: process.pid }));
+        }
+        return content;
+      });
+      return handle;
     });
     try {
       await compactEvents(eventsPath());

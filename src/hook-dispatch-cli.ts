@@ -16,6 +16,7 @@
 
 import { spawn } from 'node:child_process';
 import fs from 'node:fs';
+import { readRegularFileSync } from '@teamai/shared/regular-file';
 import os from 'node:os';
 import path from 'node:path';
 
@@ -311,7 +312,7 @@ function quoteWindowsArg(arg: string): string {
  */
 function readStdinFile(file: string): string {
   try {
-    return fs.readFileSync(file, 'utf8');
+    return readRegularFileSync(file, 'utf8');
   } catch (e) {
     log.debug(`hook-dispatch: could not read STDIN file ${file}: ${e instanceof Error ? e.message : String(e)}`);
 

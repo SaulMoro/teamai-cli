@@ -9,6 +9,7 @@ import crypto from 'node:crypto';
 import path from 'node:path';
 
 import fs from 'fs-extra';
+import { readRegularFile } from '@teamai/shared/regular-file';
 import { z } from 'zod';
 
 import { type JsonValue, JsonObjectSchema } from './types.js';
@@ -177,7 +178,7 @@ export async function loadPendingReview(cwd: string): Promise<PendingReviewItem[
         throw new Error(`${filePath} exceeds max allowed size 10MB`);
     }
 
-    const text = await fs.readFile(filePath, 'utf8');
+    const text = await readRegularFile(filePath, 'utf8');
     const items: PendingReviewItem[] = [];
 
     for (const line of text.split('\n')) {
