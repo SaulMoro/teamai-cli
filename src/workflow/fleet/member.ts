@@ -90,12 +90,12 @@ export function memberPlace(opened: OpenedDriver | undefined): MemberPlace | { r
   if (opened === undefined) return { command: { kind: 'here' }, prompt: { kind: 'here' }, workflow: { kind: 'here' } };
   const place: MemberPlace = {};
   // A whole workflow's steps go to the runtimes of the member's own driver, but for a fleet entry of its own.
-  const [first, ...rest] = opened.runtimes.filter((entry) => entry.kind === 'local' || entry.use !== 'fleet');
+  const [first, ...rest] = opened.runtimes.filter((entry) => entry.kind === 'tools' || entry.use !== 'fleet');
 
   if (first !== undefined) place.workflow = { kind: 'driver', runtimes: { driver: opened.driver.name, asked: opened.asked, runtimes: [first, ...rest] } };
 
   for (const entry of opened.runtimes) {
-    if (entry.kind === 'local') {
+    if (entry.kind === 'tools') {
       place.command ??= { kind: 'here' };
       place.prompt ??= { kind: 'here' };
       break;
@@ -133,7 +133,7 @@ function declaredLabels(config: LocalConfig, at: NonNullable<MemberPlace[keyof M
   switch (at.kind) {
     case 'here': return { labels: host, where: 'workflows.labels on this machine' };
     case 'runtime': return { labels: at.labels ?? [], where: `runtime ${at.use} of driver ${at.driver}` };
-    case 'driver': return { labels: at.runtimes.runtimes.flatMap((entry) => (entry.kind === 'local' ? host : entry.can.labels ?? [])), where: `driver ${at.runtimes.driver}` };
+    case 'driver': return { labels: at.runtimes.runtimes.flatMap((entry) => (entry.kind === 'tools' ? host : entry.can.labels ?? [])), where: `driver ${at.runtimes.driver}` };
     default: {
       const unhandled: never = at;
 
@@ -265,7 +265,7 @@ async function wholePromptToolLack(config: LocalConfig, step: WorkflowStep, at: 
   const { driver, runtimes } = at.runtimes;
 
   const places = runtimes.flatMap((entry): ToolPlace[] => {
-    if (entry.kind === 'local') return [{ kind: 'here' }];
+    if (entry.kind === 'tools') return [{ kind: 'here' }];
 
     return entry.can.prompt === false ? [] : [{ kind: 'runtime', driver, use: entry.use, ...(entry.can.tools && { tools: entry.can.tools }), ...(entry.can.default_tool !== undefined && { defaultTool: entry.can.default_tool }) }];
   });

@@ -983,11 +983,11 @@ function soleDriver(opened: OpenedDriver | undefined, localStrict: ReturnType<ty
 
   const offer = (entry: OpenedDriver['runtimes'][number]): SoleDriver['offers'][number] => ({
     runtime: entry.use,
-    can: entry.kind === 'local' ? localStrict : { network: entry.can.network ?? false, isolation: entry.can.isolation ?? 'none', env: entry.can.env ?? false, remote: true },
+    can: entry.kind === 'tools' ? localStrict : { network: entry.can.network ?? false, isolation: entry.can.isolation ?? 'none', env: entry.can.env ?? false, remote: true },
   });
 
   const [first, ...rest] = opened.runtimes;
-  const host = opened.runtimes.some((entry) => entry.kind === 'local') ? [] : [{ runtime: 'host', can: { ...localStrict, prompt: false as const } }];
+  const host = opened.runtimes.some((entry) => entry.kind === 'tools') ? [] : [{ runtime: 'host', can: { ...localStrict, prompt: false as const } }];
 
   return { driver: opened.driver.name, offers: [offer(first), ...rest.map(offer), ...host] };
 }

@@ -1130,7 +1130,7 @@ describe('where a member runs an attempt', () => {
     const { config } = await acme.member('bob');
     const runtime = hostStepRuntime();
     const runtimes = cans.map((entry): OpenedRuntime => (entry === 'local'
-      ? { kind: 'local', use: 'tools', engine: { logins: [] } }
+      ? { kind: 'tools', use: 'tools', engine: { logins: [] } }
       : { kind: 'external', use: entry.use, runtime, can: entry.can, launchesAgents: false, engine: { logins: [] }, credentials: {}, found: [], masks: {}, optionsFrom: 'test' }));
     const [first, ...rest] = runtimes;
     if (!first) throw new Error('no runtime');

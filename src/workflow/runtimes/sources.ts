@@ -330,12 +330,12 @@ function signInsFound(env: NodeJS.ProcessEnv): Record<string, string> {
 }
 
 /**
- * One runtime of an opened definition: `kind: 'local'`, `tools` in teamai's process, which the loop builds itself with
+ * One runtime of an opened definition: `kind: 'tools'`, the tools runtime in teamai's process, which the loop builds itself with
  * the tools it found for the run, by the name the definition gives it (`local` is `tools` too); or an external one
  * that took its options.
  */
 export type OpenedRuntime =
-  | { kind: 'local'; use: 'tools' | 'local'; engine: EngineOptions }
+  | { kind: 'tools'; use: 'tools' | 'local'; engine: EngineOptions }
   /**
    * `launchesAgents`: prompt steps reach it as `prompt`, and it gives each tool its own home. `credentials`: the values
    * of the credentials it declares from the member's environment, by name, in memory only. `masks`: the values its
@@ -459,7 +459,7 @@ async function openRuntime(driver: ResolvedDriver, use: string, options: Runtime
 
     if (split.credentials.length > 0) return { ok: false, failure: badOption(driver, use, 'credentials', `${use} runs each step in the member's own environment, so it brings no credential`) };
 
-    return { ok: true, opened: { kind: 'local', use: use === 'local' ? 'local' : 'tools', engine: split.engine } };
+    return { ok: true, opened: { kind: 'tools', use: use === 'local' ? 'local' : 'tools', engine: split.engine } };
   }
 
   // A check fails as the run would for an unset variable, and sends no value.

@@ -623,7 +623,7 @@ async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, given: 
   const found = [...LAUNCH_TOOLS, ...instanceNames().filter((name) => !isToolId(name))].filter((tool) => (named === undefined || named.has(tool)) && onPath(tool));
   const pickedUnlooked = [...picked].filter((tool) => !found.some((launched) => launched === tool) && !(named?.has(tool) ?? false));
   const tools = [...found, ...pickedUnlooked];
-  const defined: DriverRuntimes = options.runtimes ?? { driver: 'local', asked: 'local', runtimes: [{ kind: 'local', use: 'tools', engine: { logins: [] } }] };
+  const defined: DriverRuntimes = options.runtimes ?? { driver: 'local', asked: 'local', runtimes: [{ kind: 'tools', use: 'tools', engine: { logins: [] } }] };
   const lookup = options.resolveTool ? { resolveTool: options.resolveTool } : {};
   const confined = isStarted && mayConfine(started) ? await confinedOffers(lookup) : [];
   const hostRuntime = hostStepRuntime(localCan({ strict: localStrictCan(config, options), hitl: canHitl, tools, confined }));
@@ -649,7 +649,7 @@ async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, given: 
 
   const toSlot = (entry: OpenedDriver['runtimes'][number]): RuntimeSlot => {
     switch (entry.kind) {
-      case 'local':
+      case 'tools':
         return { kind: 'tools', use: entry.use, runtime: toolsRuntime, can: toolsReady.can, launchesAgents: false, engine: entry.engine, credentials: {}, found: [] };
       case 'external':
         return {

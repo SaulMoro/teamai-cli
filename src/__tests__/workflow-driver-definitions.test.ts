@@ -64,7 +64,7 @@ describe('the local driver, which is the definition teamai-local', () => {
   it('opens the shipped teamai-local for --driver local, a definition of the tools runtime alone that names no tool', async () => {
     const opened = await open(teamWith([]), 'local');
 
-    expect(opened).toMatchObject({ ok: true, opened: { asked: 'local', driver: { name: 'teamai-local', source: 'shipped', definition: { runtimes: [{ use: 'tools' }] } }, runtimes: [{ kind: 'local', use: 'tools' }] } });
+    expect(opened).toMatchObject({ ok: true, opened: { asked: 'local', driver: { name: 'teamai-local', source: 'shipped', definition: { runtimes: [{ use: 'tools' }] } }, runtimes: [{ kind: 'tools', use: 'tools' }] } });
     expect(opened.ok && opened.opened.driver.definition.tool).toBeUndefined();
   });
 
@@ -98,7 +98,7 @@ describe('the local driver, which is the definition teamai-local', () => {
     const team = teamWith(['mine']);
     const said = [vi.spyOn(log, 'warn').mockImplementation(() => {}), vi.spyOn(log, 'info').mockImplementation(() => {})];
 
-    expect(await open(team, 'mine')).toMatchObject({ ok: true, opened: { runtimes: [{ kind: 'local' }] } });
+    expect(await open(team, 'mine')).toMatchObject({ ok: true, opened: { runtimes: [{ kind: 'tools' }] } });
     expect(said.flatMap((spy) => spy.mock.calls)).toEqual([]);
   });
 

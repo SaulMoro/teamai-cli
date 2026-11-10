@@ -1478,7 +1478,7 @@ steps:
   it('lets step one\'s place close at the report of a step that continues its session on another runtime', async () => {
     const { config, workspace, runId } = await workflowFixture(inOneWorkspace(PAIR.replace('    prompt: Make the change you planned.\n', '    prompt: Make the change you planned.\n    tool: codex\n')));
     const toy = await toyDriver(path.dirname(workspace), { can: { tools: ['claude'] } });
-    const local = { kind: 'local' as const, use: 'tools' as const, engine: { logins: [] } };
+    const local = { kind: 'tools' as const, use: 'tools' as const, engine: { logins: [] } };
     const adapter: StepLauncher = {
       run: async () => ({ started: true, exitCode: 0, session: 'codex-session', output: { ok: true } }),
       runInteractive: async () => ({ started: false, exitCode: 1, failure: { code: 'tool_failed', message: 'not interactive' } }),
