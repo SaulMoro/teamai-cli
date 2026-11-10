@@ -28,15 +28,15 @@ function kindOf(stats: fs.Stats): NotRegularFileKind {
   return 'a special file';
 }
 
-/** A path that holds something other than a regular file, which is never read. */
+/** A path that holds something other than a regular file, which is never read or written. */
 export class NotRegularFileError extends Error {
   override name = 'NotRegularFileError';
   /** What is there instead, such as `a pipe`. */
   readonly kind: NotRegularFileKind;
 
-  constructor(readonly file: string, stats: fs.Stats) {
+  constructor(readonly file: string, stats: fs.Stats, use: 'read' | 'write' = 'read') {
     const kind = kindOf(stats);
-    super(`${file} is ${kind}, not a regular file, so teamai does not read it`);
+    super(`${file} is ${kind}, not a regular file, so teamai does not ${use} it`);
     this.kind = kind;
   }
 }
@@ -99,5 +99,52 @@ export function readRegularFileSync(file: string, encoding?: BufferEncoding): st
     return encoding === undefined ? fs.readFileSync(fd) : fs.readFileSync(fd, encoding);
   } finally {
     fs.closeSync(fd);
+  }
+}
+
+// ─── Writing where a step may have left something else ───
+//
+//  Opening a FIFO for writing waits for a reader as a read waits for a writer. Opened without blocking, a FIFO no one
+//  reads fails at once (ENXIO), and one a reader holds is caught by the handle's own type, as for a read.
+//
+
+/** Opening for writing without waiting, creating a missing file. Windows has no flag, and no FIFO a path opens. */
+const NONBLOCKING_WRITE = (process.platform === 'win32' ? fs.constants.O_WRONLY : fs.constants.O_WRONLY | fs.constants.O_NONBLOCK) | fs.constants.O_CREAT;
+
+/**
+ * The open handle of `file` for writing, created when missing: at its end when `append`, else emptied. Anything but a
+ * regular file there rejects with `NotRegularFileError`, and is left as it was.
+ */
+export async function openRegularFileForWrite(file: string, { append }: { append: boolean }): Promise<FileHandle> {
+  let handle: FileHandle;
+
+  try {
+    handle = await fs.promises.open(file, NONBLOCKING_WRITE | (append ? fs.constants.O_APPEND : fs.constants.O_TRUNC));
+  } catch (error) {
+    // A FIFO no process reads, or a device with nothing behind it.
+    if (error instanceof Error && 'code' in error && error.code === 'ENXIO') throw new NotRegularFileError(file, await fs.promises.stat(file), 'write');
+    throw error;
+  }
+
+  try {
+    const stats = await handle.stat();
+
+    if (!stats.isFile()) throw new NotRegularFileError(file, stats, 'write');
+
+    return handle;
+  } catch (error) {
+    await handle.close();
+    throw error;
+  }
+}
+
+/** Appends `data` to `file`, a regular file or none yet, as `openRegularFileForWrite` checks. */
+export async function appendRegularFile(file: string, data: string | Uint8Array): Promise<void> {
+  const handle = await openRegularFileForWrite(file, { append: true });
+
+  try {
+    await handle.appendFile(data);
+  } finally {
+    await handle.close();
   }
 }

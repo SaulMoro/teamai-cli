@@ -1,13 +1,15 @@
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawn, type ChildProcess } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { NotRegularFileError, openRegularFile, readRegularFile, readRegularFileSync } from './regular-file.js';
+import { appendRegularFile, NotRegularFileError, openRegularFile, openRegularFileForWrite, readRegularFile, readRegularFileSync } from './regular-file.js';
 
 const dirs: string[] = [];
+const readers: ChildProcess[] = [];
 
 afterEach(() => {
+  for (const reader of readers.splice(0)) reader.kill();
   for (const dir of dirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true });
 });
 
@@ -75,5 +77,47 @@ describe.skipIf(process.platform === 'win32')('reading a file a step may have re
     await expect(readRegularFile(dir, 'utf8')).rejects.toThrow(`${dir} is a directory, not a regular file`);
     await expect(readRegularFile('/dev/zero')).rejects.toThrow('/dev/zero is a device, not a regular file');
     await expect(readRegularFile(path.join(dir, 'missing.json'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+});
+
+describe.skipIf(process.platform === 'win32')('writing to a file a step may have replaced', () => {
+  it('appends to a regular file, and creates a missing one', async () => {
+    const file = path.join(scratch(), 'outcomes.jsonl');
+
+    await appendRegularFile(file, 'one\n');
+    await appendRegularFile(file, 'two\n');
+
+    expect(fs.readFileSync(file, 'utf8')).toBe('one\ntwo\n');
+  });
+
+  it('empties a regular file opened to replace it', async () => {
+    const file = path.join(scratch(), 'exclude');
+    fs.writeFileSync(file, 'old and longer\n');
+    const handle = await openRegularFileForWrite(file, { append: false });
+
+    try {
+      await handle.writeFile('new\n');
+    } finally {
+      await handle.close();
+    }
+
+    expect(fs.readFileSync(file, 'utf8')).toBe('new\n');
+  });
+
+  it('refuses a FIFO no one reads at once, saying what is there, instead of waiting for a reader', async () => {
+    const at = fifo();
+
+    const settled = await settledSoon(at, () => appendRegularFile(at, 'line\n'));
+
+    expect(settled).toEqual({ rejected: expect.any(NotRegularFileError) });
+    expect(settled).toMatchObject({ rejected: { kind: 'a pipe', message: `${at} is a pipe, not a regular file, so teamai does not write it` } });
+  });
+
+  it('refuses a FIFO another process holds open for reading, which a plain open would write into', async () => {
+    const at = fifo();
+    readers.push(spawn('sh', ['-c', 'exec 3<>"$1"; sleep 10', 'sh', at], { stdio: 'ignore' }));
+    await new Promise((resolve) => { setTimeout(resolve, 200); });
+
+    await expect(openRegularFileForWrite(at, { append: true })).rejects.toMatchObject({ kind: 'a pipe' });
   });
 });
