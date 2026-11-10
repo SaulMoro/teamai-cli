@@ -28,6 +28,7 @@ import gitExitCode from './rules/git-exit-code.js';
 import readlineError from './rules/readline-error.js';
 import spawnCommand from './rules/spawn-command.js';
 import regularFileReads from './rules/regular-file-reads.js';
+import stepPathWrites from './rules/step-path-writes.js';
 import toolFamily from './rules/tool-family-shape.js';
 
 // The anti-slop rules are vendored TypeScript. oxlint imports plugins with plain
@@ -67,6 +68,7 @@ export default definePlugin({
     'readline-error': readlineError,
     'spawn-command': spawnCommand,
     'regular-file-reads': regularFileReads,
+    'step-path-writes': stepPathWrites,
     'tool-family-shape': toolFamily,
     ...antiSlopRules,
   },
