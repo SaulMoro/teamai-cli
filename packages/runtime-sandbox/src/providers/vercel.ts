@@ -5,6 +5,7 @@ import path from 'node:path';
 import type { Command, Sandbox } from '@vercel/sandbox';
 import { z } from 'zod';
 import { PlaceViewSchema, type Can, type PlaceView, type RuntimeFailure } from '@teamai/runtime-protocol';
+import { readRegularFileSync } from '@teamai/shared/regular-file';
 import { boundedTail, STDERR_CHARS } from '../bounded-tail.js';
 import type { JournalId } from '../journal.js';
 import type { VercelOptions } from '../options.js';
@@ -286,7 +287,7 @@ export function vercelProvider({ options, owner, state, env, home }: { options: 
     }
 
     try {
-      await sandbox.writeFiles(plan.cache.map(({ file, from }) => ({ path: `${WARM_DIR}/${file}`, content: fs.readFileSync(from) })));
+      await sandbox.writeFiles(plan.cache.map(({ file, from }) => ({ path: `${WARM_DIR}/${file}`, content: readRegularFileSync(from) })));
       const prepared = await run(sandbox, 'sh', ['-c', warm.prepare], false, WARM_DIR);
 
       if (prepared.code !== 0) return warmFailed(`The warm snapshot's prepare, \`${warm.prepare}\`, failed in Vercel sandbox ${name}`, { kind: 'ran', ...prepared });

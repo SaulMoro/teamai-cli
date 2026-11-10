@@ -1,6 +1,7 @@
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
+import { readRegularFileSync } from '@teamai/shared/regular-file';
 
 // ─── Copying a hosted sandbox's work back to the host ───
 //
@@ -150,7 +151,7 @@ export function fingerprintOf(data: Buffer): string {
 
 /** Each regular file under `root`, by path, with its fingerprint: what a copy-in sends of it. */
 export function fingerprintsOf(root: string): Record<string, string> {
-  return Object.fromEntries(walk(root).flatMap((at) => (lstatOf(at)?.isFile() ? [[at, fingerprintOf(fs.readFileSync(at))]] : [])));
+  return Object.fromEntries(walk(root).flatMap((at) => (lstatOf(at)?.isFile() ? [[at, fingerprintOf(readRegularFileSync(at))]] : [])));
 }
 
 /**

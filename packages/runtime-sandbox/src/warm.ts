@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import type { RuntimeFailure } from '@teamai/runtime-protocol';
+import { readRegularFileSync } from '@teamai/shared/regular-file';
 import type { WarmOptions } from './options.js';
 import type { Ran } from './providers/cli.js';
 
@@ -115,7 +116,7 @@ export function planWarm({ base, recipe, checkout }: { base: string; recipe: War
 
     try {
       from = fs.realpathSync(path.join(real, inside));
-      bytes = fs.readFileSync(from);
+      bytes = readRegularFileSync(from);
     } catch {
       return { ok: false, failure: { code: 'bad_option', key, message: `${file} is not a file in the checkout, so the warm image has no key. Commit it, or list only files the checkout holds` } };
     }
@@ -146,7 +147,7 @@ export function scratchOf(cache: WarmPlan['cache']) {
   for (const { file, from } of cache) {
     const to = path.join(dir, file);
     fs.mkdirSync(path.dirname(to), { recursive: true });
-    fs.copyFileSync(from, to);
+    fs.writeFileSync(to, readRegularFileSync(from));
   }
 
   return { dir, remove: () => fs.rmSync(dir, { recursive: true, force: true }) };
