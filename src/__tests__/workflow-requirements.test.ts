@@ -36,7 +36,7 @@ steps:
     expect(parsed.ok && parsed.definition.steps[0]?.requires).toEqual({ host: true });
 
     const refused = flow('{ host: false }');
-    expect(refused.ok === false && refused.diagnostics.map((diagnostic) => diagnostic.field)).toEqual(['steps[0].requires.host']);
+    expect(!refused.ok && refused.diagnostics.map((diagnostic) => diagnostic.field)).toEqual(['steps[0].requires.host']);
   });
 
   it('holds from every level below it, as defaults.requires does for every step', () => {
