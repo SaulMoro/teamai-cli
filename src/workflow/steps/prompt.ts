@@ -465,9 +465,11 @@ export async function runPromptStep({ config, lock, driver, lease, adapter = ste
   ]);
 
   // Only headless Claude and CodeBuddy have a turn limit, and a runtime that launches agents its own way keeps the cap it
-  // offered; any other launch reports the cap as not enforced.
+  // offered; any other launch reports the cap as not enforced. One that runs the tool on the attempt's tool home launches
+  // it as teamai does, so only those tools' caps hold there.
   const family = launchAdapterIdOf(selected);
-  const capsTurns = lease.maxTurns !== undefined && !lease.interactive && (onRuntime?.launchesAgents === true || family === 'claude' || family === 'codebuddy');
+  const launchesOwnWay = onRuntime?.launchesAgents === true && onRuntime.runsOnToolHome !== true;
+  const capsTurns = lease.maxTurns !== undefined && !lease.interactive && (launchesOwnWay || family === 'claude' || family === 'codebuddy');
   // A turn is ended only at the limits its tool is known to keep and report: Codex states its usage only as it ends, and
   // CodeBuddy's turn cap and per-message usage are untried, so the rest list as unenforced.
   const { limits } = lease;

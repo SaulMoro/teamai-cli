@@ -17,7 +17,8 @@ const HANDLE = `teamai-${RUN}-${ATTEMPT}`;
  * A headless Claude as the step launch drives it: it prints stream-json, keeps its session in the Claude home it is
  * given, writes the workflow result, and notes how it was launched in that home. What its prompt says picks a way to end:
  * `spend` streams usage until it is stopped, `hang` prints nothing until it is stopped, `limit` ends on a spent usage
- * limit, `fail` exits 2 on an error it prints on stderr, and `echo` puts its sign-in token in its reply.
+ * limit, `fail` exits 2 on an error it prints on stderr, `flood` exits 2 after one stderr line longer than the tail
+ * teamai keeps of it, which starts with its sign-in token, and `echo` puts that token in its reply.
  */
 const AGENT = String.raw`
 const fs = require('node:fs');
@@ -43,6 +44,9 @@ if (prompt.includes('spend')) {
 } else if (prompt.includes('limit')) {
   say({ type: 'result', subtype: 'success', is_error: true, result: "You've hit your limit · resets 3pm (Europe/Madrid)", session_id: id });
   process.exit(1);
+} else if (prompt.includes('flood')) {
+  process.stderr.write(process.env.ANTHROPIC_API_KEY + 'y'.repeat(7995));
+  process.exit(2);
 } else if (prompt.includes('fail')) {
   process.stderr.write('auth failed for ' + process.env.ANTHROPIC_API_KEY + '\n');
   process.exit(2);
@@ -227,6 +231,17 @@ describe('how a prompt step\'s tool fails', () => {
 
     expect(end).toMatchObject({ event: 'failed', failure: { code: 'tool_failed', message: expect.stringContaining('Its stderr in the sandbox ends: auth failed for') } });
     expect(JSON.stringify(end)).not.toContain('sk-ant-secret-1');
+  });
+
+  it('quotes no part of a credential the start of the stderr tail it keeps cuts through', async () => {
+    const connection = start();
+    await init(connection);
+    const at = await openPlace(connection);
+
+    const end = await prompt(connection, at, { prompt: 'flood it' });
+
+    expect(end).toMatchObject({ event: 'failed', failure: { code: 'tool_failed' } });
+    expect(JSON.stringify(connection.messages)).not.toContain('ret-1y');
   });
 
   it('masks a credential the tool put in its result, on the wire and in the journal', async () => {

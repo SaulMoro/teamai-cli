@@ -56,10 +56,11 @@ const IN_SANDBOX: StepLaunchHost = {
  * The process port of a step's tool in sandbox `id`: the provider's exec, with the environment the launch gives and the
  * names `unset` withholds. Its stop stops every process in the sandbox, as a cancel's does, and the sandbox stays. It
  * calls `onStdout` only once `start` returned, so a budget stop finds its process. `stderr` gives the end of what the
- * tool printed there.
+ * tool printed there, from its first whole line.
  */
 function sandboxProcess(provider: Provider, id: string, unset: string[]) {
   const stderr = boundedTail(STDERR_CHARS);
+  let printed = 0;
 
   const start: ToolLauncher = ({ executable, args, cwd, env, onStart, onStdout }) => {
     let started = false;
@@ -75,6 +76,7 @@ function sandboxProcess(provider: Provider, id: string, unset: string[]) {
       const ran = await provider.exec(id, { argv: [executable, ...args], env: given, unset, cwd }, (stream, data) => {
         if (stream === 'stderr') {
           stderr.push(data);
+          printed += data.length;
 
           return;
         }
@@ -104,7 +106,18 @@ function sandboxProcess(provider: Provider, id: string, unset: string[]) {
     };
   };
 
-  return { start, stderr: () => stderr.text() };
+  // A tail that cut what the tool printed starts inside a line, maybe inside a credential no mask then matches: its
+  // first line goes.
+  const whole = (): string => {
+    const tail = stderr.text();
+
+    if (printed <= STDERR_CHARS) return tail;
+    const newline = tail.indexOf('\n');
+
+    return newline === -1 ? '' : tail.slice(newline + 1);
+  };
+
+  return { start, stderr: whole };
 }
 
 /**

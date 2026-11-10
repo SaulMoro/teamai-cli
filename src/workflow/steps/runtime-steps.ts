@@ -330,6 +330,9 @@ function promptFailure(failure: RuntimeFailure, retry: { run: string; step: stri
  * prompt's result is written to the result file, as a tool writes it, and its session and usage are the step's. teamai
  * keeps the step's timeout and a driver abort as a `cancel`; a budget is checked against the usage once it finishes.
  */
+/** How long past a step's timeout teamai cancels a prompt whose runtime keeps the timeout itself. */
+const TIMEOUT_GRACE_MS = 15_000;
+
 export function runtimePrompter(run: AttemptRun, { view, runId, step, tool, provided, unset, credentials, setUp, isThroughOuter, continues, toolHome }: {
   view: PlaceView;
   runId: RunId;
@@ -390,10 +393,14 @@ export function runtimePrompter(run: AttemptRun, { view, runId, step, tool, prov
       void run.cancel();
     };
 
-    const timer = input.timeoutMs === undefined || input.timeoutMs > MAX_TIMER_MS ? undefined : setTimeout(() => {
+    // A runtime that runs the tool on the attempt's tool home stops it at the lease's timeout itself and ends the prompt
+    // with its session, so teamai's own cancel waits a grace past it, for a runtime that missed it.
+    const timeoutMs = input.timeoutMs !== undefined && toolHome ? input.timeoutMs + TIMEOUT_GRACE_MS : input.timeoutMs;
+
+    const timer = timeoutMs === undefined || timeoutMs > MAX_TIMER_MS ? undefined : setTimeout(() => {
       timedOut = true;
       stop();
-    }, input.timeoutMs);
+    }, timeoutMs);
 
     signal?.addEventListener('abort', stop, { once: true });
 
