@@ -471,16 +471,25 @@ async function readOwnIdentity(): Promise<{ startTicks?: number; pidNamespace?: 
   return { ...(startTicks !== undefined && { startTicks }), ...(pidNamespace !== undefined && { pidNamespace }) };
 }
 
-/** What a lock, a reclaim sentinel or a claim holds: who wrote it, when, and on Linux when that process started, and where. */
-async function lockPayload(owner: string): Promise<string> {
-  return JSON.stringify({
+/**
+ * This process as a lock's holder: its pid, the time, and on Linux when it started and its pid namespace, which
+ * `isHolderGone` reads back. Every lock that judges its holder by pid writes it.
+ */
+export async function lockHolder(): Promise<Omit<LockPayload, 'owner'>> {
+  return {
     pid: process.pid,
     // By the process's own clock, which neither a faked Date nor a wall-clock step since it started moves, so it compares
     // with when /proc or ps says the process started (isHolderGone).
     startedAt: new Date(performance.timeOrigin + performance.now()).toISOString(),
-    owner,
     ...await (ownIdentity ??= readOwnIdentity()),
-  } satisfies LockPayload);
+  };
+}
+
+/** What a lock, a reclaim sentinel or a claim holds: who wrote it, when, and on Linux when that process started, and where. */
+async function lockPayload(owner: string): Promise<string> {
+  const { pid, startedAt, ...identity } = await lockHolder();
+
+  return JSON.stringify({ pid, startedAt, owner, ...identity } satisfies LockPayload);
 }
 
 /**
@@ -490,7 +499,7 @@ async function lockPayload(owner: string): Promise<string> {
  * than treated as un-owned garbage.
  */
 /** Who holds a lock: its process, and the owner token and time of a lock written in the JSON payload format. */
-interface LockHolder {
+export interface LockHolder {
   pid: number;
   owner?: string;
   startedAt?: string;
@@ -591,7 +600,7 @@ async function inspectLock(resolved: string): Promise<LockVerdict> {
  * Linux, else by a start after the lock was written. Without either to compare, or when the lock comes from another
  * pid namespace, a live pid holds it.
  */
-async function isHolderGone(holder: LockHolder): Promise<boolean> {
+export async function isHolderGone(holder: LockHolder): Promise<boolean> {
   try {
     process.kill(holder.pid, 0);
   } catch (err) {

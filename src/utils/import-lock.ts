@@ -5,7 +5,7 @@ import os from 'node:os';
 import { z } from 'zod';
 import { memberHome } from '@teamai/shared/home';
 import { log } from '@teamai/shared/log';
-import { withFileLock } from '../update.js';
+import { isHolderGone, lockHolder, withFileLock } from '../update.js';
 import { readRegularFile } from '@teamai/shared/regular-file';
 
 /** Duration after which a lock file is considered stale and safe to ignore. */
@@ -14,11 +14,9 @@ const LOCK_TTL_MS = 2 * 60 * 60 * 1000; // 2 hours; a lock older than this is st
 /** Module-level reference counts for reentrant locking within the same process. */
 const refCounts = new Map<string, number>();
 
-/** Metadata written into the lock file. */
-interface ImportLockMeta {
-  pid: number;
+/** Metadata written into the lock file: its holder as `acquireLock`'s locks name it (`lockHolder`), and its host. */
+interface ImportLockMeta extends Awaited<ReturnType<typeof lockHolder>> {
   host: string;
-  startedAt: string;   // ISO
   teamRepo: string;    // the resolved holder: the team repo, else the teamwiki directory
   /** The `$TEAMAI_RUN_DIR` of the workflow run that holds the lock until it ends. */
   runDir?: string;
@@ -37,6 +35,8 @@ const ImportLockFieldsSchema = z
         pid: z.number().optional().catch(undefined),
         host: z.string().optional().catch(undefined),
         startedAt: z.string().optional().catch(undefined),
+        startTicks: z.number().int().optional().catch(undefined),
+        pidNamespace: z.string().optional().catch(undefined),
         teamRepo: z.string().optional().catch(undefined),
         runDir: z.string().optional().catch(undefined),
       })
@@ -181,9 +181,8 @@ export async function acquireImportLock(holder: string, runDir?: string): Promis
 
   if (count === 0) {
     const meta: ImportLockMeta = {
-      pid: process.pid,
+      ...await lockHolder(),
       host: os.hostname(),
-      startedAt: new Date().toISOString(),
       teamRepo: path.resolve(holder),
     };
 
@@ -253,7 +252,8 @@ export async function acquireImportLock(holder: string, runDir?: string): Promis
  *
  * Detection strategy:
  * - A workflow run on this host that has not ended, its run directory still there, holds it at any age.
- * - Same host: use process.kill(pid, 0) to probe whether the locking process is alive.
+ * - Same host: the locking process holds it while it lives, judged as `acquireLock` judges its holder (`isHolderGone`),
+ *   so a later process given its pid does not.
  * - Different host: cannot probe remotely; treat any non-stale lock as active.
  * - Stale lock (older than LOCK_TTL_MS): treat as abandoned and clean up.
  * - Malformed lock: fall back to file mtime; a fresh but unreadable file is treated
@@ -298,12 +298,11 @@ async function judgeLock(lockPath: string): Promise<boolean> {
     }
 
     if (meta.host === os.hostname()) {
-      // Same host: probe the locking process via signal 0.
-      if (meta.pid !== undefined && isProcessAlive(meta.pid)) {
-        return true;
-      }
+      const { pid, startedAt, startTicks, pidNamespace } = meta;
 
-      // Process is dead (ESRCH), or the lock names none, and no run that has not ended holds it — stale lock.
+      if (pid !== undefined && !(await isHolderGone({ pid, startedAt, startTicks, pidNamespace }))) return true;
+
+      // The process is gone, or its pid names a later one, or the lock names none, and no run that has not ended holds it — stale lock.
       await removeIfUnchanged(lockPath, raw, 'Failed to remove dead-process lock');
 
       return false;
@@ -327,15 +326,5 @@ async function judgeLock(lockPath: string): Promise<boolean> {
     } catch {
       return false;
     }
-  }
-}
-
-function isProcessAlive(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-
-    return true;
-  } catch {
-    return false;
   }
 }
