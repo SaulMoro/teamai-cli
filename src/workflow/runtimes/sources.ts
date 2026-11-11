@@ -28,7 +28,7 @@ import type { StepLaunchDeps } from '@teamai/runtime-tools';
 import { opencodeMajorVersion } from '../../opencode-version.js';
 import { agyGatewayEnv } from '../../models/agy-gateway.js';
 import { AttemptResult } from '../attempt-result.js';
-import { readRegularFile } from '@teamai/shared/regular-file';
+import { readRegularFile, readRegularFileNoLink } from '@teamai/shared/regular-file';
 
 // ─── Where a step runtime comes from ─────────────────────
 //
@@ -78,12 +78,8 @@ async function isFile(at: string): Promise<boolean> {
  * link, whose target a team runtime's accepted revision does not hold (`runtimeRevision` hashes the link itself).
  */
 async function declaredFacts(dir: string): Promise<{ exec?: boolean }> {
-  const manifest = path.join(dir, 'package.json');
-
-  if (!(await isFile(manifest))) return {};
-
   try {
-    const exec = z.object({ teamai: RuntimeFactsSchema }).parse(JSON.parse(await readRegularFile(manifest, 'utf8'))).teamai.exec;
+    const exec = z.object({ teamai: RuntimeFactsSchema }).parse(JSON.parse(await readRegularFileNoLink(path.join(dir, 'package.json'), 'utf8'))).teamai.exec;
 
     return exec === undefined ? {} : { exec };
   } catch {
@@ -114,6 +110,18 @@ export async function locateRuntime(driver: ResolvedDriver, use: string): Promis
     return { ok: false, failure: { code: 'runtime_namespace_conflict', message: `Runtime "${use}" is defined in two active namespaces (${team.first} and ${team.second}). Keep it in one namespace, push it, run teamai pull, and start again.` } };
   }
 
+  if (team.kind === 'found' && (await fs.lstat(team.at).catch(() => undefined))?.isSymbolicLink() === true) {
+    const relative = path.relative(getKnowledgeDir(driver.config), team.at).split(path.sep).join('/');
+
+    return {
+      ok: false,
+      failure: {
+        code: 'runtime_not_found',
+        message: `Driver "${driver.name}" uses runtime "${use}", whose folder ${relative} in the team repo is a link, and teamai runs a team runtime only from a folder the team repo holds. Replace the link with the folder, push it, run teamai pull, and start again.`,
+      },
+    };
+  }
+
   if (team.kind === 'found' && await isFile(path.join(team.at, RUNTIME_ENTRY))) {
     return { ok: true, source: { kind: 'team', name: use, executable: path.join(team.at, RUNTIME_ENTRY), dir: team.at, relative: path.relative(getKnowledgeDir(driver.config), team.at), ...await declaredFacts(team.at) } };
   }
@@ -135,19 +143,39 @@ export async function locateRuntime(driver: ResolvedDriver, use: string): Promis
 }
 
 /**
+ * What a team runtime's folder holds, by relative path, sorted: its files, folders and links. A linked folder is not
+ * walked, so nothing outside the folder is listed or read.
+ */
+async function runtimeEntries(dir: string): Promise<string[]> {
+  const found: string[] = [];
+  const pending = [''];
+
+  for (let folder = pending.pop(); folder !== undefined; folder = pending.pop()) {
+    for (const entry of await fs.readdir(path.join(dir, folder), { withFileTypes: true })) {
+      const relative = path.join(folder, entry.name);
+      found.push(relative);
+
+      if (entry.isDirectory()) pending.push(relative);
+    }
+  }
+
+  return found.sort();
+}
+
+/**
  * A team runtime's revision: a hash of every file under its directory, by relative path, executable bit and content,
- * with a link hashed as its target. Any change a teammate pushes there is a new revision.
+ * with a link hashed as the path it names, never what it points to. Any change a teammate pushes there is a new
+ * revision.
  */
 export async function runtimeRevision(dir: string): Promise<string> {
   const hash = createHash('sha256');
-  const entries = (await fs.readdir(dir, { recursive: true })).sort();
 
-  for (const relative of entries) {
+  for (const relative of await runtimeEntries(dir)) {
     const at = path.join(dir, relative);
     const stat = await fs.lstat(at);
 
     if (stat.isDirectory()) continue;
-    const body = stat.isSymbolicLink() ? `link:${await fs.readlink(at)}` : await readRegularFile(at);
+    const body = stat.isSymbolicLink() ? `link:${await fs.readlink(at)}` : await readRegularFileNoLink(at);
     hash.update(`${relative.split(path.sep).join('/')}\0${stat.mode & 0o111 ? 'x' : '-'}\0`).update(body).update('\0');
   }
 
@@ -200,7 +228,7 @@ export async function acceptRuntime(source: RuntimeSource, { mode, canAsk, ask =
 
   if (isAcceptedIn(trust, source.dir, revision)) return { ok: true };
   const short = revision.slice(0, 12);
-  const files = (await fs.readdir(source.dir, { recursive: true })).sort();
+  const files = await runtimeEntries(source.dir);
 
   if (mode === 'attended' && canAsk) {
     const question = `Step runtime "${source.name}" comes from the team repo (${source.relative}) at revision ${short}, which you have not accepted on this machine. `

@@ -15,10 +15,15 @@ import path from 'node:path';
 /** Opening for reading without waiting: a FIFO opens at once. Windows has no flag, and no FIFO a path opens. */
 const NONBLOCKING_READ = process.platform === 'win32' ? fs.constants.O_RDONLY : fs.constants.O_RDONLY | fs.constants.O_NONBLOCK;
 
+/** `NONBLOCKING_READ` that fails on a link at the path (ELOOP) rather than following it. Windows has no flag. */
+const NONBLOCKING_READ_NO_LINK = process.platform === 'win32' ? NONBLOCKING_READ : NONBLOCKING_READ | fs.constants.O_NOFOLLOW;
+
 /** What stands at a path in place of a regular file, as an error names it. */
-export type NotRegularFileKind = 'a pipe' | 'a directory' | 'a device' | 'a socket' | 'a special file';
+export type NotRegularFileKind = 'a link' | 'a pipe' | 'a directory' | 'a device' | 'a socket' | 'a special file';
 
 function kindOf(stats: fs.Stats): NotRegularFileKind {
+  if (stats.isSymbolicLink()) return 'a link';
+
   if (stats.isFIFO()) return 'a pipe';
 
   if (stats.isDirectory()) return 'a directory';
@@ -45,8 +50,12 @@ export class NotRegularFileError extends Error {
 
 /** The open handle of `file`, a regular file; a missing file rejects with its own error, anything else with `NotRegularFileError`. */
 export async function openRegularFile(file: string): Promise<FileHandle> {
+  return openRegularFileWith(file, NONBLOCKING_READ);
+}
+
+async function openRegularFileWith(file: string, flags: number): Promise<FileHandle> {
   // oxlint-disable-next-line teamai/regular-file-reads -- the helper's own open: nonblocking, and its handle is checked before a byte is read
-  const handle = await fs.promises.open(file, NONBLOCKING_READ);
+  const handle = await fs.promises.open(file, flags);
 
   try {
     const stats = await handle.stat();
@@ -65,6 +74,33 @@ export async function readRegularFile(file: string): Promise<Buffer>;
 export async function readRegularFile(file: string, encoding: BufferEncoding): Promise<string>;
 export async function readRegularFile(file: string, encoding?: BufferEncoding): Promise<string | Buffer> {
   const handle = await openRegularFile(file);
+
+  try {
+    return encoding === undefined ? await handle.readFile() : await handle.readFile({ encoding });
+  } finally {
+    await handle.close();
+  }
+}
+
+/**
+ * The contents of `file`, which must be a regular file and not a link to one: for a folder whose hash or acceptance
+ * holds a link's text and not what it points to, so what is read is what was accepted. A link rejects with
+ * `NotRegularFileError`, and so does one put there after the check, which the open does not follow.
+ */
+export async function readRegularFileNoLink(file: string): Promise<Buffer>;
+export async function readRegularFileNoLink(file: string, encoding: BufferEncoding): Promise<string>;
+export async function readRegularFileNoLink(file: string, encoding?: BufferEncoding): Promise<string | Buffer> {
+  const stats = await fs.promises.lstat(file);
+
+  if (stats.isSymbolicLink()) throw new NotRegularFileError(file, stats);
+  let handle: FileHandle;
+
+  try {
+    handle = await openRegularFileWith(file, NONBLOCKING_READ_NO_LINK);
+  } catch (error) {
+    if (error instanceof Error && 'code' in error && error.code === 'ELOOP') throw new NotRegularFileError(file, await fs.promises.lstat(file));
+    throw error;
+  }
 
   try {
     return encoding === undefined ? await handle.readFile() : await handle.readFile({ encoding });

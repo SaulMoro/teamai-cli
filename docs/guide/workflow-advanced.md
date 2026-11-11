@@ -1610,6 +1610,8 @@ runtimes/<name>/runtime                    team repo, or runtimes/<namespace>/<n
 teamai-runtime-<name>                      shipped in teamai's package, then on PATH
 ```
 
+A team runtime's folder must be a folder in the team repo: one that is a link fails `runtime_not_found`, and teamai reads nothing through a link inside it.
+
 teamai ships these definitions:
 
 | Definition | Runtimes |

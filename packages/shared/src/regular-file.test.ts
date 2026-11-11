@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { appendRegularFile, copyRegularFile, copyRegularTree, moveRegularTree, NotRegularFileError, openRegularFile, openRegularFileForWrite, readRegularFile, readRegularFileSync, writeRegularFile } from './regular-file.js';
+import { appendRegularFile, copyRegularFile, copyRegularTree, moveRegularTree, NotRegularFileError, openRegularFile, openRegularFileForWrite, readRegularFile, readRegularFileNoLink, readRegularFileSync, writeRegularFile } from './regular-file.js';
 
 const dirs: string[] = [];
 const readers: ChildProcess[] = [];
@@ -78,6 +78,20 @@ describe.skipIf(process.platform === 'win32')('reading a file a step may have re
     await expect(readRegularFile(dir, 'utf8')).rejects.toThrow(`${dir} is a directory, not a regular file`);
     await expect(readRegularFile('/dev/zero')).rejects.toThrow('/dev/zero is a device, not a regular file');
     await expect(readRegularFile(path.join(dir, 'missing.json'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  it('reads a regular file but no link to one where a link must not be followed, and refuses a FIFO there too', async () => {
+    const dir = scratch();
+    const file = path.join(dir, 'package.json');
+    const link = path.join(dir, 'linked.json');
+    fs.writeFileSync(file, '{}');
+    fs.symlinkSync(file, link);
+
+    expect(await readRegularFileNoLink(file, 'utf8')).toBe('{}');
+    expect(await readRegularFile(link, 'utf8')).toBe('{}');
+    await expect(readRegularFileNoLink(link, 'utf8')).rejects.toThrow(`${link} is a link, not a regular file`);
+    await expect(readRegularFileNoLink(fifo())).rejects.toThrow('is a pipe, not a regular file');
+    await expect(readRegularFileNoLink(path.join(dir, 'missing.json'))).rejects.toMatchObject({ code: 'ENOENT' });
   });
 });
 

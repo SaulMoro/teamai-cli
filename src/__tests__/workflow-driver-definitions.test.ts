@@ -199,6 +199,42 @@ describe('a run that needs no AI tool and the runtimes that run no command', () 
     expect(await open(team, false)).not.toMatchObject({ ok: true, opened: { runtimes: [] } });
   });
 
+  it('reads nothing through a linked folder in a team runtime: the files it asks to review and its revision stop at the link', async () => {
+    const team = teamWithRuntime();
+    const dir = path.join(team.repo.localPath, 'runtimes', 'agents');
+    const outside = fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-runtime-outside-'));
+    dirs.push(outside);
+    fs.writeFileSync(path.join(outside, 'notes.txt'), 'before');
+    fs.symlinkSync(outside, path.join(dir, 'lib'));
+    const source = { kind: 'team' as const, name: 'agents', executable: path.join(dir, 'runtime'), dir, relative: 'runtimes/agents' };
+    const questions: string[] = [];
+
+    expect(await acceptRuntime(source, { mode: 'attended', canAsk: true, ask: async (question) => { questions.push(question); return true; } })).toEqual({ ok: true });
+    expect(questions[0]).toContain(`Review ${dir} (lib, runtime) before you accept it.`);
+
+    fs.writeFileSync(path.join(outside, 'notes.txt'), 'after');
+    expect(await acceptRuntime(source, { mode: 'unattended', canAsk: false })).toEqual({ ok: true });
+  });
+
+  it('refuses a team runtime whose folder is a link, and reads nothing through it', async () => {
+    const team = teamWith([]);
+    const outside = fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-runtime-outside-'));
+    dirs.push(outside);
+    fs.writeFileSync(path.join(outside, 'runtime'), 'not run\n', { mode: 0o755 });
+    fs.writeFileSync(path.join(outside, 'package.json'), JSON.stringify({ teamai: { exec: false } }));
+    fs.mkdirSync(path.join(team.repo.localPath, 'runtimes'));
+    fs.symlinkSync(outside, path.join(team.repo.localPath, 'runtimes', 'agents'));
+    fs.writeFileSync(path.join(team.repo.localPath, 'drivers', 'agents.yaml'), 'schemaVersion: v1alpha1\nname: agents\nruntimes:\n  - use: agents\n');
+
+    expect(await open(team, false)).toEqual({
+      ok: false,
+      failure: {
+        code: 'runtime_not_found',
+        message: 'Driver "agents" uses runtime "agents", whose folder runtimes/agents in the team repo is a link, and teamai runs a team runtime only from a folder the team repo holds. Replace the link with the folder, push it, run teamai pull, and start again.',
+      },
+    });
+  });
+
   it('opens it for a run that needs an AI tool or before its revision is accepted, and opens a team runtime whose manifest does not say, or says it runs commands', async () => {
     const unaccepted = { ok: false, failure: { code: 'runtime_not_accepted' } };
 

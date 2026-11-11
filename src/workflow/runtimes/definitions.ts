@@ -12,7 +12,7 @@ import { parseYaml } from '@teamai/shared/yaml';
 import { HOST_DRIVER, LOCAL_DRIVER, parseDriver, type DriverName } from '../driver-name.js';
 import { isReservedDriver } from '../reserved-drivers.js';
 import type { WorkflowFailure } from '../types.js';
-import { readRegularFile } from '@teamai/shared/regular-file';
+import { readRegularFileNoLink } from '@teamai/shared/regular-file';
 
 // ─── Driver definitions ──────────────────────────────────
 //
@@ -102,9 +102,7 @@ export function personalDir(kind: keyof typeof PERSONAL_DIRS): string {
 
 async function readText(file: string): Promise<string | undefined> {
   try {
-    const stat = await fs.lstat(file);
-
-    return stat.isFile() ? await readRegularFile(file, 'utf8') : undefined;
+    return await readRegularFileNoLink(file, 'utf8');
   } catch {
     return undefined;
   }
