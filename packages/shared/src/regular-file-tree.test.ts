@@ -139,6 +139,19 @@ describe('moving a folder teamai staged, on any platform', () => {
     expect(fs.readFileSync(path.join(dir, 'scripts'), 'utf8')).toBe('a file\n');
   });
 
+  it('leaves the file at the destination as it was when moving the staged one over it fails', async () => {
+    const dir = scratch();
+    fs.mkdirSync(path.join(dir, 'staged'));
+    fs.writeFileSync(path.join(dir, 'staged', 'SKILL.md'), '# new\n');
+    fs.mkdirSync(path.join(dir, 'skill'));
+    fs.writeFileSync(path.join(dir, 'skill', 'SKILL.md'), '# old\n');
+    vi.spyOn(fs.promises, 'rename').mockRejectedValueOnce(Object.assign(new Error('EXDEV: cross-device link not permitted'), { code: 'EXDEV' }));
+
+    await expect(mergeRegularTree(path.join(dir, 'staged'), path.join(dir, 'skill'))).rejects.toMatchObject({ code: 'EXDEV' });
+
+    expect(fs.readFileSync(path.join(dir, 'skill', 'SKILL.md'), 'utf8')).toBe('# old\n');
+  });
+
   it('retries a rename Windows refuses for a moment, as while a scanner holds a file, instead of failing at once', async () => {
     const dir = scratch();
     fs.mkdirSync(path.join(dir, 'queue'));

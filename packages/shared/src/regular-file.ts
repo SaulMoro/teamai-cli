@@ -355,9 +355,10 @@ const RENAME_RETRY_MS = 60_000;
 
 /**
  * Renames `from` to `to`. On Windows a scanner or an indexer holding a file under `from` makes a rename fail EACCES,
- * EPERM or EBUSY for a moment, so it is tried again, backing off, while nothing has taken `to`.
+ * EPERM or EBUSY for a moment, so it is tried again, backing off, while nothing has taken `to`, or, `isReplacing` a file
+ * at `to`, however long that file stays.
  */
-async function renameRetrying(from: string, to: string): Promise<void> {
+async function renameRetrying(from: string, to: string, { isReplacing = false }: { isReplacing?: boolean } = {}): Promise<void> {
   const started = Date.now();
 
   for (let backoff = 0; ; backoff = Math.min(backoff + 10, 100)) {
@@ -369,7 +370,7 @@ async function renameRetrying(from: string, to: string): Promise<void> {
       const code = error instanceof Error && 'code' in error ? error.code : undefined;
       const isMomentary = process.platform === 'win32' && (code === 'EACCES' || code === 'EPERM' || code === 'EBUSY');
 
-      if (!isMomentary || Date.now() - started >= RENAME_RETRY_MS || await lstatOrMissing(to) !== undefined) throw error;
+      if (!isMomentary || Date.now() - started >= RENAME_RETRY_MS || (!isReplacing && await lstatOrMissing(to) !== undefined)) throw error;
       await new Promise((resolve) => { setTimeout(resolve, backoff); });
     }
   }
@@ -408,9 +409,8 @@ export async function mergeRegularTree(from: string, to: string): Promise<void> 
     if (moving.isDirectory() && there !== undefined) throw new Error(`${target} is not a folder, so teamai does not copy the folder ${source} over it`);
 
     if (there?.isDirectory() === true) throw new Error(`${target} is a folder, so teamai does not copy ${source} over it`);
-
-    if (there !== undefined) await fs.promises.unlink(target);
-    await renameRetrying(source, target);
+    // A rename replaces a file or link there in one step, so one that fails leaves it as it was.
+    await renameRetrying(source, target, { isReplacing: there !== undefined });
   }
 }
 
