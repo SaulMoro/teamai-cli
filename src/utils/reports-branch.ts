@@ -12,7 +12,7 @@ import os from 'node:os';
 import path from 'node:path';
 import fse from 'fs-extra';
 import { assertAttachedTeamRepo, createGit, createGitWithBlockTimeout, getDefaultBranch, getHeadCommit, hasCommits, readBlobs } from './git.js';
-import { pathExists, refusedWrite, refusedWriteAdvice } from './fs.js';
+import { pathExists, refusedWrite, refusedWriteAdvice, RefusedWriteError } from './fs.js';
 import { log } from '@teamai/shared/log';
 import {
   ForeignCheckoutError,
@@ -114,7 +114,8 @@ export async function readableReportsWorktree(
   // Failed: try once more, under the lock like every creation, and throw the
   // cause if it fails again. An `ensure` here would create the checkout without
   // the lock, while a writer that took it meanwhile creates it too (#823 item 15).
-  if (refreshed.status === 'failed') refreshed = await reportsBranch.refresh(localConfig, { pushIfCreated: false });
+  // A refused write fails again on every retry.
+  if (refreshed.status === 'failed' && !(refreshed.cause instanceof RefusedWriteError)) refreshed = await reportsBranch.refresh(localConfig, { pushIfCreated: false });
 
   switch (refreshed.status) {
     case 'done':
