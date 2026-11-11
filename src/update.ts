@@ -515,6 +515,8 @@ const FOREIGN_HOLD_MS = 3_600_000;
  * and a container that exited leaves it to a namespace no later process shares, so only its age frees it.
  */
 export async function isHolderGone(holder: LockHolder): Promise<boolean> {
+  // A lock this process holds names a live holder: asking when it started would run `ps` outside Linux for nothing.
+  if (holder.owner !== undefined && holder.pid === process.pid && [...heldLockOwners.values()].includes(holder.owner)) return false;
   const verdict = await isSameProcess(holder);
 
   switch (verdict) {
