@@ -1101,9 +1101,13 @@ export async function explicitBranchRefusal(
   if (!selfMode) return null;
   const git = createGit(localPath);
   const localRef = `refs/heads/${branch}`;
-  const exists = (await gitAt(localPath, ['show-ref', '--verify', '--quiet', localRef])).code === 0;
+  const shown = await gitAt(localPath, ['show-ref', '--verify', '--quiet', localRef]);
 
-  if (!exists) return null;
+  if (shown.code === 1) return null;
+
+  if (shown.code !== 0) {
+    return `Refusing to push to "${branch}": could not tell whether it exists here, so whether it holds the member's commits is unknown. git said: ${shown.stderr.trim() || `exit ${shown.code}`}. Choose another --branch.`;
+  }
 
   const ahead = await git.raw(['rev-list', '--count', localRef, '--not', '--remotes=origin'])
     .then((out) => Number.parseInt(out.trim(), 10), () => Number.NaN);

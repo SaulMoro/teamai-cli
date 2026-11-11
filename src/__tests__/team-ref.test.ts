@@ -543,6 +543,9 @@ describe('pushRepoBranch explicit destination', () => {
     await expect(explicitBranchRefusal(localPath, 'feature/mine', false)).resolves.toBeNull();
     await expect(explicitBranchRefusal(localPath, 'main', true)).resolves.toContain('default branch');
     await expect(explicitBranchRefusal(localPath, 'feature/new', true)).resolves.toBeNull();
+    // git cannot answer outside a repository, so whether the destination holds the member's commits is unknown.
+    await expect(explicitBranchRefusal(await fs.mkdtemp(path.join(os.tmpdir(), 'teamai-no-repo-')), 'feature/new', true))
+      .resolves.toContain('could not tell whether it exists');
   });
 
   it('publishes a destination commit an earlier push could not send', async () => {
