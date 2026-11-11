@@ -535,8 +535,8 @@ export async function runPromptStep({ config, lock, driver, lease, adapter = ste
     input.env = { ...scoped.env, [toolHome.variable]: toolHome.dir };
     const view = await placeView(config, lock.run, lease, cwd, toolHome);
     const start = runtimeLauncher(onRuntime.run, { view, tool: launched, toolHome: { tool: toolHome.tool, dir: toolHome.dir }, unset: scoped.unset, credentials: credentialsForTool(onRuntime.credentials, onRuntime.found, toolHome.tool), setUp });
-    // The runtime finds the command where it runs it.
-    launcher = stepLauncher(toolsLaunchDeps(), { start, resolveTool: (command) => command, resolveInstanceCommand: (command) => command });
+    // The runtime finds the command where it runs it, and a resumed step attaches there to the tool it left running.
+    launcher = stepLauncher(toolsLaunchDeps(), { start, canReattach: true, resolveTool: (command) => command, resolveInstanceCommand: (command) => command });
   }
 
   if (launch) input.launchEnv = launchEnv(launch);

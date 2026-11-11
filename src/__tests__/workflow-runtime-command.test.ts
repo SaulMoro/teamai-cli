@@ -104,6 +104,36 @@ describe('a prompt\'s tool exec\'d on a step runtime', () => {
   });
 });
 
+describe('a prompt\'s tool a resumed step attaches to on its step runtime', () => {
+  it('reads the result that tool wrote before teamai stopped, which the launch never removes as another process\'s', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-attached-'));
+    const resultPath = path.join(dir, 'out', 'result.json');
+    const view = { worktree: dir, readonly: [], result: path.join(dir, 'out'), runDir: path.join(dir, 'scratch'), toolHome: {} };
+    fs.mkdirSync(path.dirname(resultPath), { recursive: true });
+    fs.writeFileSync(resultPath, '{"output":{"ok":true}}');
+    const { run } = commandRun();
+    // The exec ended before teamai was killed; attaching to it again gives its end and writes nothing more.
+    const launcher = runtimeLauncher({
+      ...run,
+      exec: async (_request, events) => {
+        events.onAccepted?.({});
+
+        return { kind: 'exited', code: 0, stdout: '' };
+      },
+    }, { view, tool: 'claude', toolHome: { tool: 'claude', dir: path.join(dir, 'home') }, unset: [], credentials: {}, setUp: async () => undefined });
+
+    try {
+      const ran = await stepLauncher(toolsLaunchDeps(), { start: launcher, canReattach: true, resolveTool: () => 'claude', resolveInstanceCommand: () => null })
+        .run('claude', { prompt: 'review', cwd: dir, resultPath, secrets: {}, expected: undefined });
+
+      expect(ran).toMatchObject({ started: true, exitCode: 0, output: { ok: true } });
+      expect(ran.failure).toBeUndefined();
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
 describe('the timeout of a prompt\'s tool exec\'d on a step runtime', () => {
   it('counts from when the runtime accepts the tool, so a setup longer than the timeout leaves the tool its whole time', async () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-timeout-'));
