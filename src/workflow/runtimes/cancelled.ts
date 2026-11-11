@@ -45,9 +45,10 @@ export async function stopCancelledAttempts(config: LocalConfig, lock: RunLock, 
     return attempt.success ? [attempt.data] : [];
   });
 
-  // What a killed driver of this install started for a cancelled attempt, which its record reaches; what one runs on a
-  // step runtime, the fleet's member included, its runtime stops below.
-  for (const attempt of cancelled) await stopRecordedGroup(attemptDir(config, run, attempt));
+  // What a killed driver of this install started for a cancelled attempt, which its record reaches, and the login one
+  // in teamai's process held, written back; what one runs on a step runtime, the fleet's member included, its runtime
+  // stops below.
+  for (const attempt of cancelled) await stopLeftInProcess(config, run, attempt);
 
   const left = new Set([...cancelled, ...await placesLeftOpen(config, run, leased)]);
 
