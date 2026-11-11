@@ -115,6 +115,21 @@ describe('the dedicated Codex login lock', () => {
     expect(fs.readFileSync(path.join(toolHome, 'auth.json'), 'utf8')).toBe(auth('r2'));
   });
 
+  it('writes back the token a killed judge refreshed in a temporary home before a judge restarted on the same attempt copies the login into its own', async () => {
+    const daily = path.join(root, '.codex');
+    fs.mkdirSync(daily, { recursive: true });
+    fs.writeFileSync(path.join(daily, 'auth.json'), auth('r1'), { mode: 0o600 });
+    const killed = path.join(root, 'teamai-confined-killed', 'codex');
+    const restarted = path.join(root, 'teamai-confined-restarted', 'codex');
+    expect((await holdLoginFrom({ tool: 'codex', executable: 'codex', from: daily, toolHome: killed, run: RUN, attempt: FIRST, signal: new AbortController().signal })).ok).toBe(true);
+    fs.writeFileSync(path.join(killed, 'auth.json'), auth('r2'));
+
+    const held = await holdLoginFrom({ tool: 'codex', executable: 'codex', from: daily, toolHome: restarted, run: RUN, attempt: FIRST, signal: new AbortController().signal });
+
+    expect({ ok: held.ok, daily: fs.readFileSync(path.join(daily, 'auth.json'), 'utf8'), restarted: fs.readFileSync(path.join(restarted, 'auth.json'), 'utf8') })
+      .toEqual({ ok: true, daily: auth('r2'), restarted: auth('r2') });
+  });
+
   it('copies the login again into the fresh home of a run in this process whose attempt already holds the lock, as after a restart', async () => {
     const daily = path.join(root, '.codex');
     fs.mkdirSync(daily, { recursive: true });
