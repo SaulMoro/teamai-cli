@@ -60,7 +60,7 @@ export function detachedRunners(config: LocalConfig): Runners {
     // A process group of its own, so a stop reaches every process the command started.
     command: ({ run, attempt, command, cwd, env }) => startGroupedCommand({ command, cwd, env, detached: process.platform !== 'win32', group: attemptDir(config, run, attempt) }),
     // Its runner is gone, so nothing else ends the login a Codex judge it ran held.
-    stopLeft: (run, attempt) => stopLeftInProcess(config, run, attempt),
+    stopLeft: async (run, attempt) => { await stopLeftInProcess(config, run, attempt); },
     sleep: (ms, signal) => new Promise((resolve) => {
       const timer = setTimeout(resolve, ms);
       signal?.addEventListener('abort', () => { clearTimeout(timer); resolve(); }, { once: true });
