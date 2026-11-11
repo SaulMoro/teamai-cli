@@ -5,11 +5,10 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { HOST_PROCESSES } from '@teamai/shared/exec';
 import { CodexAdapter } from '@teamai/tool-core/formats/codex';
 import { FAKE_AGENT_MARKERS, fakeAgent, leftFakeAgents, runFakeAgent } from '@teamai/tool-testing/fake-agent';
-import { launch } from '../launch.js';
+import { family } from '../index.js';
 import { codexFake } from './index.js';
 
-const call = launch.codex.call;
-const step = launch.codex.step;
+const { call, step } = family.launch.codex;
 const made: string[] = [];
 
 afterEach(() => {
