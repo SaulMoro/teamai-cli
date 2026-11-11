@@ -235,6 +235,25 @@ describe('a run that needs no AI tool and the runtimes that run no command', () 
     });
   });
 
+  it('refuses a team runtime reached through a linked runtimes folder, and reads nothing through it', async () => {
+    const team = teamWith([]);
+    const outside = fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-runtime-outside-'));
+    dirs.push(outside);
+    fs.mkdirSync(path.join(outside, 'agents'));
+    fs.writeFileSync(path.join(outside, 'agents', 'runtime'), 'not run\n', { mode: 0o755 });
+    fs.writeFileSync(path.join(outside, 'agents', 'package.json'), JSON.stringify({ teamai: { exec: false } }));
+    fs.symlinkSync(outside, path.join(team.repo.localPath, 'runtimes'));
+    fs.writeFileSync(path.join(team.repo.localPath, 'drivers', 'agents.yaml'), 'schemaVersion: v1alpha1\nname: agents\nruntimes:\n  - use: agents\n');
+
+    expect(await open(team, false)).toEqual({
+      ok: false,
+      failure: {
+        code: 'runtime_not_found',
+        message: 'Driver "agents" uses runtime "agents", whose folder runtimes/agents in the team repo is reached through the link runtimes, and teamai runs a team runtime only from a folder the team repo holds. Replace the link with the folder, push it, run teamai pull, and start again.',
+      },
+    });
+  });
+
   it('opens it for a run that needs an AI tool or before its revision is accepted, and opens a team runtime whose manifest does not say, or says it runs commands', async () => {
     const unaccepted = { ok: false, failure: { code: 'runtime_not_accepted' } };
 

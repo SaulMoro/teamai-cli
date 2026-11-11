@@ -110,14 +110,17 @@ export async function locateRuntime(driver: ResolvedDriver, use: string): Promis
     return { ok: false, failure: { code: 'runtime_namespace_conflict', message: `Runtime "${use}" is defined in two active namespaces (${team.first} and ${team.second}). Keep it in one namespace, push it, run teamai pull, and start again.` } };
   }
 
-  if (team.kind === 'found' && (await fs.lstat(team.at).catch(() => undefined))?.isSymbolicLink() === true) {
+  const linked = team.kind === 'found' ? await linkOnTheWay(getKnowledgeDir(driver.config), team.at) : undefined;
+
+  if (team.kind === 'found' && linked !== undefined) {
     const relative = path.relative(getKnowledgeDir(driver.config), team.at).split(path.sep).join('/');
+    const where = linked === relative ? 'is a link' : `is reached through the link ${linked}`;
 
     return {
       ok: false,
       failure: {
         code: 'runtime_not_found',
-        message: `Driver "${driver.name}" uses runtime "${use}", whose folder ${relative} in the team repo is a link, and teamai runs a team runtime only from a folder the team repo holds. Replace the link with the folder, push it, run teamai pull, and start again.`,
+        message: `Driver "${driver.name}" uses runtime "${use}", whose folder ${relative} in the team repo ${where}, and teamai runs a team runtime only from a folder the team repo holds. Replace the link with the folder, push it, run teamai pull, and start again.`,
       },
     };
   }
@@ -174,6 +177,22 @@ async function runtimeEntries(dir: string): Promise<string[]> {
   }
 
   return found.sort();
+}
+
+/**
+ * The first link on the way from the team repo `base` down to `at`, `at` included, by relative path, or none: the
+ * `runtimes` folder itself, a namespace folder, or the runtime's own.
+ */
+async function linkOnTheWay(base: string, at: string): Promise<string | undefined> {
+  const segments = path.relative(base, at).split(path.sep);
+
+  for (let depth = 1; depth <= segments.length; depth++) {
+    const relative = segments.slice(0, depth).join('/');
+
+    if ((await fs.lstat(path.join(base, ...segments.slice(0, depth))).catch(() => undefined))?.isSymbolicLink() === true) return relative;
+  }
+
+  return undefined;
 }
 
 /** The first link a team runtime's folder holds, by relative path, or none. */
