@@ -145,9 +145,9 @@ describe('isCaseInsensitiveFs in a folder it may not write', () => {
     fs.rmSync(root, { recursive: true, force: true });
   });
 
-  it.skipIf(process.platform === 'win32' || process.getuid?.() === 0)('answers in a folder that refuses writes as on a writable folder of its volume', () => {
+  it.skipIf(process.platform === 'win32' || process.getuid?.() === 0).each(['Checkout', '研发'])('answers in a folder that refuses writes, holding "%s", as on a writable folder of its volume', (checkout) => {
     const parent = path.join(root, 'parent');
-    fs.mkdirSync(path.join(parent, 'Checkout'), { recursive: true });
+    fs.mkdirSync(path.join(parent, checkout), { recursive: true });
     fs.chmodSync(parent, 0o555);
 
     expect(isCaseInsensitiveFs(parent)).toBe(foldsCase(root));

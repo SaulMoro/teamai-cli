@@ -55,11 +55,12 @@ let caseInsensitiveCache = new Map<string, boolean>();
  * gated on this probe.
  *
  * The probe reads first: a name in the folder, looked up with one letter's case
- * swapped, folds case when it reaches the same file (`dev` and `ino`). A sandbox
- * that refuses writes to the folder (Codex's workspace-write or read-only) gets
- * the answer a writable folder gets, so it resolves the partition `init` made.
- * Only a folder that is missing or holds no name with a letter is probed by
- * writing a file. Result is cached per probe directory. On any probe error we
+ * swapped, folds case when it reaches the same file (`dev` and `ino`). A folder
+ * whose names hold no letter (`研发`) asks the same of its own path, up to the
+ * edge of its volume. A sandbox that refuses writes to the folder (Codex's
+ * workspace-write or read-only) gets the answer a writable folder gets, so it
+ * resolves the partition `init` made. Only a folder where neither finds a letter
+ * is probed by writing a file. Result is cached per probe directory. On any probe error we
  * fall back to case-sensitive (no lowercasing) — the conservative choice: it
  * never merges two distinct anchors, at worst it keeps two spellings of one
  * anchor separate.
@@ -76,8 +77,8 @@ export function isCaseInsensitiveFs(probeDir?: string): boolean {
 }
 
 /**
- * Whether the first name in `dir` with a letter, looked up with that letter's case swapped, reaches the same file.
- * Undefined when `dir` cannot be read or holds no such name.
+ * Whether the first name with a letter in `dir`, or else in `dir`'s own path on its volume, looked up with that letter's
+ * case swapped, reaches the same file. Undefined when no such name can be read.
  */
 function foldsCaseOfAName(dir: string): boolean | undefined {
   let entries: fs.Dir;
@@ -90,15 +91,18 @@ function foldsCaseOfAName(dir: string): boolean | undefined {
 
   try {
     for (let entry = entries.readSync(); entry !== null; entry = entries.readSync()) {
-      const letter = entry.name.search(/[A-Za-z]/);
+      const folds = foldsCaseOf(dir, entry.name);
 
-      if (letter < 0) continue;
-      const char = entry.name.charAt(letter);
-      const swapped = entry.name.slice(0, letter) + (char === char.toLowerCase() ? char.toUpperCase() : char.toLowerCase()) + entry.name.slice(letter + 1);
-      const named = fs.lstatSync(path.join(dir, entry.name));
-      const other = fs.lstatSync(path.join(dir, swapped), { throwIfNoEntry: false });
+      if (folds !== undefined) return folds;
+    }
 
-      return other !== undefined && named.dev === other.dev && named.ino === other.ino;
+    const volume = fs.statSync(dir).dev;
+
+    // A name is looked up on its parent's volume, so the walk stops at the first parent on another one.
+    for (let at = dir; path.dirname(at) !== at && fs.statSync(path.dirname(at)).dev === volume; at = path.dirname(at)) {
+      const folds = foldsCaseOf(path.dirname(at), path.basename(at));
+
+      if (folds !== undefined) return folds;
     }
   } catch {
     // A name that vanished or cannot be read: the write probe decides.
@@ -107,6 +111,19 @@ function foldsCaseOfAName(dir: string): boolean | undefined {
   }
 
   return undefined;
+}
+
+/** Whether `name` in `dir`, with its first letter's case swapped, reaches the same file. Undefined when it has no letter. */
+function foldsCaseOf(dir: string, name: string): boolean | undefined {
+  const letter = name.search(/[A-Za-z]/);
+
+  if (letter < 0) return undefined;
+  const char = name.charAt(letter);
+  const swapped = name.slice(0, letter) + (char === char.toLowerCase() ? char.toUpperCase() : char.toLowerCase()) + name.slice(letter + 1);
+  const named = fs.lstatSync(path.join(dir, name));
+  const other = fs.lstatSync(path.join(dir, swapped), { throwIfNoEntry: false });
+
+  return other !== undefined && named.dev === other.dev && named.ino === other.ino;
 }
 
 /** Whether a file written in `dir` under an upper-case name exists under its lower-case one. False when it cannot write. */
