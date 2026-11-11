@@ -122,11 +122,17 @@ describe('acquireLock (real fs)', () => {
     expect(JSON.parse(fs.readFileSync(lockPath, 'utf-8')).owner).toBe('live');
   });
 
-  it.runIf(process.platform === 'linux')('keeps a lock another pid namespace wrote, such as a container sharing this home, whose pid names another process here', async () => {
-    fs.writeFileSync(lockPath, JSON.stringify({ pid: unrelatedProcess(), owner: 'theirs', startedAt: AN_HOUR_AGO(), startTicks: 1, pidNamespace: 'pid:[1]' }));
+  // A container sharing this home: its pid names another process here, or none, and says nothing of its holder.
+  it.runIf(process.platform === 'linux').each([
+    ['keeps a lock another pid namespace wrote, whose pid names another process here', () => unrelatedProcess(), () => new Date().toISOString(), false],
+    ['keeps a lock another pid namespace wrote, whose pid no process here has', () => 999999, () => new Date().toISOString(), false],
+    ['reclaims a lock another pid namespace wrote more than an hour ago, whose holder this namespace cannot see', () => unrelatedProcess(), () => new Date(Date.now() - 2 * 3_600_000).toISOString(), true],
+  ])('%s', async (_name, pid, startedAt, isReclaimed) => {
+    fs.writeFileSync(lockPath, JSON.stringify({ pid: pid(), owner: 'theirs', startedAt: startedAt(), startTicks: 1, pidNamespace: 'pid:[1]' }));
 
-    expect(await acquireLock(lockPath)).toBe(false);
-    expect(JSON.parse(fs.readFileSync(lockPath, 'utf-8')).owner).toBe('theirs');
+    expect(await acquireLock(lockPath)).toBe(isReclaimed);
+    if (isReclaimed) await releaseLock(lockPath);
+    else expect(JSON.parse(fs.readFileSync(lockPath, 'utf-8')).owner).toBe('theirs');
   });
 
   it('keeps a lock this process took while its Date reads a time before it started, as under a faked clock', async () => {

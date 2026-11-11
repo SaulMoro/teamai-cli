@@ -594,23 +594,28 @@ async function inspectLock(resolved: string): Promise<LockVerdict> {
   }
 }
 
+/** How long a lock another pid namespace wrote holds: longer than any pull, push or migration runs. */
+const FOREIGN_HOLD_MS = 3_600_000;
+
 /**
  * Whether the process `holder` names is gone. A live process with its pid is the holder only if it is the process that
  * wrote the lock, not a later one given the pid, as a container hands pids out again: by the start the lock records on
- * Linux, else by a start after the lock was written. Without either to compare, or when the lock comes from another
- * pid namespace, a live pid holds it.
+ * Linux, else by a start after the lock was written. Without either to compare, a live pid holds it. A lock another pid
+ * namespace wrote, as a container sharing this home does, is held until `FOREIGN_HOLD_MS` after it was written.
  */
 export async function isHolderGone(holder: LockHolder): Promise<boolean> {
+  // Its pid names another process here, or none, so neither says anything of the holder; a container that exited
+  // leaves its lock to a namespace no later process shares, so only its age frees it.
+  if (isOtherPidNamespace(holder.pidNamespace, (await (ownIdentity ??= readOwnIdentity())).pidNamespace)) {
+    return Date.now() - Date.parse(holder.startedAt ?? '') > FOREIGN_HOLD_MS;
+  }
+
   try {
     process.kill(holder.pid, 0);
   } catch (err) {
     // EPERM: alive, owned by another user. ESRCH: the owning process is gone.
     if (errnoCode(err) !== 'EPERM') return true;
   }
-
-  // Written in another pid namespace, as by a container sharing this home: the live process with that pid here is not
-  // the one the lock names, and its start says nothing about the holder.
-  if (isOtherPidNamespace(holder.pidNamespace, (await (ownIdentity ??= readOwnIdentity())).pidNamespace)) return false;
 
   if (holder.startTicks !== undefined) {
     const ticks = await processStartTicks(holder.pid);
