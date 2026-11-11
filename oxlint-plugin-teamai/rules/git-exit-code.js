@@ -27,6 +27,9 @@ const QUIET_ANSWERS = new Map([
   ['symbolic-ref', ['--quiet', '-q']],
 ]);
 
+/** Global options that take the next argument as their value. */
+const GLOBAL_WITH_VALUE = new Set(['-c', '-C', '--git-dir', '--work-tree', '--namespace', '--config-env']);
+
 /**
  * The literal text of each argument of `node`, an array expression; undefined for an argument that is not literal.
  * @param {ESTree.Node | undefined} node
@@ -49,7 +52,13 @@ function literalArgs(node) {
  * @returns {string | undefined}
  */
 function exitCodeQuestion(node, questions = EXIT_CODE_ANSWERS) {
-  const [command, ...rest] = literalArgs(node);
+  const args = literalArgs(node);
+  const spread = node?.type === 'ArrayExpression' ? node.elements.map((element) => element?.type === 'SpreadElement') : [];
+  let at = 0;
+
+  // Global options and spread config come before the subcommand: `-c <value>`, `-C <dir>`, or any other `-` flag.
+  while (at < args.length && (spread[at] || args[at]?.startsWith('-'))) at += GLOBAL_WITH_VALUE.has(args[at] ?? '') ? 2 : 1;
+  const [command, ...rest] = args.slice(at);
   const flags = command === undefined ? undefined : questions.get(command);
 
   return flags && rest.some((arg) => arg !== undefined && flags.includes(arg)) ? command : undefined;

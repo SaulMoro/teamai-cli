@@ -25,6 +25,9 @@ rule.invalid('rejects a quiet symbolic-ref through raw awaited for its settling 
 rule.valid('allows a quiet symbolic-ref through raw read by its output in then', `const branch = await git.raw(['symbolic-ref', '-q', 'HEAD']).then((out) => out.trim() || null, () => null);`);
 rule.valid('allows a quiet action through raw, which fails loudly', `await git.raw(['fetch', '--quiet', 'origin']);`);
 rule.invalid('holds a package added later, with no rule edit', `await git.raw(['show-ref', '--quiet', ref]);`, undefined, { filename: 'packages/tool-newcomer/src/refs.ts' });
+rule.invalid('rejects a question behind spread config, as an untrusted git asks it', `const { code } = await git(dir, [...UNTRUSTED_CONFIG, 'merge-base', '--is-ancestor', a, b]);`);
+rule.invalid('rejects a question behind global options', `const { code } = await git(dir, ['-c', 'core.quotepath=off', '-C', sub, 'cat-file', '-e', sha]);`);
+rule.valid('allows a command behind global options that is not a question', `const { code } = await git(dir, ['-c', 'user.name=TeamAI', 'commit', '-q', '-m', message]);`);
 rule.valid('allows a raw call that fails loudly', `await git.raw(['rev-parse', '--verify', \`\${rev}^{commit}\`]);`);
 rule.valid('allows a quiet rev-parse, whose output names the commit', `const sha = (await git.raw(['rev-parse', '-q', '--verify', name])).trim() || null;`);
 rule.valid('allows a raw call that reads output', `const out = await git.raw(['symbolic-ref', '--short', 'HEAD']);`);
@@ -44,14 +47,13 @@ rule.valid('allows an exit-code question read through gitAnswer without await', 
 rule.valid('allows a git call that is not an exit-code question', `const { code, stderr } = await git(root, ['merge', '--no-edit', sha]);`);
 rule.valid('leaves tests alone', `await git.raw(['merge-base', '--is-ancestor', a, b]);`, { filename: 'src/__tests__/x.test.ts' });
 
-it('holds the production source of this checkout, where git questions are asked', () => {
+it('holds the production source of this checkout, packages included, and no test', () => {
   const files = execFileSync('git', ['ls-files', 'src', 'packages'], { cwd: REPO, encoding: 'utf8' }).split('\n').filter((file) => /\.[cm]?tsx?$/.test(file));
   const matched = files.filter(isProductionSource);
-  const asking = matched.filter((file) => /'(?:merge-base|cat-file|show-ref|check-ignore|rev-parse|symbolic-ref)'/.test(fs.readFileSync(path.join(REPO, file), 'utf8')));
 
-  expect(matched.length).toBeGreaterThan(500);
+  expect(matched).toContain('src/workflow/worktree.ts');
   expect(matched.some((file) => file.startsWith('packages/'))).toBe(true);
-  expect(asking.length).toBeGreaterThan(20);
+  expect(matched.filter((file) => /\.test\.|\/__tests__\//.test(file))).toEqual([]);
 });
 
 it('is an error in this checkout, with no file let off', () => {
