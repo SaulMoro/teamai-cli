@@ -150,21 +150,21 @@ export async function recordInProcessAttempt(config: LocalConfig, run: RunId, at
 
 /**
  * Records `home`, the tool home the prompt of in-process attempt `attempt` of run `run` runs its tool with, in the
- * attempt's record, before the tool starts, so its session is read there. Nothing when the attempt has no in-process record.
+ * attempt's record, before the tool starts, so its session is read there. An attempt without an in-process record did
+ * not start in this process, and its session is read where it was before.
  */
-export async function recordInProcessSessionHome(config: LocalConfig, run: string, attempt: string, home: { tool: string; dir: string }): Promise<void> {
-  const runId = RunIdSchema.safeParse(run);
-  const attemptId = AttemptIdSchema.safeParse(attempt);
+export async function recordInProcessSessionHome(config: LocalConfig, run: RunId, attempt: AttemptId, home: z.infer<typeof ToolHomeSchema>): Promise<void> {
+  const read = await readAttemptRecord(config, run, attempt);
 
-  if (!runId.success || !attemptId.success) return;
-  const file = attemptRuntimePath(config, runId.data, attemptId.data);
-  const record = InProcessAttemptRecordSchema.safeParse(await readRegularFile(file, 'utf8').then((text) => JSON.parse(text) as unknown, () => undefined));
+  if (read.kind === 'unreadable') log.warn(`The runtime record of attempt ${attempt} cannot be read (${read.why}), so teamai looks for its session in the tool's own home.`);
 
-  if (record.success) await writeJsonAtomic(file, { ...record.data, sessionHome: home } satisfies z.infer<typeof InProcessAttemptRecordSchema>);
+  if (read.kind === 'recorded' && 'inProcess' in read.record) {
+    await writeJsonAtomic(attemptRuntimePath(config, run, attempt), { ...read.record, sessionHome: home } satisfies z.infer<typeof InProcessAttemptRecordSchema>);
+  }
 }
 
-/** Where attempt `attempt` of run `run` ran, by its record: the one reader of `runtime.json`. */
-export async function readAttemptPlacement(config: LocalConfig, run: RunId, attempt: AttemptId): Promise<AttemptPlacement> {
+/** The record of attempt `attempt` of run `run`: the one reader of `runtime.json`. */
+async function readAttemptRecord(config: LocalConfig, run: RunId, attempt: AttemptId): Promise<{ kind: 'recorded'; record: z.infer<typeof AttemptRecordSchema> } | { kind: 'unrecorded' } | { kind: 'unreadable'; why: string }> {
   let parsed: unknown;
 
   try {
@@ -175,15 +175,22 @@ export async function readAttemptPlacement(config: LocalConfig, run: RunId, atte
 
   const record = AttemptRecordSchema.safeParse(parsed);
 
-  if (!record.success) return { kind: 'unreadable', why: 'it is not a runtime record this teamai knows' };
+  return record.success ? { kind: 'recorded', record: record.data } : { kind: 'unreadable', why: 'it is not a runtime record this teamai knows' };
+}
 
-  if ('inProcess' in record.data) {
-    const { runtime, sessionHome } = record.data;
+/** Where attempt `attempt` of run `run` ran, by its record. */
+export async function readAttemptPlacement(config: LocalConfig, run: RunId, attempt: AttemptId): Promise<AttemptPlacement> {
+  const read = await readAttemptRecord(config, run, attempt);
+
+  if (read.kind !== 'recorded') return read;
+
+  if ('inProcess' in read.record) {
+    const { runtime, sessionHome } = read.record;
 
     return { kind: 'in_process', runtime, ...(sessionHome && { sessionHome }) };
   }
 
-  return { kind: 'external', record: record.data };
+  return { kind: 'external', record: read.record };
 }
 
 /** The record of attempt `attempt` of run `run` when it holds a place on an external step runtime; undefined for any other placement. */

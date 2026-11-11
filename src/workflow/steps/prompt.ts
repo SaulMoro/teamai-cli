@@ -405,7 +405,6 @@ export async function runPromptStep({ config, lock, driver, lease, adapter = ste
   // An instance reaches a runtime that execs its tool only when the runtime lists it, so its command is there. Its
   // home, and the sessions there, are its own.
   const toolHome = homed && variable !== undefined ? { tool: selected, variable, dir: attemptToolHome(config, lock.run, lease.attempt, launched) } : undefined;
-  const storeDir = toolHome ? storeDirOf(AgentSession.platformForTool(launched) ?? '', { kind: 'tool-home', dir: toolHome.dir }) : undefined;
   let resume: { id: string; resumed: SessionRef } | undefined;
 
   // A runtime that launches agents continues, as a new turn, the conversation an earlier attempt launched on it, in the
@@ -567,9 +566,10 @@ export async function runPromptStep({ config, lock, driver, lease, adapter = ste
   // In teamai's process the tool keeps its session in the home the step's environment names, such as a CODEX_HOME
   // outside HOME, which teamai does not record as the tool's root: the attempt's record says where, for scoring.
   const ranHome = !onRuntime && homeVariable !== undefined ? input.env?.[homeVariable] : undefined;
-  const ranStore = ranHome ? storeDirOf(AgentSession.platformForTool(launched) ?? '', { kind: 'tool-home', dir: ranHome }) : undefined;
 
   if (ranHome) await recordInProcessSessionHome(config, lock.run, lease.attempt, { tool: selected, dir: ranHome });
+  const sessionHome = toolHome?.dir ?? ranHome;
+  const storeDir = sessionHome ? storeDirOf(AgentSession.platformForTool(launched) ?? '', { kind: 'tool-home', dir: sessionHome }) : undefined;
 
   const { result, durationMs } = await timedLaunch({
     launch: lease.interactive ? launcher.runInteractive.bind(launcher) : launcher.run.bind(launcher),
@@ -606,7 +606,7 @@ export async function runPromptStep({ config, lock, driver, lease, adapter = ste
   }
 
   const ran = result.started ? result : undefined;
-  const used = ran?.session && teamSkills ? await usedInSession(launched, ran.session, cwd, teamSkills, launchedAt, storeDir || ranStore || undefined) : undefined;
+  const used = ran?.session && teamSkills ? await usedInSession(launched, ran.session, cwd, teamSkills, launchedAt, storeDir || undefined) : undefined;
   // A tool held to no budget that stated it spent more still ended its turn there: the budget names it.
   const passedBudget = limits?.budget !== undefined && budget === undefined && budgeted(ran?.tokens) > limits.budget.tokens;
   const stoppedBy = ran?.stoppedBy ?? (passedBudget ? 'budget' : undefined);
