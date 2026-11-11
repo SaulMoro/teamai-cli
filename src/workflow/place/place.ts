@@ -847,9 +847,21 @@ export async function finishPlace(input: {
     return { outcome: 'failed', message: failure.message, failure };
   }
 
-  // Whatever a role's finish throws, the place still ends: recorded finished, failed with why, its hooks cleared.
-  const finished = await finishRole(config, placeFiles(config, run, attempt), recorded, end, input.changed).catch((cause: unknown): PlaceFinished => {
-    const failure = { code: 'workspace_base', message: `Step "${recorded.step}" could not finish its place: ${cause instanceof Error ? cause.message : String(cause)}` };
+  const files = placeFiles(config, run, attempt);
+
+  // Whatever a role's finish throws, the place still ends: the member's copy given back as giving the place up gives it,
+  // recorded finished, failed with why, its hooks cleared.
+  const finished = await finishRole(config, files, recorded, end, input.changed).catch(async (cause: unknown): Promise<PlaceFinished> => {
+    const why = `Step "${recorded.step}" could not finish its place: ${cause instanceof Error ? cause.message : String(cause)}`;
+    let unrestored: string | undefined;
+
+    try {
+      unrestored = await giveBackCopy(config, files, recorded);
+    } catch (error) {
+      unrestored = error instanceof Error ? error.message : String(error);
+    }
+
+    const failure = { code: 'workspace_base', message: unrestored ? `${why} ${unrestoredConfig(unrestored, recorded.dir)}` : why };
 
     return { outcome: 'failed', message: failure.message, failure };
   });
@@ -1092,14 +1104,8 @@ export async function abandonPlace(input: { config: LocalConfig; lock: RunLock; 
       await removeDataCheckout(config, dir);
       break;
     case 'reader':
-      unrestored = await restoreOverlay({ dir, configCommit: place.workspace.configCommit, saved: files.overlay, run: await copyGit(config, recorded) });
-
-      // The copy keeps its mark while the branch agent files are not back, so later steps there are refused.
-      if (!unrestored) await leaveReadCopy({ dir, run: await copyGit(config, recorded), file: files.snapshot, workspace: place.workspace, found: place.found, saved: files.overlay, attempt, step: recorded.step });
-      break;
     case 'writer':
-      // The step ran in the copy, so its config may name a hook or fsmonitor.
-      unrestored = await restoreOverlay({ dir, configCommit: place.workspace.configCommit, saved: files.overlay, run: await copyGit(config, recorded) });
+      unrestored = await giveBackCopy(config, files, recorded);
       break;
     default: {
       const unhandled: never = place;
@@ -1111,6 +1117,23 @@ export async function abandonPlace(input: { config: LocalConfig; lock: RunLock; 
   await writePlaceRecord(config, abandoned);
 
   return left(unrestored);
+}
+
+/**
+ * Gives the member's copy a reader or writer place lies over back as prepare found it: teamai's overlay comes off, and a
+ * reader's copy is put back and loses its mark. The sentence a failure adds when the overlay could not come off;
+ * undefined for any other place. A writer's step ran in the copy, so its config may name a hook or fsmonitor.
+ */
+async function giveBackCopy(config: LocalConfig, files: PlaceFiles, record: Placed): Promise<string | undefined> {
+  const { place, dir } = record;
+
+  if (place.role !== 'reader' && place.role !== 'writer') return undefined;
+  const unrestored = await restoreOverlay({ dir, configCommit: place.workspace.configCommit, saved: files.overlay, run: await copyGit(config, record) });
+
+  // The copy keeps its mark while the branch agent files are not back, so later steps there are refused.
+  if (place.role === 'reader' && !unrestored) await leaveReadCopy({ dir, run: await copyGit(config, record), file: files.snapshot, workspace: place.workspace, found: place.found, saved: files.overlay, attempt: record.attempt, step: record.step });
+
+  return unrestored;
 }
 
 /**

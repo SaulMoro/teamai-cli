@@ -38,6 +38,17 @@ vi.mock('../workflow/worktree.js', async (importOriginal) => {
     commitWork: killable('commitWork', real.commitWork),
   };
 });
+vi.mock('../workflow/place/worktree-snapshot.js', async (importOriginal) => {
+  const real = await importOriginal<typeof import('../workflow/place/worktree-snapshot.js')>();
+  return {
+    ...real,
+    snapshotWorktree: async (...args: Parameters<typeof real.snapshotWorktree>) => {
+      const snapshot = await real.snapshotWorktree(...args);
+      if (killAfter.delete('snapshotWorktree')) throw new Error('killed after snapshotWorktree');
+      return snapshot;
+    },
+  };
+});
 // Setup's process runs on once the process that started it is killed, as it does when a runner is killed.
 vi.mock('@teamai/shared/process-group', async (importOriginal) => {
   const real = await importOriginal<typeof import('@teamai/shared/process-group')>();
@@ -356,6 +367,38 @@ steps:
     // Finished, so a second finish answers what the first recorded rather than finishing a place left ready.
     expect(await withRunLock(f.config, RunIdSchema.parse(f.runId), (lock) => finishPlace({ config: f.config, lock, attempt: AttemptIdSchema.parse(lease.attempt), end: { outcome: 'success' }, secrets: {} }), { waitMs: 0 }))
       .toMatchObject({ outcome: 'failed', failure: { code: 'workspace_base', message: `Step "${lease.step}" could not finish its place: killed after commitWork` } });
+  });
+
+  it('puts back the copy of a reader whose finish throws, as giving the place up does, so later steps there are not refused', async () => {
+    const f = await fixture(`schemaVersion: v1alpha1
+name: build
+description: A reader of the copy a writer made.
+alias: ship
+steps:
+  - id: change
+    workspace: new
+    workflow:
+      steps:
+        - id: write
+          prompt: Write the code.
+        - id: check
+          needs: [write]
+          workspace: read-only
+          prompt: Check the code.
+`);
+    const write = await next(f);
+    fs.writeFileSync(path.join(write.cwd, 'code.txt'), 'written\n');
+    expect(await f.client.report(f.runId, { attempt: write.attempt, revision: write.revision, outcome: 'success', driver: f.driver })).toMatchObject({ data: { accepted: true } });
+    const check = await next(f);
+    const mark = path.resolve(check.cwd, git(check.cwd, 'rev-parse', '--git-path', 'teamai-unrestored'));
+    killAfter.add('snapshotWorktree');
+
+    const reported = await f.client.report(f.runId, { attempt: check.attempt, revision: check.revision, outcome: 'success', driver: f.driver });
+
+    expect({ reported, marked: fs.existsSync(mark) }).toMatchObject({
+      reported: { data: { accepted: true, step: { status: 'failed', failure: { code: 'workspace_base', message: `Step "change.check" could not finish its place: killed after snapshotWorktree` } } } },
+      marked: false,
+    });
   });
 
   it('does not commit or push a cancelled attempt', async () => {
