@@ -25,8 +25,8 @@ import { failedCommand, placeView, runtimeCommand, runtimeSetup, runtimeStepEnv,
 import { attemptRun, credentialSecrets, HeldPlace, isExecRuntimeTool, readAttemptPlacement, recordInProcessAttempt, attemptRuntimePath, maskAttemptResults, type AttemptRun } from '../../runtimes/attempt.js';
 import { answerCallTool, hostStepRuntime } from '../../runtimes/host.js';
 import { writeHeldSteps, type HeldSteps } from '../../runtimes/held.js';
-import { closeAfterSweep, stopOnRecordedDriver } from '../../runtimes/cancelled.js';
-import { loginHolder, loginLockFile, releaseLogin } from '../../runtimes/login.js';
+import { closeAfterSweep, stopLeftInProcess, stopOnRecordedDriver } from '../../runtimes/cancelled.js';
+import { LOGIN_TOOLS, loginHolder, loginLockFile, releaseLogin } from '../../runtimes/login.js';
 import { toolsLaunchDeps, type EngineOptions, type OpenedDriver } from '../../runtimes/sources.js';
 import { newOpId, type ExecAnswer, type ExecQuestion, type StepRuntime } from '@teamai/runtime-protocol/step-runtime';
 import { resumeOrPublish, retryCommand } from '../../runtimes/retry-command.js';
@@ -780,7 +780,8 @@ async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, given: 
     const closing = attemptRuns.get(attempt);
     const handle = localHandles.get(attempt);
     const slot = slotOf.get(attempt);
-    const logins = slot?.engine.logins ?? [];
+    // One in teamai's process, as a Codex judge, may hold any login; nothing of it runs once it closes.
+    const logins = slot?.kind === 'external' ? slot.engine.logins : LOGIN_TOOLS;
     const placement = slot?.kind === 'external' ? await readAttemptPlacement(config, runId, attempt) : undefined;
     const closingHandle = placement?.kind === 'external' ? placement.record.open.handle : undefined;
     attemptRuns.delete(attempt);
@@ -898,6 +899,20 @@ async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, given: 
   const giveBackUnlaunched = async (attempt: AttemptId): Promise<void> => {
     await releaseUnlaunchedPlace({ config, lock, attempt });
     await closeRun(attempt);
+  };
+
+  // An attempt of this machine the run stopped while no driver ran it, as one whose lease a killed teamai held past its
+  // timeout, may have left its tool running and its login held.
+  const stopLeftByKilledDrivers = async (): Promise<void> => {
+    const state = await readRun(config, runId);
+
+    if (state === 'missing' || state === 'corrupt') return;
+
+    for (const { attempt, driver: by } of state.stoppedAttempts ?? []) {
+      const left = AttemptIdSchema.safeParse(attempt);
+
+      if (by.kind === 'local' && by.machine === driver.machine && left.success && !attemptRuns.has(left.data)) await stopLeftInProcess(config, runId, left.data);
+    }
   };
 
   // A driver killed before cleanup, of this run or any other, left clones behind. The runtimes that ran in them, which
@@ -1744,6 +1759,7 @@ async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, given: 
         await abandon(lease.attempt);
       }));
     } finally {
+      await stopLeftByKilledDrivers();
       await maskAttemptResults(config, runId, await maskedValues());
     }
 

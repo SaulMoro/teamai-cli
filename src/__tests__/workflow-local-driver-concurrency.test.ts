@@ -11,6 +11,8 @@ import { type StepLauncher } from '@teamai/runtime-tools';
 import { _setDriverPollMs, runLocalDriver } from '../workflow/drivers/local/local-driver.js';
 import { driverIdentity } from '../driver-identity.js';
 import { attemptDir, readRun, RunIdSchema } from '../workflow/store.js';
+import { attemptToolHome } from '../workflow/runtimes/attempt.js';
+import { holdLogin, loginHolder, loginHome } from '../workflow/runtimes/login.js';
 import { knownSecrets } from '../env-resolution.js';
 import { alive, dirs, exitsWithin, LOG, parallelFixture, toolPaths, TWO_BARRIERS, workflowFixture } from './helpers/workflow-local-driver-fixture.js';
 import { recordGroup } from '@teamai/shared/process-group';
@@ -588,6 +590,29 @@ steps:
     } finally {
       left.kill('SIGKILL');
     }
+  });
+
+  // A Codex judge holds the login lock in teamai's own process; a driver killed then never reaches its release.
+  it('releases the login an attempt of a killed driver held, once it stopped what that attempt left running', async () => {
+    const { config, workspace, runId } = await workflowFixture(`schemaVersion: v1alpha1
+name: build
+description: A step whose earlier driver was killed while it held the Codex login.
+steps:
+  - id: check
+    command: "true"
+`);
+    const leased = await leaseNext(config, runId, driverIdentity('local', workspace));
+    if (!('data' in leased)) throw new Error(leased.error.message);
+    const run = RunIdSchema.parse(runId);
+    const attempt = LeaseIdSchema.parse(leased.data.lease).attempt;
+    fs.mkdirSync(loginHome('codex'), { recursive: true });
+    fs.writeFileSync(path.join(loginHome('codex'), 'auth.json'), JSON.stringify({ tokens: { account_id: 'acct-1', refresh_token: 'r1' } }), { mode: 0o600 });
+    const held = await holdLogin({ tool: 'codex', run, attempt, toolHome: attemptToolHome(config, run, attempt, 'codex'), signal: new AbortController().signal, onWait: async () => {} });
+    expect(held).toEqual({ ok: true });
+
+    expect(await runLocalDriver(config, runId, workspace)).toMatchObject({ data: { done: { outcome: 'succeeded' } } });
+
+    expect(await loginHolder('codex')).toBeUndefined();
   });
 
   it('runs a prompt an earlier driver leased alone, between the commands leased before and after it', async () => {

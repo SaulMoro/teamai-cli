@@ -8,7 +8,7 @@ import { driverIdentity, sameDriver } from '../driver-identity.js';
 import type { WorkflowEnv } from '../env-resolution.js';
 import { scoringUnavailable, startedByPasses, verifiedScorers } from '../scorers/engine-hooks.js';
 import { resolveRunMode, type RunMode } from '../launch-context.js';
-import { stopRecordedGroup } from '@teamai/shared/process-group';
+import { stopLeftInProcess } from './runtimes/cancelled.js';
 import type { LocalConfig } from '../types.js';
 import type { JsonValue } from '@teamai/shared/json';
 import { attemptEnv, nestedWorkflowError, type AgentEvidence } from './attempt-marker.js';
@@ -26,7 +26,7 @@ import { cancelRun, respondProvenance, respondToHitl, retryStep, type CallerProv
 import { isUnder } from './loop.js';
 import { stepDefinitions } from './scope.js';
 import { StepModelSchema } from './step-model.js';
-import { attemptDir, AttemptIdSchema, readRun, RunIdSchema, withRunLock, type AttemptId, type RunId, type RunLock } from './store.js';
+import { AttemptIdSchema, readRun, RunIdSchema, withRunLock, type AttemptId, type RunId, type RunLock } from './store.js';
 import type { DriverCan } from './requirements.js';
 import { isWorkflowError, type DriverIdentity, type RunState, type RunStatus, type WorkflowDefinition, type WorkflowEnvelope, type WorkflowFailure } from './types.js';
 import { cloneBranchOf, confinedOf, deliveryProblem, runCopyToMerge, sessionSource, stepRoleOf } from './workspace.js';
@@ -809,7 +809,7 @@ export function inProcessClient({ config, env }: { config: LocalConfig; env: Wor
         // again. An attempt id no lease could carry has no group recorded.
         const left = AttemptIdSchema.safeParse(attempt);
 
-        if (left.success) await stopRecordedGroup(attemptDir(config, runId, left.data));
+        if (left.success) await stopLeftInProcess(config, runId, left.data);
         const released = await managedReport({ config, runId, report: { attempt, revision, outcome: 'released', driver }, secrets: env.secrets, lock });
 
         if (isWorkflowError(released)) return { kind: 'failed', failure: released.error };
@@ -821,7 +821,7 @@ export function inProcessClient({ config, env }: { config: LocalConfig; env: Wor
         if (stopped.driver.kind !== 'local' || stopped.driver.machine !== machine) continue;
         const left = AttemptIdSchema.safeParse(stopped.attempt);
 
-        if (left.success) await stopRecordedGroup(attemptDir(config, runId, left.data));
+        if (left.success) await stopLeftInProcess(config, runId, left.data);
       }
 
       const unreconciled = await reconcileTakenCopies(config, runId, run.checkout ?? checkout);

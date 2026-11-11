@@ -123,6 +123,20 @@ async function placesLeftOpen(config: LocalConfig, run: RunId, leased: ReadonlyS
 const RELEASE = { release: true } as const;
 
 /**
+ * Stops what a killed teamai left running of attempt `attempt` in its own process, and releases the logins it held, as
+ * a Codex judge holds one: nothing of it runs any more to use them. One on a step runtime keeps its login until that
+ * runtime closes its place (`stopOnRecordedDriver`).
+ */
+export async function stopLeftInProcess(config: LocalConfig, run: RunId, attempt: AttemptId): Promise<void> {
+  await stopRecordedGroup(attemptDir(config, run, attempt));
+  const placement = await readAttemptPlacement(config, run, attempt);
+
+  if (placement.kind !== 'in_process' && placement.kind !== 'unrecorded') return;
+
+  for (const tool of LOGIN_TOOLS) await releaseLogin(tool, { run, attempt });
+}
+
+/**
  * Stops what a killed teamai left of attempt `attempt` on the step runtime its record names, through the driver recorded
  * for it, as `teamai workflow cancel` does, and closes its place there, before a driver without that runtime runs the
  * attempt's step again, and releases the login it held once its place closed. Answers why the stop or the close is not
