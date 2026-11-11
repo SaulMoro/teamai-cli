@@ -36,7 +36,7 @@ export default defineRule({
     let isTelling = false;
 
     return {
-      /** @param {ESTree.Literal} node */
+      /** @param {ESTree.BooleanLiteral | ESTree.NullLiteral | ESTree.NumericLiteral | ESTree.StringLiteral | ESTree.BigIntLiteral | ESTree.RegExpLiteral} node */
       Literal(node) {
         const text = stringLiteralValue(node);
 
