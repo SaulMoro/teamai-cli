@@ -73,7 +73,7 @@ import {
   pathExists,
 } from './utils/fs.js';
 import { expandHome } from '@teamai/shared/home';
-import { mapStrings, parseJson, type JsonSyntax, type JsonValue, isJsonObject, type JsonObject } from '@teamai/shared/json';
+import { mapStrings, parseJson, type JsonSyntax, type JsonValue, isJsonObject, type JsonObject, JsonObjectSchema } from '@teamai/shared/json';
 import { isPlainJson, parseJsonAs } from './utils/json.js';
 import { log } from '@teamai/shared/log';
 import { warnOnce } from './utils/warn-once.js';
@@ -947,9 +947,10 @@ async function readYamlMcpDoc(file: string, keys: readonly string[]): Promise<Js
   const doc = YAML.parseDocument(raw);
 
   if (doc.errors.length > 0) return null;
-  const data: JsonValue = raw.trim() === '' ? {} : doc.toJS();
+  const parsed = JsonObjectSchema.safeParse(raw.trim() === '' ? {} : doc.toJS());
 
-  if (!isJsonObject(data)) return null;
+  if (!parsed.success) return null;
+  const data = parsed.data;
   const servers = valueAt(data, keys);
 
   if (servers !== undefined && !isJsonObject(servers)) return null;
