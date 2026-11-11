@@ -102,6 +102,9 @@ export function stepLauncher(deps: StepLaunchDeps, {
 
     if (!profile) return { started: false, exitCode: 1, failure: { code: 'tool_unsupported', message: `The local workflow tool "${tool}" is not supported` } };
     await fs.mkdir(path.dirname(input.resultPath), { recursive: true });
+    // The launch reads only what this tool writes there: a file an earlier process of the attempt left, such as the
+    // tool of a killed driver that wrote one as it was stopped, is never taken for this tool's result.
+    await fs.rm(input.resultPath, { force: true });
     const command = input.command ?? profile.command;
     const executable = input.command === undefined ? resolveTool(command) : resolveInstanceCommand(command);
 

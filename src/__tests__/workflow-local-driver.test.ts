@@ -17,7 +17,8 @@ import { type StepLauncher, type StepRunResult, type StepRun, type ToolSpawn } f
 import { hostLauncher } from './helpers/host-launcher.js';
 import { _setDriverPollMs, runLocalDriver } from '../workflow/drivers/local/local-driver.js';
 import { type WorkflowRunRecord } from '../workflow/records.js';
-import { AttemptIdSchema, readRun, RunIdSchema } from '../workflow/store.js';
+import { attemptDir, AttemptIdSchema, attemptResultPath, readRun, RunIdSchema } from '../workflow/store.js';
+import { recordGroup } from '@teamai/shared/process-group';
 import { attemptRuntimePath, attemptToolHome, readAttemptPlacement, recordInProcessAttempt } from '../workflow/runtimes/attempt.js';
 import { openDriver } from '../workflow/runtimes/sources.js';
 import { personalDir } from '../workflow/runtimes/definitions.js';
@@ -693,6 +694,29 @@ steps:
     expect(await readRun(config, runId)).toMatchObject({
       steps: [{ id: 'review', status: 'failed', failure: { code: 'tool_unconfigured', message: 'workflows.idle_timeout is "soon", which is no duration. Set it to one, such as 2m, or remove it.' } }],
     });
+  });
+
+  it('reads only the result its own tool wrote when it runs again an attempt whose tool a killed driver left, which wrote one as it was stopped', async () => {
+    const { config, workspace, runId } = await fixture();
+    config.workflows = { tools: { default: 'claude' } };
+    const leased = await leaseNext(config, runId, driverIdentity('local', workspace));
+    if (!('data' in leased)) throw new Error(leased.error.message);
+    const run = RunIdSchema.parse(runId);
+    const attempt = AttemptIdSchema.parse((leased.data.lease as { attempt: string }).attempt);
+    // What the killed driver left: its tool, still running in the attempt's process group, which writes a result as it stops.
+    const result = attemptResultPath(config, run, attempt);
+    fs.mkdirSync(path.dirname(result), { recursive: true });
+    const left = spawn(process.execPath, ['-e', `process.on('SIGTERM', () => { require('fs').writeFileSync(${JSON.stringify(result)}, JSON.stringify({ output: { ok: true } })); process.exit(0); }); setInterval(() => {}, 1000); process.stdout.write('up');`], { detached: true, stdio: ['ignore', 'pipe', 'ignore'] });
+    await new Promise((resolve) => left.stdout.once('data', resolve));
+    recordGroup(left, attemptDir(config, run, attempt));
+    onTestFinished(() => { left.kill('SIGKILL'); });
+    // The tool this driver starts ends without a result.
+    const claude = claudeBeside(workspace, { before: 'process.exit(0);' });
+
+    await runLocalDriver(config, runId, workspace, { adapter: hostLauncher(undefined, () => claude.executable), toolPaths });
+
+    expect(claude.calls()).toHaveLength(1);
+    expect(await readRun(config, runId)).toMatchObject({ steps: [{ id: 'review', status: 'failed', failure: { code: 'tool_failed', message: 'claude did not write a valid workflow result' } }] });
   });
 
   it('publishes no failure code the tool wrote into its result', async () => {
