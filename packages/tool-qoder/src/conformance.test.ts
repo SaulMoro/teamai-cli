@@ -7,7 +7,7 @@ const fixture = (name: string): string => fixtureText(new URL(`./fixtures/${name
 
 /** Qoder keeps a Claude Code-shaped session at `<store>/<real cwd with every non-alphanumeric character as ->/<id>.jsonl`;
  * written out here rather than through the adapter's encoder, so an encoder bug fails the round trip. Long cwds are
- * covered with names Claude Code wrote, in tool-claude's project-dir.test.ts. */
+ * covered with names Claude Code wrote, in tool-claude's sessions.test.ts. */
 const qoderTranscript = {
   text: fixture('qoder-transcript.jsonl'),
   place: (store: string, cwd: string, sessionId: string): string => path.join(store, fs.realpathSync(cwd).replace(/[^A-Za-z0-9]/g, '-'), `${sessionId}.jsonl`),

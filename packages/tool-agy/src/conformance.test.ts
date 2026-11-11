@@ -12,7 +12,7 @@ describeFamily('tool-agy', family, {
     },
   },
   transcripts: {
-    agy: { unrecorded: 'agy finds a conversation by the workspace in its SQLite summaries database, which a text recording cannot hold; agy-session-adapter.test.ts rebuilds it with sqlite3 beside real agy 1.4.8 transcripts' },
+    agy: { unrecorded: 'agy finds a conversation by the workspace in its SQLite summaries database, which a text recording cannot hold; session-adapter.test.ts rebuilds it with sqlite3 beside real agy 1.4.8 transcripts' },
   },
   // A real agy 1.4.8 conversation: two planner steps, no cache reads.
   tokens: {

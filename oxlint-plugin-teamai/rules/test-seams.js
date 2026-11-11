@@ -4,27 +4,7 @@ import { defineRule } from '@oxlint/plugins';
 import { z } from 'zod';
 
 import { importVisitors } from '../imports.js';
-import { lintedPath, scopedFiles } from '../utils.js';
-
-/**
- * Tests that still reach past a seam of their package, as `<test> -> <module>` from the repository root. A new test
- * reaches only its own module, src/testing/ and the package's exports; this list only shrinks, and an entry the test
- * no longer imports fails until it is removed.
- */
-const PAST_A_SEAM = new Set([
-  // The sandbox wrapper's test reads the provider's command runner, until the sandbox is split by module.
-  'packages/runtime-sandbox/src/wrapper.test.ts -> packages/runtime-sandbox/src/providers/cli.ts',
-  // Tool families whose tests are named apart from the module they test, or read their launch adapter.
-  'packages/tool-agy/src/agy-session-adapter.test.ts -> packages/tool-agy/src/session-adapter.ts',
-  'packages/tool-claude/src/project-dir.test.ts -> packages/tool-claude/src/sessions.ts',
-  'packages/tool-claude/src/testing/fake-agent.test.ts -> packages/tool-claude/src/launch.ts',
-  'packages/tool-cursor/src/cursor-bubble-range.test.ts -> packages/tool-cursor/src/cursor-store.ts',
-  'packages/tool-muse/src/muse-session-adapter.test.ts -> packages/tool-muse/src/session-adapter.ts',
-  'packages/tool-opencode/src/testing/fake-agent.test.ts -> packages/tool-opencode/src/launch.ts',
-]);
-
-// A listed test that moves fails when lint loads the rule, instead of keeping its entry for good.
-scopedFiles([...PAST_A_SEAM].map((entry) => entry.split(' -> ')[0] ?? entry));
+import { lintedPath } from '../utils.js';
 
 const ExportsSchema = z.object({ exports: z.union([z.string().transform((target) => ({ '.': target })), z.record(z.string(), z.string())]).optional() });
 
@@ -63,30 +43,16 @@ export default defineRule({
     const from = `${pkg}/src/${test}`;
     const own = `src/${test.replace(/\.test(\.[cm]?[jt]sx?)$/, '$1')}`;
     const exports = exported(root);
-    const listed = [...PAST_A_SEAM].filter((entry) => entry.startsWith(`${from} -> `));
-    const reached = new Set();
 
-    return {
-      ...importVisitors(({ node, specifier }) => {
-        if (!specifier.startsWith('.')) return;
-        const target = sourceOf(path.posix.relative(root, path.posix.resolve(path.posix.dirname(file), specifier)));
+    return importVisitors(({ node, specifier }) => {
+      if (!specifier.startsWith('.')) return;
+      const target = sourceOf(path.posix.relative(root, path.posix.resolve(path.posix.dirname(file), specifier)));
 
-        // Another package, or src/, reached by path: package-boundaries owns that.
-        if (target.startsWith('..')) return;
+      // Another package, or src/, reached by path: package-boundaries owns that.
+      if (target.startsWith('..')) return;
 
-        if (target === sourceOf(own) || target.startsWith('src/testing/') || exports.has(`./${target}`)) return;
-        const entry = `${from} -> ${pkg}/${target}`;
-        reached.add(entry);
-
-        if (!PAST_A_SEAM.has(entry)) {
-          context.report({ node, message: `${from} reaches ${target}, past its package's seams. Test it through ${own.replace(/^src\//, './').replace(/\.ts$/, '.js')}, src/testing/ or an entry of the package's exports, or give ${target} a test of its own.` });
-        }
-      }),
-      'Program:exit'(node) {
-        for (const entry of listed.filter((known) => !reached.has(known))) {
-          context.report({ node, message: `${entry} is no longer imported: remove it from PAST_A_SEAM in oxlint-plugin-teamai/rules/test-seams.js.` });
-        }
-      },
-    };
+      if (target === sourceOf(own) || target.startsWith('src/testing/') || exports.has(`./${target}`)) return;
+      context.report({ node, message: `${from} reaches ${target}, past its package's seams. Test it through ${own.replace(/^src\//, './').replace(/\.ts$/, '.js')}, src/testing/ or an entry of the package's exports, or give ${target} a test of its own.` });
+    });
   },
 });
