@@ -11,6 +11,8 @@ import type { ToolId } from '../tools.js';
 import { skillContext } from '../workflow/drivers/skill/skill-driver.js';
 import { inProcessClient, type WorkflowClient } from '../workflow/protocol.js';
 import { AttemptIdSchema, deliveryLockPath, readRun, RunIdSchema, skillStatePath, type RunId } from '../workflow/store.js';
+import { attemptToolHome } from '../workflow/runtimes/attempt.js';
+import { holdLoginFrom, loginHolder } from '../workflow/runtimes/login.js';
 import { Crash, fakeConfinedClaude, fakeJudge, githubOrigin, LABEL_PASS, scoringStarted, skillHarness, untilStopped } from './helpers/skill-harness.js';
 
 const CHECK = `schemaVersion: v1alpha1
@@ -1761,5 +1763,27 @@ describe('detached runners', () => {
     const { runners } = await skillContext({ config: harness.config, toolPaths: harness.context.toolPaths, env: harness.context.env, cwd: harness.work, aiTools: [] });
     const spawned = runners.spawn({ run, attempt: AttemptIdSchema.parse('a00000000'), checkout, mode: 'attended' });
     await expect(spawned).rejects.toThrow(`The runner of attempt a00000000 cannot start in ${checkout}, the checkout run ${run} started from: it does not exist. Restore that checkout at that path, then run the same call again, or end the run with teamai workflow cancel ${run}.`);
+  });
+
+  // A tick stops what a runner left once its runner.lock is free (C10, C11): its Codex judge held the member's login.
+  it('write back and free the Codex login the judge of a killed runner refreshed, as they stop what that runner left', async () => {
+    const harness = await skillHarness({ check: CHECK });
+    roots.push(harness.root);
+    const run = RunIdSchema.parse('r0123456789abcdef');
+    const attempt = AttemptIdSchema.parse('a00000000');
+    const daily = path.join(harness.root, 'codex');
+    // Codex rotates its refresh token on a refresh and refuses the old one after (refresh_token_reused).
+    const login = (refresh: string): string => JSON.stringify({ auth_mode: 'chatgpt', tokens: { account_id: 'acct-1', refresh_token: refresh } });
+    fs.mkdirSync(daily);
+    fs.writeFileSync(path.join(daily, 'auth.json'), login('refresh-1'), { mode: 0o600 });
+    const toolHome = attemptToolHome(harness.config, run, attempt, 'codex');
+    expect((await holdLoginFrom({ tool: 'codex', executable: 'codex', from: daily, toolHome, run, attempt, signal: new AbortController().signal })).ok).toBe(true);
+    fs.writeFileSync(path.join(toolHome, 'auth.json'), login('refresh-2'));
+    const { runners } = await skillContext({ config: harness.config, toolPaths: harness.context.toolPaths, env: harness.context.env, cwd: harness.work, aiTools: [] });
+
+    await runners.stopLeft(run, attempt);
+
+    expect({ daily: JSON.parse(fs.readFileSync(path.join(daily, 'auth.json'), 'utf8')).tokens.refresh_token, holder: await loginHolder('codex') })
+      .toEqual({ daily: 'refresh-2', holder: undefined });
   });
 });

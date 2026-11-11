@@ -8,7 +8,6 @@ import { spawn } from 'node:child_process';
 import path from 'node:path';
 import { resolveCliEntry } from '../../../builtin-hooks.js';
 import { stepEnvironment, withRunningCli } from '../../../env-exec.js';
-import { stopRecordedGroup } from '@teamai/shared/process-group';
 import { startGroupedCommand, type GroupedCommandExit } from '../../shell-command.js';
 import type { RunMode } from '../../../launch-context.js';
 import type { LocalConfig } from '../../../types.js';
@@ -33,6 +32,7 @@ import {
 import type { Runners, SkillContext } from './skill-driver.js';
 import type { SkillAnswer } from './turn.js';
 import { retryCommand } from '../../runtimes/retry-command.js';
+import { stopLeftInProcess } from '../../runtimes/cancelled.js';
 
 /** Runners as detached teamai processes, alive while they hold their runner lock. */
 export function detachedRunners(config: LocalConfig): Runners {
@@ -59,7 +59,8 @@ export function detachedRunners(config: LocalConfig): Runners {
     alive: (run, attempt) => runnerAlive(config, run, attempt),
     // A process group of its own, so a stop reaches every process the command started.
     command: ({ run, attempt, command, cwd, env }) => startGroupedCommand({ command, cwd, env, detached: process.platform !== 'win32', group: attemptDir(config, run, attempt) }),
-    stopLeft: (run, attempt) => stopRecordedGroup(attemptDir(config, run, attempt)),
+    // Its runner is gone, so nothing else ends the login a Codex judge it ran held.
+    stopLeft: (run, attempt) => stopLeftInProcess(config, run, attempt),
     sleep: (ms, signal) => new Promise((resolve) => {
       const timer = setTimeout(resolve, ms);
       signal?.addEventListener('abort', () => { clearTimeout(timer); resolve(); }, { once: true });
