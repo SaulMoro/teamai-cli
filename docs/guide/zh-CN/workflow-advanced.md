@@ -1382,7 +1382,7 @@ $ teamai workflow resume redf22a69e4ae6652 --no-auto-approve         # 从现在
 
 历史保留在 passes 和 archive 中，因此 `length(steps.x.passes)` 也统计失败尝试。重试循环所有者会重置其迭代数；重试范围内的其他步骤则保留所有者的计数。重试保留顶层工作流的 round，耗尽最后一轮后重试仍可能再次 `loop_exhausted`。
 
-指定步骤的 cancel 停止 pending、waiting、leased、running 或 delivering 工作，同时停止尚未结束的后代。cancelled 属于 stopped，因此依赖步骤会跳过，除非其 if 读取取消结果来恢复；运行通常失败。取消整个运行立即以 `cancelled` 结束，不启动下一轮。cancel 不增加修订号。迟到的报告返回 `lease_cancelled`，`next.cancelled` 告诉驱动停止哪些工具。
+指定步骤的 cancel 停止 pending、waiting、leased、running 或 delivering 工作，同时停止尚未结束的后代。cancelled 属于 stopped，因此依赖步骤会跳过，除非其 if 读取取消结果来恢复；运行通常失败。取消整个运行立即以 `cancelled` 结束，不启动下一轮。cancel 不增加修订号。迟到的报告返回 `lease_cancelled`，`next.cancelled` 告诉驱动停止哪些工具。在 `--driver skill` 下，若某步骤的 runner 仍在本机运行，它会在约 10 秒内自行停止该步骤，连同它持有的工具和登录：`cancel` 会说明这一点，并把该步骤留给它。若一分钟后 runner 仍在运行，先停止它，再运行一次 `cancel`。
 
 在重试、回答、Ctrl-C 或关闭终端后，用 resume 继续本地运行。`workflow start --driver local` 在运行开始时就把运行 id 和继续它的 `resume` 命令输出到 stderr。它优先使用本机未结本地租约的工作目录，其次使用最近调用 `next` 的驱动工作目录（该驱动必须是本机本地驱动），最后使用当前目录。因此重试后即使从子目录继续，也会保留原来的本地工作目录。每个运行同时只能有一个本地驱动。重复 resume 返回 driver_running 和持有者进程号，请停止该驱动或等待；死进程留下的锁会自动回收。被杀掉的驱动留下仍在运行的命令时，会在它的步骤再次运行前停止该命令及它启动的进程。如果 teamai 是在你的终端里由另一个程序（例如 `npm run` 或脚本）启动的，并且命令的 shell 和它一起被杀掉，那个 shell 启动的进程会继续运行，需要你自己停止。已结算运行返回 done。本地运行失败时，`start`、`resume` 和 `resume --next` 会在 stderr 写出每个步骤失败的原因，以及它的 `retry` 和 `resume` 命令，见[必需的键在本机没有值](#必需的键在本机没有值)。如果是整个运行的限制（它的 `timeout` 或 `budget`）让它停下，则改为写出运行失败的原因，以及限制停下的每个步骤的 `retry` 命令。本地运行以 failed 或 cancelled 结束时退出码为 1；控制命令成功时退出码为 0，即使返回的运行状态为 failed 或 cancelled。
 

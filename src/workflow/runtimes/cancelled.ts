@@ -4,7 +4,7 @@ import type { LocalConfig } from '../../types.js';
 import { log } from '@teamai/shared/log';
 import type { RunStatus, WorkflowFailure } from '../types.js';
 import { existingCheckout } from '../run-location.js';
-import { attemptDir, AttemptIdSchema, attemptsDir, readRun, type AttemptId, type RunId, type RunLock } from '../store.js';
+import { attemptDir, AttemptIdSchema, attemptsDir, readRun, runnerAlive, type AttemptId, type RunId, type RunLock } from '../store.js';
 import { knownSecrets } from '../../env-resolution.js';
 import { attemptRun, attemptRuntimePath, attemptToolHome, maskAttemptResults, readAttemptPlacement, releaseAttemptRuntime, type AttemptRuntimeRecord } from './attempt.js';
 import { endLogin, LOGIN_TOOLS, loginHolder, loginLockFile } from './login.js';
@@ -16,16 +16,20 @@ import { stopRecordedGroup } from '@teamai/shared/process-group';
 // ─── What cancelled attempts left on their step runtimes ─
 //
 //  A driver killed while its attempt ran leaves the tool running on the step runtime, and the attempt's login held.
-//  `teamai workflow cancel`, holding the run's lock so no driver of it is live, stops each such attempt the way its
-//  driver would have: it cancels the exec, brings the place's work back, closes the place, and only then writes
+//  `teamai workflow cancel`, holding the run's lock so no local driver of it is live, stops each such attempt the way
+//  its driver would have: it cancels the exec, brings the place's work back, closes the place, and only then writes
 //  the login back and releases it (`endLogin`). An attempt it cannot stop keeps its place, its records and its
 //  login, so no second copy runs beside it, and the next `teamai workflow cancel` of the run tries again. Each
 //  runtime is opened in `recover` mode for this, and for new work only when it refuses that mode (sources.ts).
 //
+//  A skill driver's runner works outside that lock, and stops its own attempt, ending what it holds, once it sees the
+//  cancel. The cancel leaves an attempt whose runner still runs to it, so its process group and its login never have
+//  two owners; one whose runner is gone it stops as any other.
+//
 
 /**
- * Stops what each cancelled attempt of the locked run left open on its step runtime, and each other attempt whose place
- * a runtime still holds, such as one whose stop or close failed before, then releases the logins of the attempts that
+ * Stops what each cancelled attempt of the locked run left open on its step runtime, but one whose skill runner still
+ * runs, which stops itself, and each other attempt whose place a runtime still holds, such as one whose stop or close failed before, then releases the logins of the attempts that
  * no longer run. Says what it released, and which login stays held and how to free it. Attempt `release` goes through
  * the same stop, and what its runtime cannot confirm, such as a close it can never clear, does not hold it: the person
  * checked that nothing of it still runs, so teamai writes its login back and lets it go. Answers the run's status and
@@ -45,12 +49,22 @@ export async function stopCancelledAttempts(config: LocalConfig, lock: RunLock, 
     return attempt.success ? [attempt.data] : [];
   });
 
+  const runnerOwned = new Set<AttemptId>();
+
   // What a killed driver of this install started for a cancelled attempt, which its record reaches, and the login one
   // in teamai's process held, written back; what one runs on a step runtime, the fleet's member included, its runtime
   // stops below.
-  for (const attempt of cancelled) await stopLeftInProcess(config, run, attempt);
+  for (const attempt of cancelled) {
+    if (!await runnerAlive(config, run, attempt)) {
+      await stopLeftInProcess(config, run, attempt);
+      continue;
+    }
 
-  const left = new Set([...cancelled, ...await placesLeftOpen(config, run, leased)]);
+    runnerOwned.add(attempt);
+    log.info(`Attempt ${attempt} of run ${run} runs in the skill driver's runner on this machine, which stops it and releases what it holds once it sees the cancel. If that runner (teamai workflow report ${run} --driver skill --attempt ${attempt}) still runs in a minute, stop it, then run teamai workflow cancel ${run} again.`);
+  }
+
+  const left = new Set([...cancelled.filter((attempt) => !runnerOwned.has(attempt)), ...await placesLeftOpen(config, run, leased)]);
 
   if (release !== undefined && !left.has(release)) log.warn(`Attempt ${release} of run ${run} holds no place on a step runtime, so there is nothing to release.`);
 
@@ -73,7 +87,7 @@ export async function stopCancelledAttempts(config: LocalConfig, lock: RunLock, 
 
   await maskAttemptResults(config, run, { ...await knownSecrets(config), ...masks });
 
-  const open = new Set([...stillRunning, ...leased]);
+  const open = new Set([...stillRunning, ...leased, ...runnerOwned]);
 
   // An attempt no longer open holds a login only because nothing ended it, as one whose record cannot be read.
   for (const tool of LOGIN_TOOLS) {

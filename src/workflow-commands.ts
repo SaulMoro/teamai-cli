@@ -1329,9 +1329,10 @@ export async function workflowRetry(runId: string, step: string): Promise<void> 
 }
 
 /**
- * Cancels a run or step through the shared control operation. With no live driver of the run on this machine, it also
- * stops what the cancelled attempts left running on their step runtimes, then releases the logins they held. A live
- * driver keeps the run's lock and does both itself. `release` names an attempt to let go without its runtime's close.
+ * Cancels a run or step through the shared control operation. With no live local driver of the run on this machine, it
+ * also stops what the cancelled attempts left running on their step runtimes, then releases the logins they held. A live
+ * local driver keeps the run's lock and does both itself, as a skill driver's runner still running does for its attempt.
+ * `release` names an attempt to let go without its runtime's close.
  */
 export async function workflowCancel(runId: string, step?: string, options: { release?: string } = {}): Promise<void> {
   await workflowControl(runId, async (config, secrets) => {

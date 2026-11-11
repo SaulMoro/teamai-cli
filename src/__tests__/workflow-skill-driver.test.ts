@@ -10,9 +10,13 @@ import { getDataHome } from '../types.js';
 import type { ToolId } from '../tools.js';
 import { skillContext } from '../workflow/drivers/skill/skill-driver.js';
 import { inProcessClient, type WorkflowClient } from '../workflow/protocol.js';
-import { AttemptIdSchema, deliveryLockPath, readRun, RunIdSchema, skillStatePath, type RunId } from '../workflow/store.js';
+import { AttemptIdSchema, deliveryLockPath, readRun, RunIdSchema, skillStatePath, takeRunLock, type RunId } from '../workflow/store.js';
 import { attemptToolHome } from '../workflow/runtimes/attempt.js';
 import { holdLoginFrom, loginHolder } from '../workflow/runtimes/login.js';
+import { stopCancelledAttempts } from '../workflow/runtimes/cancelled.js';
+import { cancelRun } from '../workflow/run-controls.js';
+import { knownSecrets } from '../env-resolution.js';
+import { log } from '@teamai/shared/log';
 import { Crash, fakeConfinedClaude, fakeJudge, githubOrigin, LABEL_PASS, scoringStarted, skillHarness, untilStopped } from './helpers/skill-harness.js';
 
 const CHECK = `schemaVersion: v1alpha1
@@ -1268,6 +1272,38 @@ steps:
     expect(reports).toEqual(['released']);
     const stored = await readRun(harness.config, run);
     expect(typeof stored === 'object' && stored.steps.find((item) => item.id === 'build')).toMatchObject({ status: 'cancelled' });
+  });
+
+  // A runner works outside the run's lock, which `teamai workflow cancel` holds while it stops what cancelled attempts left.
+  it('leaves an attempt whose runner still runs to that runner when the person cancels the run, and the runner stops it', async () => {
+    const stops: string[] = [];
+    const harness = await skillHarness({ serve: `schemaVersion: v1alpha1
+name: serve
+description: Serve the app
+invoke: allow
+steps:
+  - id: serve
+    command: sleep 300
+` }, { runners: (runners) => ({ ...runners, command: (input) => (input.command === 'sleep 300' ? untilStopped(() => { stops.push(input.attempt); }) : runners.command(input)) }) });
+    roots.push(harness.root);
+    const started = await harness.call({ kind: 'start', name: 'serve', answers: { parallel: 1, confirmed: false }, inputs: undefined });
+    if (!('data' in started) || !('turn' in started.data)) throw new Error(JSON.stringify(started));
+    const run = RunIdSchema.parse(started.data.turn.run);
+    const attempt = AttemptIdSchema.parse(started.data.turn.running.find((entry) => entry.phase === 'running')?.attempt);
+    // What a Codex judge of the runner's attempt holds while it runs.
+    const daily = path.join(harness.root, 'codex');
+    fs.mkdirSync(daily);
+    fs.writeFileSync(path.join(daily, 'auth.json'), JSON.stringify({ tokens: { account_id: 'acct-1', refresh_token: 'refresh-1' } }), { mode: 0o600 });
+    expect((await holdLoginFrom({ tool: 'codex', executable: 'codex', from: daily, toolHome: attemptToolHome(harness.config, run, attempt, 'codex'), run, attempt, signal: new AbortController().signal })).ok).toBe(true);
+    const info = vi.spyOn(log, 'info').mockImplementation(() => undefined);
+
+    expect(await cancelRun(harness.config, run, await knownSecrets(harness.config))).not.toHaveProperty('error');
+    expect(await takeRunLock(harness.config, run, (lock) => stopCancelledAttempts(harness.config, lock), { waitMs: 0 })).toMatchObject({ kind: 'held' });
+
+    expect(await loginHolder('codex')).toMatchObject({ run, attempt });
+    expect(info).toHaveBeenCalledWith(`Attempt ${attempt} of run ${run} runs in the skill driver's runner on this machine, which stops it and releases what it holds once it sees the cancel. If that runner (teamai workflow report ${run} --driver skill --attempt ${attempt}) still runs in a minute, stop it, then run teamai workflow cancel ${run} again.`);
+    await eventsToDone(harness, run);
+    expect(stops).toEqual([attempt]);
   });
 
   it('masks the run\'s secrets in the result a child wrote once it reports', async () => {
