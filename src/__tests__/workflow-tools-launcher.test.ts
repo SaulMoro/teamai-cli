@@ -1,6 +1,6 @@
 import { execFileSync, spawn } from 'node:child_process';
 import { EventEmitter } from 'node:events';
-import { closeSync, constants, openSync } from 'node:fs';
+import { closeSync, constants, openSync, writeFileSync } from 'node:fs';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -24,6 +24,14 @@ function child(stdout: string | Buffer[], exitCode = 0) {
     childProcess.emit('close', exitCode);
   });
   return childProcess;
+}
+
+/** A tool that writes `body` to `resultPath` as it starts, then runs as `spawned` does. */
+function writing(resultPath: string, body: unknown, spawned: () => ReturnType<typeof child>) {
+  return () => {
+    writeFileSync(resultPath, JSON.stringify(body));
+    return spawned();
+  };
 }
 
 /**
@@ -83,8 +91,7 @@ describe('the tools launcher', () => {
     const resultPath = path.join(os.tmpdir(), `teamai-workflow-failure-${Date.now()}-${Math.random()}.json`);
     files.push(resultPath);
     const output = { summary: 'Done.' };
-    await fs.writeFile(resultPath, JSON.stringify({ output, ...written }));
-    const adapter = hostLauncher(() => child(claudeStream('claude-sonnet', { result: 'Wrote the result file.' })) as ReturnType<ToolSpawn>, () => 'claude');
+    const adapter = hostLauncher(writing(resultPath, { output, ...written }, () => child(claudeStream('claude-sonnet', { result: 'Wrote the result file.' }))) as unknown as ToolSpawn, () => 'claude');
 
     const result = await adapter.run('claude', { prompt: 'Review.', expected, cwd: os.tmpdir(), resultPath, secrets: {} });
 
@@ -152,17 +159,12 @@ describe('the tools launcher', () => {
   it('starts the resolved executable and ignores token counts written into result.json', async () => {
     const resultPath = path.join(os.tmpdir(), `teamai-workflow-result-${Date.now()}.json`);
     files.push(resultPath);
-    await fs.writeFile(resultPath, JSON.stringify({
-      output: { ok: true },
-      model: 'invented',
-      session: 'invented-session',
-      tokens: { input: 999, output: 999 },
-    }));
-    const spawnTool = vi.fn(() => child(claudeStream('claude-sonnet', {
+    const written = { output: { ok: true }, model: 'invented', session: 'invented-session', tokens: { input: 999, output: 999 } };
+    const spawnTool = vi.fn(writing(resultPath, written, () => child(claudeStream('claude-sonnet', {
       session_id: 'session-1',
       usage: { input_tokens: 4, output_tokens: 2, cache_read_input_tokens: 1 },
       result: JSON.stringify({ ok: false }),
-    }))) as unknown as ToolSpawn;
+    })))) as unknown as ToolSpawn;
     const resolveTool = vi.fn(() => 'C:\\npm\\claude.cmd');
     const adapter = hostLauncher(spawnTool, resolveTool);
 
@@ -491,17 +493,12 @@ describe('the tools launcher', () => {
   it('reads Codex and OpenCode stdout for model, session, and tokens', async () => {
     const resultPath = path.join(os.tmpdir(), `teamai-workflow-codex-${Date.now()}.json`);
     files.push(resultPath);
-    await fs.writeFile(resultPath, JSON.stringify({
-      output: { ok: true },
-      model: 'invented',
-      session: 'invented-session',
-      tokens: { input: 999, output: 999 },
-    }));
+    const written = { output: { ok: true }, model: 'invented', session: 'invented-session', tokens: { input: 999, output: 999 } };
     const codexStdout = [
       JSON.stringify({ type: 'thread.started', thread_id: 'thread-1', model: 'gpt-5.4' }),
       JSON.stringify({ type: 'turn.completed', usage: { input_tokens: 8, cached_input_tokens: 3, output_tokens: 2 } }),
     ].join('\n');
-    const spawnTool = vi.fn(() => child(codexStdout)) as unknown as ToolSpawn;
+    const spawnTool = vi.fn(writing(resultPath, written, () => child(codexStdout))) as unknown as ToolSpawn;
     const adapter = hostLauncher(spawnTool, () => '/usr/bin/codex');
 
     const codex = await adapter.run('codex-internal', {
@@ -525,13 +522,12 @@ describe('the tools launcher', () => {
 
     const opencodePath = path.join(os.tmpdir(), `teamai-workflow-opencode-${Date.now()}.json`);
     files.push(opencodePath);
-    await fs.writeFile(opencodePath, JSON.stringify({ output: { ok: true }, tokens: { input: 999 } }));
     const opencodeStdout = [
       JSON.stringify({ type: 'session.created', properties: { info: { id: 'ses_1' } } }),
       JSON.stringify({ type: 'message.updated', properties: { info: { sessionID: 'ses_1', modelID: 'claude-sonnet-4' } } }),
       JSON.stringify({ type: 'message.part.updated', properties: { part: { type: 'step-finish', tokens: { input: 11, output: 4, cache: { read: 6 } } } } }),
     ].join('\n');
-    const opencodeSpawn = vi.fn(() => child(opencodeStdout)) as unknown as ToolSpawn;
+    const opencodeSpawn = vi.fn(writing(opencodePath, { output: { ok: true }, tokens: { input: 999 } }, () => child(opencodeStdout))) as unknown as ToolSpawn;
     const opencode = hostLauncher(opencodeSpawn, () => '/usr/bin/opencode');
 
     const opened = await opencode.run('opencode', {
