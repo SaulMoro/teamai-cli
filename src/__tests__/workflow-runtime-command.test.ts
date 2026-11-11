@@ -29,6 +29,7 @@ function commandRun(): { run: AttemptRun; execs: () => number } {
     collect: async () => undefined,
     close: async () => {},
     stopLeftSetup: async () => undefined,
+    closeForRemadeFolder: async () => undefined,
     stopLeftOperation: async () => undefined,
   };
 

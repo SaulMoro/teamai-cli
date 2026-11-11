@@ -297,11 +297,14 @@ async function stageLease(lease: StagedLease, { config, lock, root, env, mode, s
   const moved = await stopLeftElsewhere({ config, run: lock.run, attempt: lease.attempt, runsOn, checkout: root });
 
   if (moved) return moved;
-  // A setup cut short is given up with the folder it ran in, which the prepare makes again (`preparePlace`).
-  const placed = setUpOn && await readPlaceRecord(config, lock.run, lease.attempt);
-  const leftSetup = (await setUpOn?.stopLeftSetup({ isFolderRemade: placed?.kind === 'found' && placed.record.phase === 'setting-up' }))?.failure;
+  const leftSetup = (await setUpOn?.stopLeftSetup())?.failure;
 
   if (leftSetup) return { code: 'runtime_lost', message: leftSetup.message };
+  // A setup cut short is given up with the folder it ran in, which the prepare makes again (`preparePlace`).
+  const placed = setUpOn && await readPlaceRecord(config, lock.run, lease.attempt);
+  const unclosed = placed?.kind === 'found' && placed.record.phase === 'setting-up' ? (await setUpOn?.closeForRemadeFolder())?.failure : undefined;
+
+  if (unclosed) return { code: 'runtime_lost', message: unclosed.message };
 
   if (lease.envScope) {
     const scoped = await stepEnvironment(env, lease.envScope);

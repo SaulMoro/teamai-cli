@@ -41,6 +41,7 @@ function promptOnlyRun({ duringOpen, beforeSend, result = { output: { ok: true }
     collect: async () => undefined,
     close: async () => {},
     stopLeftSetup: async () => undefined,
+    closeForRemadeFolder: async () => undefined,
     stopLeftOperation: async () => undefined,
   };
 

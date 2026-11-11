@@ -178,6 +178,7 @@ describe('runConfinedStepOnRuntime', () => {
       collect: async () => undefined,
       close: async () => undefined,
       stopLeftSetup: async () => undefined,
+      closeForRemadeFolder: async () => undefined,
       stopLeftOperation: async () => undefined,
     };
 
