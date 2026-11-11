@@ -31,7 +31,7 @@ import { readRegularFile } from '@teamai/shared/regular-file';
 import type { SimpleGit, StatusResult } from 'simple-git';
 import { createGitWithBlockTimeout, isGitRepo, commitSkippingHooks, isDedicatedRepoRoot, gitCommonDir, checkoutLocation } from './git.js';
 import { acquireLock, releaseLock } from '../update.js';
-import { ensureDir, writeFile, pathExists, refusedWrite, RefusedWriteError } from './fs.js';
+import { ensureDir, writeFile, pathExists, refusedWrite, refusedWriteIn, RefusedWriteError, type RefusedWrite } from './fs.js';
 import { isSilent, log } from '@teamai/shared/log';
 import { projectsRootDir } from './partition.js';
 import {
@@ -177,6 +177,14 @@ async function remoteBranchExists(spec: BranchWorktreeSpec, repoRoot: string): P
  */
 export async function fetchTrackingRef(git: SimpleGit, branch: string): Promise<void> {
   await git.fetch(['--progress', 'origin', `+refs/heads/${branch}:refs/remotes/origin/${branch}`]);
+}
+
+/**
+ * The write the filesystem refused a fetch in `dir`, which failed with `cause`: as git's message names it, or, where git
+ * speaks another language, as a write in the folder the fetch writes FETCH_HEAD in is refused.
+ */
+export async function refusedFetch(git: SimpleGit, cause: unknown, dir: string): Promise<RefusedWrite | undefined> {
+  return refusedWrite(cause, { gitCwd: dir }) ?? await git.revparse(['--absolute-git-dir']).then((gitDir) => refusedWriteIn(gitDir.trim()), () => undefined);
 }
 
 /**
@@ -1351,7 +1359,7 @@ async function syncWorktree(spec: BranchWorktreeSpec, wt: string): Promise<Origi
     await fetchTrackingRef(git, spec.branch);
   } catch (e) {
     // A fetch the filesystem refuses, as a sandbox refuses FETCH_HEAD, fails again on every retry: not the connection.
-    const refused = refusedWrite(e, { gitCwd: wt });
+    const refused = await refusedFetch(git, e, wt);
 
     if (refused) return { origin: 'refused', error: new RefusedWriteError(refused, { cause: e }) };
     log.debug(`[${spec.logTag}] fetch failed, using the local copy: ${e instanceof Error ? e.message : String(e)}`);

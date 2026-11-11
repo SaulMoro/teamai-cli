@@ -19,6 +19,7 @@ import {
   createBranchWorktree,
   failureReason,
   fetchTrackingRef,
+  refusedFetch,
   isPublished,
   type BranchPushOptions,
   type BranchWrite,
@@ -214,7 +215,8 @@ export async function fetchReportsOriginFile(dir: string, relPath: string, updat
       if (heads.trim() === '') return { status: 'absent' };
       await fetchTrackingRef(git, REPORTS_BRANCH);
     } catch (e) {
-      const message = reportsRefusedMessage(e, { gitCwd: dir });
+      const refused = await refusedFetch(git, e, dir);
+      const message = refused && reportsRefusedMessage(new RefusedWriteError(refused, { cause: e }));
 
       return message === undefined ? { status: 'unreachable', reason: failureReason(e) } : { status: 'refused', message };
     }

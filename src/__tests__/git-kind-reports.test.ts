@@ -440,6 +440,50 @@ describe('git-kind reports: a team clone that refuses writes', () => {
     }
   });
 
+  it.skipIf(process.platform === 'win32' || process.getuid?.() === 0)('reads origin as refused for a member whose git speaks another language', async () => {
+    const { origin, clone } = await seedBareOrigin();
+    const alice = gitConfig(clone, origin);
+    expect(await publish(alice, 'members/alice.yaml', 'username: alice\n')).toBe(true);
+    const bob = await cloneCheckout(origin, 'bob', 'bob');
+    const gitDir = path.join(bob.repo.localPath, '.git');
+    fs.chmodSync(gitDir, 0o555);
+    vi.stubEnv('LC_ALL', 'de_DE.UTF-8');
+    vi.stubEnv('LANGUAGE', 'de');
+
+    try {
+      expect(await fetchReportsOriginFile(bob.repo.localPath, 'members/alice.yaml')).toEqual({
+        status: 'refused',
+        message: `teamai-reports could not be read on this machine: teamai may not write in ${fs.realpathSync(gitDir)} (EACCES). Give this process write access to that folder, or run the command outside its sandbox.`,
+      });
+    } finally {
+      vi.unstubAllEnvs();
+      fs.chmodSync(gitDir, 0o755);
+    }
+  });
+
+  it.skipIf(process.platform === 'win32' || process.getuid?.() === 0)('refuses to read the reports checkout whose refresh may not write FETCH_HEAD for a member whose git speaks another language', async () => {
+    const { origin, clone } = await seedBareOrigin();
+    const alice = gitConfig(clone, origin);
+    expect(await publish(alice, 'members/alice.yaml', 'username: alice\n')).toBe(true);
+    const bob = await cloneCheckout(origin, 'bob', 'bob');
+    const wt = await ensureReportsWorktree(bob, READ_ONLY);
+    expect(await publish(alice, 'members/carol.yaml', 'username: carol\n')).toBe(true);
+    const gitDir = /^gitdir: (.+)$/m.exec(fs.readFileSync(path.join(wt, '.git'), 'utf8'))?.[1] ?? '';
+    fs.rmSync(path.join(gitDir, 'FETCH_HEAD'), { force: true });
+    fs.chmodSync(gitDir, 0o555);
+    vi.stubEnv('LC_ALL', 'de_DE.UTF-8');
+    vi.stubEnv('LANGUAGE', 'de');
+
+    try {
+      const read = await readableReportsWorktree(bob).then(() => 'read', (error: unknown) => reportsRefusedMessage(error));
+
+      expect(read).toBe(`teamai-reports could not be read on this machine: teamai may not write in ${gitDir} (EACCES). Give this process write access to that folder, or run the command outside its sandbox.`);
+    } finally {
+      vi.unstubAllEnvs();
+      fs.chmodSync(gitDir, 0o755);
+    }
+  });
+
   it.skipIf(process.platform === 'win32' || process.getuid?.() === 0)('refuses to read the reports checkout whose refresh may not write FETCH_HEAD, naming the folder', async () => {
     const { origin, clone } = await seedBareOrigin();
     const alice = gitConfig(clone, origin);

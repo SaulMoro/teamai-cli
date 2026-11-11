@@ -138,6 +138,24 @@ export function refusedWrite(cause: unknown, { gitCwd }: { gitCwd?: string } = {
   return undefined;
 }
 
+/**
+ * The write the filesystem refuses in `folder`, found by creating a file there and removing it: for a failure whose
+ * own text does not say, such as git's in a language other than English.
+ */
+export async function refusedWriteIn(folder: string): Promise<RefusedWrite | undefined> {
+  const probe = path.join(folder, `.teamai-write-${crypto.randomBytes(4).toString('hex')}`);
+
+  try {
+    await fse.writeFile(probe, '', { flag: 'wx' });
+  } catch (error) {
+    return refusedWrite(error);
+  }
+
+  await fse.remove(probe);
+
+  return undefined;
+}
+
 /** What to tell the person of a write the filesystem refused: where, why, and what to do. */
 export function refusedWriteAdvice({ folder, code }: RefusedWrite): string {
   return `teamai may not write in ${folder} (${code}). Give this process write access to that folder, or run the command outside its sandbox.`;
