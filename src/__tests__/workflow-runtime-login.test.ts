@@ -1,6 +1,7 @@
 import { execFile, execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import fs from 'node:fs';
+import fsp from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -53,6 +54,41 @@ describe('the dedicated Codex login lock', () => {
     expect(holders).toHaveLength(1);
     expect(asked.find(({ held }) => !held.ok)?.held).toMatchObject({ ok: false, failure: { code: 'login_held' } });
     expect(await loginHolder('codex')).toMatchObject({ run: RUN, attempt: holders[0]?.attempt });
+  });
+
+  it('leaves the lock another attempt took meanwhile when two ends of one attempt race, each having read it as that attempt\'s', async () => {
+    plantDedicated('r1');
+    const toolHome = path.join(root, FIRST);
+    expect(await hold(FIRST, new AbortController().signal)).toEqual({ ok: true });
+    const lock = loginLockFile('codex');
+    const remove = fsp.rm.bind(fsp);
+    let secondRemoves = (): void => {};
+    const bothRead = new Promise<void>((resolve) => { secondRemoves = resolve; });
+    let secondHolds = (): void => {};
+    const taken = new Promise<void>((resolve) => { secondHolds = resolve; });
+    let removals = 0;
+    // The first end removes the lock once the second read it too, or after half a second; attempt SECOND then takes the
+    // free lock, and only then does the second end remove what it read.
+    vi.spyOn(fsp, 'rm').mockImplementation(async (target, options) => {
+      if (target !== lock) return remove(target, options);
+      removals += 1;
+
+      if (removals > 1) {
+        secondRemoves();
+        await taken;
+
+        return remove(target, options);
+      }
+
+      await Promise.race([bothRead, new Promise((resolve) => setTimeout(resolve, 500))]);
+      await remove(target, options);
+      expect(await hold(SECOND, new AbortController().signal)).toEqual({ ok: true });
+      secondHolds();
+    });
+
+    await Promise.all([FIRST, FIRST].map((attempt) => endLogin('codex', { run: RUN, attempt, toolHome, isCollected: true })));
+
+    expect(await loginHolder('codex')).toMatchObject({ run: RUN, attempt: SECOND });
   });
 
   it('takes a login already written back, by a driver killed before it released the lock, as written back', async () => {

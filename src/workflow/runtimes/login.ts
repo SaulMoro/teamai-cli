@@ -44,6 +44,9 @@ const TOOL_NAMES = { codex: 'Codex' } as const satisfies Record<LoginTool, strin
 /** How a waiting attempt checks the lock again. */
 const WAIT_POLL_MS = 500;
 
+/** How a release checks again for another release of the same login to finish. */
+const RELEASE_POLL_MS = 20;
+
 /** The file of a `tool` home that holds its login, which only `holdLogin` puts in a tool home, or undefined for a tool teamai keeps no login of. */
 export function loginFileOf(tool: string): string | undefined {
   const login = LOGIN_TOOLS.find((one) => one === tool);
@@ -320,11 +323,29 @@ async function signInHeld(tool: LoginTool, { step, canAsk }: Parameters<typeof e
   return { code: 'credential_missing', message: `${loginCommand(tool)} ended with status ${ended.code} and left no login in ${file}, so the step did not run. Run it again, then run: ${retry}` };
 }
 
+/**
+ * The lock a release of `tool`'s login holds while it reads the login lock and removes it. Only a release removes the
+ * login lock, and a take only creates one where none is, so releases in turn never remove a lock another attempt took
+ * after they read it, though two ends of one attempt race. A dead holder's lock is reclaimed (`acquireLock`).
+ */
+function releaseLockFile(tool: LoginTool): string {
+  return path.join(path.dirname(loginHome(tool)), `${tool}-release.lock`);
+}
+
 /** Releases `tool`'s login if attempt `attempt` of run `run` holds it. */
 async function releaseLogin(tool: LoginTool, { run, attempt }: { run: RunId; attempt: AttemptId }): Promise<void> {
-  const holder = await loginHolder(tool);
+  const lock = releaseLockFile(tool);
 
-  if (holder?.run === run && holder.attempt === attempt) await fs.rm(loginLockFile(tool), { force: true });
+  // Held for one read and one remove, so a wait is short.
+  while (!await acquireLock(lock)) await new Promise((resolve) => setTimeout(resolve, RELEASE_POLL_MS));
+
+  try {
+    const holder = await loginHolder(tool);
+
+    if (holder?.run === run && holder.attempt === attempt) await fs.rm(loginLockFile(tool), { force: true });
+  } finally {
+    await releaseLock(lock);
+  }
 }
 
 /**
