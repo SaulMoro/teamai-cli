@@ -22,7 +22,7 @@ import { SyncManager } from '../session-flow/sync.js';
 import { getReportsDir, isSelfMode, usesBranchWorktree, type DashboardEvent, type LocalConfig } from '../types.js';
 import { execCommand } from '@teamai/shared/exec';
 import { buildEndRecord, RECORDS_DIR } from '../workflow/records.js';
-import { gitAnswer, saidYes, unansweredGit } from '../workflow/worktree.js';
+import { gitAnswer, git as gitAt, saidYes, unansweredGit } from '../workflow/worktree.js';
 import { isRunId, readRun, runsDir } from '../workflow/store.js';
 import { HttpError } from './http.js';
 import { readRegularFile } from '@teamai/shared/regular-file';
@@ -157,10 +157,10 @@ const teamReadsCache = new Map<string, { at: string; reads: Promise<TeamReads> }
 
 /** The commit checked out in `dir`, or undefined when it has none or is gone: then nothing read from it is kept. */
 async function headOf(dir: string): Promise<string | undefined> {
-  // A git that did not start or ran out of time rejects, and reads no head either.
-  const head = await execCommand('git', ['rev-parse', '--verify', '--quiet', 'HEAD'], { cwd: dir, timeoutMs: 10_000 }).then(gitAnswer, () => undefined);
+  // No head, a git that failed, and one that did not answer all read nothing to keep.
+  const head = await gitAt(dir, ['rev-parse', '--verify', '--quiet', 'HEAD'], { timeoutMs: 10_000 }).then(gitAnswer);
 
-  return head?.said === 'yes' ? head.result.stdout.trim() : undefined;
+  return head.said === 'yes' ? head.result.stdout.trim() : undefined;
 }
 
 async function readTeam(config: LocalConfig): Promise<TeamReads> {
@@ -285,7 +285,7 @@ async function teamGit(config: LocalConfig, args: string[]) {
 
 /** The full commit `commit` names in this machine's team clone. Throws an HttpError the page shows when it has none. */
 async function resolveCommit(config: LocalConfig, commit: string): Promise<string> {
-  const resolved = gitAnswer(await teamGit(config, ['rev-parse', '--verify', '--quiet', '--end-of-options', `${commit}^{commit}`]));
+  const resolved = gitAnswer(await gitAt(config.repo.localPath, ['rev-parse', '--verify', '--quiet', '--end-of-options', `${commit}^{commit}`], { timeoutMs: 10_000 }));
 
   if (resolved.said === 'nothing') throw unansweredGit(`whether this machine's team clone has commit ${commit}`, resolved.result);
 
@@ -306,7 +306,7 @@ export async function sidesOf(config: LocalConfig, commit: string, revisions: Re
 
   for (let start = 0; start < pending.length; start += SPLIT_GIT_BATCH) {
     await Promise.all(pending.slice(start, start + SPLIT_GIT_BATCH).map(async (revision) => {
-      const contained = gitAnswer(await teamGit(config, ['merge-base', '--is-ancestor', commit, revision]));
+      const contained = gitAnswer(await gitAt(config.repo.localPath, ['merge-base', '--is-ancestor', commit, revision], { timeoutMs: 10_000 }));
 
       if (saidYes(contained, `whether ${revision} holds ${commit}`)) sides.set(revision, 'after');
       else if (contained.result.code === 1) sides.set(revision, 'before');

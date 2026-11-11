@@ -19,7 +19,7 @@ import { commitSkippingHooks, createGit } from '../../utils/git.js';
 import { runsDir, type AttemptId, type RunId } from '../store.js';
 import type { WorkflowFailure } from '../types.js';
 import type { DataAt } from './record.js';
-import { git, gitAnswer, saidYes, yesOutput } from '../worktree.js';
+import { git, gitAnswer, unansweredGit, type GitAnswer } from '../worktree.js';
 
 const said = (result: { stderr: string; stdout: string }): string => (result.stderr || result.stdout).trim();
 
@@ -66,7 +66,10 @@ export async function openDataCheckout(input: { config: LocalConfig; run: RunId;
   }
 
   const repo = gitRoot(config);
-  const base = await startOf(repo, branch);
+  const start = await startOf(repo, branch);
+
+  if (start.kind === 'unanswered') return unavailable(start.reason);
+  const base = start.commit;
 
   if (base === '') return unavailable(`neither origin nor this machine has ${branch} yet`);
   await fs.mkdir(path.dirname(dir), { recursive: true });
@@ -79,15 +82,21 @@ export async function openDataCheckout(input: { config: LocalConfig; run: RunId;
  * The commit a step on `branch` starts from: this machine's branch when it holds origin's tip, with the commits origin
  * lacks yet, else origin's tip; '' when neither has the branch.
  */
-async function startOf(repo: string, branch: DataBranch): Promise<string> {
-  const tipOf = async (ref: string): Promise<string> => {
-    return yesOutput(gitAnswer(await git(repo, ['rev-parse', '--verify', '-q', `${ref}^{commit}`])), `the tip of ${ref} in ${repo}`);
-  };
+async function startOf(repo: string, branch: DataBranch): Promise<{ kind: 'start'; commit: string } | { kind: 'unanswered'; reason: string }> {
+  const tipOf = (ref: string): Promise<GitAnswer> => git(repo, ['rev-parse', '--verify', '-q', `${ref}^{commit}`]).then(gitAnswer);
+  const [originTip, localTip] = await Promise.all([tipOf(`refs/remotes/origin/${branch}`), tipOf(`refs/heads/${branch}`)]);
+  const silent = [originTip, localTip].find((tip) => tip.said === 'nothing');
 
-  const [origin, local] = await Promise.all([tipOf(`refs/remotes/origin/${branch}`), tipOf(`refs/heads/${branch}`)]);
-  const holdsOrigin = local !== '' && (origin === '' || saidYes(gitAnswer(await git(repo, ['merge-base', '--is-ancestor', origin, local])), `whether ${branch} here holds origin's ${origin}`));
+  if (silent) return { kind: 'unanswered', reason: unansweredGit(`where ${branch} starts`, silent.result).message };
+  const origin = originTip.said === 'yes' ? originTip.result.stdout.trim() : '';
+  const local = localTip.said === 'yes' ? localTip.result.stdout.trim() : '';
 
-  return holdsOrigin ? local : origin;
+  if (local === '' || origin === '') return { kind: 'start', commit: local || origin };
+  const holds = gitAnswer(await git(repo, ['merge-base', '--is-ancestor', origin, local]));
+
+  if (holds.said === 'nothing') return { kind: 'unanswered', reason: unansweredGit(`whether ${branch} here holds origin's ${origin}`, holds.result).message };
+
+  return { kind: 'start', commit: holds.said === 'yes' ? local : origin };
 }
 
 /**

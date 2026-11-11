@@ -4,7 +4,7 @@ import { z } from 'zod';
 import { writeJsonAtomic } from '../../utils/fs.js';
 import type { StepRead } from '../step-state.js';
 import type { WorkflowFailure } from '../types.js';
-import { gitAnswer, keptSentence, putBackCopy, saidYes, yesOutput, type Git, type KeptChanges } from '../worktree.js';
+import { gitAnswer, keptSentence, putBackCopy, type Git, type KeptChanges } from '../worktree.js';
 import { restoreOverlay } from './overlay.js';
 import { changedPaths, snapshotWorktree, type WorktreeSnapshot } from './worktree-snapshot.js';
 import { Writes } from '../writes.js';
@@ -78,7 +78,8 @@ export async function finishReader(input: {
 async function isCommitUnder(writes: string[], dir: string, before: WorktreeSnapshot, after: WorktreeSnapshot, git: Git): Promise<boolean> {
   if (!before.head || !after.head || before.head === after.head || before.branch === '' || before.branch !== after.branch) return false;
 
-  if (!saidYes(gitAnswer(await git(dir, ['merge-base', '--is-ancestor', before.head, after.head])), `whether ${after.head} in ${dir} holds ${before.head}`)) return false;
+  // Only a yes keeps the commits: a git that did not answer leaves them a change the reader made.
+  if (gitAnswer(await git(dir, ['merge-base', '--is-ancestor', before.head, after.head])).said !== 'yes') return false;
   const diff = await git(dir, ['diff', '--name-only', '--no-renames', '-z', before.head, after.head]);
   const committed = diff.stdout.split('\0').filter((changed) => changed !== '');
 
@@ -114,7 +115,9 @@ export async function leaveReadCopy(input: {
   const changed = changedPaths(before, await snapshotWorktree(dir, run));
   // A detach or a switch to another branch at the same commit changes no file, but a later step would commit off the branch.
   // The full ref: --short prints heads/<branch> when a tag has the same name.
-  const onBranch = yesOutput(gitAnswer(await run(dir, ['symbolic-ref', '--quiet', 'HEAD'])), `the branch ${dir} is on`) === `refs/heads/${workspace.branch}`;
+  // A git that did not answer is off the branch, so the copy is restored and the change reported.
+  const head = gitAnswer(await run(dir, ['symbolic-ref', '--quiet', 'HEAD']));
+  const onBranch = head.said === 'yes' && head.result.stdout.trim() === `refs/heads/${workspace.branch}`;
 
   if (!onBranch && !changed.includes('HEAD')) changed.push('HEAD');
   const unrestored = await restoreOverlay({ dir, configCommit: workspace.configCommit, saved, run });

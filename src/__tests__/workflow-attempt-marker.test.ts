@@ -2,12 +2,13 @@ import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { nestedCall, nestedStart } from '../workflow/attempt-marker.js';
 
 const roots: string[] = [];
 
 afterEach(() => {
+  vi.unstubAllEnvs();
   for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true });
 });
 
@@ -23,6 +24,13 @@ function checkout(): string {
 describe('nested workflow starts', () => {
   it('lets a start run in a checkout on a branch of its own, with no marker', async () => {
     expect(await nestedStart({}, checkout())).toBeUndefined();
+  });
+
+  it('lets a start pass a checkout git cannot read, as a hook offering a workflow asks where no git is installed', async () => {
+    const dir = checkout();
+    vi.stubEnv('PATH', dir);
+
+    expect(await nestedStart({}, dir)).toBeUndefined();
   });
 
   it('refuses a start inside an attempt, whatever the directory', async () => {

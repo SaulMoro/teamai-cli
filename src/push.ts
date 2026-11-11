@@ -38,7 +38,7 @@ import {
 } from './push-namespaces.js';
 import { askQuestion, askSelection, isInteractive } from './utils/prompt.js';
 import { pathExists, pruneEmptyDirs, readFileSafe, writeFile } from './utils/fs.js';
-import { gitAnswer, git as gitAt } from './workflow/worktree.js';
+import { gitAnswer, git as gitAt, unansweredGit } from './workflow/worktree.js';
 import { brokenTeamProfileFiles } from './models/profile.js';
 
 /**
@@ -1105,7 +1105,9 @@ export async function explicitBranchRefusal(
 
   if (shown.said === 'no' && shown.result.code === 1) return null;
 
-  if (shown.said !== 'yes') {
+  if (shown.said === 'nothing') return `Refusing to push to "${branch}": ${unansweredGit(`whether it exists here`, shown.result).message}`;
+
+  if (shown.said === 'no') {
     return `Refusing to push to "${branch}": could not tell whether it exists here, so whether it holds the member's commits is unknown. git said: ${shown.result.stderr.trim() || `exit ${shown.result.code}`}. Choose another --branch.`;
   }
 

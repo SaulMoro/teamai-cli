@@ -36,7 +36,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { getTeamaiHomeDir } from '../types.js';
 import { acquireLock, releaseLock } from '../update.js';
 import { resolveAnchors } from '../utils/git.js';
-import { gitAnswer, unansweredGit, unstartedGit, type GitResult } from '../workflow/worktree.js';
+import { gitAnswer, stoppedGit, unstartedGit, type GitResult } from '../workflow/worktree.js';
 import { z } from 'zod';
 import { AgentObservationSchema, CommitStateSchema, type AgentObservation } from '../agent-observation.js';
 import type { Session } from '@teamai/tool-core/sessions/ir';
@@ -1830,8 +1830,7 @@ export class SyncManager {
 
     const holds = gitAnswer(this.askGit(['merge-base', '--is-ancestor', 'FETCH_HEAD', 'HEAD']));
 
-    if (holds.said === 'nothing') throw unansweredGit(`whether ${ref} on ${remote} is ahead of this checkout`, holds.result);
-
+    // A git that did not answer is not known to be behind, so the push's own error stands.
     return holds.said === 'no';
   }
 
@@ -1839,8 +1838,10 @@ export class SyncManager {
   private askGit(args: string[]): GitResult {
     const ran = spawnSync('git', args, { cwd: this.repoRoot, encoding: 'utf-8', timeout: 30_000, env: { ...process.env, LANGUAGE: 'en' } });
 
-    // Only a git that never started has no pid; one stopped at its timeout has one, and no exit code.
-    if (ran.error && !ran.pid) return unstartedGit(this.repoRoot, ran.error, fs.statSync(this.repoRoot, { throwIfNoEntry: false })?.isDirectory() === true);
+    // A git with no pid never started; one stopped at its timeout has one, and a signal for its exit.
+    if (ran.error && !ran.pid) return unstartedGit({ cwd: this.repoRoot, error: ran.error, isCwdThere: fs.statSync(this.repoRoot, { throwIfNoEntry: false })?.isDirectory() === true });
+
+    if (ran.signal) return stoppedGit(`it got ${ran.signal}`, ran.stderr);
 
     return { code: ran.status ?? 1, stdout: ran.stdout, stderr: ran.stderr };
   }

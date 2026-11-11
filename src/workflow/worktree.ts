@@ -74,6 +74,9 @@ export interface GitResult {
  */
 export const GIT_NOT_STARTED = 127;
 
+/** The exit code of a git stopped before it exited, at its deadline or by a signal, as `timeout(1)` reports one. */
+export const GIT_STOPPED = 124;
+
 /**
  * What git said to a question it answers with its exit code (`merge-base --is-ancestor`, `cat-file -e`, `diff --quiet`,
  * `show-ref --quiet`, `check-ignore -q`, `rev-parse --verify --quiet`, `symbolic-ref --quiet`): yes at exit 0, with what
@@ -86,22 +89,29 @@ export type GitAnswer = { readonly said: 'yes' | 'no' | 'nothing'; readonly resu
  * What a git whose process could not start returns, by `error`, the spawn's: in a `cwd` that is not a directory, the
  * failure `git -C` exits 128 with, since Node reports it as a missing git; otherwise GIT_NOT_STARTED.
  */
-export function unstartedGit(cwd: string, error: Error, isCwdThere: boolean): GitResult {
+export function unstartedGit({ cwd, error, isCwdThere }: { cwd: string; error: Error; isCwdThere: boolean }): GitResult {
   if (!isCwdThere) return { code: 128, stdout: '', stderr: `fatal: cannot change to '${cwd}': No such directory` };
 
-  return { code: GIT_NOT_STARTED, stdout: '', stderr: `git did not start: ${error.message}` };
+  const missing = 'code' in error && error.code === 'ENOENT' ? '; check that git is installed and on PATH' : '';
+
+  return { code: GIT_NOT_STARTED, stdout: '', stderr: `git did not start: ${error.message}${missing}` };
+}
+
+/** What a git stopped before it exited returns, `why` naming what stopped it, with whatever it printed by then. */
+export function stoppedGit(why: string, stderr: string): GitResult {
+  return { code: GIT_STOPPED, stdout: '', stderr: `git was stopped before it answered: ${why}.${stderr.trim() ? ` ${stderr.trim()}` : ''}` };
 }
 
 /** Reads `result`, git's exit to a question it answers with its exit code, as its answer (`GitAnswer`). */
 export function gitAnswer(result: GitResult): GitAnswer {
   if (result.code === 0) return { said: 'yes', result };
 
-  return { said: result.code === GIT_NOT_STARTED ? 'nothing' : 'no', result };
+  return { said: result.code === GIT_NOT_STARTED || result.code === GIT_STOPPED ? 'nothing' : 'no', result };
 }
 
 /** The error a caller raises when git did not answer `question`, with the cause git gave. */
 export function unansweredGit(question: string, result: GitResult): Error {
-  return new Error(`git could not tell ${question}: ${result.stderr.trim() || `it exited with code ${result.code}`}. Check that git is installed and on PATH, then try again.`);
+  return new Error(`Could not tell ${question}: ${result.stderr.trim()}. Then try again.`);
 }
 
 /** Whether git said yes to `question`. Throws when git did not start, which is neither a yes nor a no. */
@@ -513,12 +523,18 @@ function isDirectory(dir: string): Promise<boolean> {
 function spawnGit(cwd: string, args: string[], options: GitOptions | undefined, base: NodeJS.ProcessEnv): Promise<GitResult> {
   if (options === undefined) {
     return new Promise((resolve) => {
-      execFile('git', args, { cwd, env: base, windowsHide: true }, (error, stdout, stderr) => {
+      const child = execFile('git', args, { cwd, env: base, windowsHide: true }, (error, stdout, stderr) => {
         const exit = z.number().safeParse(error?.code);
 
-        // Only the spawn's own error names the spawn syscall (ENOENT, EACCES): git never started, so it answered nothing.
-        if (error && 'syscall' in error && String(error.syscall).startsWith('spawn')) {
-          resolve(isDirectory(cwd).then((isCwdThere) => unstartedGit(cwd, error, isCwdThere)));
+        // A git with no pid never started (ENOENT, EACCES), so it answered nothing.
+        if (error && child.pid === undefined) {
+          resolve(isDirectory(cwd).then((isCwdThere) => unstartedGit({ cwd, error, isCwdThere })));
+
+          return;
+        }
+
+        if (error?.signal) {
+          resolve(stoppedGit(`it got ${error.signal}`, String(stderr)));
 
           return;
         }
@@ -539,25 +555,37 @@ function spawnGit(cwd: string, args: string[], options: GitOptions | undefined, 
   child.stdout.on('data', (chunk: string) => { stdout += chunk; });
   child.stderr.on('data', (chunk: string) => { stderr += chunk; });
 
+  let stoppedBy: string | undefined;
+
   const exited = new Promise<number>((resolve) => {
     child.on('error', (error) => {
-      // An error before git spawned (ENOENT, EACCES) is the only one with no pid: git never ran.
+      // A git with no pid never started (ENOENT, EACCES), so it answered nothing.
       if (child.pid === undefined) notStarted = error;
       resolve(notStarted === undefined ? 1 : GIT_NOT_STARTED);
     });
-    child.on('close', (code) => resolve(code ?? 1));
+    child.on('close', (code, signal) => {
+      if (code === null) stoppedBy ??= `it got ${signal ?? 'a signal'}`;
+      resolve(code ?? GIT_STOPPED);
+    });
   });
 
   // At its timeout git stops with every process it started, such as a filter that never returns. A timeout longer than a
   // timer can wait is none: Node would fire the timer at once.
-  const timer = options.timeoutMs === undefined || options.timeoutMs > MAX_TIMER_MS ? undefined : setTimeout(() => { void stopProcess(child, exited, false)(); }, options.timeoutMs);
+  const timer = options.timeoutMs === undefined || options.timeoutMs > MAX_TIMER_MS ? undefined : setTimeout(() => {
+    stoppedBy = `its deadline passed after ${options.timeoutMs} ms`;
+    void stopProcess(child, exited, false)();
+  }, options.timeoutMs);
+
   child.stdin.on('error', () => {});
   child.stdin.end('input' in options ? options.input : undefined);
 
   return exited.then(async (code) => {
     clearTimeout(timer);
 
-    return notStarted === undefined ? { code, stdout, stderr } : unstartedGit(cwd, notStarted, await isDirectory(cwd));
+    if (notStarted !== undefined) return unstartedGit({ cwd, error: notStarted, isCwdThere: await isDirectory(cwd) });
+
+    // A git that exited 0 as its deadline passed answered before it was stopped.
+    return stoppedBy === undefined || code === 0 ? { code, stdout, stderr } : stoppedGit(stoppedBy, stderr);
   });
 }
 
@@ -615,7 +643,11 @@ export async function headCommit(cwd: string): Promise<{ ref?: string; commit: s
   const commit = result.stdout.trim();
 
   if (!commit) return undefined;
-  const ref = yesOutput(gitAnswer(await git(cwd, ['symbolic-ref', '--quiet', '--short', 'HEAD'])), `the branch ${cwd} is on`);
+  const head = gitAnswer(await git(cwd, ['symbolic-ref', '--quiet', '--short', 'HEAD']));
+
+  // A git that did not answer leaves HEAD unread, as one that could not read the commit does.
+  if (head.said === 'nothing') return undefined;
+  const ref = head.said === 'yes' ? head.result.stdout.trim() : '';
 
   return ref ? { ref, commit } : { commit };
 }
@@ -688,7 +720,11 @@ export async function markSetup(dir: string, state: 'unfinished' | 'finished'): 
  * is. `runGit` runs each git call.
  */
 export async function offBranch(dir: string, branch: string, runGit: Git = git): Promise<string | undefined> {
-  const head = yesOutput(gitAnswer(await runGit(dir, ['symbolic-ref', '--quiet', 'HEAD'])), `the branch ${dir} is on`);
+  const onBranch = gitAnswer(await runGit(dir, ['symbolic-ref', '--quiet', 'HEAD']));
+
+  // A git that did not answer is never on the branch, so every caller refuses the checkout with git's cause.
+  if (onBranch.said === 'nothing') return `where git cannot tell (${onBranch.result.stderr.trim()})`;
+  const head = onBranch.said === 'yes' ? onBranch.result.stdout.trim() : '';
 
   if (head === `refs/heads/${branch}`) return undefined;
 
@@ -800,7 +836,8 @@ async function lackedCommits(dir: string, commits: string[]): Promise<string[]> 
   const lacking: string[] = [];
 
   for (const commit of new Set(commits)) {
-    if (!saidYes(gitAnswer(await git(dir, ['cat-file', '-e', `${commit}^{commit}`])), `whether ${dir} has commit ${commit}`)) lacking.push(commit);
+    // Lacking unless git says it has it: the fetch that follows says why when git did not answer.
+    if (gitAnswer(await git(dir, ['cat-file', '-e', `${commit}^{commit}`])).said !== 'yes') lacking.push(commit);
   }
 
   return lacking;
@@ -859,9 +896,8 @@ export async function applyBaseConfig(
       return { ok: false, message: `Agent configuration ${linked.relative} is under the symlink ${linked.parent} in the run's base commit ${commit}, so it was not reset. Commit ${linked.parent} as a directory on the base branch, then start a new run.` };
     }
 
-    // Only names the branch in the refusal: no branch, and a git that did not answer, name none.
     const head = gitAnswer(await options.run(dir, ['symbolic-ref', '--quiet', 'HEAD']));
-    const branch = head.said === 'yes' ? head.result.stdout.trim().replace(/^refs\/heads\//, '') : '';
+    const branch = head.said === 'yes' ? head.result.stdout.trim().replace(/^refs\/heads\//, '') : 'HEAD';
 
     return { ok: false, message: `Agent configuration ${linked.relative} is under the symlink ${linked.parent} on branch ${branch}, so it was not reset. Commit ${linked.parent} as a directory on branch ${branch} in ${dir}, then retry the step.` };
   }
@@ -1054,7 +1090,8 @@ async function gitlinkCommit(dir: string, relative: string, run: Git): Promise<s
 
   if (staged === undefined) return undefined;
   const indexSha = staged.slice(0, staged.indexOf('\t')).split(' ')[1] ?? '';
-  const checked = yesOutput(gitAnswer(await run(path.join(dir, relative), ['rev-parse', '--verify', '--quiet', 'HEAD'])), `the commit checked out in ${relative}`);
+  const head = gitAnswer(await run(path.join(dir, relative), ['rev-parse', '--verify', '--quiet', 'HEAD']));
+  const checked = head.said === 'yes' ? head.result.stdout.trim() : '';
 
   return /^[0-9a-f]{40}$/i.test(checked) ? checked : indexSha;
 }
@@ -1420,13 +1457,20 @@ export async function pushIfOrigin(dir: string, branch: string, commits: string[
  * a first push that never landed leaves commits only on this branch.
  */
 async function branchNeedsPush(dir: string, branch: string, runGit: Git): Promise<boolean> {
-  const tip = yesOutput(gitAnswer(await runGit(dir, ['rev-parse', '--verify', '--quiet', `refs/heads/${branch}`])), `the tip of ${branch} in ${dir}`);
+  // A git that did not answer needs the push: the push says why when git still cannot run.
+  const local = gitAnswer(await runGit(dir, ['rev-parse', '--verify', '--quiet', `refs/heads/${branch}`]));
 
-  if (tip === '') return false;
+  if (local.said === 'nothing') return true;
+
+  if (local.said === 'no') return false;
+  const tip = local.result.stdout.trim();
   const remote = `refs/remotes/origin/${branch}`;
+  const known = gitAnswer(await runGit(dir, ['rev-parse', '--verify', '--quiet', remote]));
 
-  if (saidYes(gitAnswer(await runGit(dir, ['rev-parse', '--verify', '--quiet', remote])), `whether ${dir} tracks ${remote}`)) {
-    return !saidYes(gitAnswer(await runGit(dir, ['merge-base', '--is-ancestor', tip, remote])), `whether ${remote} holds ${branch} at ${tip}`);
+  if (known.said === 'nothing') return true;
+
+  if (known.said === 'yes') {
+    return gitAnswer(await runGit(dir, ['merge-base', '--is-ancestor', tip, remote])).said !== 'yes';
   }
 
   const listed = await runGit(dir, ['for-each-ref', '--format=%(refname)', 'refs/remotes/origin']);

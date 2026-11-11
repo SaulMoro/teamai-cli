@@ -6,7 +6,7 @@ import fs from 'node:fs/promises';
 import { gitCommonDir } from '../../utils/git.js';
 import type { WorkflowFailure } from '../types.js';
 import type { CopyContract, WorkspaceContract } from '../workspace.js';
-import { fetchMissingCommits, git, gitAnswer, hooksPath, offBranch, saidYes, setupUnfinished, worktreeHooks } from '../worktree.js';
+import { fetchMissingCommits, git, gitAnswer, hooksPath, offBranch, setupUnfinished, unansweredGit, worktreeHooks } from '../worktree.js';
 import { leaseCommits } from './created.js';
 import type { PlaceRecord } from './record.js';
 
@@ -94,11 +94,19 @@ async function adoptedMismatch({ root, dir, run, attempt, workspace }: Adoption)
     return `${dir} is ${on}, not on branch ${branch} nor detached at its start ${start.commit}, so attempt ${attempt} was not prepared there. Check out ${branch} in ${dir}, then adopt it again.`;
   }
 
-  if (on !== undefined && saidYes(gitAnswer(await git(dir, ['rev-parse', '--verify', '--quiet', `refs/heads/${branch}`])), `whether branch ${branch} exists in ${dir}`)) {
+  const exists = on === undefined ? undefined : gitAnswer(await git(dir, ['rev-parse', '--verify', '--quiet', `refs/heads/${branch}`]));
+
+  if (exists?.said === 'nothing') return `${unansweredGit(`whether branch ${branch} exists in ${dir}`, exists.result).message} Attempt ${attempt} was not prepared there.`;
+
+  if (exists?.said === 'yes') {
     return `${dir} is detached at the start of branch ${branch}, which already exists, so attempt ${attempt} was not prepared there. Check out ${branch} in ${dir}, then adopt it again.`;
   }
 
-  if (!saidYes(gitAnswer(await git(dir, ['merge-base', '--is-ancestor', start.commit, 'HEAD'])), `whether branch ${branch} in ${dir} holds ${start.commit}`)) {
+  const holds = gitAnswer(await git(dir, ['merge-base', '--is-ancestor', start.commit, 'HEAD']));
+
+  if (holds.said === 'nothing') return `${unansweredGit(`whether branch ${branch} in ${dir} holds ${start.commit}`, holds.result).message} Attempt ${attempt} was not prepared there.`;
+
+  if (holds.said === 'no') {
     return `Branch ${branch} in ${dir} does not contain ${start.commit}, the commit the step starts from, so attempt ${attempt} was not prepared there. Adopt a worktree whose ${branch} contains it.`;
   }
 

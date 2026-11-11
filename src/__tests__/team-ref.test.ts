@@ -546,6 +546,13 @@ describe('pushRepoBranch explicit destination', () => {
     // git cannot answer outside a repository, so whether the destination holds the member's commits is unknown.
     await expect(explicitBranchRefusal(await fs.mkdtemp(path.join(os.tmpdir(), 'teamai-no-repo-')), 'feature/new', true))
       .resolves.toContain('could not tell whether it exists');
+    // A git that did not start is no reason to pick another branch.
+    vi.stubEnv('PATH', localPath);
+    try {
+      await expect(explicitBranchRefusal(localPath, 'feature/new', true)).resolves.toContain('check that git is installed and on PATH');
+    } finally {
+      vi.unstubAllEnvs();
+    }
   });
 
   it('publishes a destination commit an earlier push could not send', async () => {
