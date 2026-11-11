@@ -2,12 +2,13 @@ import { chmod } from 'node:fs/promises';
 import { openRegularFile } from '@teamai/shared/regular-file';
 import path from 'node:path';
 import { parseYaml } from '@teamai/shared/yaml';
+import { mergeTeamConfig } from './utils/yaml.js';
 import { z } from 'zod';
 import { autoDetectInit, loadStateForScope, saveStateForScope } from './config.js';
 import { assertNotReadOnly } from './read-only.js';
 import {
   createGit, pullRepo, pushRepoBranch, checkoutMaster, unusedBranchName,
-  resetToCleanMaster, isDedicatedRepoRoot, getDefaultBranch, getFileContentAtRev, getHeadCommit, hashObject, prepareExplicitBranch,
+  resetToCleanMaster, isDedicatedRepoRoot, getDefaultBranch, getFileContentAtRev, getHeadCommit, hashObject, prepareExplicitBranch, readFileAtRev,
 } from './utils/git.js';
 import { reconcilePlacementRecords, dropClosedPendingPushes,
   findPendingForItem, isRecordedItem, partiallySelectedEntries, pendingNamespaceFor, planPushGroups, recordedNamespace,
@@ -404,7 +405,7 @@ async function createPrWithFallback(
   branchName: string,
   title: string,
   description: string,
-  opts: { spawnTimeoutMs?: number } = {},
+  opts: { spawnTimeoutMs?: number; reuseExisting?: boolean } = {},
 ): Promise<string | null> {
   // A member's `init --provider` choice outranks the team's provider (#789).
   const provider = getProvider(localConfig.provider ?? teamConfig.provider);
@@ -422,9 +423,22 @@ async function createPrWithFallback(
     }
 
     const targetBranch = await getDefaultBranch(localConfig.repo.localPath);
+    const repo = `${repoInfo.owner}/${repoInfo.repo}`;
+
+    if (opts.reuseExisting && provider.pullRequests) {
+      const existing = await provider.pullRequests.findOpen({
+        repo, source: branchName, target: targetBranch, timeoutMs: 5000,
+      }).catch(() => undefined);
+
+      if (existing) {
+        mrSpin.succeed(`Existing PR updated: ${existing}`);
+
+        return existing;
+      }
+    }
 
     const prUrl = await provider.createPullRequest({
-      repo: `${repoInfo.owner}/${repoInfo.repo}`,
+      repo,
       source: branchName,
       target: targetBranch,
       title,
@@ -1002,6 +1016,7 @@ async function pushGroup(args: {
         branchName,
         commitMsg,
         `Pushed ${items.length} resource(s):\n${items.map((i) => `- [${i.type}] ${i.name}`).join('\n')}`,
+        { reuseExisting: branch !== undefined },
       );
 
       if (!prUrl) {
@@ -1318,7 +1333,7 @@ async function pendingSelfTeamConfig(localConfig: LocalConfig): Promise<string |
   const relativeConfigPath = path.relative(businessRoot, activeConfigPath).split(path.sep).join('/');
   const committed = await getFileContentAtRev(businessRoot, 'HEAD', relativeConfigPath);
 
-  return committed === null || committed.toString() !== activeConfig ? activeConfig : null;
+  return committed === null || committed.toString().replace(/\r\n/g, '\n') !== activeConfig.replace(/\r\n/g, '\n') ? activeConfig : null;
 }
 
 /**
@@ -1640,13 +1655,16 @@ async function pushCore(
         git.status(),
       ]);
 
-      if (workingContent !== null && (committed === null || committed.toString() !== workingContent)) {
+      const originalConfig = committed?.toString() ?? null;
+      const configBytesChanged = workingContent !== null && originalConfig !== workingContent;
+
+      if (configBytesChanged && originalConfig?.replace(/\r\n/g, '\n') !== workingContent.replace(/\r\n/g, '\n')) {
         pendingTeamConfig = workingContent;
       }
 
       const modeChangedPaths = new Set<string>();
 
-      if (pendingTeamConfig !== null && await hasGitModeChange(git, 'teamai.yaml')) {
+      if (configBytesChanged && await hasGitModeChange(git, 'teamai.yaml')) {
         modeChangedPaths.add('teamai.yaml');
       }
 
@@ -1684,7 +1702,7 @@ async function pushCore(
 
       const unsafeDirtyPaths = collectUnsafeDirtyPaths(
         status,
-        pendingTeamConfig,
+        configBytesChanged && !indexedPaths.has('teamai.yaml') ? workingContent : pendingTeamConfig,
         modeChangedPaths,
         new Set(pendingEnvFiles.keys()),
       );
@@ -1699,18 +1717,38 @@ async function pushCore(
         return;
       }
 
+      const originalHead = options.branch && pendingTeamConfig !== null ? await git.revparse(['HEAD']) : null;
+
       try {
         await resetToCleanMaster(git, repoPath);
         await pullRepo(repoPath);
-      } finally {
-        // Unlike teamai.yaml, nothing later in the run holds these edits, so
-        // they go back even when the refresh fails after reset --hard.
-        lostEnvFiles = await restorePendingEnvFiles();
-      }
 
-      if (pendingTeamConfig !== null) {
-        // Re-apply the TeamAI-owned config edit after refreshing the default branch.
-        await writeFile(yamlPath, pendingTeamConfig);
+        if (originalHead !== null && pendingTeamConfig !== null) {
+          try {
+            const refreshed = await readFileAtRev(repoPath, 'HEAD', 'teamai.yaml');
+            const refreshedConfig = 'text' in refreshed ? refreshed.text : null;
+            pendingTeamConfig = mergeTeamConfig(originalConfig, pendingTeamConfig, refreshedConfig);
+          } catch (error) {
+            process.exitCode = 1;
+
+            // Keep the edit on the commit it was made against so a retry sees the same change.
+            if (status.current && (await git.revparse(['--abbrev-ref', 'HEAD'])) !== status.current) {
+              await git.checkout([status.current]);
+            } else {
+              await git.reset(['--keep', originalHead]);
+            }
+
+            pullSpin.fail(`Cannot apply teamai.yaml to the updated default branch: ${error instanceof Error ? error.message : String(error)} Reapply the edit on the updated config before pushing.`);
+
+            return;
+          }
+        }
+      } finally {
+        lostEnvFiles = await restorePendingEnvFiles();
+
+        if (pendingTeamConfig !== null) await writeFile(yamlPath, pendingTeamConfig);
+
+        if (lostEnvFiles.length > 0) reportLostEnvFiles(lostEnvFiles);
       }
 
       pullSpin.succeed('Up to date');
@@ -1719,11 +1757,7 @@ async function pushCore(
       pullSpin.warn(`Pull failed: ${e instanceof Error ? e.message : String(e)}`);
     }
 
-    if (lostEnvFiles.length > 0) {
-      reportLostEnvFiles(lostEnvFiles);
-
-      return;
-    }
+    if (lostEnvFiles.length > 0) return;
   }
 
   // Validate the refreshed checkout, not the stale local clone. A pull can
@@ -2916,6 +2950,7 @@ async function pushTeamConfigOnly(
       branchName,
       commitMsg,
       'Updated team config (teamai.yaml)',
+      { reuseExisting: options.branch !== undefined },
     );
 
     if (!prUrl) {
