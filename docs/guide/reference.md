@@ -188,6 +188,8 @@ teamai's own AI calls (enrich, codebase, import, promote) run on the first insta
 2. `ai.tool` in the config of the workspace or self install the command runs in, `~/.teamai/projects/<slug>/config.yaml`.
 3. `ai.tool` in `~/.teamai/config.yaml`, for this machine. A command outside any install reads only this one.
 
+`teamai init --agent <tool>` sets `ai.tool` in the install's config to the first tool it names that teamai launches, unless that config or `~/.teamai/config.yaml` already names one.
+
 `~/.teamai/config.yaml` can hold only this setting on a machine with no user-scope install:
 
 ```yaml

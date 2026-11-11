@@ -188,6 +188,8 @@ teamai 自身的 AI 调用（enrich、codebase、import、promote）使用 teama
 2. 命令所在的 workspace 或 self 安装的配置 `~/.teamai/projects/<slug>/config.yaml` 中的 `ai.tool`。
 3. `~/.teamai/config.yaml` 中的 `ai.tool`，作用于本机。不在任何安装中运行的命令只读取这一项。
 
+`teamai init --agent <tool>` 会把安装配置中的 `ai.tool` 设为它列出的第一个 teamai 能启动的工具，除非该配置或 `~/.teamai/config.yaml` 已经指定了工具。
+
 本机没有 user scope 安装时，`~/.teamai/config.yaml` 可以只包含这一项设置：
 
 ```yaml

@@ -5,7 +5,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { readWorkspaceChildren } from './workspace-children.js';
 import { readSelfModeMarker } from './bootstrap.js';
-import { hasUserScopeInstall, saveLocalConfig, loadTeamConfig, saveLocalConfigForScope, loadLocalConfigForScope, loadStateForScope, refreshRoleAssignment, saveStateForScope, resolveProjectDataHome } from './config.js';
+import { hasUserScopeInstall, loadMemberSettings, markMemberSettingsWritten, saveLocalConfig, loadTeamConfig, saveLocalConfigForScope, loadLocalConfigForScope, loadStateForScope, refreshRoleAssignment, saveStateForScope, resolveProjectDataHome } from './config.js';
 import { codexTrustPolicy, deliveredHookFiles, describeUnappliedTeamHooks, hasTeamaiHooks, reconcileHooks, reconcileTeamHooksForConfig, reportCodexTrust, trustCodexForScope } from './hooks.js';
 import { configureGitUser, resolveAnchors, initRepo, isGitRepo, getRemoteUrl, getConfiguredRemoteUrl, remotesMatch, redactGitCredentials, pullRepoFastForward, DetachedTeamRepoError, pushRepoDirectly, autoPushViaMR, gitBlockTimeoutMs, createGitWithBlockTimeout } from './utils/git.js';
 import { withTimeout } from './utils/async.js';
@@ -26,6 +26,24 @@ import { learningsBranch } from './utils/learnings-branch.js';
  * A config that exists but cannot be read names no owner, so it counts as
  * another. `save` writes the new config.
  */
+/**
+ * The member's AI tool, which an answer step, a prompt step and teamai's own AI calls run on: the first of `agents`,
+ * as `--agent` named them, that teamai launches becomes `ai.tool` in this install's config. A tool the install's
+ * config or ~/.teamai/config.yaml already names stays the member's choice.
+ */
+async function adoptAgentTool(localConfig: LocalConfig, agents: readonly string[]): Promise<void> {
+  const tool = agents.find((agent) => launchTargetOf(agent) !== undefined);
+
+  if (tool === undefined || localConfig.ai?.tool !== undefined) return;
+  const ownConfig = localConfig.scope === 'user' ? getUserConfigPath() : path.join(getDataHome(localConfig), 'config.yaml');
+  const [own, machine] = await Promise.all([loadMemberSettings(expandHome(ownConfig)), loadMemberSettings()]);
+
+  if (own.ai?.tool !== undefined || machine.ai?.tool !== undefined) return;
+  // Marked as written, so the save keeps it in the install's own file.
+  Object.assign(localConfig, markMemberSettingsWritten(localConfig, { ai: { tool } }));
+  log.info(`AI tool: ${tool}, from --agent (ai.tool in ${expandHome(ownConfig)}).`);
+}
+
 async function settleModeSwitch(previous: LocalConfig | null, next: LocalConfig, save: () => Promise<void>): Promise<void> {
   const switched = await setAsideQueueOnModeSwitch(previous, next, async () => {
     const ownerChanged = previous
@@ -193,9 +211,11 @@ import {
   getTeamaiHome,
   getConfigPath,
   getDataHome,
+  getUserConfigPath,
   installScopeName,
   selfModeGitignorePath,
 } from './types.js';
+import { launchTargetOf } from './launch-registry.js';
 import { getUserHome, expandHome } from '@teamai/shared/home';
 import { describeRoles, listRoleIds, loadRolesManifest, RolesManifestNotFoundError } from './roles.js';
 import { loadRoleAssignmentsIfPresent, resolveAssignedRoles, ROLE_ASSIGNMENTS_FILE } from './role-assignments.js';
@@ -1037,6 +1057,7 @@ export async function initHttp(
   await releasePreviousToolRoots(teamConfig, existingLocalConfig, localConfig);
 
   await ensureDir(teamaiHome);
+  await adoptAgentTool(localConfig, requestedAgents);
   await settleModeSwitch(existingLocalConfig, localConfig, async () => {
     if (scope === 'project') {
       await saveLocalConfigForScope(localConfig, scope, projectRoot);
@@ -1766,6 +1787,9 @@ export async function initSelfMode(options: GlobalOptions & {
   // getDataHome, which now resolves to the partition.
   await ensureDir(teamaiHome);
   await ensureDir(partitionHome);
+  // Tools found in HOME without --agent or a pick are no choice of the member's.
+  const isChosen = normalizeAgentList(options.agent).length > 0 || (!options.silent && !options.force && isInteractive());
+  await adoptAgentTool(localConfig, isChosen ? selectedAgents : []);
   await settleModeSwitch(preInitConfig, localConfig, () =>
     saveLocalConfigForScope(localConfig, 'project', businessRepoRoot));
   log.success(`Local config saved to ${partitionHome}/config.yaml`);
@@ -2860,6 +2884,7 @@ export async function init(options: GlobalOptions & {
   await ensureDir(teamaiHome);
 
   if (scope !== 'project') await ensureDir(getTeamaiHomeDir());
+  await adoptAgentTool(localConfig, requestedAgents);
   await settleModeSwitch(existingLocalConfig ?? sameTeamSalvage, localConfig, () =>
     scope === 'project' ? saveLocalConfigForScope(localConfig, scope, projectRoot) : saveLocalConfig(localConfig));
 
