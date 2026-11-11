@@ -91,8 +91,7 @@ export function hostProcess(spawnTool: ToolSpawn = spawnCommand): ToolLauncher {
  * The launcher over `start`, whatever starts the tool's process: it finds the tool's executable, then runs the step's
  * launch through `start`. `resolveTool` finds the executable, and `resolveInstanceCommand` a tool instance's command,
  * which comes from a config file, so only the PATH directories may hold it; each says when it is missing.
- * `canReattach` says `start` may attach to the tool an earlier launch of the attempt began, whose result is then this
- * launch's.
+ * `canReattach` is the launch's (`runStepLaunch`).
  */
 export function stepLauncher(deps: StepLaunchDeps, {
   start = hostProcess(),
@@ -105,9 +104,6 @@ export function stepLauncher(deps: StepLaunchDeps, {
 
     if (!profile) return { started: false, exitCode: 1, failure: { code: 'tool_unsupported', message: `The local workflow tool "${tool}" is not supported` } };
     await fs.mkdir(path.dirname(input.resultPath), { recursive: true });
-    // A tool started anew reads only what it writes there: a file an earlier process of the attempt left, such as the
-    // tool of a killed driver that wrote one as it was stopped, is never taken for this tool's result.
-    if (!canReattach) await fs.rm(input.resultPath, { force: true });
     const command = input.command ?? profile.command;
     const executable = input.command === undefined ? resolveTool(command) : resolveInstanceCommand(command);
 
@@ -126,6 +122,7 @@ export function stepLauncher(deps: StepLaunchDeps, {
       tool: { name: tool, family: profile.family, step: profile.step, executable },
       input: run,
       start,
+      canReattach,
       limits: { budget, timeoutMs, idleTimeoutMs },
       signal,
       interactive,

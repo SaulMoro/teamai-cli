@@ -125,6 +125,31 @@ describe('runStepLaunch', () => {
     expect(launched).toEqual(argv);
   });
 
+  it.each([
+    ['starts its tool anew', false, undefined],
+    ['can attach to the tool an earlier launch began, whose result it is', true, { ok: true }],
+  ])('reads a result file an earlier process left only when its start %s', async (_, canReattach, output) => {
+    const resultPath = await resultPathIn();
+    await fs.mkdir(path.dirname(resultPath));
+    await fs.writeFile(resultPath, JSON.stringify({ output: { ok: true } }));
+    const { start } = fakeLauncher([JSON.stringify({ type: 'result', subtype: 'success', result: 'Done.' })]);
+
+    const ran = await runStepLaunch({ tool: claude, input: { prompt: 'Review.', cwd: os.tmpdir(), resultPath, secrets: {}, expected: undefined }, start, canReattach, interactive: false, host });
+
+    expect(ran).toMatchObject({ started: true, exitCode: 0 });
+    expect('output' in ran ? ran.output : undefined).toEqual(output);
+  });
+
+  it('refuses a directory an earlier process left at its result path, as one its tool left', async () => {
+    const resultPath = await resultPathIn();
+    await fs.mkdir(resultPath, { recursive: true });
+    const { start } = fakeLauncher([JSON.stringify({ type: 'result', subtype: 'success', result: 'Done.' })]);
+
+    const ran = await runStepLaunch({ tool: claude, input: { prompt: 'Review.', cwd: os.tmpdir(), resultPath, secrets: {}, expected: undefined }, start, interactive: false, host });
+
+    expect(ran).toMatchObject({ started: true, failure: { code: 'tool_failed', message: `claude left a directory at its result path, ${resultPath}, not a regular file, so teamai did not read it` } });
+  });
+
   it.skipIf(process.platform === 'win32')('refuses a FIFO the tool left at its result path, without reading it', async () => {
     const resultPath = await resultPathIn();
     await fs.mkdir(path.dirname(resultPath));
