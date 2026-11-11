@@ -8,7 +8,7 @@ import { parse as parseToml } from 'smol-toml';
 import { parse, stringify } from 'yaml';
 import { resolveProjectDataHome } from '../../config.js';
 import type { RunState } from '../../workflow/types.js';
-import { attemptOf, CLAUDE_SESSIONS, CLI, envelope, fakeTool, ROOT, runCLI, type Ran } from '../helpers/step-runtime-e2e.js';
+import { attemptOf, CLAUDE_SESSIONS, CLI, codexOnPath, envelope, fakeTool, ROOT, runCLI, type Ran } from '../helpers/step-runtime-e2e.js';
 import { hasPython, TYPED_TERMINAL } from '../helpers/in-terminal.js';
 import { TOY_RUNTIME } from '../helpers/toy-runtime.js';
 import { t3OnFakeServer } from '../helpers/t3-runtime.js';
@@ -857,8 +857,7 @@ steps:
       ok: boolean`);
     expect((await runCLI(['pull'], repo)).code).toBe(0);
     // A codex on this machine's PATH, which local would launch.
-    fs.writeFileSync(path.join(bin, 'codex'), fakeTool({ tool: 'codex', version: 'codex-cli 0.40.0', homeVariable: 'CODEX_HOME', sessions: CLAUDE_SESSIONS }), { mode: 0o755 });
-    onTestFinished(() => fs.rmSync(path.join(bin, 'codex'), { force: true }));
+    const codex = codexOnPath(bin);
     const reason = 'codex cannot sign in inside this sandbox. Sign it in there, then start again.';
     writeDefinition('sandboxthenlocal', [{ use: 'toy', options: { state, can: { isolation: 'sandbox' }, unavailable: { codex: reason } } }, { use: 'local' }]);
 
@@ -866,7 +865,7 @@ steps:
 
     const [review] = readRunState(runOf(ran)).steps;
     expect(review, ran.stderr).toMatchObject({ status: 'failed', failure: { code: 'tool_unavailable', message: expect.stringContaining(`toy: ${reason}`) } });
-    expect(fs.existsSync(launches)).toBe(false);
+    expect(codex.calls()).toEqual([]);
   });
 
   it('records the runtime each step ran on: the host command slot for a command a prompt runtime does not run', async () => {
@@ -930,16 +929,16 @@ steps:
 
   it.each([
     {
-      tool: 'claude', variable: 'CLAUDE_CONFIG_DIR', file: 'settings.json',
+      tool: 'claude', file: 'settings.json',
       member: JSON.stringify({ model: 'opus', effortLevel: 'high', modelSettings: { opus: { thinking: true } }, env: { MEMBER_TOKEN: 'kept-home' }, permissions: { allow: ['Bash'] }, hooks: { Stop: [] }, mcpServers: { db: {} } }),
       seeded: { model: 'opus', effortLevel: 'high', modelSettings: { opus: { thinking: true } } },
     },
     {
-      tool: 'codex', variable: 'CODEX_HOME', file: 'config.toml',
+      tool: 'codex', file: 'config.toml',
       member: 'model = "gpt-5.5"\nmodel_reasoning_effort = "high"\napproval_policy = "never"\n\n[mcp_servers.db]\ncommand = "db"\n\n[shell_environment_policy.set]\nMEMBER_TOKEN = "kept-home"\n',
       seeded: { model: 'gpt-5.5', model_reasoning_effort: 'high' },
     },
-  ])('starts a $tool attempt home with the member\'s model choices and nothing else of their settings', async ({ tool, variable, file, member, seeded }) => {
+  ])('starts a $tool attempt home with the member\'s model choices and nothing else of their settings', async ({ tool, file, member, seeded }) => {
     writeFlow(`${tool}seeded`, `  - id: review
     tool: ${tool}
     prompt: Review the repository without changing it.
@@ -951,10 +950,7 @@ steps:
     fs.mkdirSync(path.dirname(memberFile), { recursive: true });
     fs.writeFileSync(memberFile, member);
     onTestFinished(() => (before === undefined ? fs.rmSync(memberFile, { force: true }) : fs.writeFileSync(memberFile, before)));
-    if (tool === 'codex') {
-      fs.writeFileSync(path.join(bin, 'codex'), fakeTool({ tool: 'codex', version: 'codex-cli 0.40.0', homeVariable: variable, sessions: CLAUDE_SESSIONS }), { mode: 0o755 });
-      onTestFinished(() => fs.rmSync(path.join(bin, 'codex'), { force: true }));
-    }
+    if (tool === 'codex') codexOnPath(bin);
     writeDefinition(`toy${tool}seeded`, [{ use: 'toy', options: { state } }]);
 
     const ran = await runCLI(['workflow', 'start', `${tool}seeded`, '--driver', `toy${tool}seeded`], repo, env());
