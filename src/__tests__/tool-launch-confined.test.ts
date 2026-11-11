@@ -284,6 +284,19 @@ it('offers a verified OpenCode only at best-effort when its temporary copy would
   ]);
 });
 
+it('refuses to run OpenCode where the directory holds links that loop, before it lists through them', async () => {
+  const { dir } = await evidenceDir();
+  for (const folder of ['a', 'b']) {
+    await fs.mkdir(path.join(dir, folder));
+    await fs.symlink('..', path.join(dir, folder, 'up'));
+  }
+  const opencode = await fakeTool('opencode', 'opencode v2.1.2');
+
+  expect(await runConfined({ tool: 'opencode', dir, prompt: 'Say whether the fix landed.', level: 'best-effort', timeoutMs: 60_000, attempt: ATTEMPT }, { resolveTool: machineWith({ opencode }) })).toMatchObject({
+    ok: false, code: 'confined_failed', message: expect.stringContaining('OpenCode would follow a symlink'),
+  });
+}, 20_000);
+
 it('refuses to run OpenCode where it would load an AGENTS.md above its copy of the directory', async () => {
   const { dir } = await evidenceDir();
   await tmpUnder('AGENTS.md');
