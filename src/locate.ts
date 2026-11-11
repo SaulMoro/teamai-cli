@@ -13,7 +13,7 @@ import { MCP_SERVER_KEY } from './resources/mcp-format.js';
 import { SESSION_PLATFORM_FACTS, type SessionPlatform, type StoredSessionPlatform } from './session-flow/adapters/platform-facts.js';
 import { TOOLS, type ToolId } from './tools.js';
 import { type Activation, type BlocksFile, type BlocksHeader, type ChannelProbe, type FirstExistingRead, type HomeRead, type HookAdapter, type HookAdapterId, type HookFormat, type HookSettings, type McpProject, type McpUser, type ProjectRead, type ReadGateKind, type RunTime, type SkillReads, type RunTimeVia } from '@teamai/tool-core/definition';
-import { channelsOf, installGateOf, isToolId, hasDefaultHomeLeftovers } from './tool-registry.js';
+import { channelsOf, installGateOf, isToolId, hasDefaultHomeLeftovers, mcpScopeFor } from './tool-registry.js';
 import {
   CURSOR_CONFIG_TOOL_ID, CURSOR_DATA_TOOL_ID,
   DEFAULT_TOOL_PATHS, isAgentExcluded, isGitExcludeEnabled, isSelfMode, recordedToolRootDir, resolveBaseDir, scopedToolPaths, toolGateRoot,
@@ -1190,6 +1190,10 @@ function mcpKeyOf(channel: Pick<McpUser, 'format' | 'key'>): readonly [string, .
 async function mcpFileOf(
   channel: McpUser | McpProject<ToolId>, scope: Scope, roots: Roots, host: Host,
 ): Promise<{ readonly file: string | null; readonly lookup: McpLookup | null }> {
+  if (scope === 'user' && channel.format === 'openclaw' && host.env.OPENCLAW_CONFIG_PATH?.trim()) {
+    return { file: resolveOpenclawConfigPath(host, openclawStateDir(roots, host)), lookup: null };
+  }
+
   const configured = roots.configured(scope === 'user' ? 'mcp' : 'mcpProject');
 
   if (configured === null || channel.reads === 'unknown') return { file: configured, lookup: null };
@@ -1272,6 +1276,12 @@ async function claudeProjectKey(checkout: string, host: Host): Promise<string> {
 }
 
 async function locateMcp(tool: string, install: Install, host: Host): Promise<Location<'mcp'>> {
+  // A tool with no project MCP file takes a project's servers in its user
+  // config, as its skills already land in the one place it reads.
+  if (install.scope === 'project' && mcpScopeFor(tool, install.scope) === 'user') {
+    return locateMcp(tool, await userViewOf(install, host), host);
+  }
+
   const { mcp } = channelsOf(tool);
   const roots = rootsOf(tool, install, host);
   const p = host.path;
@@ -1372,7 +1382,9 @@ async function mcpFilesOf(
       })),
       ...(lookup?.files ?? []).filter((other) => other !== file).map((other): Retired<EntryPlace> => ({ place: entry(other), was: 'lookup' })),
     ],
-    reads: await readsOf(channel.reads, roots, host, key),
+    reads: scope === 'user' && channel.format === 'openclaw' && host.env.OPENCLAW_CONFIG_PATH?.trim() && file !== null
+      ? [{ path: file, key, when: 'always' }]
+      : await readsOf(channel.reads, roots, host, key),
   };
 }
 

@@ -3,6 +3,7 @@ import { NONE, type ToolDescriptor } from '@teamai/tool-core/definition';
 /** DeepSeek Harness, run as dsh. */
 export const tools = {
   dsh: {
+    receivesDeliveredModels: true,
     home: { dir: '.dsh', moves: { by: [{ kind: 'env', name: 'DSH_HOME', evidence: 'source' }] } },
     skillLoad: { calls: [{ name: 'skill', evidence: 'verified' }] },
     skills: { user: [{ base: 'home', path: '.dsh/skills', evidence: 'verified' }], project: 'unknown' },
@@ -15,7 +16,12 @@ export const tools = {
       project: { channel: 'session-hook', probe: 'dsh-session-start', evidence: 'source' },
     },
     agents: NONE,
-    mcp: NONE,
+    // MCP servers are mcp-client plugin instances in the home patch DSH applies
+    // on every boot. Only the user channel is proven.
+    mcp: {
+      user: { format: 'dsh', reads: [{ base: 'home', path: '.dsh/cordis.patch.yml', evidence: 'source' }] },
+      project: 'none',
+    },
     hooks: { user: { channel: 'adapter', adapter: 'dsh-hooks', evidence: 'source' }, self: 'user', subagentStop: false, stopReply: true, shell: 'system', teamHooks: 'home', needsBundle: false },
     sessions: 'none',
     launch: 'none',

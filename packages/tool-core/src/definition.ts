@@ -1,7 +1,7 @@
 import type { JsonSyntax } from './json.js';
 
 /** The MCP config formats teamai writes (`src/resources/mcp-format.ts`); a tool's MCP channel names one. */
-export type McpFormat = 'claude' | 'cursor' | 'buddy' | 'codex' | 'opencode' | 'copilot' | 'pi' | 'muse' | 'agy';
+export type McpFormat = 'claude' | 'cursor' | 'buddy' | 'codex' | 'opencode' | 'copilot' | 'pi' | 'muse' | 'agy' | 'openclaw' | 'hermes' | 'dsh';
 
 /** The rule file formats teamai renders a team rule in (`src/resources/rule-format.ts`); a tool's rules directory names one, or takes the team `.md` verbatim. */
 export type RuleFormatId = 'cursor-mdc' | 'joycode' | 'copilot-instructions' | 'kiro-steering' | 'qoder' | 'trae' | 'codebuddy' | 'omp' | 'agy';
@@ -322,6 +322,29 @@ export type HooksChannels = {
    * hook-fast-path.test.ts checks against this field.
    */
   readonly needsBundle: boolean;
+  /**
+   * The first version of the tool whose command hooks take `"async": true` and are then not waited for, with no
+   * side effect on a hook that prints nothing. Once the installed version reaches it, teamai writes its PostToolUse
+   * built-in that way into the member's own hook file, on macOS and Linux only (`builtinHookForm`). Set on a run of
+   * the real tool, or on its documentation together with its source read at the floor and at a later release; the
+   * comment beside it says which. Absent: the tool has no such option, or neither shows it.
+   */
+  readonly unwaitedSince?: string;
+  /**
+   * Where the version compared with `unwaitedSince` comes from, and means nothing without it. Absent: the tool's
+   * version detector. `codex-builds`: the oldest of the Codex builds that read the member's hook file, a build on PATH
+   * and each desktop app's (`oldestCodexBuildVersion`), since one hook file serves them all.
+   */
+  readonly unwaitedVersionOf?: 'codex-builds';
+  /**
+   * Set when, on POSIX, the tool runs a hook's command string with a POSIX-compatible shell and `-c`, not a login
+   * shell, so a built-in hook in the member's own hook file may start teamai without one and leave the login
+   * environment to the background pass (`builtinHookForm`). Set on a run of the executor for a tool of its own, or,
+   * for a variant, the original it is assumed to behave as, which shows the shell and its flags; source that picks
+   * the shell may extend it to the platforms and versions the run did not cover. The comment beside it says which.
+   * Absent: no run shows it.
+   */
+  readonly loginDeferrable?: true;
 };
 
 /**
@@ -389,6 +412,8 @@ export type ToolDescriptor<TIds extends DescriptorIds = DescriptorIds> = {
   readonly skillLoad: SkillLoad;
   readonly skills: SkillReads;
   readonly installedBy?: InstallGate;
+  /** HTTP delivery adds models to this tool's own model settings; it reads them like any member entry. */
+  readonly receivesDeliveredModels?: true;
   /**
    * Where teamai writes the tool's skills follows inputs of each session that
    * nothing records: OpenClaw's workspace follows `OPENCLAW_WORKSPACE_DIR`,

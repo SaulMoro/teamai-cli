@@ -235,3 +235,27 @@ export function mcpFormatOf(tool: string): McpFormat | null {
 
   return null;
 }
+
+/** Tools whose own model settings teamai adds delivered models to (`receivesDeliveredModels`). */
+export type DeliveredModelTool = { [T in ToolId]: DescriptorOf<T> extends { readonly receivesDeliveredModels: true } ? T : never }[ToolId];
+
+function receivesDeliveredModels(tool: ToolId): tool is DeliveredModelTool {
+  return 'receivesDeliveredModels' in descriptorOf(tool);
+}
+
+export const DELIVERED_MODEL_TOOLS: readonly DeliveredModelTool[] = TOOL_ORDER.filter(receivesDeliveredModels);
+
+/**
+ * The scope `tool` takes an MCP server in when the install is `scope`. A tool
+ * whose descriptor names no project MCP file writes its user config instead of
+ * skipping the server, as its skills already land in the one place it reads
+ * (OpenClaw's workspace, Hermes' and DSH's home). A tool with neither channel
+ * keeps `scope`: it is skipped either way.
+ */
+export function mcpScopeFor(tool: string, scope: 'user' | 'project'): 'user' | 'project' {
+  const { mcp } = channelsOf(tool);
+
+  if (scope === 'project' && (mcp.project === 'none' || mcp.project === 'unknown') && mcp.user instanceof Object) return 'user';
+
+  return scope;
+}

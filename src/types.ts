@@ -669,12 +669,16 @@ export const DEFAULT_TOOL_PATHS = {
   codebuddy: { skills: '.codebuddy/skills', rules: '.codebuddy/rules', settings: '.codebuddy/settings.json', claudemd: '.codebuddy/CODEBUDDY.md', agents: '.codebuddy/agents', mcp: '.codebuddy/mcp.json', mcpProject: '.mcp.json' },
   // OpenClaw reads no rules directory: in user scope its team rules are a
   // block in the workspace AGENTS.md, and a project gets none (#946).
-  openclaw: { skills: '.openclaw/skills', claudemd: '.openclaw/workspace/AGENTS.md' },
-  hermes: { skills: '.hermes/skills', claudemd: 'AGENTS.md' },
+  // MCP servers live under `mcp.servers` of openclaw.json: one user channel,
+  // no project one (its only project file is the shared AGENTS.md).
+  openclaw: { skills: '.openclaw/skills', claudemd: '.openclaw/workspace/AGENTS.md', mcp: '.openclaw/openclaw.json' },
+  // Hermes keeps one YAML config per profile, which its home move resolves.
+  hermes: { skills: '.hermes/skills', claudemd: 'AGENTS.md', mcp: '.hermes/config.yaml' },
   // DeepSeek Harness: skills synced to ~/.dsh/skills, which its skill-filesystem
   // provider scans as user-dsh root (rank 400). dsh discovers both directory
-  // bundles (<name>/SKILL.md) and flat Markdown files there natively.
-  dsh: { skills: '.dsh/skills' },
+  // bundles (<name>/SKILL.md) and flat Markdown files there natively. MCP servers
+  // are mcp-client instances in the home patch dsh applies on every boot.
+  dsh: { skills: '.dsh/skills', mcp: '.dsh/cordis.patch.yml' },
   // WorkBuddy runs CodeBuddy's engine: in a project it reads CodeBuddy's
   // .codebuddy/rules, which the two share (one copy), and in user scope its
   // own ~/.workbuddy/rules (#946). Its install probe stays .workbuddy
@@ -922,6 +926,13 @@ export const MemberSettingsSchema = z.object({
    *  Undefined means on. */
   codexTrustEnabled: z.boolean().optional(),
   updatePolicy: z.enum(['auto', 'prompt', 'skip']).optional(),
+  /**
+   * Let an automatic update install a newer version into the other npm-global
+   * copies this machine has run (#1753). Off by default: `updatePolicy: auto`
+   * keeps its meaning of updating the copy that runs. Only `auto` uses it;
+   * `prompt` and `skip` never install unattended.
+   */
+  updateOtherInstallations: z.boolean().optional(),
   /**
    * Per-machine map from a gateway/proxy model alias to a model the price
    * catalog (`src/token-usage/model-prices.json`) lists, so the dashboard can
@@ -1614,6 +1625,8 @@ export interface HookDef {
   shell?: 'powershell';
   /** Per-hook timeout in seconds (tool-specific; omitted = tool default). */
   timeout?: number;
+  /** The tool starts the hook and does not wait for it (Claude Code and Codex `"async": true`). */
+  async?: true;
   /**
    * Codex only: the token count past which Codex keeps just the start and end
    * of the hook's additionalContext. 0 turns that off. Omitted = Codex's 2,500.
@@ -1866,6 +1879,13 @@ export interface GlobalOptions {
    * while the team repo is unreachable; the session's full pull fetches.
    */
   localOnly?: boolean;
+  /**
+   * Internal (the inline preparation of a new checkout from git's hook): the
+   * delivered git exclude sync lists this checkout's files and drops no line,
+   * asking git about this checkout alone. The detached pull the hook hands
+   * over to then syncs every checkout's lines.
+   */
+  gitExcludeAddOnly?: boolean;
   /**
    * Internal (post-merge/post-rewrite git hooks, with `inline`): fetch the team repo
    * whatever its fetch stamp says, and give up after this many ms; the scope
@@ -2459,6 +2479,18 @@ export function stripInjectedPrompt(raw: string): string {
 export const TRANSCRIPT_REJECT_MARKERS = [
   'The tool use was rejected',
   "doesn't want to proceed with this tool use",
+];
+
+/**
+ * Substrings that mark a tool_result the host refused to run before it started:
+ * Claude Code's auto-mode classifier could not answer, so it blocked the call
+ * rather than letting the tool fail. The message names the member's gateway
+ * model first (`RCH10-CQ-2MM is temporarily unavailable (timed out), so auto
+ * mode cannot determine the safety of Bash right now`), so nothing before this
+ * marker is matched (#1821).
+ */
+export const TRANSCRIPT_HOST_BLOCK_MARKERS = [
+  'auto mode cannot determine the safety of',
 ];
 
 // ─── Contribute (session auto-contribute) ────────────
