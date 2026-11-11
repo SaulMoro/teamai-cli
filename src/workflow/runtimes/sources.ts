@@ -73,10 +73,17 @@ async function isFile(at: string): Promise<boolean> {
   return (await fs.lstat(at).catch(() => undefined))?.isFile() === true;
 }
 
-/** The runtime facts the `package.json` in `dir` declares under `teamai`: none when it has none or cannot be read. */
+/**
+ * The runtime facts the `package.json` in `dir` declares under `teamai`: none when it has none, cannot be read, or is a
+ * link, whose target a team runtime's accepted revision does not hold (`runtimeRevision` hashes the link itself).
+ */
 async function declaredFacts(dir: string): Promise<{ exec?: boolean }> {
+  const manifest = path.join(dir, 'package.json');
+
+  if (!(await isFile(manifest))) return {};
+
   try {
-    const exec = z.object({ teamai: RuntimeFactsSchema }).parse(JSON.parse(await readRegularFile(path.join(dir, 'package.json'), 'utf8'))).teamai.exec;
+    const exec = z.object({ teamai: RuntimeFactsSchema }).parse(JSON.parse(await readRegularFile(manifest, 'utf8'))).teamai.exec;
 
     return exec === undefined ? {} : { exec };
   } catch {

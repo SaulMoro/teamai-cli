@@ -188,6 +188,17 @@ describe('a run that needs no AI tool and the runtimes that run no command', () 
     expect(await open(team, false)).toMatchObject({ ok: true, opened: { runtimes: [] } });
   });
 
+  it('reads no declaration through a link, whose target the accepted revision does not hold', async () => {
+    const team = teamWithRuntime();
+    const dir = path.join(team.repo.localPath, 'runtimes', 'agents');
+    fs.writeFileSync(path.join(team.repo.localPath, 'facts.json'), JSON.stringify({ teamai: { exec: false } }));
+    fs.symlinkSync(path.join(team.repo.localPath, 'facts.json'), path.join(dir, 'package.json'));
+    const source = { kind: 'team' as const, name: 'agents', executable: path.join(dir, 'runtime'), dir, relative: 'runtimes/agents' };
+    expect(await acceptRuntime(source, { mode: 'attended', canAsk: true, ask: async () => true })).toEqual({ ok: true });
+
+    expect(await open(team, false)).not.toMatchObject({ ok: true, opened: { runtimes: [] } });
+  });
+
   it('opens it for a run that needs an AI tool or before its revision is accepted, and opens a team runtime whose manifest does not say, or says it runs commands', async () => {
     const unaccepted = { ok: false, failure: { code: 'runtime_not_accepted' } };
 
