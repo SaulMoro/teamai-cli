@@ -44,22 +44,24 @@ const workspace = {
   'src/pull-checks.ts': 'export {};\n',
   'src/pull-requests.ts': 'export {};\n',
 };
+/** `code` in the CLI, beside the commands it declares. */
+const atCli = (code: string) => `${code}\n${workspace['src/index.ts']}`;
 /** The workspace around a fixture at `filename`, without the workspace's own copy of that file. */
 const inWorkspace = (filename: string) => ({ filename, files: Object.fromEntries(Object.entries(workspace).filter(([file]) => file !== filename)) });
 
 describe('teamai/family-facts', () => {
   describe('the startup entries', () => {
-    rule.invalid('refuses the CLI entry when an import reaches a family\'s behaviour through the list of families', `import { hooks } from './stale-hooks.js';`, (output) => {
+    rule.invalid('refuses the CLI entry when an import reaches a family\'s behaviour through the list of families', atCli(`import { hooks } from './stale-hooks.js';`), (output) => {
       expect(output).toContain('src/index.ts -> src/stale-hooks.ts -> src/tools-from-registry.ts -> packages/tool-definitions/src/registry.ts');
       expect(output).toContain('@teamai/tool-definitions/facts');
     }, inWorkspace('src/index.ts'));
     rule.invalid('refuses the hook dispatch too', `import { LAUNCH } from './launch-registry.js';`, (output) => {
       expect(output).toContain('src/hook-dispatch-cli.ts loads at startup or before a hook or pull an agent waits on ends');
     }, inWorkspace('src/hook-dispatch-cli.ts'));
-    rule.invalid('refuses a re-export that reaches a family\'s adapters', `export { platforms } from '@teamai/tool-acme';`, undefined, inWorkspace('src/index.ts'));
-    rule.valid('allows an entry whose imports reach only facts', `import { hooks } from './hooks.js';\nimport { UNKNOWN } from '@teamai/tool-core/definition';`, inWorkspace('src/index.ts'));
-    rule.valid('allows a dynamic import, which loads the behaviour on first use', `const { LAUNCH } = await import('./launch-registry.js');`, inWorkspace('src/index.ts'));
-    rule.valid('allows a type-only import, which the build erases', `import type { LAUNCH } from './launch-registry.js';`, inWorkspace('src/index.ts'));
+    rule.invalid('refuses a re-export that reaches a family\'s adapters', atCli(`export { platforms } from '@teamai/tool-acme';`), undefined, inWorkspace('src/index.ts'));
+    rule.valid('allows an entry whose imports reach only facts', atCli(`import { hooks } from './hooks.js';\nimport { UNKNOWN } from '@teamai/tool-core/definition';`), inWorkspace('src/index.ts'));
+    rule.valid('allows a dynamic import, which loads the behaviour on first use', atCli(`const { LAUNCH } = await import('./launch-registry.js');`), inWorkspace('src/index.ts'));
+    rule.valid('allows a type-only import, which the build erases', atCli(`import type { LAUNCH } from './launch-registry.js';`), inWorkspace('src/index.ts'));
     rule.valid('leaves a module that is not a startup entry alone', `import { LAUNCH } from './launch-registry.js';`, inWorkspace('src/doctor.ts'));
     rule.invalid('refuses the executable, which loads the CLI by URL', `import { LAUNCH } from './launch-registry.js';\nawait import(new URL('./cli.js', import.meta.url).href);`, (output) => {
       expect(output).toContain('src/bin.ts -> src/launch-registry.ts -> packages/tool-definitions/src/registry.ts');
@@ -70,6 +72,13 @@ describe('teamai/family-facts', () => {
     }, inWorkspace('src/pull.ts'));
     rule.invalid('refuses a module the pull loads with import() before it ends', `import { LAUNCH } from './launch-registry.js';`, undefined, inWorkspace('src/pull-checks.ts'));
     rule.valid('leaves a command whose name only starts with pull alone', `import { LAUNCH } from './launch-registry.js';`, inWorkspace('src/pull-requests.ts'));
+    rule.invalid('refuses a family\'s behaviour the pull loads with import() by its package name', `export async function pull() { await import('@teamai/tool-acme'); }`, (output) => {
+      expect(output).toContain('src/pull.ts -> packages/tool-acme/src/index.ts');
+    }, inWorkspace('src/pull.ts'));
+    rule.invalid('finds the pull however the CLI quotes its name and its module', `import { LAUNCH } from './launch-registry.js';`, undefined, {
+      filename: 'src/pull.ts',
+      files: { ...inWorkspace('src/pull.ts').files, 'src/index.ts': `program\n  .command("hook-dispatch <event>")\n  .action(async () => { await import("./hook-dispatch-cli.js"); });\nprogram\n  .command(\`pull\`)\n  .action(async () => { await import(\`./pull.js\`); });\n` },
+    });
     rule.invalid('holds a new step of the hook dispatch, with no rule edit', `import { LAUNCH } from './launch-registry.js';`, (output) => {
       expect(output).toContain('src/new-hook-step.ts -> src/launch-registry.ts');
     }, { filename: 'src/new-hook-step.ts', files: { ...workspace, 'src/hook-dispatch-cli.ts': `export async function hookDispatchCli() { await import('./new-hook-step.js'); }\n` } });
@@ -93,6 +102,24 @@ describe('teamai/family-facts', () => {
         fs.writeFileSync(path.join(root, 'tsup.config.ts'), `export default defineConfig({\n  entry: {\n    index: 'src/bin.ts',\n  },\n});\n`);
 
         expect(() => startupEntries(root)).toThrow('package.json bin dist/new.js names no entry of tsup.config.ts');
+      } finally {
+        fs.rmSync(root, { recursive: true, force: true });
+      }
+    });
+
+    it.each([
+      ['declares no pull', `program\n  .command('hook-dispatch <event>')\n  .action(async () => { await import('./hook-dispatch-cli.js'); });\n`, 'declares no pull command'],
+      ['loads the pull\'s module in no import()', `import { pull } from './pull.js';\nprogram\n  .command('hook-dispatch <event>')\n  .action(async () => { await import('./hook-dispatch-cli.js'); });\nprogram\n  .command('pull')\n  .action(pull);\n`, 'its pull command loads no module with import()'],
+    ])('refuses a CLI that %s, rather than leaving the pull unchecked', (_, cli, message) => {
+      const root = fs.mkdtempSync(path.join(os.tmpdir(), 'family-facts-cli-'));
+
+      try {
+        for (const [file, text] of Object.entries({ ...workspace, 'src/index.ts': cli })) {
+          fs.mkdirSync(path.dirname(path.join(root, file)), { recursive: true });
+          fs.writeFileSync(path.join(root, file), text);
+        }
+
+        expect(() => startupEntries(root)).toThrow(message);
       } finally {
         fs.rmSync(root, { recursive: true, force: true });
       }

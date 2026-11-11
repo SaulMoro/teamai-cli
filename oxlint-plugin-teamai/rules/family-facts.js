@@ -32,7 +32,7 @@ const RUNTIME_EXECUTABLE = /^packages\/runtime-[^/]+\/src\/main\.ts$/;
 /** package.json's `bin`: one executable named after the package, or a name for each. */
 const ManifestSchema = z.object({ bin: z.union([z.string().transform((one) => ({ [one]: one })), z.record(z.string(), z.string())]).default({}) });
 
-/** @type {Map<string, Set<string>>} */
+/** @type {Map<string, { entries: Set<string>; waited: Set<string> }>} */
 const startups = new Map();
 
 /**
@@ -45,6 +45,15 @@ const startups = new Map();
  * @returns {Set<string>}
  */
 export function startupEntries(root) {
+  return startupsOf(root).entries;
+}
+
+/**
+ * The startup entries of `root`, and among them the modules a waited command loads, whose own `import()`s run before
+ * it answers.
+ * @param {string} root
+ */
+function startupsOf(root) {
   const known = startups.get(root);
 
   if (known !== undefined) return known;
@@ -69,34 +78,45 @@ export function startupEntries(root) {
   // A bundle an executable loads by URL beside itself, as bin.ts loads the CLI.
   const clis = executables.flatMap((source) => [...read(source).matchAll(/new URL\('\.\/([\w-]+)\.js'/g)].flatMap(([, name = '']) => bundles.get(name) ?? []));
   const entries = new Set([...executables, ...clis]);
+  /** @type {Set<string>} */
+  const waited = new Set();
 
-  for (const [cli, command] of clis.flatMap((source) => WAITED_COMMANDS.map((name) => /** @type {const} */ ([source, name])))) {
-    const text = read(cli);
-    // The name ends at its arguments or its quote, so `pull` is not `pull-requests`.
-    const at = text.search(new RegExp(`\\.command\\('${command}[ ']`));
+  for (const command of clis.length === 0 ? [] : WAITED_COMMANDS) {
+    const found = clis.flatMap((cli) => {
+      const text = read(cli);
+      // The name ends at its arguments or its quote, so `pull` is not `pull-requests`.
+      const at = text.search(new RegExp(`\\.command\\(['"\`]${command}[ '"\`]`));
 
-    if (at === -1) continue;
-    // The command's own block: up to the next command the CLI declares.
-    const next = text.indexOf('.command(', at + 1);
+      if (at === -1) return [];
+      // The command's own block: up to the next command the CLI declares.
+      const next = text.indexOf('.command(', at + 1);
 
-    for (const [, specifier = ''] of text.slice(at, next === -1 ? undefined : next).matchAll(/import\('(\.[^']+)'\)/g)) {
-      const waited = sourceImport(path.posix.join(root, cli), specifier);
+      return [{ cli, block: text.slice(at, next === -1 ? undefined : next) }];
+    });
 
-      if (waited === undefined) continue;
-      entries.add(path.posix.relative(root, waited));
+    if (found.length === 0) throw new Error(`teamai/family-facts: ${clis.join(', ')} declares no ${command} command, so the rule cannot find what an agent waits on there. Declare it as .command('${command}'), or update WAITED_COMMANDS.`);
+    const loaded = found.flatMap(({ cli, block }) => [...block.matchAll(/import\((['"`])(\.[^'"`]+)\1\)/g)].flatMap(([, , specifier = '']) => sourceImport(path.posix.join(root, cli), specifier) ?? []));
+
+    if (loaded.length === 0) throw new Error(`teamai/family-facts: its ${command} command loads no module with import() in ${found.map(({ cli }) => cli).join(', ')}, so the rule cannot find what an agent waits on there. Load the command's module with import('./<module>.js') in its action.`);
+
+    for (const module of loaded) {
+      const relative = path.posix.relative(root, module);
+      entries.add(relative);
+      waited.add(relative);
 
       // What that module loads before it answers, such as the session captures of a SessionStart.
-      for (const step of dynamicImports(waited)) {
-        const file = sourceImport(waited, step);
+      for (const step of dynamicImports(module)) {
+        const file = resolved(root, relative, step);
 
-        if (file !== undefined) entries.add(path.posix.relative(root, file));
+        if (file !== undefined) entries.add(file);
       }
     }
   }
 
-  startups.set(root, entries);
+  const found = { entries, waited };
+  startups.set(root, found);
 
-  return entries;
+  return found;
 }
 
 /**
@@ -200,12 +220,18 @@ export default defineRule({
       });
     }
 
-    if (root === undefined || !startupEntries(root).has(from)) return {};
+    const startup = root === undefined ? undefined : startupsOf(root);
+
+    if (root === undefined || startup === undefined || !startup.entries.has(from)) return {};
     const seen = new Set();
 
     return importVisitors(({ node, specifier, typeOnly }) => {
-      if (typeOnly || node.type === 'ImportExpression') return;
+      // A waited command's module loads what it imports with import() before it answers: a family's behaviour among it
+      // is loaded there. What such a module imports itself is held when it is linted, as a startup entry.
+      if (typeOnly || (node.type === 'ImportExpression' && !startup.waited.has(from))) return;
       const to = resolved(root, from, specifier);
+
+      if (node.type === 'ImportExpression' && (to === undefined || !isFamilyBehaviour(to))) return;
       const chain = to === undefined ? undefined : chainToBehaviour(root, to, seen);
 
       if (chain === undefined) return;
