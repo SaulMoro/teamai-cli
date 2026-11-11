@@ -17,13 +17,20 @@ import { readRegularFile } from '@teamai/shared/regular-file';
 const PS_TIMEOUT_MS = 5_000;
 
 /**
- * The channel each process read is told on, with the ps argv it ran or, read from `/proc`, stands for, and whether it ran
- * ps: `{ ps: string[]; spawned: boolean }`. The agent wait budget counts the reads Linux answers from `/proc` as the ps
- * macOS runs for them, so a wait only macOS has shows on a Linux runner too.
+ * The channel each process read is told on (`tellProcessRead`). The agent wait budget counts the reads Linux answers from
+ * `/proc` as the ps macOS runs for them, so a wait only macOS has shows on a Linux runner too.
  */
 export const PROCESS_READ_CHANNEL = 'teamai:process-read';
 
+/** A process read: the ps argv it ran or, read from `/proc`, stands for, and whether it ran ps. */
+export interface ProcessRead { readonly ps: readonly string[]; readonly spawned: boolean }
+
 const processReads = diagnostics.channel(PROCESS_READ_CHANNEL);
+
+/** Tells a process read on `PROCESS_READ_CHANNEL`: every read of `/proc`, where macOS runs ps, is told, once per ps it stands for. */
+export function tellProcessRead(read: ProcessRead): void {
+  processReads.publish(read);
+}
 
 /**
  * The one way this module reads processes: from `/proc` on Linux when `fromProc` tells, else through ps with `args`, in
@@ -41,14 +48,14 @@ async function readProcesses<T>({ args, fromPs, fromProc, signal }: {
     const read = await fromProc();
 
     if (read !== undefined) {
-      processReads.publish({ ps: args, spawned: false });
+      tellProcessRead({ ps: args, spawned: false });
 
       return read;
     }
   }
 
   if (signal?.aborted === true) return undefined;
-  processReads.publish({ ps: args, spawned: true });
+  tellProcessRead({ ps: args, spawned: true });
 
   return new Promise((resolve) => {
     execFile('ps', args, { encoding: 'utf8', env: { ...process.env, LC_ALL: 'C' }, timeout: PS_TIMEOUT_MS, ...(signal !== undefined && { signal }) }, (error, stdout) => {

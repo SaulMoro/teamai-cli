@@ -97,6 +97,8 @@
     "teamai/spawn-command": "error",
     // readline re-emits a socket's or stream's errors on its interface, and throws them when nothing listens there.
     "teamai/readline-error": "error",
+    // Linux answers from /proc the process reads macOS runs ps for, and the agent wait budget counts only what it is told on Linux.
+    "teamai/process-reads": "error",
     // A step writes the paths the engine reads; a FIFO it leaves there would block a plain read past every deadline.
     "teamai/regular-file-reads": "error",
     // Opening a FIFO for writing blocks until a reader comes, as a read blocks until a writer does.
