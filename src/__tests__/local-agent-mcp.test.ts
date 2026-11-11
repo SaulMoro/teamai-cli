@@ -1724,13 +1724,14 @@ describe('MCP servers in each tool\'s own settings', () => {
     expect(serverNameProblem('hermes', 'local.tools')).toBeNull();
   });
 
-  it('keeps Hermes comments and unrelated values, and rewrites only its own server map', async () => {
+  it('keeps Hermes comments and unrelated values, even ones JSON cannot hold, and rewrites only its own server map', async () => {
     const file = path.join(nativeHome, HERMES_FILE);
     const original = [
       '# member settings',
       'providers:',
       '  mine:',
       '    api: https://llm.example',
+      '    budget: .inf',
       'mcp_servers:',
       '  mine:',
       '    command: mine-server   # member comment',
@@ -1749,7 +1750,7 @@ describe('MCP servers in each tool\'s own settings', () => {
     expect(written).toContain('# member settings');
     expect(written).toContain('# member comment');
     expect(YAML.parse(written)).toEqual({
-      providers: { mine: { api: 'https://llm.example' } },
+      providers: { mine: { api: 'https://llm.example', budget: Infinity } },
       mcp_servers: { mine: { command: 'mine-server' }, alpha: { command: 'node' } },
     });
 

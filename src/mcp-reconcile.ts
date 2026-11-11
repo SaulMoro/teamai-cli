@@ -946,16 +946,16 @@ async function readYamlMcpDoc(file: string, keys: readonly string[]): Promise<Js
 
   const doc = YAML.parseDocument(raw);
 
-  if (doc.errors.length > 0) return null;
-  const parsed = JsonObjectSchema.safeParse(raw.trim() === '' ? {} : doc.toJS());
+  if (doc.errors.length > 0 || (raw.trim() !== '' && !YAML.isMap(doc.contents))) return null;
+  // Only the server map is read as JSON: the member's other values, which JSON may not hold (`.inf`), stay in the
+  // document that is written back.
+  const node: unknown = doc.getIn(keys, true);
+  const read = node === undefined ? undefined : JsonObjectSchema.safeParse(YAML.isNode(node) ? node.toJS(doc) : node);
 
-  if (!parsed.success) return null;
-  const data = parsed.data;
-  const servers = valueAt(data, keys);
+  if (read !== undefined && !read.success) return null;
+  const servers = read?.data ?? {};
 
-  if (servers !== undefined && !isJsonObject(servers)) return null;
-
-  return { data, servers: { ...servers }, bare: false, raw, storage: { kind: 'yaml-map', doc } };
+  return { data: withValueAt({}, keys, servers), servers: { ...servers }, bare: false, raw, storage: { kind: 'yaml-map', doc } };
 }
 
 /** Read a DSH patch list as the same `servers` view: keyed by each mcp-client instance's `config.serverName`. */
