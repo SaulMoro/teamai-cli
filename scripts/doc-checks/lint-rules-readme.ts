@@ -10,6 +10,7 @@ const README = 'oxlint-plugin-teamai/README.md';
 // The shapes this check reads. Another shape fails it rather than passing with rules it did not see.
 const RULES_BLOCK = /^ {2}rules: \{\n(.*?)^ {2}\},$/msu;
 const RULE_ENTRY = /^ {4}'([a-z][a-z-]*)': [A-Za-z]+,$/u;
+
 // The vendored anti-slop rules, which the README describes together rather than one row each.
 const ANTI_SLOP_SPREAD = '    ...antiSlopRules,';
 const ROW = /^\| `teamai\/([a-z][a-z-]*)` \|/gmu;
