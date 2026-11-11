@@ -142,10 +142,10 @@ async function play(threadId) {
   const thread = readThread(threadId);
   const agent = config().agent ?? {};
   update(threadId, () => ({ status: 'running' }));
-  const unstarted = await startWrapper(thread);
+  const startFailure = await startWrapper(thread);
 
-  if (unstarted !== undefined) {
-    update(threadId, () => ({ status: 'failed', error: { title: 'Provider failed to start', text: unstarted, runId: `run:${threadId}:1` } }));
+  if (startFailure !== undefined) {
+    update(threadId, () => ({ status: 'failed', error: { title: 'Provider failed to start', text: startFailure, runId: `run:${threadId}:1` } }));
 
     return;
   }
