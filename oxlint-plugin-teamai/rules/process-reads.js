@@ -18,10 +18,17 @@ const TELL = 'tellProcessRead';
 function namesProcPath(text, node) {
   if (text.startsWith('/proc/')) return true;
 
-  if (text !== '/proc') return false;
+  return text === '/proc' && opensFrom(node);
+}
+
+/**
+ * Whether a path is built or opened from `node`: it is an argument, or the start of a sum.
+ * @param {ESTree.Node} node
+ */
+function opensFrom(node) {
   const { parent } = node;
 
-  return parent?.type === 'CallExpression' || parent?.type === 'NewExpression' || (parent?.type === 'BinaryExpression' && parent.operator === '+' && parent.left === node);
+  return ((parent?.type === 'CallExpression' || parent?.type === 'NewExpression') && parent.arguments.some((argument) => argument === node)) || (parent?.type === 'BinaryExpression' && parent.operator === '+' && parent.left === node);
 }
 
 export default defineRule({
@@ -33,6 +40,10 @@ export default defineRule({
     if (!inProductionSource(context)) return {};
     /** @type {ESTree.Node[]} */
     const reads = [];
+    /** The names a bare `/proc` is first stored in, and each use of a name a path is built or opened from. */
+    const procNames = new Set();
+    /** @type {ESTree.IdentifierReference[]} */
+    const opened = [];
     let isTelling = false;
 
     return {
@@ -41,6 +52,12 @@ export default defineRule({
         const text = stringLiteralValue(node);
 
         if (text !== undefined && namesProcPath(text, node)) reads.push(node);
+
+        if (text === '/proc' && node.parent?.type === 'VariableDeclarator' && node.parent.id.type === 'Identifier') procNames.add(node.parent.id.name);
+      },
+      /** @param {ESTree.IdentifierReference} node */
+      Identifier(node) {
+        if (opensFrom(node)) opened.push(node);
       },
       /** @param {ESTree.TemplateLiteral} node */
       TemplateLiteral(node) {
@@ -55,7 +72,7 @@ export default defineRule({
       'Program:exit'() {
         if (isTelling) return;
 
-        for (const node of reads) context.report({ node, message: MESSAGE });
+        for (const node of [...reads, ...opened.filter(({ name }) => procNames.has(name))]) context.report({ node, message: MESSAGE });
       },
     };
   },

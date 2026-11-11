@@ -22,6 +22,14 @@ export const all = (pid: number) => [fs.readdirSync('/proc'), fs.readFileSync(pa
   expect(output.match(/Linux answers from \/proc where macOS runs ps/g)).toHaveLength(3);
 });
 
+rule.invalid('rejects /proc first held in a variable, then listed or joined', `import fs from 'node:fs';
+import path from 'node:path';
+export const all = (pid: number) => [fs.readdirSync(PROC), fs.readFileSync(path.join(PROC, String(pid), 'stat'))];
+const PROC = '/proc';
+export const mounts = ['--proc', PROC];`, (output) => {
+  expect(output.match(/Linux answers from \/proc where macOS runs ps/g)).toHaveLength(2);
+});
+
 rule.invalid('rejects a /proc read in a module that only imports the way to tell it', `import fs from 'node:fs';
 import { tellProcessRead } from '@teamai/shared/process-group';
 export const parentOf = (pid: number) => fs.readFileSync(\`/proc/\${pid}/stat\`, 'utf8');
