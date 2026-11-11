@@ -601,6 +601,67 @@ it.runIf(READS_PS)('lets a timer fire on time while it stops an attached command
   // The stop may wait out its five-second grace, with each ps it runs taking half a second.
 }, 20_000);
 
+/** A directory with a `ps` that answers its first `times` calls and fails every later one, as one past its timeout. */
+function psAnswering(times: number): { directory: string; bin: string } {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-failing-ps-'));
+  const bin = path.join(directory, 'bin');
+  fs.mkdirSync(bin);
+  fs.writeFileSync(path.join(bin, 'ps'), `#!/bin/sh\necho . >> "${directory}/calls"\n[ "$(wc -l < "${directory}/calls")" -le ${times} ] || exit 1\nexec /bin/ps "$@"\n`, { mode: 0o755 });
+  return { directory, bin };
+}
+
+/** An attached shell whose child ignores SIGTERM, as a tool that traps it does; the shell itself ends on it. */
+async function shellLeavingDeafChild(): Promise<{ shell: ChildProcess; deaf: number; exit: Promise<void> }> {
+  const shell = spawn('/bin/sh', ['-c', '(trap "" TERM; exec sleep 30) & echo $!; wait'], { stdio: ['ignore', 'pipe', 'ignore'] });
+  const deaf = await new Promise<number>((resolve) => { shell.stdout?.once('data', (chunk: Buffer) => resolve(Number(chunk.toString().trim()))); });
+  const exit = new Promise<void>((resolve) => { shell.once('exit', () => resolve()); });
+
+  return { shell, deaf, exit };
+}
+
+it.runIf(READS_PS)('keeps the record of an attached command whose stop ps stopped answering before it saw the command\'s processes end', async () => {
+  const { directory, bin } = psAnswering(3);
+  const { shell, deaf, exit } = await shellLeavingDeafChild();
+  const records = path.join(directory, 'records');
+  fs.mkdirSync(records);
+  const pid = shell.pid ?? 0;
+  try {
+    fs.writeFileSync(path.join(records, `group-${pid}.json`), JSON.stringify({ pid, ...await recordedStart(pid), tree: true }));
+    // The reads that find the command and what it started answer; the ones that would see them end do not.
+    vi.stubEnv('PATH', `${bin}:/bin:/usr/bin`);
+    const left = await stopRecordedGroup(records);
+    vi.unstubAllEnvs();
+    await exit;
+
+    expect(isRunning(deaf)).toBe(true);
+    expect(left).toEqual([pid]);
+    expect(fs.existsSync(path.join(records, `group-${pid}.json`))).toBe(true);
+  } finally {
+    try { process.kill(deaf, 'SIGKILL'); } catch { /* Already stopped. */ }
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+}, 20_000);
+
+it.runIf(READS_PS)('keeps the record of an attached command whose starter\'s group ps stopped answering before it saw stop', async () => {
+  const { directory, bin } = psAnswering(4);
+  const records = path.join(directory, 'records');
+  fs.mkdirSync(records);
+  const { leader, member } = await groupWithMember(false);
+  try {
+    // The command's pid names no process: only the group it shared with its starter is left to stop.
+    fs.writeFileSync(path.join(records, `group-${member}.json`), JSON.stringify({ pid: 2147483646, ...await recordedStart(member), tree: true, starterGroup: leader }));
+    vi.stubEnv('PATH', `${bin}:/bin:/usr/bin`);
+    const left = await stopRecordedGroup(records);
+    vi.unstubAllEnvs();
+
+    expect(left).toEqual([2147483646]);
+    expect(fs.existsSync(path.join(records, `group-${member}.json`))).toBe(true);
+  } finally {
+    try { process.kill(-leader, 'SIGKILL'); } catch { /* Already stopped. */ }
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+}, 20_000);
+
 it.skipIf(process.platform === 'win32')('tells each process read once, with the ps it ran or stands for, on every platform', async () => {
   const told: unknown[] = [];
   const listen = (message: unknown): void => { told.push(message); };

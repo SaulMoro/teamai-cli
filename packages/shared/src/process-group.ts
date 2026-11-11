@@ -533,28 +533,32 @@ async function endGroup(group: Recorded): Promise<StopEnd> {
  * group lives, POSIX reuses no pid equal to its id, so a group whose id no process has is still the starter's. A process
  * with the id is the leader still running, or one leading a later group of the same id: either way the group is left
  * alone, and so is the group of this process. What ran in the group before the command, such as a server an earlier
- * step left or a pipe the starter wrote to, is left running.
+ * step left or a pipe the starter wrote to, is left running. Whether it is done with the group: false when a process
+ * read it needed failed, so the record stays for a later stop.
  */
-async function stopLeftStarterGroup(recorded: Recorded, pgid: number): Promise<void> {
-  if (!signalGroup(pgid, 0)) return;
+async function stopLeftStarterGroup(recorded: Recorded, pgid: number): Promise<boolean> {
+  if (!signalGroup(pgid, 0)) return true;
 
   try {
     process.kill(pgid, 0);
 
-    return;
+    return true;
   } catch (error) {
     // EPERM: a process has the id, another user's.
-    if (error instanceof Error && 'code' in error && error.code === 'EPERM') return;
+    if (error instanceof Error && 'code' in error && error.code === 'EPERM') return true;
   }
 
   const own = (await ownGroups())?.pgid;
 
-  // A group this process cannot tell from its own is left alone too.
-  if (own === undefined || own === pgid) return;
+  // A group this process cannot tell from its own is left alone too, and a later stop looks again.
+  if (own === undefined) return false;
+
+  if (own === pgid) return true;
   const running = await runningProcesses();
 
-  if (running === undefined) return;
-  await endProcesses([...running].flatMap(([pid, { pgid: group, start }]) => (group === pgid && pid !== process.pid && startedSince(start, recorded) ? [{ pid, start }] : [])));
+  if (running === undefined) return false;
+
+  return endProcesses([...running].flatMap(([pid, { pgid: group, start }]) => (group === pgid && pid !== process.pid && startedSince(start, recorded) ? [{ pid, start }] : [])));
 }
 
 /**
@@ -614,7 +618,7 @@ async function stopTree(recorded: Recorded & { tree: true }): Promise<StopEnd> {
   if (process.platform === 'win32') return 'unreachable';
   const ended = await stopRecordedTree(recorded);
 
-  if (recorded.starterGroup !== undefined) await stopLeftStarterGroup(recorded, recorded.starterGroup);
+  if (recorded.starterGroup !== undefined && !await stopLeftStarterGroup(recorded, recorded.starterGroup)) return 'unconfirmed';
 
   return ended;
 }
@@ -632,18 +636,21 @@ async function stopRecordedTree(recorded: Recorded): Promise<StopEnd> {
   if (verdict === 'other') return 'gone';
 
   if (verdict !== 'same') return 'unconfirmed';
-  await endProcesses([...await descendantsOf(recorded.pid), { pid: recorded.pid, start: rootStart }]);
 
-  return 'stopped';
+  return await endProcesses([...await descendantsOf(recorded.pid), { pid: recorded.pid, start: rootStart }]) ? 'stopped' : 'unconfirmed';
 }
 
-/** Stops each process of `found` that still runs as found, with a five-second grace period before SIGKILL. */
-async function endProcesses(found: FoundProcess[]): Promise<void> {
-  /** Signals each process that is still the one found; whether any was reached. */
-  const signal = async (name: NodeJS.Signals | 0): Promise<boolean> => {
-    const now = await runningProcesses() ?? new Map<number, RunningProcess>();
+/**
+ * Stops each process of `found` that still runs as found, with a five-second grace period before SIGKILL. Whether it
+ * saw them end, or killed them: false once the process table cannot be read, as with a ps past its timeout, since a pid
+ * reused since cannot be told apart and none is signalled blind.
+ */
+async function endProcesses(found: FoundProcess[]): Promise<boolean> {
+  /** Signals each process that is still the one found; whether any was reached, undefined when that cannot be read. */
+  const signal = async (name: NodeJS.Signals | 0): Promise<boolean | undefined> => {
+    const now = await runningProcesses();
 
-    return found.filter(({ pid, start }) => isStillRunning(now, { pid, start })).reduce((reached, { pid }) => {
+    return now === undefined ? undefined : found.filter(({ pid, start }) => isStillRunning(now, { pid, start })).reduce((reached, { pid }) => {
       try {
         return process.kill(pid, name) || reached;
       } catch {
@@ -652,15 +659,15 @@ async function endProcesses(found: FoundProcess[]): Promise<void> {
     }, false);
   };
 
-  await signal('SIGTERM');
+  if (await signal('SIGTERM') === undefined) return false;
 
   // Counted rather than timed, so a faked clock cannot stretch the grace period.
-  for (let probe = 0; await signal(0); probe += 1) {
-    if (probe === 100) {
-      await signal('SIGKILL');
-      break;
-    }
+  for (let probe = 0; ; probe += 1) {
+    const isRunning = await signal(0);
 
+    if (isRunning !== true) return isRunning === false;
+
+    if (probe === 100) return await signal('SIGKILL') !== undefined;
     await new Promise<void>((resolve) => setTimeout(resolve, 50));
   }
 }
