@@ -23,7 +23,7 @@ const VERSION_CACHE = new Map<string, string>();
 /** How teamai reads each tool's version, or null when it reads none. */
 const DETECTORS: Record<ToolId, VersionDetector | null> = {
   claude: BUILT_IN_TOOLS.claude.detect.claude,
-  codex: null,
+  codex: BUILT_IN_TOOLS.codex.detect.codex,
   'codex-internal': null,
   'claude-internal': null,
   tclaude: null,
