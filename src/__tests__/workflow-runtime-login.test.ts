@@ -115,6 +115,19 @@ describe('the dedicated Codex login lock', () => {
     expect(fs.readFileSync(path.join(toolHome, 'auth.json'), 'utf8')).toBe(auth('r2'));
   });
 
+  it('writes back the token a judge\'s Codex refreshed when the judge releases the login, then frees it', async () => {
+    const daily = path.join(root, '.codex');
+    fs.mkdirSync(daily, { recursive: true });
+    fs.writeFileSync(path.join(daily, 'auth.json'), auth('r1'), { mode: 0o600 });
+    const toolHome = path.join(root, 'judge');
+    const held = await holdLoginFrom({ tool: 'codex', executable: 'codex', from: daily, toolHome, run: RUN, attempt: FIRST, signal: new AbortController().signal });
+    fs.writeFileSync(path.join(toolHome, 'auth.json'), auth('r2'));
+
+    const kept = held.ok ? await held.release() : held.failure;
+
+    expect({ kept, daily: fs.readFileSync(path.join(daily, 'auth.json'), 'utf8'), holder: await loginHolder('codex') }).toEqual({ kept: undefined, daily: auth('r2'), holder: undefined });
+  });
+
   it('writes back the token a killed judge refreshed in a temporary home before a judge restarted on the same attempt copies the login into its own', async () => {
     const daily = path.join(root, '.codex');
     fs.mkdirSync(daily, { recursive: true });
