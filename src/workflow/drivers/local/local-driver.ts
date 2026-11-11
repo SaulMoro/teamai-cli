@@ -32,9 +32,7 @@ import { newOpId, type ExecAnswer, type ExecQuestion, type StepRuntime } from '@
 import { resumeOrPublish, retryCommand } from '../../runtimes/retry-command.js';
 import type { RuntimeOffer, SoleDriver } from '../../engine.js';
 import { attemptDir, AttemptIdSchema, attemptResultPath, readRun, RunIdSchema, runScratchDir, updateRun, withRunLock, type AttemptId, type RunId, type RunLock } from '../../store.js';
-import { abandonPlace, placeLeaseOf, placeOf, placeRoot, preparePlace, refuseDirtyAdoptedCommand, releaseUnlaunchedPlace, runPlaceSetup, sweepClones } from '../../place/place.js';
-// oxlint-disable-next-line teamai/workflow-boundaries -- reads whether the prepare makes a cut-short setup's folder again, which place.ts does not export yet
-import { readPlaceRecord } from '../../place/record.js';
+import { abandonPlace, isSetupCutShort, placeLeaseOf, placeOf, placeRoot, preparePlace, refuseDirtyAdoptedCommand, releaseUnlaunchedPlace, runPlaceSetup, sweepClones } from '../../place/place.js';
 import { commandEnd, commandOutputs, managedReport, StartedRunSchema, unreadablePlace, type StartedRun } from '../../protocol.js';
 import { WholeEndSchema } from '../../whole-workflow.js';
 import { memberTools } from '../../member-tools.js';
@@ -301,8 +299,7 @@ async function stageLease(lease: StagedLease, { config, lock, root, env, mode, s
 
   if (leftSetup) return { code: 'runtime_lost', message: leftSetup.message };
   // A setup cut short is given up with the folder it ran in, which the prepare makes again (`preparePlace`).
-  const placed = setUpOn && await readPlaceRecord(config, lock.run, lease.attempt);
-  const unclosed = placed?.kind === 'found' && placed.record.phase === 'setting-up' ? (await setUpOn?.closeForRemadeFolder())?.failure : undefined;
+  const unclosed = setUpOn && await isSetupCutShort({ config, run: lock.run, attempt: lease.attempt }) ? (await setUpOn.closeForRemadeFolder())?.failure : undefined;
 
   if (unclosed) return { code: 'runtime_lost', message: unclosed.message };
 

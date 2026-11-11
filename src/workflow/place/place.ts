@@ -201,6 +201,21 @@ function baseOf(record: Placed): PlaceRecordBase {
   return base;
 }
 
+/** Whether `recorded` is a place whose setup was cut short, which a prepare gives up with its folder and makes again. */
+function isCutShort(recorded: PlaceRecord | undefined): recorded is SettingUp {
+  return recorded?.phase === 'setting-up';
+}
+
+/**
+ * Whether the next prepare of `attempt` gives up a setup a teamai before this one cut short, making its folder again
+ * (`preparePlace`): a runtime that mounted the old folder must close its place first.
+ */
+export async function isSetupCutShort({ config, run, attempt }: { config: LocalConfig; run: RunId; attempt: AttemptId }): Promise<boolean> {
+  const read = await readPlaceRecord(config, run, attempt);
+
+  return read.kind === 'found' && isCutShort(read.record);
+}
+
 /**
  * Prepares the place of `lease` under `root`, the checkout the run started from, and records it in
  * `attempts/<a>/place.json`, so any process can finish it. A lease without a workspace contract runs in `root`. Any
@@ -225,7 +240,7 @@ export async function preparePlace(input: { config: LocalConfig; lock: RunLock; 
 
   if (unkept) return { kind: 'failed', failure: unkept };
 
-  if (recorded?.phase === 'setting-up') {
+  if (isCutShort(recorded)) {
     // A setup cut short is given up as a failed one is, so this prepare starts over from a place no setup touched.
     const given = await giveUpSetup(config, recorded);
 
