@@ -179,12 +179,26 @@ export async function fetchTrackingRef(git: SimpleGit, branch: string): Promise<
   await git.fetch(['--progress', 'origin', `+refs/heads/${branch}:refs/remotes/origin/${branch}`]);
 }
 
+/** git begins a message with "fatal: " or "error: " only in English: another language translates both. */
+const SPEAKS_ENGLISH = /^(?:fatal|error): /mu;
+
 /**
  * The write the filesystem refused a fetch in `dir`, which failed with `cause`: as git's message names it, or, where git
- * speaks another language, as a write in the folder the fetch writes FETCH_HEAD in is refused.
+ * speaks another language, as a write refused in a folder the fetch writes in: its own git folder (FETCH_HEAD), and the
+ * one a linked worktree shares with its checkout, with its objects and refs. A folder deeper than those goes unnamed.
  */
 export async function refusedFetch(git: SimpleGit, cause: unknown, dir: string): Promise<RefusedWrite | undefined> {
-  return refusedWrite(cause, { gitCwd: dir }) ?? await git.revparse(['--absolute-git-dir']).then((gitDir) => refusedWriteIn(gitDir.trim()), () => undefined);
+  const refused = refusedWrite(cause, { gitCwd: dir });
+
+  if (refused || SPEAKS_ENGLISH.test(cause instanceof Error ? cause.message : String(cause))) return refused;
+
+  const [gitDir, sharedDir = gitDir] = await git.revparse(['--path-format=absolute', '--git-dir', '--git-common-dir'])
+    .then((printed) => printed.split('\n').map((line) => line.trim()).filter((line) => line !== ''), () => []);
+
+  if (gitDir === undefined || sharedDir === undefined) return undefined;
+  const probed = await Promise.all([...new Set([gitDir, sharedDir, path.join(sharedDir, 'objects'), path.join(sharedDir, 'refs')])].map(refusedWriteIn));
+
+  return probed.find((found) => found !== undefined);
 }
 
 /**

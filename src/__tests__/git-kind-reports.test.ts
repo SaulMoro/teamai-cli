@@ -3,6 +3,7 @@
  * No mocks of the units under test.
  */
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from 'vitest';
+import { execFileSync, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import http from 'node:http';
 import os from 'node:os';
@@ -20,6 +21,9 @@ import { resolveProjectDataHome, saveLocalConfigForScope } from '../config.js';
 import { buildHandlerRegistry } from '../hook-handlers.js';
 import YAML from 'yaml';
 import { getUserHome } from '@teamai/shared/home';
+
+// A git with no German, or a system without that locale, speaks English, where the cases in another language prove nothing.
+const gitSpeaksGerman = spawnSync('git', ['-C', path.join(os.tmpdir(), 'teamai-no-such-folder'), 'status'], { env: { ...process.env, LC_ALL: 'de_DE.UTF-8', LANGUAGE: 'de' }, encoding: 'utf8' }).stderr.startsWith('Schwerwiegend:');
 
 let tmp: string;
 let originalHome: string;
@@ -440,7 +444,7 @@ describe('git-kind reports: a team clone that refuses writes', () => {
     }
   });
 
-  it.skipIf(process.platform === 'win32' || process.getuid?.() === 0)('reads origin as refused for a member whose git speaks another language', async () => {
+  it.skipIf(process.platform === 'win32' || process.getuid?.() === 0 || !gitSpeaksGerman)('reads origin as refused for a member whose git speaks another language', async () => {
     const { origin, clone } = await seedBareOrigin();
     const alice = gitConfig(clone, origin);
     expect(await publish(alice, 'members/alice.yaml', 'username: alice\n')).toBe(true);
@@ -461,7 +465,12 @@ describe('git-kind reports: a team clone that refuses writes', () => {
     }
   });
 
-  it.skipIf(process.platform === 'win32' || process.getuid?.() === 0)('refuses to read the reports checkout whose refresh may not write FETCH_HEAD for a member whose git speaks another language', async () => {
+  it.skipIf(process.platform === 'win32' || process.getuid?.() === 0 || !gitSpeaksGerman).each([
+    // FETCH_HEAD goes into the worktree's own git folder.
+    { refusing: 'FETCH_HEAD', folderOf: (gitDir: string) => gitDir, isRecursive: false },
+    // The objects fetched go into the git folder the worktree shares with its checkout.
+    { refusing: 'the shared objects', folderOf: (gitDir: string) => path.join(path.dirname(path.dirname(gitDir)), 'objects'), isRecursive: true },
+  ])('refuses to read the reports checkout whose refresh may not write $refusing for a member whose git speaks another language', async ({ folderOf, isRecursive }) => {
     const { origin, clone } = await seedBareOrigin();
     const alice = gitConfig(clone, origin);
     expect(await publish(alice, 'members/alice.yaml', 'username: alice\n')).toBe(true);
@@ -469,18 +478,19 @@ describe('git-kind reports: a team clone that refuses writes', () => {
     const wt = await ensureReportsWorktree(bob, READ_ONLY);
     expect(await publish(alice, 'members/carol.yaml', 'username: carol\n')).toBe(true);
     const gitDir = /^gitdir: (.+)$/m.exec(fs.readFileSync(path.join(wt, '.git'), 'utf8'))?.[1] ?? '';
+    const folder = folderOf(gitDir);
     fs.rmSync(path.join(gitDir, 'FETCH_HEAD'), { force: true });
-    fs.chmodSync(gitDir, 0o555);
+    execFileSync('chmod', [...(isRecursive ? ['-R'] : []), 'a-w', folder]);
     vi.stubEnv('LC_ALL', 'de_DE.UTF-8');
     vi.stubEnv('LANGUAGE', 'de');
 
     try {
       const read = await readableReportsWorktree(bob).then(() => 'read', (error: unknown) => reportsRefusedMessage(error));
 
-      expect(read).toBe(`teamai-reports could not be read on this machine: teamai may not write in ${gitDir} (EACCES). Give this process write access to that folder, or run the command outside its sandbox.`);
+      expect(read).toBe(`teamai-reports could not be read on this machine: teamai may not write in ${folder} (EACCES). Give this process write access to that folder, or run the command outside its sandbox.`);
     } finally {
       vi.unstubAllEnvs();
-      fs.chmodSync(gitDir, 0o755);
+      execFileSync('chmod', [...(isRecursive ? ['-R'] : []), 'u+w', folder]);
     }
   });
 
