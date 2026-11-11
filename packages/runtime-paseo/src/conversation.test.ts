@@ -5,7 +5,7 @@ import { OpIdSchema, type PromptLeaseSchema, type RuntimeMessage } from '@teamai
 import { z } from 'zod';
 import { describe, expect, it } from 'vitest';
 import { agentIdOf } from './conversation.js';
-import { restartDaemon, dir, worktree, daemonState, daemon, RUN, ATTEMPT, behave, received, stopped, start, isOp, isEnd, ready, opened, openRequest, createdAgent, agentsOf, delay, worktreeWorkspace, promptRequest, useRuntimeSuite } from './testing/suite.js';
+import { restartDaemon, dir, worktree, daemonState, daemon, RUN, ATTEMPT, behave, received, stopped, start, isOp, isEnd, ready, opened, openRequest, createdAgent, agentsOf, delay, until, waitedOn, worktreeWorkspace, promptRequest, useRuntimeSuite } from './testing/suite.js';
 
 describe('the agent id a prompt gets', () => {
   it('is a version 4 UUID that its op alone decides, so a runtime started again finds the same agent', () => {
@@ -796,7 +796,8 @@ describe('teamai-runtime-paseo', () => {
     const runtime = start();
     await ready(runtime);
     runtime.send(promptRequest(await opened(runtime), 'op-0000000b'));
-    await runtime.next(isOp('op-0000000b', 'display'));
+    // Its follow read the record before it waits for the agent; a record broken before that read ends the prompt then.
+    await until(() => waitedOn(agentIdOf(OpIdSchema.parse('op-0000000b'))));
     fs.writeFileSync(path.join(dir, 'home', '.teamai', 'runtime-state', 'paseo', 'ops', 'op-0000000b.json'), '{not json');
 
     runtime.send({ type: 'cancel', op: 'op-0000000b' });

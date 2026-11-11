@@ -57,6 +57,13 @@ export const stopped = (): unknown[] => {
   return fs.existsSync(file) ? fs.readFileSync(file, 'utf8').trim().split('\n').map((line) => JSON.parse(line)) : [];
 };
 
+/** Whether a client asked the daemon to wait for agent `agentId`: a prompt's follow does once it read the prompt's record. */
+export const waitedOn = (agentId: string): boolean => {
+  const file = path.join(daemonState, 'waited.jsonl');
+
+  return fs.existsSync(file) && fs.readFileSync(file, 'utf8').trim().split('\n').some((line) => z.object({ agentId: z.string() }).parse(JSON.parse(line)).agentId === agentId);
+};
+
 export const start = (env?: Record<string, string | undefined>): Runtime => {
   const runtime = startRuntime(executable, path.join(dir, 'home'), env);
   runtimes.push(runtime);

@@ -25,6 +25,7 @@ import { z } from 'zod';
 //    stopped.jsonl       each agent a cancel or an archive stopped, once it stopped running, which may be after the answer
 //    answers/<agent>     a person answered the agent's permission request in the app, or a client allowed it
 //    started.jsonl       each start of a custom provider's command for an agent, with how it ended
+//    waited.jsonl        each agent a client asked to wait for, as the request came
 //
 //  It routes a client to the other daemons it saved as hosts (`hosts`), as `paseo host add` saves one: a route carries
 //  the client's frames to that daemon's WebSocket and its answers back, as text frames.
@@ -996,6 +997,7 @@ export async function startFakeDaemon({ state, port, socket: socketPath }: { sta
       }
 
       case 'wait_for_finish_request': {
+        fs.appendFileSync(path.join(state, 'waited.jsonl'), `${JSON.stringify({ agentId: message.agentId })}\n`);
         const agent = kept.agents[message.agentId];
 
         if (!agent) {
