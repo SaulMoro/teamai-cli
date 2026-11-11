@@ -57,9 +57,9 @@ describe('fake codex', () => {
 
     const out = await runFakeAgent(agent.executable, call.args({ prompt: '', promptFile: '', lastMessageFile }), 'Which test runner?', { cwd: root, env: { HOME: home, CODEX_HOME: codexHome } });
 
-    // codex-cli 0.167.0 printed input_tokens 20707 and output_tokens 51 for this turn.
+    // codex-cli 0.167.0 printed input_tokens 42861 and output_tokens 196 for this turn.
     expect({ code: out.code, read: call.read({ stdout: out.stdout, lastMessage: fs.readFileSync(lastMessageFile, 'utf8') }) })
-      .toMatchObject({ code: 0, read: { ok: true, text: 'It uses Jest.', tokens: { input: 20707, output: 51 } } });
+      .toMatchObject({ code: 0, read: { ok: true, text: 'It uses Jest.', tokens: { input: 42861, output: 196 } } });
   });
 
   it('fails as the recorded failure, which the profile reads as a failure, and keeps a session with no answer', async () => {
@@ -124,6 +124,29 @@ describe('fake codex', () => {
     const out = await runFakeAgent(agent.executable, stepArgs('Now fix it.', '01a1c999-0000-7000-8000-000000000000'), '', { cwd: repo, env: { HOME: home, CODEX_HOME: codexHome } });
 
     expect({ code: out.code, stdout: out.stdout, sessions: rollouts(codexHome) }).toEqual({ code: 1, stdout: '', sessions: [] });
+  });
+
+  it('writes the step result it was told to into the directory the step argv lets it write, as Codex did', async () => {
+    const { root, repo, home, bin, codexHome } = scratch();
+    const agent = fakeAgent(codexFake, { bin });
+    const result = path.join(root, 'attempt', 'out', 'result.json');
+    const args = step.args({ prompt: 'Set the output word to done.', resultDir: path.dirname(result), streamsUsage: false }, { interactive: false, opencodeMajor: 2 });
+
+    // TMPDIR elsewhere: Codex lets its sandbox write in the checkout, /tmp, TMPDIR and each --add-dir, and nowhere else.
+    const out = await runFakeAgent(agent.executable, args, '', { cwd: repo, env: { HOME: home, CODEX_HOME: codexHome, TMPDIR: path.join(root, 't'), TEAMAI_WORKFLOW_RESULT: result } });
+
+    // codex-cli 0.167.0 wrote this file in the recorded step.
+    expect({ code: out.code, result: fs.readFileSync(result, 'utf8') }).toEqual({ code: 0, result: '{"output": {"word": "done"}}\n' });
+  });
+
+  it('writes no step result outside the directories its sandbox may write, as Codex did without --add-dir', async () => {
+    const { root, repo, home, bin, codexHome } = scratch();
+    const agent = fakeAgent(codexFake, { bin });
+    const result = path.join(root, 'attempt', 'out', 'result.json');
+
+    const out = await runFakeAgent(agent.executable, ['exec', '--json', 'Set the output word to done.'], '', { cwd: repo, env: { HOME: home, CODEX_HOME: codexHome, TMPDIR: path.join(root, 't'), TEAMAI_WORKFLOW_RESULT: result } });
+
+    expect({ code: out.code, wrote: fs.existsSync(result) }).toEqual({ code: 0, wrote: false });
   });
 
   it('writes nothing under CODEX_HOME for an ephemeral run, as Codex does', async () => {
