@@ -122,6 +122,20 @@ export async function locateRuntime(driver: ResolvedDriver, use: string): Promis
     };
   }
 
+  const link = team.kind === 'found' ? await firstLink(team.at) : undefined;
+
+  if (team.kind === 'found' && link !== undefined) {
+    const relative = path.relative(getKnowledgeDir(driver.config), team.at).split(path.sep).join('/');
+
+    return {
+      ok: false,
+      failure: {
+        code: 'runtime_not_found',
+        message: `Driver "${driver.name}" uses runtime "${use}", whose folder ${relative} in the team repo holds the link ${link}, and teamai runs a team runtime only when its folder holds no link, so the revision you accept is all it runs. Replace the link with what it names, push it, run teamai pull, and start again.`,
+      },
+    };
+  }
+
   if (team.kind === 'found' && await isFile(path.join(team.at, RUNTIME_ENTRY))) {
     return { ok: true, source: { kind: 'team', name: use, executable: path.join(team.at, RUNTIME_ENTRY), dir: team.at, relative: path.relative(getKnowledgeDir(driver.config), team.at), ...await declaredFacts(team.at) } };
   }
@@ -160,6 +174,15 @@ async function runtimeEntries(dir: string): Promise<string[]> {
   }
 
   return found.sort();
+}
+
+/** The first link a team runtime's folder holds, by relative path, or none. */
+async function firstLink(dir: string): Promise<string | undefined> {
+  for (const relative of await runtimeEntries(dir).catch(() => [])) {
+    if ((await fs.lstat(path.join(dir, relative)).catch(() => undefined))?.isSymbolicLink() === true) return relative.split(path.sep).join('/');
+  }
+
+  return undefined;
 }
 
 /**

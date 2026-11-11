@@ -199,21 +199,21 @@ describe('a run that needs no AI tool and the runtimes that run no command', () 
     expect(await open(team, false)).not.toMatchObject({ ok: true, opened: { runtimes: [] } });
   });
 
-  it('reads nothing through a linked folder in a team runtime: the files it asks to review and its revision stop at the link', async () => {
+  it('refuses a team runtime whose folder holds a link, since the revision a member accepts would not hold what it names', async () => {
     const team = teamWithRuntime();
-    const dir = path.join(team.repo.localPath, 'runtimes', 'agents');
     const outside = fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-runtime-outside-'));
     dirs.push(outside);
-    fs.writeFileSync(path.join(outside, 'notes.txt'), 'before');
-    fs.symlinkSync(outside, path.join(dir, 'lib'));
-    const source = { kind: 'team' as const, name: 'agents', executable: path.join(dir, 'runtime'), dir, relative: 'runtimes/agents' };
-    const questions: string[] = [];
+    fs.writeFileSync(path.join(outside, 'index.js'), 'not run\n');
+    fs.mkdirSync(path.join(team.repo.localPath, 'runtimes', 'agents', 'src'));
+    fs.symlinkSync(outside, path.join(team.repo.localPath, 'runtimes', 'agents', 'src', 'lib'));
 
-    expect(await acceptRuntime(source, { mode: 'attended', canAsk: true, ask: async (question) => { questions.push(question); return true; } })).toEqual({ ok: true });
-    expect(questions[0]).toContain(`Review ${dir} (lib, runtime) before you accept it.`);
-
-    fs.writeFileSync(path.join(outside, 'notes.txt'), 'after');
-    expect(await acceptRuntime(source, { mode: 'unattended', canAsk: false })).toEqual({ ok: true });
+    expect(await open(team, true)).toEqual({
+      ok: false,
+      failure: {
+        code: 'runtime_not_found',
+        message: 'Driver "agents" uses runtime "agents", whose folder runtimes/agents in the team repo holds the link src/lib, and teamai runs a team runtime only when its folder holds no link, so the revision you accept is all it runs. Replace the link with what it names, push it, run teamai pull, and start again.',
+      },
+    });
   });
 
   it('refuses a team runtime whose folder is a link, and reads nothing through it', async () => {

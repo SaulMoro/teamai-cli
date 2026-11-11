@@ -1604,7 +1604,7 @@ runtimes/<name>/runtime                    团队仓库，或 runtimes/<namespac
 teamai-runtime-<name>                      先找 teamai 包里自带的，再找 PATH
 ```
 
-团队运行时的文件夹必须是团队仓库中的文件夹：链接形式的文件夹以 `runtime_not_found` 失败，teamai 也不会经由其中的链接读取任何内容。
+团队运行时的文件夹必须是团队仓库中、不含任何链接的文件夹，这样你接受的修订就是它运行的全部内容：本身是链接或含有链接的文件夹以 `runtime_not_found` 失败。
 
 teamai 自带这些定义：
 
