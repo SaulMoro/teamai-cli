@@ -93,6 +93,7 @@ import {
   listFiles,
   listFilesRecursive,
   pruneEmptyDirs,
+  stagingLeftIn,
 } from './utils/fs.js';
 import { installationsPath } from './installations.js';
 import { listQueuesIn } from './utils/pending-learnings.js';
@@ -839,6 +840,8 @@ async function discoverToolResources(
             res.keptSkillDirs.push(describeMembersDirLeft(file, `skills/${dir}/${path.relative(skillDir, file).split(path.sep).join('/')}`, 'uninstall'));
           }
         }
+
+        for (const staging of await stagingLeftIn(skillsDir)) res.skillDirs.push({ dir: staging, baseDir: rootBase });
       }
     }
   }

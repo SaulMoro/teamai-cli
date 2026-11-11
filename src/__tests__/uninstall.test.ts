@@ -1,9 +1,9 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach, onTestFinished } from 'vitest';
 import path from 'node:path';
 import os from 'node:os';
 import fse from 'fs-extra';
 import { fileURLToPath } from 'node:url';
-import { execFileSync, spawnSync } from 'node:child_process';
+import { execFileSync, spawn, spawnSync } from 'node:child_process';
 import { shipped, shippedSkillDigestsMock } from './helpers/shipped-skills.js';
 import { commitTeamRepo } from './helpers/team-repo-history.js';
 
@@ -3491,11 +3491,13 @@ describe('uninstall', () => {
     expect(await fse.pathExists(path.join(homeDir, '.claude', 'skills', 'my-own-skill', 'SKILL.md'))).toBe(true);
   });
 
-  it('removes the skills directory once the skills it delivered were all it held', async () => {
+  it('removes the skills directory once the skills it delivered, and the staging folders copies left, were all it held', async () => {
     const { homeDir, repoPath } = await setupFixture(tmpDir);
     vi.stubEnv('HOME', homeDir);
     vi.stubEnv('SHELL', '/bin/zsh');
     await fse.remove(path.join(homeDir, '.claude', 'skills', 'my-own-skill'));
+    // A copy cut short that wrote no owner yet, as an older teamai's or one another host made, fresh.
+    await fse.outputFile(path.join(homeDir, '.claude', 'skills', '.review.5e6f7a8b.staging', 'SKILL.md'), 'Half copied.\n');
     mockAutoDetectInit.mockResolvedValue({ localConfig: makeLocalConfig(homeDir, repoPath), teamConfig: makeTeamConfig() });
     commitTeamRepo(repoPath);
 
@@ -3503,6 +3505,25 @@ describe('uninstall', () => {
 
     expect(await fse.pathExists(path.join(homeDir, '.claude', 'skills'))).toBe(false);
     expect(await fse.pathExists(path.join(homeDir, '.claude'))).toBe(true);
+  });
+
+  it('keeps a staging folder a copy on this host still writes, and the skills directory with it', async () => {
+    const { homeDir, repoPath } = await setupFixture(tmpDir);
+    vi.stubEnv('HOME', homeDir);
+    vi.stubEnv('SHELL', '/bin/zsh');
+    await fse.remove(path.join(homeDir, '.claude', 'skills', 'my-own-skill'));
+    const copier = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore' });
+    onTestFinished(() => { copier.kill('SIGKILL'); });
+    await new Promise((resolve) => { copier.once('spawn', resolve); });
+    const writing = path.join(homeDir, '.claude', 'skills', '.review.3a4b5c6d.staging');
+    await fse.outputJson(path.join(writing, 'owner.json'), { pid: copier.pid, startedAt: new Date().toISOString(), host: os.hostname() });
+    mockAutoDetectInit.mockResolvedValue({ localConfig: makeLocalConfig(homeDir, repoPath), teamConfig: makeTeamConfig() });
+    commitTeamRepo(repoPath);
+
+    await uninstall({ force: true });
+
+    expect(await fse.pathExists(path.join(homeDir, '.claude', 'skills', 'team-skill'))).toBe(false);
+    expect(await fse.pathExists(writing)).toBe(true);
   });
 
   it('keeps an empty folder of the member\'s in the skills directory, and the directory with it', async () => {

@@ -499,6 +499,29 @@ async function removeLeftStaging(dest: string): Promise<void> {
   }
 }
 
+/**
+ * The staging folders in `parent` no copy on this host still writes into, whatever their age: what an uninstall removes
+ * with the copies, since the member asked for all of it to go.
+ */
+export async function stagingLeftIn(parent: string): Promise<string[]> {
+  const left: string[] = [];
+
+  for (const entry of await fse.readdir(parent, { withFileTypes: true }).catch(() => [])) {
+    if (entry.isDirectory() && isStagingName(entry.name) && !await isCopyingInto(path.join(parent, entry.name))) left.push(path.join(parent, entry.name));
+  }
+
+  return left;
+}
+
+/** Whether a copy on this host still writes into `staging`: the process its owner file names runs, or is this one copying there. */
+async function isCopyingInto(staging: string): Promise<boolean> {
+  const owner = StagingOwnerSchema.safeParse(await readRegularFile(path.join(staging, STAGING_OWNER), 'utf8').then(parseJson).catch(() => undefined));
+
+  if (!owner.success || owner.data.host !== os.hostname()) return false;
+
+  return owner.data.pid === process.pid ? copyingNow.has(path.basename(staging)) : await isSameProcess(owner.data) === 'same';
+}
+
 async function isLeftBehind(staging: string): Promise<boolean> {
   const left = await fse.lstat(staging).catch(() => undefined);
 
