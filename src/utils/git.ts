@@ -1416,7 +1416,7 @@ async function carryWorkingTree(git: SimpleGit): Promise<CarriedWorkingTree | nu
   try {
     for (const [relative, present] of changes) {
       if (present) {
-        await copyRegularTree(path.join(top, relative), path.join(root, 'files', relative));
+        await copyRegularTree(path.join(top, relative), path.join(root, 'files', relative), { keepTimes: true });
       }
 
       entries.push({ relative, present });
@@ -1454,7 +1454,7 @@ async function restoreWorkingTree(git: SimpleGit, carried: CarriedWorkingTree | 
       const target = path.join(top, relative);
 
       if (present) {
-        await copyRegularTree(path.join(carried.root, 'files', relative), target);
+        await copyRegularTree(path.join(carried.root, 'files', relative), target, { keepTimes: true });
       } else {
         await fse.remove(target);
       }

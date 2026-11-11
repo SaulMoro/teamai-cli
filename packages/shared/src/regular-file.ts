@@ -232,9 +232,14 @@ export async function copyRegularFile(from: string, to: string): Promise<void> {
   }
 }
 
-/** How `copyRegularTree` treats an entry it copies: `filter` leaves out an entry and all under it; `existing` says what an entry already at the destination gets. */
+/**
+ * How `copyRegularTree` treats an entry it copies: `filter` leaves out an entry and all under it; `existing` says what
+ * an entry already at the destination gets; `keepTimes` gives each copied file its source's access and modification
+ * times, as fs-extra's `preserveTimestamps` does.
+ */
 export interface CopyTreeOptions {
   readonly filter?: (source: string) => boolean | Promise<boolean>;
+  readonly keepTimes?: true;
   /**
    * `replace` (the default) puts the copy in its place, never writing through a link there; `keep` leaves it and copies
    * the rest; `fail` rejects with EEXIST and leaves it.
@@ -333,8 +338,15 @@ async function copyEntry(from: string, to: string, options: CopyTreeOptions): Pr
 
   if (!(await makeWay(from, to, options.existing ?? 'replace'))) return;
 
-  if (stats.isSymbolicLink()) await fs.promises.symlink(await fs.promises.readlink(from), to);
-  else await copyRegularFile(from, to);
+  if (stats.isSymbolicLink()) {
+    await fs.promises.symlink(await fs.promises.readlink(from), to);
+
+    return;
+  }
+
+  await copyRegularFile(from, to);
+
+  if (options.keepTimes === true) await fs.promises.utimes(to, stats.atime, stats.mtime);
 }
 
 /** How long a rename Windows refuses for a moment is tried again, as graceful-fs, under fs-extra's `move`, tries it. */
