@@ -154,6 +154,13 @@ describe('acquireLock (real fs)', () => {
     expect(JSON.parse(fs.readFileSync(lockPath, 'utf-8')).owner).toBe('live');
   });
 
+  it('keeps a lock its live holder wrote a moment before its start reads, as after the clock stepped forward', async () => {
+    fs.writeFileSync(lockPath, JSON.stringify({ pid: process.pid, owner: 'live', startedAt: new Date(performance.timeOrigin - 2000).toISOString() }));
+
+    expect(await acquireLock(lockPath)).toBe(false);
+    expect(JSON.parse(fs.readFileSync(lockPath, 'utf-8')).owner).toBe('live');
+  });
+
   it('reclaims a stale legacy plain-PID lock from an older teamai version', async () => {
     fs.writeFileSync(lockPath, '999999');
     expect(await acquireLock(lockPath)).toBe(true);

@@ -594,6 +594,9 @@ async function inspectLock(resolved: string): Promise<LockVerdict> {
   }
 }
 
+/** How far a lock's time may trail its holder's start, as a clock step makes it, while still naming that holder. */
+const CLOCK_STEP_MS = 5_000;
+
 /** How long a lock another pid namespace wrote holds: longer than any pull, push or migration runs. */
 const FOREIGN_HOLD_MS = 3_600_000;
 
@@ -628,8 +631,9 @@ export async function isHolderGone(holder: LockHolder): Promise<boolean> {
   if (Number.isNaN(written)) return false;
   const started = await processStartedAt(holder.pid);
 
-  // ps prints the start to the second, rounded down, so a start it prints past the lock's time is past it.
-  return started !== undefined && started > written;
+  // ps prints the start to the second, rounded down, and on Linux it is counted from a boot time that moves with the
+  // clock, so a start only seconds past the lock's time may be the holder's under a clock that stepped since.
+  return started !== undefined && started > written + CLOCK_STEP_MS;
 }
 
 /**
