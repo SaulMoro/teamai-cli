@@ -28,7 +28,7 @@ import { stepLauncher, type StepLauncher, type StepRun, type StepRunResult } fro
 import { expectedOutput } from '../output.js';
 import { placeView, runtimeLauncher, runtimePrompter, runtimeSetup, runtimeStepEnv } from './runtime-steps.js';
 import { attemptHoldingSession, attemptToolHome, EXEC_RUNTIME_TOOLS, isExecRuntimeTool, recordInProcessSessionHome, seedMemberModel, seedToolHome, toolHomeVariable, type AttemptRun, type HeldPlace } from '../runtimes/attempt.js';
-import { ensureLogin, holdLogin, loginWaitFile, releaseLogin, writeLoginBack, type LoginTool } from '../runtimes/login.js';
+import { endLogin, ensureLogin, holdLogin, loginWaitFile, type LoginTool } from '../runtimes/login.js';
 import { credentialsForTool, toolsLaunchDeps, type OpenedRuntime } from '../runtimes/sources.js';
 import { withRetry } from '../runtimes/retry-command.js';
 import { storeDirOf } from '../../session-flow/adapters/index.js';
@@ -594,8 +594,7 @@ export async function runPromptStep({ config, lock, driver, lease, adapter = ste
   if (login && toolHome && result.failure?.code !== 'runtime_lost') {
     // A runtime that failed may not have brought the tool home back, so what is there says nothing of the login.
     const collected = !(result.failure?.code.startsWith('runtime_') === true && result.failure.code !== 'runtime_interrupted');
-    const notBack = await writeLoginBack({ tool: login, run: lock.run, attempt: lease.attempt, toolHome: toolHome.dir, collected });
-    await releaseLogin(login, { run: lock.run, attempt: lease.attempt });
+    const { notBack } = await endLogin(login, { run: lock.run, attempt: lease.attempt, toolHome: toolHome.dir, isCollected: collected });
 
     if (notBack && end.outcome === 'success') {
       end.outcome = 'failed';

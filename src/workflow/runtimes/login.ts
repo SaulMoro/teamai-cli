@@ -24,8 +24,9 @@ import { readRegularFile, writeRegularFile } from '@teamai/shared/regular-file';
 //    take the lock (or wait, naming its holder)  →  copy auth.json into the attempt's tool home  →  open, exec, collect
 //    →  write the attempt's auth.json back, compare-and-replace, for the same account only  →  release the lock
 //
-//  The lock belongs to the attempt, not to a teamai process: a driver killed meanwhile leaves it held, and the
-//  attempt, reattached, finishes and releases it. `teamai workflow cancel` of the holder's run releases it too.
+//  The last two are one step, `endLogin`, the only way a hold ends. The lock belongs to the attempt, not to a teamai
+//  process: a driver killed meanwhile leaves it held, and the attempt, reattached, finishes and ends it. Whatever
+//  ends a killed driver's attempt, a later driver or `teamai workflow cancel` of the holder's run, ends it too.
 //
 
 /** The tools whose login a runtime option may bring from a home dedicated to teamai, `<tool>: login`. */
@@ -320,78 +321,80 @@ async function signInHeld(tool: LoginTool, { step, canAsk }: Parameters<typeof e
 }
 
 /** Releases `tool`'s login if attempt `attempt` of run `run` holds it. */
-export async function releaseLogin(tool: LoginTool, { run, attempt }: { run: RunId; attempt: AttemptId }): Promise<void> {
+async function releaseLogin(tool: LoginTool, { run, attempt }: { run: RunId; attempt: AttemptId }): Promise<void> {
   const holder = await loginHolder(tool);
 
   if (holder?.run === run && holder.attempt === attempt) await fs.rm(loginLockFile(tool), { force: true });
 }
 
 /**
- * Writes back the login of `tool` that attempt `attempt` of run `run` holds, from the tool home its lock names (or
- * `toolHome`, for a lock an earlier teamai wrote) to the home it copied it from, then releases it, as the attempt's own
- * release does: for an attempt nothing of runs any more, such as a judge whose teamai was killed. Says why the login was
- * not written back; undefined once it was, or when the attempt holds none or copied none.
+ * How `endLogin` ended a login: `wasHeld` says the attempt held it, so it was released; `notBack` says why what its tool
+ * refreshed was not written back, which an attempt that held none gets too, since nothing of its login came back.
  */
-export async function releaseLeftLogin(tool: LoginTool, { run, attempt, toolHome }: { run: RunId; attempt: AttemptId; toolHome: string }): Promise<WorkflowFailure | undefined> {
+export type EndedLogin = { wasHeld: false; notBack: WorkflowFailure } | { wasHeld: true; notBack?: WorkflowFailure };
+
+/**
+ * The one way an attempt's hold on `tool`'s login ends, whether the attempt ran to its end or a killed teamai left it:
+ * writes back what its tool refreshed, from the tool home its lock names (or `toolHome`) to the home its lock names (or
+ * `from`, the dedicated one unless given), then releases the lock, as writeLoginBack's rules allow. A write-back that
+ * fails on the file system still releases the login and says why: nothing of the attempt runs any more to use it.
+ * `isCollected` says the attempt's runtime brought its tool home back.
+ */
+export async function endLogin(tool: LoginTool, { run, attempt, toolHome, from = dedicatedSource(tool), isCollected }: { run: RunId; attempt: AttemptId; toolHome: string; from?: LoginSource; isCollected: boolean }): Promise<EndedLogin> {
   const holder = await loginHolder(tool);
 
-  if (holder?.run !== run || holder.attempt !== attempt) return undefined;
+  if (holder?.run !== run || holder.attempt !== attempt) return { wasHeld: false, notBack: notWrittenBack(tool, from, 'this attempt no longer holds the login') };
+  const source = holder.from ?? from;
 
   try {
-    return holder.copied === undefined ? undefined : await writeLoginBack({ tool, run, attempt, toolHome: holder.toolHome ?? toolHome, from: holder.from, collected: true });
+    if (holder.copied === undefined) return { wasHeld: true };
+    let notBack: WorkflowFailure | undefined;
+
+    try {
+      notBack = await writeLoginBack({ tool, copied: holder.copied, toolHome: holder.toolHome ?? toolHome, from: source, isCollected });
+    } catch (error) {
+      if (errnoCode(error) === undefined) throw error;
+      notBack = notWrittenBack(tool, source, `writing it failed (${error instanceof Error ? error.message : String(error)})`);
+    }
+
+    return notBack ? { wasHeld: true, notBack } : { wasHeld: true };
   } finally {
     await releaseLogin(tool, { run, attempt });
   }
 }
 
-/**
- * Releases each login an attempt of run `run` holds that is no longer one of its `open` attempts, as `teamai workflow
- * cancel` does once it stopped them. Says which it released.
- */
-export async function releaseEndedLogins(run: RunId, open: ReadonlySet<string>): Promise<Array<{ tool: LoginTool; attempt: AttemptId }>> {
-  const released: Array<{ tool: LoginTool; attempt: AttemptId }> = [];
+/** Why the login of `tool` an attempt used was not written back to the home `from`, and what the member does. */
+function notWrittenBack(tool: LoginTool, from: LoginSource, why: string): WorkflowFailure {
+  const target = path.join(from.home, LOGIN_FILES[tool]);
 
-  for (const tool of LOGIN_TOOLS) {
-    const holder = await loginHolder(tool);
-
-    if (holder?.run !== run || open.has(holder.attempt)) continue;
-    await fs.rm(loginLockFile(tool), { force: true });
-    released.push({ tool, attempt: holder.attempt });
-  }
-
-  return released;
+  return {
+    code: 'login_not_written_back',
+    message: `The ${tool} login the step used was not written back to ${target}: ${why}. The login there is unchanged; if ${tool} refreshed its token, log in again with ${from.signIn}, then retry the step.`,
+  };
 }
 
 /**
- * Writes the login file the attempt's tool left in `toolHome` back to the home it was copied from (`from`, the
- * dedicated one unless given), while the attempt holds the lock: only a regular file that parses as a login of the
- * same account, and only over the file the attempt copied, so a login made meanwhile stays. It keeps the file's
- * permissions. A file the tool did not change writes nothing. Otherwise it keeps the file there and says why,
- * `login_not_written_back`.
+ * Writes the login file the attempt's tool left in `toolHome` back to the home it was copied from (`from`), while the
+ * attempt holds the lock, whose hash of the file it copied is `copied`: only a regular file that parses as a login of
+ * the same account, and only over the file the attempt copied, so a login made meanwhile stays. It keeps the file's
+ * permissions. A file the tool did not change writes nothing. Otherwise it keeps the file there and says why.
  */
-export async function writeLoginBack({ tool, run, attempt, toolHome, from = dedicatedSource(tool), collected }: { tool: LoginTool; run: RunId; attempt: AttemptId; toolHome: string; from?: LoginSource; collected: boolean }): Promise<WorkflowFailure | undefined> {
+async function writeLoginBack({ tool, copied, toolHome, from, isCollected }: { tool: LoginTool; copied: string; toolHome: string; from: LoginSource; isCollected: boolean }): Promise<WorkflowFailure | undefined> {
   const target = path.join(from.home, LOGIN_FILES[tool]);
-  const holder = await loginHolder(tool);
+  const kept = (why: string): WorkflowFailure => notWrittenBack(tool, from, why);
 
-  const kept = (why: string): WorkflowFailure => ({
-    code: 'login_not_written_back',
-    message: `The ${tool} login the step used was not written back to ${target}: ${why}. The login there is unchanged; if ${tool} refreshed its token, log in again with ${from.signIn}, then retry the step.`,
-  });
-
-  if (holder?.run !== run || holder.attempt !== attempt || holder.copied === undefined) return kept('this attempt no longer holds the login');
-
-  if (!collected) return kept('its runtime could not bring the attempt\'s tool home back');
+  if (!isCollected) return kept('its runtime could not bring the attempt\'s tool home back');
   const written = await readRegular(path.join(toolHome, LOGIN_FILES[tool]));
 
   if (written === undefined) return kept(`the step left no regular ${LOGIN_FILES[tool]} in its tool home`);
 
-  if (sha256(written) === holder.copied) return undefined;
+  if (sha256(written) === copied) return undefined;
   const current = await readRegular(target);
 
   // Written back already, by a driver killed before it released the lock.
   if (current !== undefined && sha256(current) === sha256(written)) return undefined;
 
-  if (current === undefined || sha256(current) !== holder.copied) return kept('the login there changed while the step ran');
+  if (current === undefined || sha256(current) !== copied) return kept('the login there changed while the step ran');
   const account = accountOf(written);
 
   if (account === undefined) return kept(`the step's ${LOGIN_FILES[tool]} is not a ${tool} login`);
@@ -399,9 +402,14 @@ export async function writeLoginBack({ tool, run, attempt, toolHome, from = dedi
   if (account !== accountOf(current)) return kept(`the step's ${LOGIN_FILES[tool]} is for another account`);
   const { mode } = await fs.stat(target);
   const temporary = `${target}.${process.pid}.tmp`;
-  await writeRegularFile(temporary, written, { mode: mode & 0o777 });
-  await fs.chmod(temporary, mode & 0o777);
-  await fs.rename(temporary, target);
+
+  try {
+    await writeRegularFile(temporary, written, { mode: mode & 0o777 });
+    await fs.chmod(temporary, mode & 0o777);
+    await fs.rename(temporary, target);
+  } finally {
+    await fs.rm(temporary, { force: true });
+  }
 
   return undefined;
 }
@@ -423,9 +431,11 @@ export async function holdLoginFrom({ tool, executable, from, toolHome, run, att
 }): Promise<{ ok: true; release(): Promise<WorkflowFailure | undefined> } | { ok: false; failure: WorkflowFailure }> {
   if (!await holdsLogin(path.join(from, LOGIN_FILES[tool]))) return { ok: true, release: async () => undefined };
 
-  // A lock this attempt holds is a killed run's: its home keeps what the tool refreshed, unless the home went with it.
-  if (!await holdsLogin(path.join(toolHome, LOGIN_FILES[tool]))) await releaseLogin(tool, { run, attempt });
   const source: LoginSource = { home: from, signIn: `${HOME_VARIABLES[tool]}=${from} ${executable} login` };
+
+  // A lock this attempt holds is a killed run's: its home keeps what the tool refreshed, unless the home went with it,
+  // and then that hold ends, so this run copies the login again; what nothing refreshed has nothing to say.
+  if (!await holdsLogin(path.join(toolHome, LOGIN_FILES[tool]))) await endLogin(tool, { run, attempt, toolHome, from: source, isCollected: true });
 
   const held = await holdLogin({
     tool, run, attempt, toolHome, from: source, signal,
@@ -438,12 +448,6 @@ export async function holdLoginFrom({ tool, executable, from, toolHome, run, att
 
   return {
     ok: true,
-    release: async () => {
-      try {
-        return await writeLoginBack({ tool, run, attempt, toolHome, from: source, collected: true });
-      } finally {
-        await releaseLogin(tool, { run, attempt });
-      }
-    },
+    release: async () => (await endLogin(tool, { run, attempt, toolHome, from: source, isCollected: true })).notBack,
   };
 }

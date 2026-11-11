@@ -253,8 +253,8 @@ Where the guards of several rows hold, the first row in the order below answers:
 | C7 | preparing | runner: prepare or setup failed | | write-ahead `failed` with its failure | reporting | |
 | C8 | running | runner: the command exited | | write-ahead: `success` on exit 0, else `failed`; outputs, exit code, masked tail | reporting | |
 | C9 | stopping by its runner | runner: its check every `RUNNER_POLL_MS` and at `expiresAt`, its setup ending, its command exiting, or its confined run ending | | stop the setup, command or confined run and every process it started (`@teamai/shared/process-group`); write-ahead `released` | reporting | |
-| C10 | preparing, running | tick: its `runner.lock` is free | it was spawned more than `WAIT_GRACE_MS` ago | stop the process group its setup or command left; spawn the same job again (prepare is idempotent; a command restarts in its prepared place) | unchanged | event `restarted` |
-| C11 | stopping by its runner | tick: its `runner.lock` is free | it was spawned more than `WAIT_GRACE_MS` ago | stop the process group its setup or command left; write-ahead `released` | reporting | |
+| C10 | preparing, running | tick: its `runner.lock` is free | it was spawned more than `WAIT_GRACE_MS` ago | stop the process group its setup, command or judge left, then end the login that judge held; spawn the same job again (prepare is idempotent; a command restarts in its prepared place) | unchanged | event `restarted` |
+| C11 | stopping by its runner | tick: its `runner.lock` is free | it was spawned more than `WAIT_GRACE_MS` ago | stop the process group its setup, command or judge left, then end the login that judge held; write-ahead `released` | reporting | |
 | C12 | preparing | runner: prepared | attempt `runs: here` | `runConfinedStep` outside the lock, on the first of the lease's tools that resolves its model, in its directory, with no team env and no session kept | running | |
 | C13 | running | runner: the confined run ended | | write-ahead: `success` with the reply as outputs and what the run measured, else `failed` with its failure; `released` when no tool of the lease resolves its model here | reporting | |
 

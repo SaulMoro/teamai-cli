@@ -7,7 +7,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { LocalConfig } from '../types.js';
 import { attemptRun, attemptSessionStore, attemptToolHome, readAttemptPlacement, seedToolHome, type AttemptRuntimeRecord } from '../workflow/runtimes/attempt.js';
-import { ensureLogin, holdLogin, holdLoginFrom, loginHolder, loginLockFile, writeLoginBack } from '../workflow/runtimes/login.js';
+import { endLogin, ensureLogin, holdLogin, holdLoginFrom, loginHolder, loginLockFile } from '../workflow/runtimes/login.js';
 import { OpIdSchema, type RuntimeDisplay } from '@teamai/runtime-protocol';
 import { newOpId, type ExecEnd, type PromptEnd, type Reattached, type StepRuntime } from '@teamai/runtime-protocol/step-runtime';
 import type { DriverCan } from '../workflow/requirements.js';
@@ -62,9 +62,9 @@ describe('the dedicated Codex login lock', () => {
     fs.writeFileSync(path.join(toolHome, 'auth.json'), auth('r2'));
     fs.writeFileSync(dedicated(), auth('r2'));
 
-    const notBack = await writeLoginBack({ tool: 'codex', run: RUN, attempt: FIRST, toolHome, collected: true });
+    const ended = await endLogin('codex', { run: RUN, attempt: FIRST, toolHome, isCollected: true });
 
-    expect(notBack).toBeUndefined();
+    expect(ended).toEqual({ wasHeld: true });
     expect(createHash('sha256').update(fs.readFileSync(dedicated())).digest('hex')).toBe(createHash('sha256').update(auth('r2')).digest('hex'));
   });
 

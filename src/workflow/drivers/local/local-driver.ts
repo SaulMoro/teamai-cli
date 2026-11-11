@@ -25,8 +25,8 @@ import { failedCommand, placeView, runtimeCommand, runtimeSetup, runtimeStepEnv,
 import { attemptRun, credentialSecrets, HeldPlace, isExecRuntimeTool, readAttemptPlacement, recordInProcessAttempt, attemptRuntimePath, maskAttemptResults, type AttemptRun } from '../../runtimes/attempt.js';
 import { answerCallTool, hostStepRuntime } from '../../runtimes/host.js';
 import { writeHeldSteps, type HeldSteps } from '../../runtimes/held.js';
-import { closeAfterSweep, releaseLeftLogins, stopLeftInProcess, stopOnRecordedDriver } from '../../runtimes/cancelled.js';
-import { loginHolder, loginLockFile, releaseLogin } from '../../runtimes/login.js';
+import { closeAfterSweep, endLeftLogins, stopLeftInProcess, stopOnRecordedDriver } from '../../runtimes/cancelled.js';
+import { loginHolder } from '../../runtimes/login.js';
 import { toolsLaunchDeps, type EngineOptions, type OpenedDriver } from '../../runtimes/sources.js';
 import { newOpId, type ExecAnswer, type ExecQuestion, type StepRuntime } from '@teamai/runtime-protocol/step-runtime';
 import { resumeOrPublish, retryCommand } from '../../runtimes/retry-command.js';
@@ -796,18 +796,19 @@ async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, given: 
     if (notClosed) log.warn(notClosed.message);
 
     // One in teamai's process left its tool home under the attempt, which a killed judge refreshed its login in.
-    if (slot?.kind !== 'external') return releaseLeftLogins(config, runId, attempt);
+    if (slot?.kind !== 'external') return endLeftLogins(config, runId, attempt);
+
+    if (!notClosed) {
+      const record = placement?.kind === 'external' ? placement.record : undefined;
+
+      return endLeftLogins(config, runId, attempt, { toolHome: record?.toolHome, isCollected: record?.phase === 'collected' });
+    }
 
     for (const tool of slot.engine.logins) {
-      if (!notClosed) {
-        await releaseLogin(tool, { run: runId, attempt });
-        continue;
-      }
-
       const holder = await loginHolder(tool);
 
       if (holder?.run === runId && holder.attempt === attempt) {
-        log.warn(`The ${tool} login teamai keeps stays held by attempt ${attempt} of run ${runId}, whose tool may still run. Stop that tool on its step runtime, then delete ${loginLockFile(tool)}.`);
+        log.warn(`The ${tool} login teamai keeps stays held by attempt ${attempt} of run ${runId}, whose tool may still run. Stop that tool on its step runtime; once run ${runId} has ended, run teamai workflow cancel ${runId} --release ${attempt}, which lets the attempt go and ends its login.`);
       }
     }
   };

@@ -10,7 +10,13 @@ import { getDataHome } from '../types.js';
 import type { ToolId } from '../tools.js';
 import { skillContext } from '../workflow/drivers/skill/skill-driver.js';
 import { inProcessClient, type WorkflowClient } from '../workflow/protocol.js';
-import { AttemptIdSchema, deliveryLockPath, readRun, RunIdSchema, skillStatePath, type RunId } from '../workflow/store.js';
+import { AttemptIdSchema, deliveryLockPath, readRun, RunIdSchema, skillStatePath, takeRunLock, type RunId } from '../workflow/store.js';
+import { attemptToolHome } from '../workflow/runtimes/attempt.js';
+import { holdLoginFrom, loginHolder } from '../workflow/runtimes/login.js';
+import { stopCancelledAttempts } from '../workflow/runtimes/cancelled.js';
+import { cancelRun } from '../workflow/run-controls.js';
+import { knownSecrets } from '../env-resolution.js';
+import { log } from '@teamai/shared/log';
 import { Crash, fakeConfinedClaude, fakeJudge, githubOrigin, LABEL_PASS, scoringStarted, skillHarness, untilStopped } from './helpers/skill-harness.js';
 
 const CHECK = `schemaVersion: v1alpha1
@@ -1268,6 +1274,49 @@ steps:
     expect(typeof stored === 'object' && stored.steps.find((item) => item.id === 'build')).toMatchObject({ status: 'cancelled' });
   });
 
+  // A runner works outside the run's lock, which `teamai workflow cancel` holds while it stops what cancelled attempts left.
+  it('leaves an attempt whose runner still runs to that runner when the person cancels the run, and the runner stops it', async () => {
+    const stops: string[] = [];
+    const harness = await skillHarness({ serve: `schemaVersion: v1alpha1
+name: serve
+description: Serve the app
+invoke: allow
+steps:
+  - id: serve
+    command: sleep 300
+` }, { runners: (runners) => ({ ...runners, command: (input) => (input.command === 'sleep 300' ? untilStopped(() => { stops.push(input.attempt); }) : runners.command(input)) }) });
+    roots.push(harness.root);
+    const started = await harness.call({ kind: 'start', name: 'serve', answers: { parallel: 1, confirmed: false }, inputs: undefined });
+    if (!('data' in started) || !('turn' in started.data)) throw new Error(JSON.stringify(started));
+    const run = RunIdSchema.parse(started.data.turn.run);
+    const attempt = AttemptIdSchema.parse(started.data.turn.running.find((entry) => entry.phase === 'running')?.attempt);
+    // What a Codex judge of the runner's attempt holds while it runs, and refreshed.
+    const daily = path.join(harness.root, 'codex');
+    const login = (refresh: string): string => JSON.stringify({ tokens: { account_id: 'acct-1', refresh_token: refresh } });
+    fs.mkdirSync(daily);
+    fs.writeFileSync(path.join(daily, 'auth.json'), login('refresh-1'), { mode: 0o600 });
+    const toolHome = attemptToolHome(harness.config, run, attempt, 'codex');
+    expect((await holdLoginFrom({ tool: 'codex', executable: 'codex', from: daily, toolHome, run, attempt, signal: new AbortController().signal })).ok).toBe(true);
+    fs.writeFileSync(path.join(toolHome, 'auth.json'), login('refresh-2'));
+    const info = vi.spyOn(log, 'info').mockImplementation(() => undefined);
+    onTestFinished(() => { info.mockRestore(); });
+    const cancelHere = async (): Promise<void> => {
+      expect(await takeRunLock(harness.config, run, (lock) => stopCancelledAttempts(harness.config, lock), { waitMs: 0 })).toMatchObject({ kind: 'held' });
+    };
+
+    expect(await cancelRun(harness.config, run, await knownSecrets(harness.config))).not.toHaveProperty('error');
+    await cancelHere();
+
+    expect(await loginHolder('codex')).toMatchObject({ run, attempt });
+    expect(info).toHaveBeenCalledWith(`Attempt ${attempt} of run ${run} runs in the skill driver's runner on this machine, which stops it and releases what it holds once it sees the cancel. If that runner (teamai workflow report ${run} --driver skill --attempt ${attempt}) still runs in a minute, stop it; once it has ended, teamai workflow cancel ${run} again releases what it left.`);
+    await eventsToDone(harness, run);
+    expect(stops).toEqual([attempt]);
+    // A runner that ended without releasing the login, as a killed one does, leaves it to the next cancel.
+    await cancelHere();
+    expect({ daily: JSON.parse(fs.readFileSync(path.join(daily, 'auth.json'), 'utf8')).tokens.refresh_token, holder: await loginHolder('codex') })
+      .toEqual({ daily: 'refresh-2', holder: undefined });
+  });
+
   it('masks the run\'s secrets in the result a child wrote once it reports', async () => {
     vi.stubEnv('ACME_API_TOKEN', 'tm-child-credential-5810');
     const harness = await skillHarness({ review: REVIEW });
@@ -1765,5 +1814,27 @@ describe('detached runners', () => {
     const { runners } = await skillContext({ config: harness.config, toolPaths: harness.context.toolPaths, env: harness.context.env, cwd: harness.work, aiTools: [] });
     const spawned = runners.spawn({ run, attempt: AttemptIdSchema.parse('a00000000'), checkout, mode: 'attended' });
     await expect(spawned).rejects.toThrow(`The runner of attempt a00000000 cannot start in ${checkout}, the checkout run ${run} started from: it does not exist. Restore that checkout at that path, then run the same call again, or end the run with teamai workflow cancel ${run}.`);
+  });
+
+  // A tick stops what a runner left once its runner.lock is free (C10, C11): its Codex judge held the member's login.
+  it('write back and free the Codex login the judge of a killed runner refreshed, as they stop what that runner left', async () => {
+    const harness = await skillHarness({ check: CHECK });
+    roots.push(harness.root);
+    const run = RunIdSchema.parse('r0123456789abcdef');
+    const attempt = AttemptIdSchema.parse('a00000000');
+    const daily = path.join(harness.root, 'codex');
+    // Codex rotates its refresh token on a refresh and refuses the old one after (refresh_token_reused).
+    const login = (refresh: string): string => JSON.stringify({ auth_mode: 'chatgpt', tokens: { account_id: 'acct-1', refresh_token: refresh } });
+    fs.mkdirSync(daily);
+    fs.writeFileSync(path.join(daily, 'auth.json'), login('refresh-1'), { mode: 0o600 });
+    const toolHome = attemptToolHome(harness.config, run, attempt, 'codex');
+    expect((await holdLoginFrom({ tool: 'codex', executable: 'codex', from: daily, toolHome, run, attempt, signal: new AbortController().signal })).ok).toBe(true);
+    fs.writeFileSync(path.join(toolHome, 'auth.json'), login('refresh-2'));
+    const { runners } = await skillContext({ config: harness.config, toolPaths: harness.context.toolPaths, env: harness.context.env, cwd: harness.work, aiTools: [] });
+
+    await runners.stopLeft(run, attempt);
+
+    expect({ daily: JSON.parse(fs.readFileSync(path.join(daily, 'auth.json'), 'utf8')).tokens.refresh_token, holder: await loginHolder('codex') })
+      .toEqual({ daily: 'refresh-2', holder: undefined });
   });
 });
