@@ -213,6 +213,7 @@ function withLocalRoles(config: LocalConfig): LocalConfig {
 /** `config` with its own settings restored before a fresh machine overlay is applied. */
 function withLocalMemberSettings(config: LocalConfig): LocalConfig {
   if (!config.memberSettingsOverlay) return config;
+  refuseUnmarkedSettings(config);
   const { memberSettingsOverlay, ...rest } = config;
 
   for (const key of MEMBER_SETTING_KEYS) delete rest[key];
@@ -587,8 +588,22 @@ export function ownMemberSettings(config: LocalConfig): MemberSettings {
   return config.memberSettingsOverlay?.local ?? config;
 }
 
+/**
+ * Refuses `config` when a member setting changed on it, not through markMemberSettingsWritten: that change is not in its
+ * overlay's own settings, so a save or a later mark would drop it.
+ */
+function refuseUnmarkedSettings(config: LocalConfig): void {
+  const overlay = config.memberSettingsOverlay;
+  const unmarked = overlay ? MEMBER_SETTING_KEYS.filter((key) => !isDeepStrictEqual(config[key], overlay.applied[key])) : [];
+
+  if (unmarked.length > 0) {
+    throw new Error(`teamai changed the member settings ${unmarked.join(', ')} of this config without marking them written (markMemberSettingsWritten), so saving it would drop them. The config file is unchanged. This is a bug in teamai: please report it with the command you ran.`);
+  }
+}
+
 /** Mark settings a command deliberately wrote, so a later save keeps them even when they equal a machine value. */
 export function markMemberSettingsWritten(config: LocalConfig, written: MemberSettings): LocalConfig {
+  refuseUnmarkedSettings(config);
   const local = config.memberSettingsOverlay?.local ?? MemberSettingsSchema.parse(config);
 
   const workflows = local.workflows || written.workflows
@@ -696,14 +711,8 @@ function serializeLocalConfig(config: LocalConfig, carriedSettings?: MemberSetti
   // The overlaid roles are the team's, read fresh on every load. Writing them
   // would leave a stale copy behind once the assignment changes or the file
   // goes, and a stale copy is exactly what a member must not be able to keep.
+  refuseUnmarkedSettings(config);
   const { dataHome: _dataHome, branchHome: _branchHome, roleUnresolved: _roleUnresolved, children: _children, roleAssignment: _assignment, memberSettingsOverlay: overlay, stepRole: _stepRole, ephemeralConfig: _ephemeralConfig, ...persisted } = withLocalRoles(config);
-  // A setting changed on the config itself, not through markMemberSettingsWritten, is not in `local`: refused, never dropped.
-  const unmarked = overlay ? MEMBER_SETTING_KEYS.filter((key) => !isDeepStrictEqual(persisted[key], overlay.applied[key])) : [];
-
-  if (unmarked.length > 0) {
-    throw new Error(`teamai changed the member settings ${unmarked.join(', ')} of this config without marking them written (markMemberSettingsWritten), so saving it would drop them. The config file is unchanged. This is a bug in teamai: please report it with the command you ran.`);
-  }
-
   const localSettings = overlay?.local ?? MemberSettingsSchema.parse(persisted);
 
   const settings = { ...localSettings };
