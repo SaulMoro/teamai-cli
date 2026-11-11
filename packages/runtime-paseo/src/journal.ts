@@ -63,6 +63,9 @@ const PlaceSchema = z.discriminatedUnion('kind', [
 
 export type Place = z.infer<typeof PlaceSchema>;
 
+/** The environment this runtime gives an agent: the run directory's and the workflow folder's paths and nothing else, since Paseo keeps it in plain text. */
+const AgentEnvSchema = z.strictObject({ [RUN_DIR_ENV]: z.string(), [WORKFLOW_DIR_ENV]: z.string().optional() });
+
 /** The agent create a prompt sends, every field of it decided before it is first sent. */
 const AgentCreateSchema = z.object({
   agentId: z.uuid(),
@@ -70,8 +73,8 @@ const AgentCreateSchema = z.object({
   title: z.string(),
   prompt: z.string(),
   labels: z.record(z.string(), z.string()),
-  /** The agent's environment: the run directory's and the workflow folder's paths and nothing else, since Paseo keeps it in plain text. */
-  env: z.strictObject({ [RUN_DIR_ENV]: z.string(), [WORKFLOW_DIR_ENV]: z.string().optional() }).optional(),
+  /** `AgentEnv`, and any key a later runtime on this journal sends, kept as it wrote it, so a create sent again is the same. */
+  env: AgentEnvSchema.catchall(z.string()).optional(),
   config: z.object({
     provider: z.string(),
     /** Absent: the mode Paseo starts the tool in when it sets no default for it. */
@@ -91,7 +94,8 @@ const AgentCreateSchema = z.object({
   }),
 });
 
-export type AgentCreate = z.infer<typeof AgentCreateSchema>;
+/** The agent create this runtime builds, whose env holds only `AgentEnv`; one read back may hold a later runtime's keys too. */
+export type AgentCreate = Omit<z.infer<typeof AgentCreateSchema>, 'env'> & { env?: z.infer<typeof AgentEnvSchema> };
 
 /**
  * A prompt: refused before it was accepted (its tool is not offered), accepted before Paseo was asked anything, or run

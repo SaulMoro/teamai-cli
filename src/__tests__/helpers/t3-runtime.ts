@@ -24,7 +24,8 @@ const ToyAgentSchema = z.object({
  * teamai-runtime-t3 built as it ships, against a fake T3 Code server (packages/runtime-t3/src/testing/fake-t3.mjs) over
  * `state`. `options(state, agent)` lays out what a T3 run needs beside the scenario's worktree, `<state>/../worktree`
  * (the worktree as a git checkout the fake lists as a T3 project, and the fake's agent playing the scenario's toy
- * agent), then gives the runtime's options. `ready(state)` starts the fake once per state and signs the member in;
+ * agent), then gives the runtime's options; `through` gives the attempt's tool home a run through a sandbox keeps its
+ * session in. `ready(state)` starts the fake once per state and signs the member in;
  * `stop(state)` stops it, and it stops by itself once `state` is removed. Its command line names `state`, so a leak check
  * of the test's directory sees it. `forget(state, op)` deletes the thread prompt `op` launched (its clientRequestId), as
  * the person deletes it in T3 Code. `worktreeAt(state, at)` adds `at` as another git worktree of the project.
@@ -32,7 +33,7 @@ const ToyAgentSchema = z.object({
 export async function t3OnFakeServer(): Promise<{
   command: string;
   args: (state: string) => string[];
-  options: (state: string, agent: JsonValue) => RuntimeOptions;
+  options: (state: string, agent: JsonValue, through?: { toolHome: string }) => RuntimeOptions;
   ready: (state: string) => Promise<void>;
   stop: (state: string) => Promise<void>;
   forget: (state: string, op: string) => void;
@@ -73,7 +74,7 @@ export async function t3OnFakeServer(): Promise<{
   return {
     command: '/usr/bin/env',
     args: (state) => [`HOME=${path.join(state, 'home')}`, `T3CODE_HOME=${path.join(state, 't3-home')}`, process.execPath, executable],
-    options(state, agent) {
+    options(state, agent, through) {
       const worktree = path.join(path.dirname(state), 'worktree');
       const toy = ToyAgentSchema.parse(agent);
 
@@ -85,6 +86,7 @@ export async function t3OnFakeServer(): Promise<{
         projects: [{ id: 'project-1', title: 'scenario', workspaceRoot: fs.realpathSync(worktree) }],
         providers: [{ providerInstanceId: 'claudeAgent', driverKind: 'claudeAgent', displayName: 'Claude', constraints: [], models: [{ id: 'claude-opus-5-5' }] }],
         agent: { output: toy.output, fail: toy.fail !== undefined, hold: toy.hold_ms !== undefined, release: toy.release, result: toy.result },
+        ...(through && { wrappedHome: through.toolHome }),
       }));
 
       return { environment: 'local' };

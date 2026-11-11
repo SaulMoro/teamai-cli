@@ -451,15 +451,19 @@ describe('teamai-runtime-t3', () => {
         return reply;
       };
 
-      it('offers it on the T3 provider instance whose Binary path is its command', async () => {
-        const reply = await initWith({ binaryPaths: { 'acme-claude-t3': '/opt/acme/bin/acme-claude' } });
+      // T3 Code starts a Binary path as given: an absolute path, or a name it finds on its PATH.
+      it.each([
+        { case: 'an absolute path to', binaryPath: '/opt/acme/bin/acme-claude' },
+        { case: 'the name of', binaryPath: 'acme-claude' },
+      ])('offers it on the T3 provider instance whose Binary path is $case its command', async ({ binaryPath }) => {
+        const reply = await initWith({ binaryPaths: { 'acme-claude-t3': binaryPath } });
 
         expect(reply).toMatchObject({ ok: true, can: { tools: ['claude', 'codex', 'acme-claude'], confined: [{ tools: ['claude', 'codex', 'acme-claude'] }] } });
         expect(reply).not.toHaveProperty('unavailable');
       });
 
       it.each([
-        { case: 'a relative Binary path', binaryPath: 'acme-claude' },
+        { case: 'a Binary path relative to a folder', binaryPath: 'bin/acme-claude' },
         { case: 'a Binary path to another file', binaryPath: '/opt/acme/bin/acme-claude-old' },
       ])('does not offer it on an instance with $case, and names the instance to add when teamai cannot add it', async ({ binaryPath }) => {
         const reply = await initWith({ binaryPaths: { 'acme-claude-t3': binaryPath } });

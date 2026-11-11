@@ -790,6 +790,31 @@ describe('teamai-runtime-paseo', () => {
     expect(agentsOf()).toEqual([agentIdOf(OpIdSchema.parse('op-0000000b'))]);
   });
 
+  // Runtimes of two teamai versions may share a journal, and a later one may give an agent an env key this one never heard of.
+  it('follows a prompt whose record a later runtime wrote with an env key this one does not know, and keeps that create as written', async () => {
+    const release = path.join(dir, 'release');
+    behave({ release, output: { ok: true } });
+    const first = start();
+    await ready(first);
+    const handle = await opened(first);
+    first.send(promptRequest(handle, 'op-0000000b'));
+    await first.next(isOp('op-0000000b', 'display'));
+    await first.kill();
+    const file = path.join(dir, 'home', '.teamai', 'runtime-state', 'paseo', 'ops', 'op-0000000b.json');
+    const record = z.looseObject({ create: z.looseObject({ env: z.record(z.string(), z.string()) }) }).parse(JSON.parse(fs.readFileSync(file, 'utf8')));
+    fs.writeFileSync(file, JSON.stringify({ ...record, create: { ...record.create, env: { ...record.create.env, TEAMAI_LATER_DIR: path.join(dir, 'later') } } }));
+
+    const second = start();
+    await ready(second);
+    second.send({ type: 'reattach', handle });
+    expect(await second.next((line) => 'event' in line && !('op' in line))).toMatchObject({ event: 'alive', ops: [{ op: 'op-0000000b', state: 'running' }] });
+    fs.writeFileSync(release, '');
+    second.send(promptRequest(handle, 'op-0000000b'));
+
+    expect(await second.next(isEnd('op-0000000b'))).toMatchObject({ event: 'finished', result: { output: { ok: true } } });
+    expect(JSON.parse(fs.readFileSync(file, 'utf8'))).toMatchObject({ create: { env: { TEAMAI_RUN_DIR: path.join(dir, 'run'), TEAMAI_LATER_DIR: path.join(dir, 'later') } } });
+  });
+
   it('ends a prompt once when its cancel cannot read the prompt\'s record, though its agent then ends', async () => {
     const release = path.join(dir, 'release');
     behave({ release, output: { ok: true } });

@@ -6,9 +6,9 @@ import { z } from 'zod';
 import type { PaseoAgent, PaseoApi } from '@getpaseo/client';
 import type { DaemonClient } from '@getpaseo/client/internal/daemon-client';
 import type { WebSocketFactory } from '@getpaseo/client/internal/daemon-client-transport-types';
-import { RUN_DIR_ENV, type InitInstance, type RuntimeFailure } from '@teamai/runtime-protocol';
+import { RUN_DIR_ENV, runsCommand, type InitInstance, type RuntimeFailure } from '@teamai/runtime-protocol';
 import { paseoKeyOf, type AgentCreate } from '../journal.js';
-import { CustomProvidersSchema, homeDirOf, homeVariableOf, instanceHomeOf, isPaseoTool, keptOf, namedProblem, PASEO_TOOLS, providerOf, runsCommand, shownPath, type CustomProviders, type PaseoTool, type ProviderFound, type ProviderToAdd } from '../providers.js';
+import { CustomProvidersSchema, homeDirOf, homeVariableOf, instanceHomeOf, isPaseoTool, keptOf, namedProblem, PASEO_TOOLS, providerOf, shownPath, type CustomProviders, type PaseoTool, type ProviderFound, type ProviderToAdd } from '../providers.js';
 import { isOnThisMachine } from './address.js';
 import { routedHost, savedHosts, type Host, type SavedHost } from './host.js';
 import { atLeast, OLDEST_PASEO, type PaseoClient } from './client.js';
@@ -721,7 +721,7 @@ export async function connect(url: string, paseo: PaseoClient, abandoned?: Abort
       }
 
       const setUp = `add one on the daemon's host that extends ${tool} with command ${JSON.stringify([id])} (\`paseo daemon config set agents.providers …\`, then \`paseo daemon reload\`)`;
-      let provider = Object.entries(configured).find(([, entry]) => entry.extends === tool && runsCommand(entry.command?.[0], id))?.[0];
+      let provider = Object.entries(configured).find(([, entry]) => entry.extends === tool && runsCommand({ executable: entry.command?.[0], command: id, expandsHome: false }))?.[0];
       let added = false;
 
       if (provider === undefined) {

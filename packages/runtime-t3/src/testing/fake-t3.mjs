@@ -37,7 +37,7 @@
 //                               the default model and the project scripts, the project's override first; a Claude or Codex
 //                               provider instance it adds is listed as T3 lists one once it reloaded them
 
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawn } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import fs from 'node:fs';
 import http from 'node:http';
@@ -119,11 +119,36 @@ function runScript(projectId, which, cwd) {
   if (script && cwd) execFileSync('/bin/sh', ['-c', script.command], { cwd });
 }
 
-/** The agent of one run: it works, then writes the result file and its transcript, and the run completes. */
+/**
+ * Starts the Binary path of the thread's provider instance once, in the thread's folder, when it is teamai's sandbox
+ * wrapper, as T3 starts a run's tool: why it failed, or undefined once it exited 0.
+ */
+function startWrapper(thread) {
+  const binaryPath = settings().providerInstances?.[thread.instanceId]?.config?.binaryPath;
+
+  if (!binaryPath || !path.basename(binaryPath).startsWith('teamai-sandbox-')) return Promise.resolve(undefined);
+
+  return new Promise((resolve) => {
+    const child = spawn(binaryPath, [], { cwd: thread.worktreePath ?? process.cwd(), stdio: ['ignore', 'ignore', 'pipe'] });
+    let stderr = '';
+    child.stderr.setEncoding('utf8').on('data', (data) => { stderr += data; });
+    child.on('error', (error) => resolve(error.message));
+    child.on('close', (code) => resolve(code === 0 ? undefined : stderr.trim() || `${binaryPath} exited ${code}`));
+  });
+}
+
+/** The agent of one run: its tool starts, it works, then writes the result file and its transcript, and the run completes. */
 async function play(threadId) {
   const thread = readThread(threadId);
   const agent = config().agent ?? {};
   update(threadId, () => ({ status: 'running' }));
+  const startFailure = await startWrapper(thread);
+
+  if (startFailure !== undefined) {
+    update(threadId, () => ({ status: 'failed', error: { title: 'Provider failed to start', text: startFailure, runId: `run:${threadId}:1` } }));
+
+    return;
+  }
 
   while (agent.hold || agent.release) {
     const now = readThread(threadId);
