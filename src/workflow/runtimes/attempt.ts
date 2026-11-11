@@ -577,8 +577,8 @@ export function attemptRun({ config, run, attempt, runtime, driver, deadline }: 
   let mayRun: RuntimeFailure | undefined;
   // The credentials the place was opened with, in memory only, so what the runtime says of the place is kept masked.
   let openedWith: Record<string, string> = {};
-  // How the step was stopped while the attempt recorded what it sends, which found nothing running to stop: an exec,
-  // setup or prompt never sent is not sent, and an exec a restart reconnects to gets the stop once it is sent again.
+  // How the step was stopped while nothing it sent was running: an exec, setup or prompt never sent is not sent, and an
+  // exec or prompt a restart sends again under its recorded id gets the stop once it is sent.
   let stopped: 'stop' | 'cancel' | undefined;
 
   const save = async (next: AttemptRuntimeRecord): Promise<void> => {
@@ -907,7 +907,12 @@ export function attemptRun({ config, run, attempt, runtime, driver, deadline }: 
       if (stopped && before.prompt === undefined) return { kind: 'cancelled' };
       running = sent;
       const acceptance = accepting(events);
-      const end = await runtime.prompt({ op: sent.op, handle, ...request }, { onAccepted: acceptance.onAccepted, onDisplay: acceptance.onDisplay });
+      const asked = runtime.prompt({ op: sent.op, handle, ...request }, { onAccepted: acceptance.onAccepted, onDisplay: acceptance.onDisplay });
+      // A prompt is never left: a stop of either kind cancels the one this resends.
+      const passedOn = stopped ? runtime.cancel(sent.op) : undefined;
+
+      if (passedOn) cancelling = { op: sent.op, landed: passedOn };
+      const [end] = await Promise.all([asked, passedOn]);
       await acceptance.kept();
       running = undefined;
 
