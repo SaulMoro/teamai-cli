@@ -3,6 +3,7 @@ import path from 'node:path';
 import os from 'node:os';
 import fs from 'node:fs';
 import { realpathSync } from 'node:fs';
+import { createHash } from 'node:crypto';
 import fse from 'fs-extra';
 import YAML from 'yaml';
 import {
@@ -212,6 +213,21 @@ describe('resolvePartitionDir (legacy partition adoption)', () => {
 
   afterEach(() => {
     fs.rmSync(base, { recursive: true, force: true });
+  });
+
+  // An earlier teamai that could not write the anchor's parent read the volume as case-sensitive, and kept the case.
+  it.runIf(process.platform === 'darwin')('adopts the partition named with the anchor\'s case kept on a case-insensitive volume', async () => {
+    anchor = path.join(base, 'Project');
+    fs.mkdirSync(anchor, { recursive: true });
+    const caseKept = path.join(projectsRoot(), `${anchor.replace(/[^A-Za-z0-9._-]+/g, '-').replace(/^-+|-+$/g, '')}-${createHash('sha256').update(anchor).digest('hex').slice(0, 16)}`);
+    expect(caseKept).not.toBe(canonical());
+    fs.mkdirSync(caseKept, { recursive: true });
+    fs.writeFileSync(path.join(caseKept, 'config.yaml'), 'repo: {}\n');
+
+    const dir = await resolvePartitionDir(anchor);
+
+    expect(dir).toBe(canonical());
+    expect(fs.readFileSync(path.join(dir, 'config.yaml'), 'utf-8')).toBe('repo: {}\n');
   });
 
   it('returns the canonical path for a fresh install (pure resolution, no mkdir)', async () => {

@@ -193,9 +193,11 @@ export function projectSlug(anchor: string): string {
   // Normalize once so BOTH the path prefix and the hash are derived from the
   // same canonical spelling — on a case-insensitive volume this makes the whole
   // slug string identical for any spelling of one directory.
-  const norm = normalizeAnchor(anchor);
+  return slugOf(normalizeAnchor(anchor));
+}
 
-  return `${safePathPrefix(norm)}-${anchorHash(norm)}`;
+function slugOf(spelling: string): string {
+  return `${safePathPrefix(spelling)}-${anchorHash(spelling)}`;
 }
 
 /**
@@ -209,11 +211,26 @@ export function projectSlug(anchor: string): string {
  * corrupt.
  */
 export function legacyProjectSlug(anchor: string): string {
-  const norm = normalizeAnchor(anchor);
-  const raw = path.basename(norm) || 'project';
+  return legacySlugOf(normalizeAnchor(anchor));
+}
+
+function legacySlugOf(spelling: string): string {
+  const raw = path.basename(spelling) || 'project';
   const cleaned = raw.replace(/[^A-Za-z0-9._-]+/g, '-').replace(/^-+|-+$/g, '');
 
-  return `${(cleaned || 'project').slice(0, 40)}-${anchorHash(norm)}`;
+  return `${(cleaned || 'project').slice(0, 40)}-${anchorHash(spelling)}`;
+}
+
+/**
+ * The names an earlier teamai gave `anchor`'s partition, which `resolvePartitionDir` adopts: the legacy one, and on a
+ * case-insensitive volume the ones with the anchor's case kept, which a teamai that could not write the anchor's parent
+ * gave it, reading the volume as case-sensitive.
+ */
+export function earlierProjectSlugs(anchor: string): string[] {
+  const norm = normalizeAnchor(anchor);
+  const kept = norm === anchor ? [] : [slugOf(anchor), legacySlugOf(anchor)];
+
+  return [...new Set([legacySlugOf(norm), ...kept])].filter((slug) => slug !== slugOf(norm));
 }
 
 /**
@@ -244,7 +261,7 @@ export function projectDataHome(anchor: string): string {
  * project's partition" (detection, init, migration) goes through here, so an
  * upgraded CLI converges on the new name on the first command that touches the
  * project. `status --all` deliberately does NOT rename (it must stay
- * read-only); it recognizes the legacy name via `legacyProjectSlug` instead.
+ * read-only); it recognizes the earlier names via `earlierProjectSlugs` instead.
  *
  * Edge cases:
  *  - canonical already exists with data → it is authoritative; a leftover
@@ -275,23 +292,30 @@ export function projectDataHome(anchor: string): string {
  */
 export async function resolvePartitionDir(anchor: string, options: { dryRun?: boolean } = {}): Promise<string> {
   const canonical = projectDataHome(anchor);
-  const legacyDir = path.join(projectsRootDir(), legacyProjectSlug(anchor));
-
-  if (legacyDir === canonical) return canonical; // whole-path prefix == basename (root-level anchor)
+  const earlierDirs = earlierProjectSlugs(anchor).map((slug) => path.join(projectsRootDir(), slug));
 
   if (options.dryRun) {
     // A preview adopts nothing: report the directory that holds the data now,
-    // the legacy one wherever adoption would move it.
+    // the earlier one wherever adoption would move it.
     const canonicalEntries = await fs.promises.readdir(canonical).catch(() => null);
 
-    return (await dirExists(legacyDir)) && !canonicalEntries?.length ? legacyDir : canonical;
+    if (canonicalEntries?.length) return canonical;
+
+    for (const earlier of earlierDirs) {
+      if (await dirExists(earlier)) return earlier;
+    }
+
+    return canonical;
   }
 
-  const dir = await adoptLegacyPartition(canonical, legacyDir);
+  for (const earlier of earlierDirs) {
+    const dir = await adoptLegacyPartition(canonical, earlier);
 
-  if (dir === canonical) await rebaseLocalPathAfterAdoption(canonical, legacyDir);
+    if (dir !== canonical) return dir;
+    await rebaseLocalPathAfterAdoption(canonical, earlier);
+  }
 
-  return dir;
+  return canonical;
 }
 
 /** Perform the rename-based adoption, returning the directory that holds the data. */
