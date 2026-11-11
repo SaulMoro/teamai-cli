@@ -166,6 +166,7 @@ async function endLeftLogin(config: LocalConfig, tool: LoginTool, { run, attempt
   const ended = await endLogin(tool, { run, attempt, toolHome: toolHome?.tool === tool ? toolHome.dir : attemptToolHome(config, run, attempt, tool), isCollected });
 
   if (!ended.wasHeld) return;
+
   if (ended.notBack) log.warn(ended.notBack.message);
   log.info(`Released the ${tool} login teamai keeps, which attempt ${attempt} of run ${run} held.`);
 }
