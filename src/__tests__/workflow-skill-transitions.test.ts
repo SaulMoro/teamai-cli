@@ -16,6 +16,8 @@ import { runLocalDriver } from '../workflow/drivers/local/local-driver.js';
 import { respondProvenance, respondToHitl } from '../workflow/run-controls.js';
 import { attemptDir, AttemptIdSchema, deliveryLockPath, readRun, RunIdSchema, runScratchDir, runsDir, skillStatePath, updateRun, type RunId } from '../workflow/store.js';
 import { DeliveryReceiptSchema } from '../workflow/delivery-schema.js';
+import { attemptToolHome } from '../workflow/runtimes/attempt.js';
+import { holdLoginFrom, loginHolder, loginLockFile } from '../workflow/runtimes/login.js';
 import { syncScorerDefinitions } from '../scorers/cache.js';
 import { syncScorersThenWorkflows } from '../scorers/team-sync.js';
 import type { Runners } from '../workflow/drivers/skill/skill-driver.js';
@@ -1706,6 +1708,42 @@ const CASES: Array<{ name: string; rows: string[]; run: () => Promise<string[]> 
       expect(await made.context.client.cancel(cancelled.run, 'lint')).toMatchObject({ data: {} });
       await made.call({ kind: 'resume', run: cancelled.run, claim: 'lacking', confirmed: false, answers: {} });
       expect(await stillRunning(cancelled.left)).toBe('SIGTERM');
+      return made.rows;
+    },
+  },
+  {
+    name: 'a resume of a run whose local driver on this machine was killed while its Codex judge held the member\'s login writes back what that judge refreshed, then frees the login',
+    rows: ['R19'],
+    run: async () => {
+      const made = await harness({ check: CHECK });
+      const daily = path.join(made.work, '..', 'codex');
+      // Codex rotates its refresh token on a refresh and refuses the old one after (refresh_token_reused).
+      const login = (refresh: string): string => JSON.stringify({ auth_mode: 'chatgpt', tokens: { account_id: 'acct-1', refresh_token: refresh } });
+      fs.mkdirSync(daily, { recursive: true });
+      onTestFinished(() => { fs.rmSync(loginLockFile('codex'), { force: true }); });
+      // The killed local driver's judge took the member's login, and its Codex refreshed it in the attempt's own home.
+      const killedHolding = async (): Promise<RunId> => {
+        fs.writeFileSync(path.join(daily, 'auth.json'), login('refresh-1'), { mode: 0o600 });
+        const startAnswer = await made.context.client.start('check', { checkout: made.work, caller: { evidence: { kind: 'none' }, confirmed: false, mode: 'attended' }, startedBy: 'person' });
+        if (!('data' in startAnswer)) throw new Error(JSON.stringify(startAnswer));
+        const run = RunIdSchema.parse(startAnswer.data.run);
+        const leased = await made.context.client.next(run, { driver: { ...driverIdentity('local', made.work), can: { workspace: [...WORKSPACE_MODES] } } });
+        const { attempt } = z.object({ data: z.object({ lease: z.object({ attempt: AttemptIdSchema }) }) }).parse(leased).data.lease;
+        const toolHome = attemptToolHome(made.config, run, attempt, 'codex');
+        expect(await holdLoginFrom({ tool: 'codex', executable: 'codex', from: daily, toolHome, run, attempt, signal: new AbortController().signal })).toMatchObject({ ok: true });
+        fs.writeFileSync(path.join(toolHome, 'auth.json.tmp'), login('refresh-2'));
+        fs.renameSync(path.join(toolHome, 'auth.json.tmp'), path.join(toolHome, 'auth.json'));
+        return run;
+      };
+      const member = async (): Promise<{ daily: unknown; holder: unknown }> => ({ daily: JSON.parse(fs.readFileSync(path.join(daily, 'auth.json'), 'utf8')).tokens.refresh_token, holder: await loginHolder('codex') });
+      const resumed = await killedHolding();
+      await turnOf(await made.call({ kind: 'resume', run: resumed, claim: 'lacking', confirmed: false, answers: {} }));
+      expect(await member()).toEqual({ daily: 'refresh-2', holder: undefined });
+      // A step of that driver cancelled before the resume holds no lease any more, yet its judge's login comes back as well.
+      const cancelled = await killedHolding();
+      expect(await made.context.client.cancel(cancelled, 'lint')).toMatchObject({ data: {} });
+      await made.call({ kind: 'resume', run: cancelled, claim: 'lacking', confirmed: false, answers: {} });
+      expect(await member()).toEqual({ daily: 'refresh-2', holder: undefined });
       return made.rows;
     },
   },
