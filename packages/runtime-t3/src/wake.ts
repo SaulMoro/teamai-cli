@@ -85,6 +85,7 @@ export async function canWake(t3: T3): Promise<boolean> {
 async function memberModel(t3: T3, link: EnvironmentLink, project: Project): Promise<{ modelSelection: Launch['modelSelection']; tool: string | undefined } | undefined> {
   // With the project's default, the providers only say which tool it is: a machine that cannot list them still wakes.
   const providers = project.defaultModelSelection ? await t3.providers(link.environmentId).catch(() => []) : await t3.providers(link.environmentId);
+
   const toolOfInstance = (instanceId: string): string | undefined => {
     const driver = providers.find((one) => one.providerInstanceId === instanceId)?.driverKind;
 
