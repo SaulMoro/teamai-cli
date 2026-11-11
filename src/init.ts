@@ -19,14 +19,6 @@ import { reportsBranch } from './utils/reports-branch.js';
 import { learningsBranch } from './utils/learnings-branch.js';
 
 /**
- * A re-init that changes the install's kind or team repository keeps the data
- * home (git and self mode share the partition, #808; #823 item 13), and what it
- * holds was written for the previous repository: set the queue aside and drop
- * the search indexes, which the new install rebuilds from its own knowledge.
- * A config that exists but cannot be read names no owner, so it counts as
- * another. `save` writes the new config.
- */
-/**
  * The member's AI tool, which an answer step, a prompt step and teamai's own AI calls run on: the first of `agents`,
  * as `--agent` named them, that teamai launches becomes `ai.tool` in this install's config. A tool the install's
  * config or ~/.teamai/config.yaml already names stays the member's choice.
@@ -44,6 +36,14 @@ async function adoptAgentTool(localConfig: LocalConfig, agents: readonly string[
   log.info(`AI tool: ${tool}, from --agent (ai.tool in ${expandHome(ownConfig)}).`);
 }
 
+/**
+ * A re-init that changes the install's kind or team repository keeps the data
+ * home (git and self mode share the partition, #808; #823 item 13), and what it
+ * holds was written for the previous repository: set the queue aside and drop
+ * the search indexes, which the new install rebuilds from its own knowledge.
+ * A config that exists but cannot be read names no owner, so it counts as
+ * another. `save` writes the new config.
+ */
 async function settleModeSwitch(previous: LocalConfig | null, next: LocalConfig, save: () => Promise<void>): Promise<void> {
   const switched = await setAsideQueueOnModeSwitch(previous, next, async () => {
     const ownerChanged = previous
@@ -1787,9 +1787,7 @@ export async function initSelfMode(options: GlobalOptions & {
   // getDataHome, which now resolves to the partition.
   await ensureDir(teamaiHome);
   await ensureDir(partitionHome);
-  // Tools found in HOME without --agent or a pick are no choice of the member's.
-  const isChosen = normalizeAgentList(options.agent).length > 0 || (!options.silent && !options.force && isInteractive());
-  await adoptAgentTool(localConfig, isChosen ? selectedAgents : []);
+  await adoptAgentTool(localConfig, normalizeAgentList(options.agent));
   await settleModeSwitch(preInitConfig, localConfig, () =>
     saveLocalConfigForScope(localConfig, 'project', businessRepoRoot));
   log.success(`Local config saved to ${partitionHome}/config.yaml`);
