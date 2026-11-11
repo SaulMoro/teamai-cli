@@ -247,3 +247,14 @@ it('check refuses a DriverCan key the workflow engine page does not name', () =>
   expect(checked.output).toContain('Documentation check failed: docs/dev/workflow-engine.md names every key DriverCan adds to the protocol\'s can');
   expect(checked.output).toContain('queue');
 });
+it('check refuses a DriverCan key the workflow engine page does not name, written after a comma', () => {
+  const root = checkout();
+  const source = path.join(root, DRIVER_CAN);
+  const text = fs.readFileSync(source, 'utf8');
+  const keys = 'workflow?: true;\n};';
+  expect(text).toContain(keys);
+  fs.writeFileSync(source, text.replace(keys, 'workflow?: true, queue?: true;\n};'));
+  const checked = run(root, '--only=driver-can');
+  expect(checked.status).toBe(1);
+  expect(checked.output).toContain('queue');
+});

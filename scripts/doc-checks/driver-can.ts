@@ -18,7 +18,7 @@ function addedKeys(): string[] {
   const [, omittedKeys = '', members = ''] = declared;
   const omitted = new Set([...omittedKeys.matchAll(/'([A-Za-z]+)'/gu)].map(([, key]) => key));
 
-  return [...members.matchAll(/(?:^|;)\s*([A-Za-z]+)\??:/gu)].flatMap(([, key = '']) => (omitted.has(key) ? [] : [key])).sort();
+  return [...members.matchAll(/(?:^|[;,])\s*([A-Za-z]+)\??:/gu)].flatMap(([, key = '']) => (omitted.has(key) ? [] : [key])).sort();
 }
 
 await check(`${PAGE} names every key DriverCan adds to the protocol's can`, () => {
