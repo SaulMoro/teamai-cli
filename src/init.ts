@@ -24,6 +24,7 @@ import { learningsBranch } from './utils/learnings-branch.js';
  * config or ~/.teamai/config.yaml already names stays the member's choice.
  */
 async function adoptAgentTool(localConfig: LocalConfig, agents: readonly string[]): Promise<void> {
+  const { launchTargetOf } = await import('./launch-registry.js');
   const tool = agents.find((agent) => launchTargetOf(agent) !== undefined);
 
   if (tool === undefined || localConfig.ai?.tool !== undefined) return;
@@ -215,7 +216,6 @@ import {
   installScopeName,
   selfModeGitignorePath,
 } from './types.js';
-import { launchTargetOf } from './launch-registry.js';
 import { getUserHome, expandHome } from '@teamai/shared/home';
 import { describeRoles, listRoleIds, loadRolesManifest, RolesManifestNotFoundError } from './roles.js';
 import { loadRoleAssignmentsIfPresent, resolveAssignedRoles, ROLE_ASSIGNMENTS_FILE } from './role-assignments.js';

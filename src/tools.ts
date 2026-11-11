@@ -46,6 +46,12 @@ export const TOOL_IDS = [
 export type ToolId = (typeof TOOL_IDS)[number];
 
 /**
+ * The launch adapters that build a workflow step's launch: a step runs a tool whose `launch` names one. tools.type-test.ts
+ * holds it to the adapters, which load each family's behaviour.
+ */
+export const STEP_LAUNCH_ADAPTERS = ['claude', 'codex', 'opencode', 'codebuddy', 'agy'] as const satisfies readonly LaunchAdapterId[];
+
+/**
  * What teamai knows about each built-in tool.
  *
  * `calls` lists only a dedicated skill tool; a read of a SKILL.md path is not

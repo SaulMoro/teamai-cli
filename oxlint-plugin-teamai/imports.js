@@ -156,6 +156,23 @@ function staticModule(statement, includeTypes) {
 }
 
 /**
+ * The modules `file` loads with a dynamic `import()` of a string, anywhere in it.
+ * @param {string} file
+ * @returns {string[]}
+ */
+export function dynamicImports(file) {
+  const program = parse(fs.readFileSync(file, 'utf8'), { sourceType: 'module', createImportExpressions: true, plugins: file.endsWith('.tsx') ? ['typescript', 'jsx'] : ['typescript'] }).program;
+  /** @type {string[]} */
+  const specifiers = [];
+
+  traverseFast(program, (node) => {
+    if (node.type === 'ImportExpression' && node.source.type === 'StringLiteral') specifiers.push(node.source.value);
+  });
+
+  return specifiers;
+}
+
+/**
  * The modules `file` imports at its top level, its type-only imports too when `includeTypes`, and with them its dynamic
  * imports and vi.mock calls.
  * @param {string} file @param {boolean} includeTypes

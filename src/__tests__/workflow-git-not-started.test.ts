@@ -68,13 +68,29 @@ describe('git when git does not start', () => {
     await expect(fetchMissingCommits(root, { run: 'r0123456789abcdef', commits: [commit] })).resolves.toEqual({ missing: [commit], fetchError: expect.stringContaining('git did not start') });
   });
 
-  it('refuses to resume a run whose branch git cannot look up, never taking it for a branch this checkout lacks', async () => {
+  // macOS without the Command Line Tools: /usr/bin/git is a stub that runs no git, says why on stderr and exits 1.
+  const STUB_NOTE = [
+    'xcode-select: note: No developer tools were found, requesting install.',
+    'If developer tools are located at a non-default location on disk, use `sudo xcode-select --switch path`, and cancel the installation dialog.',
+    'See `man xcode-select\' for more details.',
+  ];
+
+  it.each([
+    ['is not on PATH', undefined, 'git did not start'],
+    ['is the macOS stub with no Command Line Tools', STUB_NOTE, 'xcode-select: note: No developer tools were found'],
+    ['is the macOS stub whose Command Line Tools are gone', ['xcrun: error: invalid active developer path (/Library/Developer/CommandLineTools), missing xcrun at: /Library/Developer/CommandLineTools/usr/bin/xcrun'], 'xcrun: error: invalid active developer path'],
+  ])('refuses to resume a run whose branch git cannot look up, as when git %s, never taking it for a branch this checkout lacks', async (_, stderr, cause) => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'git-not-started-'));
     roots.push(root);
+    if (stderr) {
+      fs.writeFileSync(path.join(root, 'stub-note'), `${stderr.join('\n')}\n`);
+      // Shell builtins only: PATH holds nothing but this stub.
+      fs.writeFileSync(path.join(root, 'git'), `#!/bin/sh\nwhile IFS= read -r line; do printf '%s\\n' "$line" >&2; done < '${path.join(root, 'stub-note')}'\nexit 1\n`, { mode: 0o755 });
+    }
     vi.stubEnv('PATH', root);
 
     const reconciled = await reconcileCopy(root, 'feature', 'a'.repeat(40));
 
-    expect(reconciled).toEqual({ error: expect.stringContaining('git did not start') });
+    expect(reconciled).toEqual({ error: expect.stringContaining(cause) });
   });
 });

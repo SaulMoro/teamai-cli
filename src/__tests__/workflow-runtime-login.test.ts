@@ -1,6 +1,7 @@
 import { execFile, execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import fs from 'node:fs';
+import fsp from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -55,6 +56,66 @@ describe('the dedicated Codex login lock', () => {
     expect(await loginHolder('codex')).toMatchObject({ run: RUN, attempt: holders[0]?.attempt });
   });
 
+  it('leaves the lock another attempt took meanwhile when two ends of one attempt race, each having read it as that attempt\'s', async () => {
+    plantDedicated('r1');
+    const toolHome = path.join(root, FIRST);
+    expect(await hold(FIRST, new AbortController().signal)).toEqual({ ok: true });
+    const lock = loginLockFile('codex');
+    const remove = fsp.rm.bind(fsp);
+    let secondRemoves = (): void => {};
+    const bothRead = new Promise<void>((resolve) => { secondRemoves = resolve; });
+    let secondHolds = (): void => {};
+    const taken = new Promise<void>((resolve) => { secondHolds = resolve; });
+    let removals = 0;
+    let second: ReturnType<typeof hold> | undefined;
+    // The first end removes the lock once the second read it too, or after half a second; attempt SECOND then takes the
+    // free lock, and only then does the second end remove what it read. SECOND records its copy once the first end is done.
+    vi.spyOn(fsp, 'rm').mockImplementation(async (target, options) => {
+      if (target !== lock) return remove(target, options);
+      removals += 1;
+
+      if (removals > 1) {
+        secondRemoves();
+        await taken;
+
+        return remove(target, options);
+      }
+
+      await Promise.race([bothRead, new Promise((resolve) => setTimeout(resolve, 500))]);
+      await remove(target, options);
+      second = hold(SECOND, new AbortController().signal);
+      while ((await loginHolder('codex'))?.attempt !== SECOND) await new Promise((resolve) => setTimeout(resolve, 10));
+      secondHolds();
+    });
+
+    await Promise.all([FIRST, FIRST].map((attempt) => endLogin('codex', { run: RUN, attempt, toolHome, isCollected: true })));
+
+    expect({ second: await second, holder: await loginHolder('codex') }).toMatchObject({ second: { ok: true }, holder: { run: RUN, attempt: SECOND } });
+  });
+
+  it('never replaces the lock another attempt took after an end of the holding attempt freed it, while that attempt copied the login', async () => {
+    plantDedicated('r1');
+    const lock = loginLockFile('codex');
+    const link = fsp.link.bind(fsp);
+    let raced = false;
+    // Once attempt FIRST took the lock, and before it records the copy it makes, a second end of FIRST frees the lock and
+    // attempt SECOND takes it.
+    vi.spyOn(fsp, 'link').mockImplementation(async (existing, target) => {
+      await link(existing, target);
+
+      if (target !== lock || raced) return;
+      raced = true;
+      await endLogin('codex', { run: RUN, attempt: FIRST, toolHome: path.join(root, FIRST), isCollected: true });
+      expect(await hold(SECOND, new AbortController().signal)).toEqual({ ok: true });
+    });
+    const stop = new AbortController();
+    setTimeout(() => stop.abort(), 1000);
+
+    const first = await hold(FIRST, stop.signal);
+
+    expect({ first, holder: await loginHolder('codex') }).toMatchObject({ first: { ok: false, failure: { code: 'login_held' } }, holder: { run: RUN, attempt: SECOND } });
+  });
+
   it('takes a login already written back, by a driver killed before it released the lock, as written back', async () => {
     plantDedicated('r1');
     const toolHome = path.join(root, FIRST);
@@ -77,6 +138,34 @@ describe('the dedicated Codex login lock', () => {
     expect(await hold(FIRST, new AbortController().signal)).toEqual({ ok: true });
 
     expect(fs.readFileSync(path.join(toolHome, 'auth.json'), 'utf8')).toBe(auth('r2'));
+  });
+
+  it('writes back the token a judge\'s Codex refreshed when the judge releases the login, then frees it', async () => {
+    const daily = path.join(root, '.codex');
+    fs.mkdirSync(daily, { recursive: true });
+    fs.writeFileSync(path.join(daily, 'auth.json'), auth('r1'), { mode: 0o600 });
+    const toolHome = path.join(root, 'judge');
+    const held = await holdLoginFrom({ tool: 'codex', executable: 'codex', from: daily, toolHome, run: RUN, attempt: FIRST, signal: new AbortController().signal });
+    fs.writeFileSync(path.join(toolHome, 'auth.json'), auth('r2'));
+
+    const kept = held.ok ? await held.release() : held.failure;
+
+    expect({ kept, daily: fs.readFileSync(path.join(daily, 'auth.json'), 'utf8'), holder: await loginHolder('codex') }).toEqual({ kept: undefined, daily: auth('r2'), holder: undefined });
+  });
+
+  it('writes back the token a killed judge refreshed in a temporary home before a judge restarted on the same attempt copies the login into its own', async () => {
+    const daily = path.join(root, '.codex');
+    fs.mkdirSync(daily, { recursive: true });
+    fs.writeFileSync(path.join(daily, 'auth.json'), auth('r1'), { mode: 0o600 });
+    const killed = path.join(root, 'teamai-confined-killed', 'codex');
+    const restarted = path.join(root, 'teamai-confined-restarted', 'codex');
+    expect((await holdLoginFrom({ tool: 'codex', executable: 'codex', from: daily, toolHome: killed, run: RUN, attempt: FIRST, signal: new AbortController().signal })).ok).toBe(true);
+    fs.writeFileSync(path.join(killed, 'auth.json'), auth('r2'));
+
+    const held = await holdLoginFrom({ tool: 'codex', executable: 'codex', from: daily, toolHome: restarted, run: RUN, attempt: FIRST, signal: new AbortController().signal });
+
+    expect({ ok: held.ok, daily: fs.readFileSync(path.join(daily, 'auth.json'), 'utf8'), restarted: fs.readFileSync(path.join(restarted, 'auth.json'), 'utf8') })
+      .toEqual({ ok: true, daily: auth('r2'), restarted: auth('r2') });
   });
 
   it('copies the login again into the fresh home of a run in this process whose attempt already holds the lock, as after a restart', async () => {

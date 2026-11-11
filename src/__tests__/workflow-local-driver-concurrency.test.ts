@@ -695,6 +695,25 @@ steps:
       expect({ daily: refreshOf(daily), holder: await loginHolder('codex') }).toEqual({ daily: 'refresh-2', holder: undefined });
     });
 
+    it('keeps the login, and says why, while what the killed driver left may still run, until a stop confirms it ended', async () => {
+      const { config, runId, run, attempt, daily } = await killedJudge();
+      const warn = vi.spyOn(log, 'warn').mockImplementation(() => undefined);
+      // A group another pid namespace started, which no stop here can reach or tell ended.
+      const left = path.join(attemptDir(config, run, attempt), 'group-424242.json');
+      fs.writeFileSync(left, JSON.stringify({ pid: 424242, spawnedAt: Date.now(), pidNamespace: 'pid:[1]' }));
+
+      await cancelHere(config, runId, run);
+
+      expect({ daily: refreshOf(daily), holder: await loginHolder('codex') }).toEqual({ daily: 'refresh-1', holder: expect.objectContaining({ run, attempt }) });
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining(`Kept the codex login attempt ${attempt} of run ${run} holds: teamai could not confirm that process 424242, which that attempt left, ended`));
+      fs.rmSync(left);
+
+      // A cancel again of the settled run stops what its cancelled attempts left, as the first did.
+      expect(await takeRunLock(config, run, (lock) => stopCancelledAttempts(config, lock), { waitMs: 0 })).toMatchObject({ kind: 'held' });
+
+      expect({ daily: refreshOf(daily), holder: await loginHolder('codex') }).toEqual({ daily: 'refresh-2', holder: undefined });
+    });
+
     it.skipIf(process.platform === 'win32')('releases the login and says why it was not written back when the member\'s Codex home refuses the write', async () => {
       const { config, runId, run, daily } = await killedJudge();
       const warn = vi.spyOn(log, 'warn').mockImplementation(() => undefined);

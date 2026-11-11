@@ -1,3 +1,4 @@
+import fs from 'node:fs/promises';
 import path from 'node:path';
 import { z } from 'zod';
 import type { StepLaunch } from '@teamai/tool-core/launch';
@@ -194,6 +195,16 @@ async function readResultFile(resultPath: string): Promise<ResultRead> {
   }
 }
 
+/**
+ * Removes the result file an earlier process of the attempt left, such as the tool of a killed driver that wrote one as
+ * it was stopped, so it is never taken for this tool's result. Anything but a regular file stays, and the read refuses it.
+ */
+async function removeLeftResult(resultPath: string): Promise<void> {
+  const left = await fs.lstat(resultPath).catch(() => undefined);
+
+  if (left?.isFile()) await fs.rm(resultPath, { force: true });
+}
+
 /** A failure message a tool wrote, without the step's prompt or the agent's instructions it may quote. */
 export function withoutPrompt(message: string, input: { prompt: string; agent?: { instructions: string } }): string {
   let kept = message;
@@ -251,12 +262,14 @@ function combineResults(fileResult: ResultFile | null, reported: ToolReport | nu
 /**
  * Runs one workflow step on `tool`, whatever starts its process: it builds the argv with the family's `step.args`, meters
  * the budget from stdout and stops the tool at its limits through `start`, reads the result file, and parses stdout for
- * the session, tokens and cost. It never starts a process itself.
+ * the session, tokens and cost. It never starts a process itself. `canReattach` says `start` may attach to the tool an
+ * earlier launch of the attempt began, whose result file is then this launch's.
  */
-export async function runStepLaunch({ tool, input, start, limits = {}, signal, interactive, host }: {
+export async function runStepLaunch({ tool, input, start, canReattach = false, limits = {}, signal, interactive, host }: {
   tool: StepTool;
   input: StepLaunchInput;
   start: ToolLauncher;
+  canReattach?: boolean;
   limits?: StepLimits;
   signal?: AbortSignal | undefined;
   interactive: boolean;
@@ -361,6 +374,7 @@ export async function runStepLaunch({ tool, input, start, limits = {}, signal, i
     active();
   };
 
+  if (!canReattach) await removeLeftResult(input.resultPath);
   const processRun = start({ executable: tool.executable, args, cwd: input.cwd, env, interactive, onStart: started, onStdout });
 
   function stopAt(limit: 'timeout' | 'budget' | 'idle'): void {

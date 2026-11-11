@@ -11,6 +11,7 @@ import type { Session } from '@teamai/tool-core/sessions/ir';
 import { SyncManager, defaultSyncMeta, getRepoIdentity } from '../session-flow/sync.js';
 import { getDataHome, getReportsDir, type LocalConfig, type TeamaiConfig } from '../types.js';
 import { log } from '@teamai/shared/log';
+import * as workflowEngine from '../workflow/engine.js';
 import { leaseNext, reportAttempt } from '../workflow/engine.js';
 import { cancelRun, respondProvenance, respondToHitl, retryStep } from '../workflow/run-controls.js';
 import { type StepLauncher, type StepRunResult, type StepRun } from '@teamai/runtime-tools';
@@ -21,7 +22,6 @@ import type { ExecEnd, StepRuntime } from '@teamai/runtime-protocol/step-runtime
 import type { DriverCan } from '../workflow/requirements.js';
 import { driverIdentity } from '../driver-identity.js';
 import { driverLockPath, readRun } from '../workflow/store.js';
-import * as worktreeSnapshot from '../workflow/place/worktree-snapshot.js';
 import type { DriverIdentity } from '../workflow/types.js';
 import { git } from './helpers/delivered-checkout.js';
 import { knownSecrets, resolveWorkflowEnv } from '../env-resolution.js';
@@ -864,19 +864,14 @@ steps:
   it('masks every result file when the driver stops on an error before it reports', async () => {
     const { config, workspace, runId } = await fixture();
     vi.stubEnv('DEPLOY_TOKEN', 'deploy-secret-value-1082');
-    let ran = false;
-    const snapshot = worktreeSnapshot.snapshotWorktree;
-    vi.spyOn(worktreeSnapshot, 'snapshotWorktree').mockImplementation(async (dir, run) => {
-      if (ran) throw new Error('snapshot failed');
-      return snapshot(dir, run);
-    });
+    // The report of the step fails once its tool ran: the driver stops on that error before the engine took the report.
+    vi.spyOn(workflowEngine, 'reportAttempt').mockRejectedValue(new Error('report failed'));
     const adapter: StepLauncher = { runInteractive: vi.fn(), run: vi.fn<StepLauncher['run']>(async (_tool, input) => {
       fs.mkdirSync(path.dirname(input.resultPath), { recursive: true });
       fs.writeFileSync(input.resultPath, JSON.stringify({ output: { token: 'deploy-secret-value-1082' } }));
-      ran = true;
       return { started: true, exitCode: 0 };
     }) };
-    await expect(runLocalDriver(config, runId, workspace, { hitl: false, adapter })).rejects.toThrow('snapshot failed');
+    await expect(runLocalDriver(config, runId, workspace, { hitl: false, adapter })).rejects.toThrow('report failed');
     vi.unstubAllEnvs();
     expect(keptResult(config, runId)).toContain('<REDACTED:DEPLOY_TOKEN>');
     expect(keptResult(config, runId)).not.toContain('deploy-secret-value-1082');

@@ -44,6 +44,9 @@ const TOOL_NAMES = { codex: 'Codex' } as const satisfies Record<LoginTool, strin
 /** How a waiting attempt checks the lock again. */
 const WAIT_POLL_MS = 500;
 
+/** How a release checks again for another release of the same login to finish. */
+const RELEASE_POLL_MS = 20;
+
 /** The file of a `tool` home that holds its login, which only `holdLogin` puts in a tool home, or undefined for a tool teamai keeps no login of. */
 export function loginFileOf(tool: string): string | undefined {
   const login = LOGIN_TOOLS.find((one) => one === tool);
@@ -237,7 +240,9 @@ export async function holdLogin({ tool, run, attempt, toolHome, from = dedicated
 
       await fs.mkdir(toolHome, { recursive: true });
       await writeRegularFile(path.join(toolHome, LOGIN_FILES[tool]), body, { mode: 0o600 });
-      await placeLock(tool, { ...lock, copied: sha256(body), toolHome }, { replace: true });
+
+      // An end of this attempt may have freed the lock meanwhile, and another attempt taken it: then this one waits again.
+      if (!await replaceOwnLock(tool, lock, { ...lock, copied: sha256(body), toolHome })) continue;
 
       return { ok: true };
     }
@@ -320,11 +325,49 @@ async function signInHeld(tool: LoginTool, { step, canAsk }: Parameters<typeof e
   return { code: 'credential_missing', message: `${loginCommand(tool)} ended with status ${ended.code} and left no login in ${file}, so the step did not run. Run it again, then run: ${retry}` };
 }
 
+/**
+ * The lock a release of `tool`'s login holds while it reads the login lock and removes it, and a hold while it reads the
+ * lock it took and replaces it. Only a release removes the login lock, a take only creates one where none is, and a hold
+ * replaces only its own, so none of them removes or replaces a lock another attempt took after it read, though two ends
+ * of one attempt race each other and its hold. A dead holder's lock is reclaimed (`acquireLock`).
+ */
+function releaseLockFile(tool: LoginTool): string {
+  return path.join(path.dirname(loginHome(tool)), `${tool}-release.lock`);
+}
+
+/** Runs `change`, one read of `tool`'s login lock and one remove or replace of it, under the release lock. */
+async function underReleaseLock<T>(tool: LoginTool, change: () => Promise<T>): Promise<T> {
+  const lock = releaseLockFile(tool);
+
+  // Held for one read and one write, so a wait is short.
+  while (!await acquireLock(lock)) await new Promise((resolve) => setTimeout(resolve, RELEASE_POLL_MS));
+
+  try {
+    return await change();
+  } finally {
+    await releaseLock(lock);
+  }
+}
+
 /** Releases `tool`'s login if attempt `attempt` of run `run` holds it. */
 async function releaseLogin(tool: LoginTool, { run, attempt }: { run: RunId; attempt: AttemptId }): Promise<void> {
-  const holder = await loginHolder(tool);
+  await underReleaseLock(tool, async () => {
+    const holder = await loginHolder(tool);
 
-  if (holder?.run === run && holder.attempt === attempt) await fs.rm(loginLockFile(tool), { force: true });
+    if (holder?.run === run && holder.attempt === attempt) await fs.rm(loginLockFile(tool), { force: true });
+  });
+}
+
+/** Replaces `tool`'s login lock with `next` if it still is `taken`, the take of a hold. Whether it did. */
+async function replaceOwnLock(tool: LoginTool, taken: LoginLock, next: LoginLock): Promise<boolean> {
+  return underReleaseLock(tool, async () => {
+    const holder = await loginHolder(tool);
+
+    if (holder?.run !== taken.run || holder.attempt !== taken.attempt || holder.takenAt !== taken.takenAt) return false;
+    await placeLock(tool, next, { replace: true });
+
+    return true;
+  });
 }
 
 /**

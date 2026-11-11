@@ -13,10 +13,8 @@ import { SessionWork, type SessionScorer } from './session-flow/session-work.js'
 import { markFacts } from './scorers/score-plan.js';
 import type { LocalConfig, SessionShareOffered } from './types.js';
 import { WorkflowOffers } from './workflow-offers.js';
+import { DefaultWorkflows } from './default-workflows.js';
 import type { OutputSchema } from './workflow/types.js';
-
-/** teamai's default that shares what a session taught, then the session: the one the friction reminder offers. */
-const SHARE_LEARNINGS = 'teamai-share-learnings';
 
 /** A value teamai proposes for one input, and why it proposes that value. */
 interface Proposal<T> {
@@ -144,7 +142,7 @@ async function reminderOffer(
   { tool, sessionId, cwd, run }: { tool: string; sessionId: string; cwd: string; run: SessionRun },
   options: OfferOptions = {},
 ): Promise<SessionShareOffered | undefined> {
-  const startConfig = await WorkflowOffers.offerable(config, SHARE_LEARNINGS, { sessionId, cwd, run });
+  const startConfig = await WorkflowOffers.offerable(config, DefaultWorkflows.SHARE_LEARNINGS, { sessionId, cwd, run });
 
   if (startConfig === undefined) return undefined;
   const { publish, scorers } = await propose(startConfig, { tool, sessionId }, options);
@@ -186,4 +184,4 @@ async function proposals(
   return Object.fromEntries(matching.map((input) => [input, proposed[input]]));
 }
 
-export const SessionShare = { SHARE_LEARNINGS, offer, reminderOffer, proposals } as const;
+export const SessionShare = { offer, reminderOffer, proposals } as const;

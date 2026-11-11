@@ -6,7 +6,7 @@ import type { RuleFormatId } from '@teamai/tool-core/definition';
 import type { SessionPlatformFacts } from '@teamai/tool-core/sessions/platform';
 import { isSessionPlatform, SESSION_PLATFORM_FACTS, sessionPlatformFacts, type SessionPlatform } from './session-flow/adapters/platform-facts.js';
 import type { JsonSyntax } from '@teamai/shared/json';
-import { TOOLS, type AgentToolId, type ToolId, type ShippedDescriptor } from './tools.js';
+import { STEP_LAUNCH_ADAPTERS, TOOLS, type AgentToolId, type ToolId, type ShippedDescriptor } from './tools.js';
 import { type HookFormat, type InstallGate, type RuleFolderReach, type RunTimeVia } from '@teamai/tool-core/definition';
 
 /**
@@ -54,6 +54,13 @@ export const toolOf: (name: string) => ResolvedTool<ToolId, ResolvedToolInstance
  */
 export function baseToolOf(name: string): string {
   return toolOf(name)?.base ?? name;
+}
+
+/** Whether `name` names a tool a workflow step runs, or an instance of one: its `launch` names a STEP_LAUNCH_ADAPTERS adapter. */
+export function runsSteps(name: string): boolean {
+  const base = toolOf(name)?.base;
+
+  return base !== undefined && STEP_LAUNCH_ADAPTERS.some((adapter) => adapter === descriptorOf(base).launch);
 }
 
 /** The instance whose own session platform `platform` is, and the shipped platform its sessions keep the format of. */
@@ -129,6 +136,11 @@ export const sessionPlatformOwner: (platform: string) => string | undefined = RE
 /** The session platform that holds `tool`'s sessions: the first its `sessions` lists, else `tool` when it names one; undefined for a tool teamai reads no sessions of. */
 export function platformForTool(tool: string): string | undefined {
   return sessionPlatformsOf(tool)[0] ?? (isSessionPlatform(tool) ? tool : undefined);
+}
+
+/** The tools of `tools` teamai reads no sessions from, in their order: their sessions are never captured, published or judged. */
+export function toolsWithoutSessions(tools: readonly string[]): string[] {
+  return tools.filter((tool) => platformForTool(tool) === undefined);
 }
 
 /** The facts of `platform`: a shipped platform's, or for an instance's own, those of the platform whose format it keeps. */

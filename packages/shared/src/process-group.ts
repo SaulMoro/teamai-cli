@@ -418,25 +418,41 @@ function writeGroup(file: string, body: string): void {
 }
 
 /**
- * Stops every process group, and every attached command with its descendants, recorded in `dir`, and removes the
- * records, but those another pid namespace wrote. A setup and the command of one attempt each start one there, and a
- * stop of the attempt has to reach both.
+ * How a stop of a recorded group or command ended: it stopped it, found it ended, or could not tell whether it still
+ * runs. Windows has none to reach.
  */
-export async function stopRecordedGroup(dir: string): Promise<void> {
+type StopEnd = 'stopped' | 'gone' | 'unconfirmed' | 'unreachable';
+
+/**
+ * Stops every process group, and every attached command with its descendants, recorded in `dir`, and removes the
+ * records. A setup and the command of one attempt each start one there, and a stop of the attempt has to reach both.
+ * Returns the pid of each it could not confirm ended, whose record stays for a later stop: one another pid namespace
+ * started, and one running here that it cannot tell from a later process given its pid. On Windows, where it stops
+ * nothing, none: no stop there would ever confirm one.
+ */
+export async function stopRecordedGroup(dir: string): Promise<number[]> {
   // A record this process is still completing is finished first, so the stop removes it rather than racing its write.
   await pendingStarts.get(path.resolve(dir));
   const namespace = await namespaceHere();
+  const left = new Set<number>();
 
   for (const file of await recordedGroups(dir)) {
     const recorded = await readGroup(file);
 
-    // A pid recorded in another pid namespace names another process here: the record is left for a stop there.
-    if (recorded !== undefined && isOtherPidNamespace(recorded.pidNamespace, namespace)) continue;
+    if (recorded !== undefined) {
+      // A pid recorded in another pid namespace names another process here: the record is left for a stop there.
+      const ended = isOtherPidNamespace(recorded.pidNamespace, namespace) ? 'unconfirmed' : recorded.tree ? await stopTree(recorded) : await endGroup(recorded);
 
-    if (recorded?.tree) await stopTree(recorded);
-    else if (recorded !== undefined) await stopGroup(recorded);
+      if (ended === 'unconfirmed') {
+        left.add(recorded.pid);
+        continue;
+      }
+    }
+
     await fs.promises.rm(file, { force: true });
   }
+
+  return [...left];
 }
 
 /** The files in `dir` that record a process group: one per group, and the one a teamai before #1523 wrote. */
@@ -479,12 +495,23 @@ function signalGroup(pid: number, name: NodeJS.Signals | 0): boolean {
  * it signalled the group. POSIX only: Windows has no process groups to reach.
  */
 export async function stopGroup(group: Recorded): Promise<boolean> {
-  if (process.platform === 'win32' || !signalGroup(group.pid, 0)) return false;
+  return await endGroup(group) === 'stopped';
+}
+
+async function endGroup(group: Recorded): Promise<StopEnd> {
+  if (process.platform === 'win32') return 'unreachable';
+
+  if (!signalGroup(group.pid, 0)) return 'gone';
   const running = await runningProcesses();
-  const leader = running?.get(group.pid);
 
   // Without current identities, a pid reused since cannot be told apart, so the group is left alone.
-  if (!running || (leader !== undefined && verdictOf(group, leader.start, await namespaceHere()) !== 'same')) return false;
+  if (!running) return 'unconfirmed';
+  const leader = running.get(group.pid);
+  const verdict = leader === undefined ? 'same' : verdictOf(group, leader.start, await namespaceHere());
+
+  if (verdict === 'other') return 'gone';
+
+  if (verdict !== 'same') return 'unconfirmed';
   signalGroup(group.pid, 'SIGTERM');
 
   // Counted rather than timed, so a faked clock cannot stretch the grace period.
@@ -497,7 +524,7 @@ export async function stopGroup(group: Recorded): Promise<boolean> {
     await new Promise<void>((resolve) => setTimeout(resolve, 50));
   }
 
-  return true;
+  return 'stopped';
 }
 
 /**
@@ -583,19 +610,31 @@ async function descendantsOf(pid: number): Promise<FoundProcess[]> {
  * alone, as `stopGroup` leaves a group. Then the group it shared with the starter that led it, once that leader is
  * gone, which reaches what the command's shell left after it died. POSIX only.
  */
-async function stopTree(recorded: Recorded & { tree: true }): Promise<void> {
-  if (process.platform === 'win32') return;
-  await stopRecordedTree(recorded);
+async function stopTree(recorded: Recorded & { tree: true }): Promise<StopEnd> {
+  if (process.platform === 'win32') return 'unreachable';
+  const ended = await stopRecordedTree(recorded);
 
   if (recorded.starterGroup !== undefined) await stopLeftStarterGroup(recorded, recorded.starterGroup);
+
+  return ended;
 }
 
 /** Stops the attached command `recorded` names and the processes it started that still descend from it. */
-async function stopRecordedTree(recorded: Recorded): Promise<void> {
-  const rootStart = (await runningProcesses())?.get(recorded.pid)?.start;
+async function stopRecordedTree(recorded: Recorded): Promise<StopEnd> {
+  const running = await runningProcesses();
 
-  if (rootStart === undefined || verdictOf(recorded, rootStart, await namespaceHere()) !== 'same') return;
+  if (running === undefined) return 'unconfirmed';
+  const rootStart = running.get(recorded.pid)?.start;
+
+  if (rootStart === undefined) return 'gone';
+  const verdict = verdictOf(recorded, rootStart, await namespaceHere());
+
+  if (verdict === 'other') return 'gone';
+
+  if (verdict !== 'same') return 'unconfirmed';
   await endProcesses([...await descendantsOf(recorded.pid), { pid: recorded.pid, start: rootStart }]);
+
+  return 'stopped';
 }
 
 /** Stops each process of `found` that still runs as found, with a five-second grace period before SIGKILL. */

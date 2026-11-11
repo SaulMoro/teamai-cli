@@ -91,12 +91,14 @@ export function hostProcess(spawnTool: ToolSpawn = spawnCommand): ToolLauncher {
  * The launcher over `start`, whatever starts the tool's process: it finds the tool's executable, then runs the step's
  * launch through `start`. `resolveTool` finds the executable, and `resolveInstanceCommand` a tool instance's command,
  * which comes from a config file, so only the PATH directories may hold it; each says when it is missing.
+ * `canReattach` is the launch's (`runStepLaunch`).
  */
 export function stepLauncher(deps: StepLaunchDeps, {
   start = hostProcess(),
+  canReattach = false,
   resolveTool = resolveCliPath,
   resolveInstanceCommand = resolvePathCommand,
-}: { start?: ToolLauncher; resolveTool?: ToolResolve; resolveInstanceCommand?: ToolResolve } = {}): StepLauncher {
+}: { start?: ToolLauncher; canReattach?: boolean; resolveTool?: ToolResolve; resolveInstanceCommand?: ToolResolve } = {}): StepLauncher {
   const launch = async (tool: string, input: StepRun, signal: AbortSignal | undefined, interactive: boolean): Promise<StepRunResult> => {
     const profile = deps.stepTool(tool);
 
@@ -120,6 +122,7 @@ export function stepLauncher(deps: StepLaunchDeps, {
       tool: { name: tool, family: profile.family, step: profile.step, executable },
       input: run,
       start,
+      canReattach,
       limits: { budget, timeoutMs, idleTimeoutMs },
       signal,
       interactive,

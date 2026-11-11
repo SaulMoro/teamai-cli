@@ -491,6 +491,19 @@ export function conversations(state: ProcessState, { ensureProvider }: { ensureP
   }
 
   /**
+   * The turn sent to an earlier prompt's agent: `prompt`, after this step's workflow folder when that agent's shell names
+   * another, as a step of a named child workflow that goes on from the step beside its enclosing one finds it.
+   */
+  function goingOn(earlier: AgentCreate, wanted: AgentCreate, prompt: string): string {
+    const folder = wanted.env?.[WORKFLOW_DIR_ENV];
+
+    if (earlier.env?.[WORKFLOW_DIR_ENV] === folder) return prompt;
+    const named = folder === undefined ? 'this step has no workflow folder' : `this step's workflow folder is ${folder}`;
+
+    return `This agent goes on from an earlier step, so its shell's ${WORKFLOW_DIR_ENV} is that step's: ${named}.\n\n${prompt}`;
+  }
+
+  /**
    * The agent Paseo imports for session `session`, which a new prompt's lease resumes, set to run as `create` would, and
    * the turn it is sent; or why it was not imported, for the notice. Paseo imports a session it does not hold all the
    * same and fails its first turn, so only one it lists in the place's directory is imported. An import runs nothing
@@ -600,7 +613,7 @@ export function conversations(state: ProcessState, { ensureProvider }: { ensureP
 
     // A turn of the earlier agent: Paseo already shows it, and its create stays the earlier prompt's.
     const record: AgentPrompt = earlier && continued && !('why' in continued)
-      ? { ...base, create: continued.create, dispatched: 'confirmed', turn: { prompt: how.prompt, of: { op: earlier.op } } }
+      ? { ...base, create: continued.create, dispatched: 'confirmed', turn: { prompt: goingOn(continued.create, create, how.prompt), of: { op: earlier.op } } }
       : resumed && !('why' in resumed)
         ? { ...base, create: resumed.create, dispatched: 'confirmed', turn: resumed.turn }
         : { ...base, create };

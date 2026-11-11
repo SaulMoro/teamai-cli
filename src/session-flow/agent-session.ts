@@ -16,7 +16,7 @@ import { resolveMemberToolRoots } from '../config.js';
 import { getTeamaiHomeDir, type LocalConfig } from '../types.js';
 import { acquireLock, releaseLock } from '../update.js';
 import { adapterAt, listAvailablePlatforms, listInstalledPlatforms, storeDirOf } from './adapters/index.js';
-import { platformFactsOf, platformForTool, toolForPlatform } from '../tool-registry.js';
+import { platformFactsOf, platformForTool, toolForPlatform, toolsWithoutSessions } from '../tool-registry.js';
 import { ToolUnavailableError, type AgentAdapter, type SessionMeta, type SubagentsRead } from '@teamai/tool-core/sessions/base';
 import { imagePlaceholderText, type ContentBlock, type Message, type Session } from '@teamai/tool-core/sessions/ir';
 import { deriveTargetSessionId, legacyTargetSessionIds } from '@teamai/tool-core/sessions/ids';
@@ -586,11 +586,6 @@ function transcript(session: Session): AgentSessionTranscriptEntry[] {
 
     return message.timestamp ? { role: message.role, timestamp: message.timestamp, text, toolOutput } : { role: message.role, text, toolOutput };
   });
-}
-
-/** The tools of `tools` teamai reads no sessions from, in their order: their sessions are never captured, published or judged. */
-function toolsWithoutSessions(tools: readonly string[]): string[] {
-  return tools.filter((tool) => platformForTool(tool) === undefined);
 }
 
 /** One string per session, for a set or a map keyed by session. */

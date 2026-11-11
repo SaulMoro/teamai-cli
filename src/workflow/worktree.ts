@@ -81,7 +81,7 @@ export const GIT_STOPPED = 124;
  * What git said to a question it answers with its exit code (`merge-base --is-ancestor`, `cat-file -e`, `diff --quiet`,
  * `show-ref --quiet`, `check-ignore -q`, `rev-parse --verify --quiet`, `symbolic-ref --quiet`): yes at exit 0, with what
  * it printed; no at any other exit of a git that ran, whose code tells a plain no (1) from a git that failed (128); and
- * nothing when git did not start, which is no answer, never a no.
+ * nothing when git did not start, or the macOS stub ran in its place, which is no answer, never a no.
  */
 export type GitAnswer = { readonly said: 'yes' | 'no' | 'nothing'; readonly result: GitResult };
 
@@ -102,11 +102,15 @@ export function stoppedGit(why: string, stderr: string): GitResult {
   return { code: GIT_STOPPED, stdout: '', stderr: `git was stopped before it answered: ${why}.${stderr.trim() ? ` ${stderr.trim()}` : ''}` };
 }
 
+// On macOS without the Command Line Tools, /usr/bin/git is a stub that runs no git: it says why on stderr and exits 1.
+const GIT_STUB_REFUSAL = /^(xcode-select: note: |xcrun: error: )/m;
+
 /** Reads `result`, git's exit to a question it answers with its exit code, as its answer (`GitAnswer`). */
 export function gitAnswer(result: GitResult): GitAnswer {
   if (result.code === 0) return { said: 'yes', result };
+  const isUnanswered = result.code === GIT_NOT_STARTED || result.code === GIT_STOPPED || GIT_STUB_REFUSAL.test(result.stderr);
 
-  return { said: result.code === GIT_NOT_STARTED || result.code === GIT_STOPPED ? 'nothing' : 'no', result };
+  return { said: isUnanswered ? 'nothing' : 'no', result };
 }
 
 /** The error a caller raises when git did not answer `question`, with the cause git gave. */

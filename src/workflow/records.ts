@@ -23,7 +23,7 @@ import { parseJson, isJsonObject, type JsonValue } from '@teamai/shared/json';
 import { log } from '@teamai/shared/log';
 import { redactJson } from '@teamai/shared/redact';
 import { acquireLock, releaseLock } from '../update.js';
-import { launchTargetOf } from '../launch-registry.js';
+import { runsSteps } from '../tool-registry.js';
 import type { RunMode } from '../launch-context.js';
 import type { RunOrigin } from '../default-workflows.js';
 import { uniqueOutcomes, type WorkOutcome } from '../outcomes.js';
@@ -243,7 +243,7 @@ export function buildEndRecord(
       answer: reported?.answer ? { choice: reported.answer.choice, channel: reported.answer.channel, agent: reported.answer.agent } : undefined,
       pass: pass ?? 1,
       agent,
-      tool: reported?.tool && launchTargetOf(reported.tool) ? reported.tool : undefined,
+      tool: reported?.tool && runsSteps(reported.tool) ? reported.tool : undefined,
       model: reported?.model && isRecordableName(reported.model) ? reported.model : undefined,
       outcome: outcome || undefined,
       tokens: reported?.tokens || undefined,

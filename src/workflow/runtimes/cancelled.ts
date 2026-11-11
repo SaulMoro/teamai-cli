@@ -50,13 +50,14 @@ export async function stopCancelledAttempts(config: LocalConfig, lock: RunLock, 
   });
 
   const runnerOwned = new Set<AttemptId>();
+  const keptLogins = new Set<AttemptId>();
 
   // What a killed driver of this install started for a cancelled attempt, which its record reaches, and the login one
   // in teamai's process held, written back; what one runs on a step runtime, the fleet's member included, its runtime
   // stops below.
   for (const attempt of cancelled) {
     if (!await runnerAlive(config, run, attempt)) {
-      await stopLeftInProcess(config, run, attempt);
+      if (await stopLeftInProcess(config, run, attempt) === 'kept') keptLogins.add(attempt);
       continue;
     }
 
@@ -91,6 +92,9 @@ export async function stopCancelledAttempts(config: LocalConfig, lock: RunLock, 
     const holder = await loginHolder(tool);
 
     if (holder?.run !== run || runnerOwned.has(holder.attempt) || leased.has(holder.attempt)) continue;
+
+    // The person checked that nothing of a released attempt still runs.
+    if (keptLogins.has(holder.attempt) && holder.attempt !== release) continue;
 
     if (stillRunning.has(holder.attempt)) {
       log.warn(`The ${tool} login teamai keeps stays held by attempt ${holder.attempt} of run ${run}, whose tool may still run. Stop that tool on its step runtime, then run teamai workflow cancel ${run} --release ${holder.attempt}, which lets the attempt go and ends its login.`);
@@ -141,15 +145,32 @@ const RELEASE = { release: true } as const;
 
 /**
  * Stops what a killed teamai left running of attempt `attempt` in its own process, then writes back and releases the
- * logins it held, as a Codex judge holds one: nothing of it runs any more to use them. One on a step runtime keeps its
- * login until that runtime closes its place (`stopOnRecordedDriver`).
+ * logins it held, as a Codex judge holds one: nothing of it runs any more to use them. While a process it left may still
+ * run, it keeps them, says so, and answers `kept`; a later stop ends them. One on a step runtime keeps its login until
+ * that runtime closes its place (`stopOnRecordedDriver`), and answers `on_runtime`.
  */
-export async function stopLeftInProcess(config: LocalConfig, run: RunId, attempt: AttemptId): Promise<void> {
-  await stopRecordedGroup(attemptDir(config, run, attempt));
+export async function stopLeftInProcess(config: LocalConfig, run: RunId, attempt: AttemptId): Promise<'ended' | 'kept' | 'on_runtime'> {
+  const left = await stopRecordedGroup(attemptDir(config, run, attempt));
   const placement = await readAttemptPlacement(config, run, attempt);
 
-  if (placement.kind !== 'in_process' && placement.kind !== 'unrecorded') return;
-  await endLeftLogins(config, run, attempt);
+  if (placement.kind !== 'in_process' && placement.kind !== 'unrecorded') return 'on_runtime';
+
+  if (left.length === 0) {
+    await endLeftLogins(config, run, attempt);
+
+    return 'ended';
+  }
+
+  for (const tool of LOGIN_TOOLS) {
+    const holder = await loginHolder(tool);
+
+    if (holder?.run !== run || holder.attempt !== attempt) continue;
+    log.warn(`Kept the ${tool} login attempt ${attempt} of run ${run} holds: teamai could not confirm that process ${left.join(', ')}, which that attempt left, ended, `
+      + `so its ${tool} may still use the login. Once that process has ended, the next resume or cancel of the run releases the login; `
+      + `if teamai still cannot tell, teamai workflow cancel ${run} --release ${attempt} lets it go.`);
+  }
+
+  return 'kept';
 }
 
 /**

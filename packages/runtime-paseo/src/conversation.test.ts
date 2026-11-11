@@ -5,7 +5,7 @@ import { OpIdSchema, type PromptLeaseSchema, type RuntimeMessage } from '@teamai
 import { z } from 'zod';
 import { describe, expect, it } from 'vitest';
 import { agentIdOf } from './conversation.js';
-import { restartDaemon, dir, worktree, daemonState, daemon, RUN, ATTEMPT, behave, received, stopped, start, isOp, isEnd, ready, opened, openRequest, createdAgent, agentsOf, delay, worktreeWorkspace, promptRequest, useRuntimeSuite } from './testing/suite.js';
+import { restartDaemon, dir, worktree, daemonState, daemon, RUN, ATTEMPT, behave, received, stopped, start, isOp, isEnd, ready, opened, openRequest, createdAgent, agentsOf, delay, until, waitedOn, worktreeWorkspace, promptRequest, useRuntimeSuite } from './testing/suite.js';
 
 describe('the agent id a prompt gets', () => {
   it('is a version 4 UUID that its op alone decides, so a runtime started again finds the same agent', () => {
@@ -821,7 +821,8 @@ describe('teamai-runtime-paseo', () => {
     const runtime = start();
     await ready(runtime);
     runtime.send(promptRequest(await opened(runtime), 'op-0000000b'));
-    await runtime.next(isOp('op-0000000b', 'display'));
+    // Its follow read the record before it waits for the agent; a record broken before that read ends the prompt then.
+    await until(() => waitedOn(agentIdOf(OpIdSchema.parse('op-0000000b'))));
     fs.writeFileSync(path.join(dir, 'home', '.teamai', 'runtime-state', 'paseo', 'ops', 'op-0000000b.json'), '{not json');
 
     runtime.send({ type: 'cancel', op: 'op-0000000b' });
@@ -1157,6 +1158,30 @@ describe('a prompt that continues an earlier prompt\'s conversation', () => {
     expect(creates()).toHaveLength(1);
     expect(received().filter((request) => request.type === 'send_agent_message_request')).toEqual([expect.objectContaining({ agentId: agent, text: expect.stringContaining('Fix what the review found.') })]);
     expect(noticesOf(runtime, 'op-0000000d')).toEqual([]);
+  });
+
+  // A step of a named child workflow may go on from the step beside its enclosing one, and each has its own workflow folder.
+  it('names this step\'s workflow folder in the turn when the earlier agent\'s shell has another one', async () => {
+    behave({ output: { verdict: 'request-changes' } });
+    const runtime = start();
+    await ready(runtime);
+    const review = await opened(runtime);
+    const [parentFolder, childFolder] = [path.join(dir, 'folders', 'a'.repeat(64)), path.join(dir, 'folders', 'b'.repeat(64))];
+    const first = promptRequest(review, 'op-0000000b');
+    runtime.send({ ...first, env: { ...first.env, TEAMAI_WORKFLOW_DIR: parentFolder } });
+    expect(await runtime.next(isEnd('op-0000000b'))).toMatchObject({ event: 'finished' });
+    const agent = createdAgent('op-0000000b');
+    const fix = await opened(runtime, { attempt: 'a0123abce', op: 'op-0000000c' });
+
+    behave({ output: { fixed: true } });
+    const later = fixing(fix, 'op-0000000d', review, 'op-0000000b');
+    runtime.send({ ...later, env: { ...later.env, TEAMAI_WORKFLOW_DIR: childFolder } });
+
+    expect(await runtime.next(isEnd('op-0000000d'))).toMatchObject({ event: 'finished', result: { output: { fixed: true } }, resumed: true });
+    expect(received().filter((request) => request.type === 'send_agent_message_request')).toEqual([expect.objectContaining({
+      agentId: agent,
+      text: `This agent goes on from an earlier step, so its shell's TEAMAI_WORKFLOW_DIR is that step's: this step's workflow folder is ${childFolder}.\n\n${String(later.lease.prompt)}`,
+    })]);
   });
 
   it('allows the continued agent to write the later step\'s result file, which its create did not allow, as a new agent would be allowed, and nothing else', async () => {
