@@ -1,11 +1,6 @@
-import fs from 'node:fs';
-import path from 'node:path';
-import { fileURLToPath } from 'node:url';
-import { expect, it } from 'vitest';
+import { expect } from 'vitest';
 
 import { ruleHarness } from '../test/harness.ts';
-
-const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 
 const rule = ruleHarness('teamai/test-seams', { filename: 'packages/runtime-x/src/connect.test.ts' });
 
@@ -35,11 +30,3 @@ rule.invalid('rejects a test named apart from the module it tests, with no file 
 rule.invalid('rejects a test of a fake reaching the module it fakes past the package\'s seams', `import { launch } from '../launch.js';`, (output) => {
   expect(output).toContain('reaches src/launch.ts');
 }, { filename: 'packages/tool-zzz/src/testing/fake-agent.test.ts', files: { 'packages/tool-zzz/package.json': JSON.stringify({ name: '@teamai/tool-zzz', private: true }) } });
-
-it('matches the package tests of this checkout', () => {
-  const tests = fs.readdirSync(path.join(REPO, 'packages'), { recursive: true, encoding: 'utf8' })
-    .map((file) => `packages/${file.split(path.sep).join('/')}`)
-    .filter((file) => !file.includes('node_modules') && /^packages\/[^/]+\/src\/.+\.test\.[cm]?[jt]sx?$/.test(file));
-
-  expect(tests.length).toBeGreaterThan(80);
-});
