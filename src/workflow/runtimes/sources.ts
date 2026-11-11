@@ -114,15 +114,12 @@ export async function locateRuntime(driver: ResolvedDriver, use: string): Promis
 
   if (team.kind === 'found' && linked !== undefined) {
     const relative = path.relative(getKnowledgeDir(driver.config), team.at).split(path.sep).join('/');
-    const where = linked === relative ? 'is a link' : `is reached through the link ${linked}`;
 
-    return {
-      ok: false,
-      failure: {
-        code: 'runtime_not_found',
-        message: `Driver "${driver.name}" uses runtime "${use}", whose folder ${relative} in the team repo ${where}, and teamai runs a team runtime only from a folder the team repo holds. Replace the link with the folder, push it, run teamai pull, and start again.`,
-      },
-    };
+    const message = linked === relative
+      ? `Driver "${driver.name}" uses runtime "${use}", whose folder ${relative} in the team repo is a link, and teamai runs a team runtime only from a folder the team repo holds. Replace the link with the folder, push it, run teamai pull, and start again.`
+      : `Driver "${driver.name}" uses runtime "${use}", whose folder ${relative} in the team repo is reached through the link ${linked}, and teamai runs a team runtime only from a folder the team repo holds. Replace the link with the folder, push it, run teamai pull, and start again.`;
+
+    return { ok: false, failure: { code: 'runtime_not_found', message } };
   }
 
   const link = team.kind === 'found' ? await firstLink(team.at) : undefined;
