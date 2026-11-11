@@ -38,6 +38,7 @@ import { setTimeout as sleep } from 'node:timers/promises';
 import { z } from 'zod';
 import { commandOutputs } from '../protocol.js';
 import { parseStepPath } from '../step-path.js';
+import { attemptEnv } from '../attempt-marker.js';
 import { attemptDir, attemptOutDir, attemptResultPath, readRun, RunIdSchema, runScratchDir, takeRunLock, type AttemptId, type RunId, type RunLock } from '../store.js';
 import { isWorkflowFile, stepWorkflow, workflowRunBy, type RunState, type WorkflowDefinition, type WorkflowEnvelope, type WorkflowFailure, type WorkflowStep } from '../types.js';
 import { envAdvice, envScopeOf, lackedLabels, lacksTool, mergeRequirements, requiredEnvKeys, type EnvScope, type InEffect, type TurnLimits } from '../requirements.js';
@@ -561,14 +562,19 @@ async function runClaim(config: LocalConfig, { lock, claim, root, secrets, membe
     }
   };
 
+  // A command step gets what the local driver gives it: the run's folder, made here for the attempt, its marker and the run mode.
+  const marked = ready.kind === 'command' ? attemptEnv(config, run, attempt, resolveRunMode(process.env)) : {};
+
+  if (ready.kind === 'command') await fs.mkdir(runScratchDir(config, run), { recursive: true });
+
   try {
     const command = ready.kind === 'workflow'
       ? workflowRun(config, { claim, trusted: ready, place: place.workflow ?? { kind: 'here' }, work, from, secrets, ask: askOwner, ...(spent && { spent }) })
       : ready.kind === 'prompt'
       ? promptRun(config, { lock, claim, trusted: ready, place: place.prompt ?? { kind: 'here' }, work, root, secrets })
       : commandRun(place.command?.kind === 'runtime'
-        ? runtimeCommand(config, { run, attempt, place: place.command, work, command: ready.command, env: { ...providedEnv(ready.scoped), ...ready.env }, unset: ready.scoped.scope?.withhold ?? [] })
-        : startGroupedCommand({ command: ready.command, cwd: work, env: { ...ready.scoped.env, ...ready.env }, detached: process.platform !== 'win32', group: dir }));
+        ? runtimeCommand(config, { run, attempt, place: place.command, work, command: ready.command, env: { ...providedEnv(ready.scoped), ...ready.env, ...marked }, unset: ready.scoped.scope?.withhold ?? [] })
+        : startGroupedCommand({ command: ready.command, cwd: work, env: { ...ready.scoped.env, ...ready.env, ...marked }, detached: process.platform !== 'win32', group: dir }));
 
     stopCommand = command.stop;
 
@@ -610,7 +616,8 @@ async function runClaim(config: LocalConfig, { lock, claim, root, secrets, membe
     // A restarted member goes on from work its killed run pushed, which is the step's work even when this run adds none.
     return finish(saved.to === claim.start ? ran : { ...ran, to: saved.to });
   } finally {
-    await fs.rm(work, { recursive: true, force: true });
+    // The run's folder here serves this attempt alone: the run lock keeps another of the run from sharing it.
+    await Promise.all([fs.rm(work, { recursive: true, force: true }), fs.rm(runScratchDir(config, run), { recursive: true, force: true })]);
   }
 }
 

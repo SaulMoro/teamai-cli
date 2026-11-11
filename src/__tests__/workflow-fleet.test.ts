@@ -561,7 +561,36 @@ describe('a member taking an attempt', () => {
     expect(record).toMatchObject({ state: 'finished', result: { exitCode: 0, to: expect.any(String) } });
   });
 
-  it('runs the step on the step runtime of the member\'s own driver, with the step\'s env alone, and pushes what it wrote there', async () => {
+  it('gives the command the run\'s folder, the attempt\'s marker and the member\'s run mode, as the local driver does', async () => {
+    vi.stubEnv('TEAMAI_MODE', 'unattended');
+    const seen = 'printf "%s\\n" "$TEAMAI_WORKFLOW_ATTEMPT" "$TEAMAI_MODE" "$TEAMAI_RUN_DIR" > seen.txt; test -d "$TEAMAI_RUN_DIR" && echo made > "$TEAMAI_RUN_DIR/handed.txt"';
+    const workflow = `schemaVersion: v1alpha1
+name: mark
+description: Writes what its env holds.
+inputs: { mark: string }
+steps:
+  - id: write
+    workspace: new
+    command: '${seen}'
+`;
+
+    const { record, alice } = await takeForged((forged) => {
+      forged.lease = { kind: 'command', step: 'write', command: seen, env: {} };
+    }, undefined, workflow);
+
+    vi.unstubAllEnvs();
+    expect(record).toMatchObject({ state: 'finished', result: { exitCode: 0 } });
+    const to = record?.state === 'finished' ? record.result.to ?? '' : '';
+    git(alice.checkout, 'fetch', '-q', 'origin', to);
+    const [attempt, mode, runDir] = git(alice.checkout, 'show', `${to}:seen.txt`).split('\n');
+    expect(attempt).toMatch(new RegExp(`^r[0-9a-f]+/${ATTEMPT}$`));
+    expect(mode).toBe('unattended');
+    expect(runDir).toMatch(new RegExp(`/runs/${attempt?.split('/')[0] ?? ''}/scratch$`));
+    // The folder served this attempt alone, and is gone once it ended.
+    expect(fs.existsSync(runDir ?? '')).toBe(false);
+  });
+
+  it('runs the step on the step runtime of the member\'s own driver, with the step\'s env and the attempt\'s marker alone, and pushes what it wrote there', async () => {
     const local = hostStepRuntime();
     const execs: Array<{ argv: string[]; env: Record<string, string>; cwd: string }> = [];
     const runtime: StepRuntime<DriverCan> = { ...local, exec: (request, events, kind) => {
@@ -573,7 +602,7 @@ describe('a member taking an attempt', () => {
     const { taken, record, alice } = await takeForged(() => undefined, undefined, MARK, { command: { kind: 'runtime', driver: 'bobs', use: 'box', runtime } });
 
     expect(taken).toMatchObject({ data: { ran: { step: 'write', exit_code: 0 } } });
-    expect(execs).toEqual([{ argv: expect.arrayContaining(['echo written > "$MARK"']), env: { MARK: 'made.txt' }, cwd: expect.stringMatching(/work$/) }]);
+    expect(execs).toEqual([{ argv: expect.arrayContaining(['echo written > "$MARK"']), env: { MARK: 'made.txt', TEAMAI_WORKFLOW_ATTEMPT: expect.stringMatching(new RegExp(`/${ATTEMPT}$`)), TEAMAI_MODE: expect.any(String), TEAMAI_RUN_DIR: expect.stringMatching(/\/scratch$/) }, cwd: expect.stringMatching(/work$/) }]);
     const to = record?.state === 'finished' ? record.result.to ?? '' : '';
     git(alice.checkout, 'fetch', '-q', 'origin', to);
     expect(git(alice.checkout, 'show', `${to}:made.txt`)).toBe('written');
