@@ -56,7 +56,7 @@ let caseInsensitiveCache = new Map<string, boolean>();
  *
  * The probe reads first: a name in the folder, looked up with one letter's case
  * swapped, folds case when it reaches the same file (`dev` and `ino`). A folder
- * whose names hold no ASCII letter (all CJK, say) asks the same of its own path,
+ * whose names hold no cased letter (all CJK, say) asks the same of its own path,
  * up to the edge of its volume. A sandbox that refuses writes to the folder
  * (Codex's workspace-write or read-only) gets the answer a writable folder gets,
  * so it resolves the partition `init` made. Only a folder that is missing, or
@@ -77,8 +77,8 @@ export function isCaseInsensitiveFs(probeDir?: string): boolean {
 }
 
 /**
- * Whether the first name with a letter in `dir`, or else in `dir`'s own path on its volume, looked up with that letter's
- * case swapped, reaches the same file. Undefined when no such name can be read.
+ * Whether the first name with a cased letter in `dir`, or else in `dir`'s own path on its volume, looked up with that
+ * letter's case swapped, reaches the same file. Undefined when no such name can be read.
  */
 function foldsCaseOfAName(dir: string): boolean | undefined {
   let entries: fs.Dir;
@@ -113,17 +113,29 @@ function foldsCaseOfAName(dir: string): boolean | undefined {
   return undefined;
 }
 
-/** Whether `name` in `dir`, with its first letter's case swapped, reaches the same file. Undefined when it has no letter. */
+/**
+ * Whether `name` in `dir`, with its first cased letter's case swapped, reaches the same file. Undefined when it has none.
+ * A letter whose swap is not one letter that swaps back (German sharp s, Turkish dotted I) is passed over: volumes fold
+ * those differently.
+ */
 function foldsCaseOf(dir: string, name: string): boolean | undefined {
-  const letter = name.search(/[A-Za-z]/);
+  const chars = Array.from(name);
 
-  if (letter < 0) return undefined;
-  const char = name.charAt(letter);
-  const swapped = name.slice(0, letter) + (char === char.toLowerCase() ? char.toUpperCase() : char.toLowerCase()) + name.slice(letter + 1);
-  const named = fs.lstatSync(path.join(dir, name));
-  const other = fs.lstatSync(path.join(dir, swapped), { throwIfNoEntry: false });
+  for (const [at, char] of chars.entries()) {
+    const swapped = swapCase(char);
 
-  return other !== undefined && named.dev === other.dev && named.ino === other.ino;
+    if (swapped === char || swapCase(swapped) !== char) continue;
+    const named = fs.lstatSync(path.join(dir, name), { bigint: true });
+    const other = fs.lstatSync(path.join(dir, [...chars.slice(0, at), swapped, ...chars.slice(at + 1)].join('')), { bigint: true, throwIfNoEntry: false });
+
+    return other !== undefined && named.dev === other.dev && named.ino === other.ino;
+  }
+
+  return undefined;
+}
+
+function swapCase(char: string): string {
+  return char === char.toLowerCase() ? char.toUpperCase() : char.toLowerCase();
 }
 
 /** Whether a file written in `dir` under an upper-case name exists under its lower-case one. False when it cannot write. */
