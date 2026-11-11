@@ -135,6 +135,20 @@ describe('acquireLock (real fs)', () => {
     else expect(JSON.parse(fs.readFileSync(lockPath, 'utf-8')).owner).toBe('theirs');
   });
 
+  // An earlier teamai may have written its time in another shape: the lock file's own time bounds it instead.
+  it.each([
+    ['reclaims a lock another pid namespace wrote more than an hour ago, by its file\'s time, when its own time cannot be read', 2 * 3_600_000, true],
+    ['keeps a lock another pid namespace wrote a moment ago, by its file\'s time, when its own time cannot be read', 0, false],
+  ])('%s', async (_name, age, isReclaimed) => {
+    fs.writeFileSync(lockPath, JSON.stringify({ pid: 999999, owner: 'theirs', startedAt: 'yesterday', pidNamespace: 'pid:[1]' }));
+    const written = new Date(Date.now() - age);
+    fs.utimesSync(lockPath, written, written);
+
+    expect(await acquireLock(lockPath)).toBe(isReclaimed);
+    if (isReclaimed) await releaseLock(lockPath);
+    else expect(JSON.parse(fs.readFileSync(lockPath, 'utf-8')).owner).toBe('theirs');
+  });
+
   it('keeps a lock this process took while its Date reads a time before it started, as under a faked clock', async () => {
     vi.useFakeTimers({ toFake: ['Date'] });
     vi.setSystemTime(new Date('2020-01-01T00:00:00Z'));

@@ -493,7 +493,7 @@ async function inspectLock(resolved: string): Promise<LockVerdict> {
     return { state: 'live' };
   }
 
-  if (!(await isHolderGone(parsed))) return { state: 'live' };
+  if (!(await isHolderGone(parsed, { writtenAt: async () => (await fse.lstat(resolved).catch(() => undefined))?.mtimeMs }))) return { state: 'live' };
 
   // The owner may have released the lock and exited after the read, and
   // another process created a fresh one: only the dead owner's own file is stale.
@@ -512,9 +512,10 @@ const FOREIGN_HOLD_MS = 3_600_000;
  * Whether the process `holder` names is gone: no process has its pid, or a later one does, as a container hands pids
  * out again (`isSameProcess`). A live pid whose start nothing tells holds it. A lock another pid namespace wrote, as a
  * container sharing this home does, is held until `FOREIGN_HOLD_MS` after it was written: its pid says nothing here,
- * and a container that exited leaves it to a namespace no later process shares, so only its age frees it.
+ * and a container that exited leaves it to a namespace no later process shares, so only its age frees it. Its own
+ * `startedAt`, else `writtenAt`, the lock file's time, tells that age; with neither, it is held.
  */
-export async function isHolderGone(holder: LockHolder): Promise<boolean> {
+export async function isHolderGone(holder: LockHolder, { writtenAt }: { writtenAt?: () => Promise<number | undefined> } = {}): Promise<boolean> {
   // A lock this process holds names a live holder: asking when it started would run `ps` outside Linux for nothing.
   if (holder.owner !== undefined && holder.pid === process.pid && [...heldLockOwners.values()].includes(holder.owner)) return false;
   const verdict = await isSameProcess(holder);
@@ -525,8 +526,11 @@ export async function isHolderGone(holder: LockHolder): Promise<boolean> {
     case 'same':
     case 'unknown':
       return false;
-    case 'foreign':
-      return Date.now() - (holder.startedAt ?? Number.NaN) > FOREIGN_HOLD_MS;
+    case 'foreign': {
+      const own = holder.startedAt ?? Number.NaN;
+
+      return Date.now() - (Number.isNaN(own) ? await writtenAt?.() ?? Number.NaN : own) > FOREIGN_HOLD_MS;
+    }
     default: {
       const unhandled: never = verdict;
 
