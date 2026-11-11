@@ -1,6 +1,8 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import { OuterHandleSchema } from '@teamai/runtime-kit/outer';
 import { expectNothingLeft as expectNothingLeftBy } from '@teamai/runtime-testing/leaks';
+import { z } from 'zod';
 import { connect, type Connection } from './harness.js';
 
 // ─── What a test left behind ───
@@ -51,12 +53,31 @@ function hostTmpFilesWritten(): string[] {
   });
 }
 
-/** What the test left of sandboxes, as `<kind> <name>`: containers, attempts' state directories, hosted sandboxes, and host files a fake container wrote. */
-function sandboxesLeft({ dir, containers, vercelState, planted = [] }: Scope): string[] {
+/** An open's answer whose handle is an outer handle, which names the place's socket. */
+const AcceptedOuterSchema = z.object({ event: z.literal('accepted'), handle: z.string().startsWith('{') });
+
+/**
+ * The folders of the attempt sockets the test's runtimes accepted a place with that are still there: a runtime that
+ * stops serving a place removes its socket's folder, which may sit under the temp directory, outside the test's own.
+ */
+function socketFoldersLeft(connections: readonly Connection[]): string[] {
+  const sockets = connections.flatMap(({ messages }) => messages.flatMap((message) => {
+    const accepted = AcceptedOuterSchema.safeParse(message);
+    const handle = accepted.success ? OuterHandleSchema.safeParse(JSON.parse(accepted.data.handle)) : undefined;
+
+    return handle?.success === true ? [handle.data.socket] : [];
+  }));
+
+  return [...new Set(sockets.map((socket) => path.dirname(socket)))].filter((folder) => fs.existsSync(folder));
+}
+
+/** What the test left of sandboxes, as `<kind> <name>`: containers, attempts' state directories, hosted sandboxes, attempt sockets' folders, and host files a fake container wrote. */
+function sandboxesLeft({ dir, connections = [], containers, vercelState, planted = [] }: Scope): string[] {
   const sandboxes = vercelState === undefined ? undefined : path.join(vercelState, 'sandboxes');
 
   return [
     ...hostTmpFilesWritten().map((file) => `host file ${file}`),
+    ...socketFoldersLeft(connections).map((folder) => `socket folder ${folder}`),
     ...(containers?.() ?? []).filter((name) => !planted.includes(name)).map((name) => `container ${name}`),
     ...(fs.existsSync(dir) ? attemptDirsUnder(dir).filter((at) => !planted.includes(path.basename(at))).map((at) => `attempt ${at}`) : []),
     ...(sandboxes !== undefined && fs.existsSync(sandboxes) ? fs.readdirSync(sandboxes).map((name) => `vercel ${name}`) : []),

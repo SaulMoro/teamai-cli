@@ -102,6 +102,24 @@ function isServed(socketPath: string): Promise<boolean> {
 }
 
 /**
+ * Removes the folder of the socket at `socketPath` a runtime that stopped serving it left, as one that dies before its
+ * place closes does: a socket another runtime still serves stays that runtime's, and a folder that is not this user's
+ * own is not touched. Left as it is when it cannot be removed: it holds no secret, and the next listen replaces it.
+ */
+export async function removeLeftSocket(socketPath: string): Promise<void> {
+  const dir = path.dirname(socketPath);
+  const stat = fs.lstatSync(dir, { throwIfNoEntry: false });
+
+  if (stat === undefined || !stat.isDirectory() || stat.uid !== process.getuid?.() || await isServed(socketPath)) return;
+
+  try {
+    fs.rmSync(dir, { recursive: true, force: true });
+  } catch {
+    // Left for the next listen on this place, as a close that cannot remove its folder leaves it.
+  }
+}
+
+/**
  * Listens on `socketPath` for the inner runtime's registration and the wrapper's asks. Only the registered agent is
  * served, while the connection it registered on stays open: an ask before any registration, after that connection
  * closed, or from another agent (an app's helper agents in the same worktree), is refused. A socket another runtime still serves (one teamai started to stop the run reattaches too) stays that

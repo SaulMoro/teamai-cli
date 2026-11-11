@@ -1,6 +1,6 @@
 import path from 'node:path';
 import type { RuntimeFailure } from '@teamai/runtime-protocol';
-import { listen, type Answering, type AttemptSocket } from './attempt-socket.js';
+import { listen, removeLeftSocket, type Answering, type AttemptSocket } from './attempt-socket.js';
 import type { Journal } from './journal.js';
 import { inSandbox } from './loopback.js';
 import { sandboxOf } from './provider.js';
@@ -111,11 +111,16 @@ export function attemptSockets({ journal, ready }: { journal: Journal; ready: ()
     return { ok: true };
   };
 
-  /** Stops serving `place`'s socket and removes it, once the place is forgotten. */
-  const unserveSocket = async (place: string): Promise<void> => {
+  /**
+   * Stops serving `place`'s socket and removes it, once the place is forgotten; or, when this process does not serve it,
+   * removes the folder of `socketPath`, the one the place's record names, that a runtime which stopped left.
+   */
+  const unserveSocket = async (place: string, socketPath: string | undefined): Promise<void> => {
     const served = sockets.get(place);
     sockets.delete(place);
-    await served?.socket.close();
+
+    if (served !== undefined) await served.socket.close();
+    else if (socketPath !== undefined) await removeLeftSocket(socketPath);
   };
 
   return { serve: serveSocket, unserve: unserveSocket };

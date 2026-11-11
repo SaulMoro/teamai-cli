@@ -350,7 +350,7 @@ export function serve({ input, write: send, journal, warn, provider: providerFor
     const failed = (failure: RuntimeFailure): void => {
       if (isReleased) {
         forget();
-        void sockets.unserve(handle);
+        void sockets.unserve(handle, known?.outer?.socket);
       }
 
       // A released place is forgotten, and its sandbox, which the failure says how to remove, is left on purpose.
@@ -400,7 +400,7 @@ export function serve({ input, write: send, journal, warn, provider: providerFor
     // its own end since this process last looked.
     execs.endFollowersOf(handle);
     forget();
-    await sockets.unserve(handle);
+    await sockets.unserve(handle, known?.outer?.socket);
     write({ event: 'closed', handle: given });
   };
 
