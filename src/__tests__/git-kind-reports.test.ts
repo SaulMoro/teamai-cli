@@ -439,6 +439,19 @@ describe('git-kind reports: a team clone that refuses writes', () => {
       fs.chmodSync(gitDir, 0o755);
     }
   });
+
+  it.skipIf(process.platform === 'win32')('reads origin as unreachable when a sandbox refuses the ssh connection, which no folder access mends', async () => {
+    const { origin, clone } = await seedBareOrigin();
+    const alice = gitConfig(clone, origin);
+    expect(await publish(alice, 'members/alice.yaml', 'username: alice\n')).toBe(true);
+    const bob = await cloneCheckout(origin, 'bob', 'bob');
+    const ssh = path.join(tmp, 'refused-ssh');
+    fs.writeFileSync(ssh, '#!/bin/sh\necho "ssh: connect to host github.com port 22: Operation not permitted" >&2\nexit 255\n', { mode: 0o755 });
+    await simpleGit(bob.repo.localPath).remote(['set-url', 'origin', 'git@github.com:team/repo.git']);
+    fs.appendFileSync(path.join(bob.repo.localPath, '.git', 'config'), `[core]\n\tsshCommand = ${ssh}\n`);
+
+    expect(await fetchReportsOriginFile(bob.repo.localPath, 'members/alice.yaml')).toMatchObject({ status: 'unreachable' });
+  });
 });
 
 describe('git-kind reports: refresh before reading (#557)', () => {

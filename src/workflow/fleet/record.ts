@@ -787,6 +787,7 @@ async function writeRecord(config: LocalConfig, record: FleetRecord, { replaces,
     const read = await fetchReportsOriginFile(worktree, rel, context);
 
     if (read.status === 'unreachable') return { value: { ok: false, error: { code: 'reports_unreachable', message: `teamai-reports could not be read (${sanitizeGitUrl(read.reason)}).` } }, write: null };
+
     if (read.status === 'refused') return { value: { ok: false, error: { code: 'reports_unreachable', message: read.message } }, write: null };
     const held = read.status === 'found' ? parseRecord(read.text, record.run, record.attempt) : undefined;
 

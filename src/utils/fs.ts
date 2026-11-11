@@ -67,9 +67,14 @@ const WRITING_CALLS = new Set(['open', 'mkdir', 'mkdtemp', 'rename', 'unlink', '
 const RefusedWriteErrorSchema = z.object({ code: z.enum(WRITE_REFUSALS), path: z.string(), syscall: z.string() });
 
 /** The strerror git prints after the path it may not write, by the code it stands for. */
-const GIT_REFUSALS: Record<string, (typeof WRITE_REFUSALS)[number]> = { 'Permission denied': 'EACCES', 'Operation not permitted': 'EPERM', 'Read-only file system': 'EROFS' };
+const GIT_REFUSALS = [
+  { strerror: 'Permission denied', code: 'EACCES' },
+  { strerror: 'Operation not permitted', code: 'EPERM' },
+  { strerror: 'Read-only file system', code: 'EROFS' },
+] as const satisfies ReadonlyArray<{ strerror: string; code: (typeof WRITE_REFUSALS)[number] }>;
 
-const GIT_REFUSAL_LINE = /(?:'([^']+)'|([^\s':]+)):\s*(Permission denied|Operation not permitted|Read-only file system)\s*$/m;
+/** Git's own error line, so ssh's `connect to host … port 22: Operation not permitted` is not read as a path. */
+const GIT_REFUSAL_LINE = /^(?:error|fatal): .*?(?:'([^']+)'|([^\s':]*\/[^\s':]*)):\s*(Permission denied|Operation not permitted|Read-only file system)\s*$/m;
 
 /** A write the filesystem refused: the folder it was refused in, and its error code. */
 export interface RefusedWrite { folder: string; code: (typeof WRITE_REFUSALS)[number] }
@@ -86,7 +91,7 @@ export function refusedWrite(cause: unknown, { gitCwd }: { gitCwd?: string } = {
     if (errno.success && WRITING_CALLS.has(errno.data.syscall)) return { folder: path.dirname(errno.data.path), code: errno.data.code };
     const line = gitCwd !== undefined && current instanceof Error ? GIT_REFUSAL_LINE.exec(current.message) : null;
     const written = line?.[1] ?? line?.[2];
-    const code = line?.[3] === undefined ? undefined : GIT_REFUSALS[line[3]];
+    const code = GIT_REFUSALS.find(({ strerror }) => strerror === line?.[3])?.code;
 
     if (gitCwd !== undefined && written !== undefined && code !== undefined) return { folder: path.dirname(path.resolve(gitCwd, written)), code };
     current = current instanceof Error ? current.cause : undefined;
