@@ -41,14 +41,15 @@ function runningProcesses(): Map<number, RunningProcess> | undefined {
  * The fields of `/proc/<pid>/stat` this module reads: the parent (field 4), the process group (field 5) and the start
  * in ticks (field 22).
  */
-function statFields(stat: string): { ppid: number; pgid: number; ticks: number } | undefined {
+function statFields(stat: string): { ppid: number; pgid: number; foreground: number; ticks: number } | undefined {
   // The command name, field 2, is in parentheses and may hold spaces or parentheses itself: fields count after its last `)`.
   const fields = stat.slice(stat.lastIndexOf(')') + 2).split(' ');
   const ppid = Number(fields[1]);
   const pgid = Number(fields[2]);
+  const foreground = Number(fields[5]);
   const ticks = Number(fields[19]);
 
-  return Number.isInteger(ppid) && Number.isInteger(pgid) && Number.isInteger(ticks) ? { ppid, pgid, ticks } : undefined;
+  return [ppid, pgid, foreground, ticks].every(Number.isInteger) ? { ppid, pgid, foreground, ticks } : undefined;
 }
 
 /** The clock ticks per second `/proc` counts in (USER_HZ), 100 on every architecture Linux exposes to Node. */
@@ -351,10 +352,9 @@ export async function ownGroups(): Promise<OwnGroups | undefined> {
     }
 
     if (stat !== undefined) {
-      // The command name, field 2, may hold spaces: fields count after its last `)`.
-      const fields = stat.slice(stat.lastIndexOf(')') + 2).split(' ');
+      const fields = statFields(stat);
 
-      return groupsOf(fields[2], fields[5]);
+      return fields && groupsOf(fields.pgid, fields.foreground);
     }
   }
 
@@ -362,15 +362,13 @@ export async function ownGroups(): Promise<OwnGroups | undefined> {
     execFile('ps', ['-o', 'pgid=,tpgid=', '-p', String(process.pid)], { encoding: 'utf8', timeout: 5_000 }, (error, stdout) => {
       const [pgid, foreground] = stdout.trim().split(/\s+/);
 
-      resolve(error ? undefined : groupsOf(pgid, foreground));
+      resolve(error ? undefined : groupsOf(Number(pgid), Number(foreground)));
     });
   });
 }
 
-function groupsOf(pgid: string | undefined, foreground: string | undefined): OwnGroups | undefined {
-  const groups = { pgid: Number(pgid), foreground: Number(foreground) };
-
-  return Number.isInteger(groups.pgid) && groups.pgid > 0 && Number.isInteger(groups.foreground) ? groups : undefined;
+function groupsOf(pgid: number, foreground: number): OwnGroups | undefined {
+  return Number.isInteger(pgid) && pgid > 0 && Number.isInteger(foreground) ? { pgid, foreground } : undefined;
 }
 
 /** Writes the record of one process group, so a reader never sees half of it. */
