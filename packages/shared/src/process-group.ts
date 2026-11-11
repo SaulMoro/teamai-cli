@@ -328,28 +328,49 @@ let isOwnGroupLeader: Promise<boolean> | undefined;
  * before the job runs. False when it cannot be read.
  */
 function leadsOwnGroup(): Promise<boolean> {
-  return isOwnGroupLeader ??= (async () => (await ownProcessGroup()) === process.pid)();
+  return isOwnGroupLeader ??= (async () => (await ownGroups())?.pgid === process.pid)();
 }
 
-/** The process group of this process: on Linux from `/proc`, elsewhere from ps. Undefined when neither can tell. */
-async function ownProcessGroup(): Promise<number | undefined> {
+/** This process's group, and its terminal's foreground group, which is 0 or less when it has no controlling terminal. */
+export interface OwnGroups { pgid: number; foreground: number }
+
+/**
+ * The groups of this process: on Linux from `/proc` (fields 5 and 8 of its stat), which a container whose ps takes no
+ * -p (BusyBox), or that has no ps, still has; elsewhere from ps. Undefined on Windows and when neither can tell.
+ */
+export async function ownGroups(): Promise<OwnGroups | undefined> {
   if (process.platform === 'win32') return undefined;
 
   if (process.platform === 'linux') {
+    let stat: string | undefined;
+
     try {
-      return statFields(await readRegularFile('/proc/self/stat', 'utf8'))?.pgid;
+      stat = await readRegularFile('/proc/self/stat', 'utf8');
     } catch {
       // No /proc: ps may tell.
+    }
+
+    if (stat !== undefined) {
+      // The command name, field 2, may hold spaces: fields count after its last `)`.
+      const fields = stat.slice(stat.lastIndexOf(')') + 2).split(' ');
+
+      return groupsOf(fields[2], fields[5]);
     }
   }
 
   return new Promise((resolve) => {
-    execFile('ps', ['-o', 'pgid=', '-p', String(process.pid)], { encoding: 'utf8', timeout: 5_000 }, (error, stdout) => {
-      const pgid = Number(stdout.trim());
+    execFile('ps', ['-o', 'pgid=,tpgid=', '-p', String(process.pid)], { encoding: 'utf8', timeout: 5_000 }, (error, stdout) => {
+      const [pgid, foreground] = stdout.trim().split(/\s+/);
 
-      resolve(error || !Number.isInteger(pgid) || pgid <= 0 ? undefined : pgid);
+      resolve(error ? undefined : groupsOf(pgid, foreground));
     });
   });
+}
+
+function groupsOf(pgid: string | undefined, foreground: string | undefined): OwnGroups | undefined {
+  const groups = { pgid: Number(pgid), foreground: Number(foreground) };
+
+  return Number.isInteger(groups.pgid) && groups.pgid > 0 && Number.isInteger(groups.foreground) ? groups : undefined;
 }
 
 /** Writes the record of one process group, so a reader never sees half of it. */
@@ -467,7 +488,7 @@ async function stopLeftStarterGroup(recorded: Recorded, pgid: number): Promise<v
     if (error instanceof Error && 'code' in error && error.code === 'EPERM') return;
   }
 
-  const own = await ownProcessGroup();
+  const own = (await ownGroups())?.pgid;
 
   // A group this process cannot tell from its own is left alone too.
   if (own === undefined || own === pgid) return;

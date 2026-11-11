@@ -8,7 +8,7 @@ import path from 'node:path';
 import YAML from 'yaml';
 
 import * as regularFile from '@teamai/shared/regular-file';
-import { envExec, exitLike, inTerminalForeground, terminalReachesCommand } from '../env-exec.js';
+import { envExec, exitLike, terminalReachesCommand } from '../env-exec.js';
 import { EnvHandler } from '../resources/env.js';
 import { envLoaderPath } from '../resources/env-loader.js';
 import { envShMarker } from '../env-sh-exports.js';
@@ -960,15 +960,26 @@ describe('teamai env exec', () => {
   });
 
   // #879: a terminal sends Ctrl-C to its foreground group, the command included; any other SIGINT is teamai's alone.
-  it.each([
+  it.skipIf(process.platform === 'win32').each([
     ['in the foreground group of its terminal', '77167 77167\n', true],
     ['in a background job of its terminal', ' 77167 80012\n', false],
     ['without a controlling terminal (macOS)', '77167     0\n', false],
     ['without a controlling terminal (Linux)', '77167    -1\n', false],
     ['when ps printed nothing', '', false],
     ['when ps printed something else', 'PGID TPGID\n', false],
-  ] as const)('takes teamai to be %s from `ps -o pgid=,tpgid=`', (_name, ps, foreground) => {
-    expect(inTerminalForeground(ps)).toBe(foreground);
+  ] as const)('takes teamai to be %s from `ps -o pgid=,tpgid=`', async (_name, ps, foreground) => {
+    const platform = Object.getOwnPropertyDescriptor(process, 'platform');
+    const bin = path.join(tmpDir, 'ps-bin');
+    fs.mkdirSync(bin, { recursive: true });
+    fs.writeFileSync(path.join(bin, 'ps'), `#!/bin/sh\nprintf '%s' '${ps}'\n`, { mode: 0o755 });
+    Object.defineProperty(process, 'platform', { value: 'darwin' });
+    vi.stubEnv('PATH', bin);
+    try {
+      expect(await terminalReachesCommand()).toBe(foreground);
+    } finally {
+      if (platform) Object.defineProperty(process, 'platform', platform);
+      vi.unstubAllEnvs();
+    }
   });
 
   // `/proc/self/stat` as node:22-alpine prints it with a terminal (`docker run -t`) and without one. Its ps takes no -p,
