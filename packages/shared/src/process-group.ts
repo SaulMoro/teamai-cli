@@ -7,6 +7,7 @@
 //
 
 import { execFile, type ChildProcess } from 'node:child_process';
+import diagnostics from 'node:diagnostics_channel';
 import fs from 'node:fs';
 import path from 'node:path';
 import { z } from 'zod';
@@ -16,9 +17,19 @@ import { readRegularFile } from '@teamai/shared/regular-file';
 const PS_TIMEOUT_MS = 5_000;
 
 /**
+ * The channel each process read is told on, with the ps argv it ran or, read from `/proc`, stands for, and whether it ran
+ * ps: `{ ps: string[]; spawned: boolean }`. The agent wait budget counts the reads Linux answers from `/proc` as the ps
+ * macOS runs for them, so a wait only macOS has shows on a Linux runner too.
+ */
+export const PROCESS_READ_CHANNEL = 'teamai:process-read';
+
+const processReads = diagnostics.channel(PROCESS_READ_CHANNEL);
+
+/**
  * The one way this module reads processes: from `/proc` on Linux when `fromProc` tells, else through ps with `args`, in
  * the C locale, whose `lstart` reads the same on every machine and parses as a date. ps runs off the event loop, for at
- * most `PS_TIMEOUT_MS` or until `signal` aborts. Undefined when neither tells.
+ * most `PS_TIMEOUT_MS` or until `signal` aborts. Undefined when neither tells. Each read is told on
+ * `PROCESS_READ_CHANNEL`.
  */
 async function readProcesses<T>({ args, fromPs, fromProc, signal }: {
   args: readonly string[];
@@ -29,10 +40,15 @@ async function readProcesses<T>({ args, fromPs, fromProc, signal }: {
   if (fromProc !== undefined && process.platform === 'linux') {
     const read = await fromProc();
 
-    if (read !== undefined) return read;
+    if (read !== undefined) {
+      processReads.publish({ ps: args, spawned: false });
+
+      return read;
+    }
   }
 
   if (signal?.aborted === true) return undefined;
+  processReads.publish({ ps: args, spawned: true });
 
   return new Promise((resolve) => {
     execFile('ps', args, { encoding: 'utf8', env: { ...process.env, LC_ALL: 'C' }, timeout: PS_TIMEOUT_MS, ...(signal !== undefined && { signal }) }, (error, stdout) => {

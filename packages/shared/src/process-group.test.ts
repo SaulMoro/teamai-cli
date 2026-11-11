@@ -4,7 +4,8 @@ import os from 'node:os';
 import path from 'node:path';
 import { afterEach, expect, it, vi } from 'vitest';
 import { z } from 'zod';
-import { identityOf, isSameProcess, recordGroup, stopGroup, stopProcess, stopRecordedGroup } from './process-group.js';
+import diagnostics from 'node:diagnostics_channel';
+import { identityOf, isSameProcess, ownGroups, PROCESS_READ_CHANNEL, recordGroup, stopGroup, stopProcess, stopRecordedGroup } from './process-group.js';
 
 /** Whether this platform tells start times through ps rather than `/proc`, so a fake ps on PATH is what is read. */
 const READS_PS = process.platform !== 'win32' && process.platform !== 'linux';
@@ -598,3 +599,21 @@ it.runIf(READS_PS)('lets a timer fire on time while it stops an attached command
     fs.rmSync(directory, { recursive: true, force: true });
   }
 }, 20_000);
+
+it.skipIf(process.platform === 'win32')('tells each process read once, with the ps it ran or stands for, on every platform', async () => {
+  const told: unknown[] = [];
+  const listen = (message: unknown): void => { told.push(message); };
+  diagnostics.subscribe(PROCESS_READ_CHANNEL, listen);
+  try {
+    expect(await isSameProcess({ pid: process.pid, startedAt: Date.now() })).toBe('same');
+    expect(await ownGroups()).toBeDefined();
+  } finally {
+    diagnostics.unsubscribe(PROCESS_READ_CHANNEL, listen);
+  }
+
+  const spawned = process.platform !== 'linux';
+  expect(told).toEqual([
+    { ps: ['-o', 'lstart=', '-p', String(process.pid)], spawned },
+    { ps: ['-o', 'pgid=,tpgid=', '-p', String(process.pid)], spawned },
+  ]);
+});
