@@ -1,3 +1,4 @@
+import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -18,12 +19,15 @@ afterEach(() => {
   expect(left, 'fake agents left running').toEqual([]);
 });
 
-function scratch(): { root: string; home: string; bin: string; codexHome: string } {
+/** A scratch folder outside any git repository (`root`, where a call runs) and a repository in it (`repo`, a step's). */
+function scratch(): { root: string; repo: string; home: string; bin: string; codexHome: string } {
   const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'fx-')));
+  const repo = path.join(root, 'repo');
 
   made.push(root);
+  execFileSync('git', ['init', '-q', repo]);
 
-  return { root, home: path.join(root, 'h'), bin: path.join(root, 'b'), codexHome: path.join(root, 'c') };
+  return { root, repo, home: path.join(root, 'h'), bin: path.join(root, 'b'), codexHome: path.join(root, 'c') };
 }
 
 const stepArgs = (prompt: string, resume?: string): string[] => step.args({ prompt, resultDir: '/r', streamsUsage: true, ...(resume && { resume }) }, { interactive: false, opencodeMajor: 2 });
@@ -42,6 +46,9 @@ const rollouts = (codexHome: string): string[] => {
   return fs.existsSync(sessions) ? fs.readdirSync(sessions, { recursive: true, encoding: 'utf8' }).filter((name) => name.endsWith('.jsonl')) : [];
 };
 
+const readSession = (codexHome: string, sessionId: string, projectPath: string) =>
+  new CodexAdapter('codex', path.join(codexHome, 'sessions'), { processes: HOST_PROCESSES, executablesOf: (tool) => [tool] }).readSession({ sessionId, projectPath });
+
 describe('fake codex', () => {
   it('answers a call in the recorded format, which the Codex call profile reads as the answer it was given', async () => {
     const { root, home, bin, codexHome } = scratch();
@@ -55,55 +62,75 @@ describe('fake codex', () => {
       .toMatchObject({ code: 0, read: { ok: true, text: 'It uses Jest.', tokens: { input: 20707, output: 51 } } });
   });
 
-  it('fails as the recorded failure, which the profile reads as a failure', async () => {
+  it('fails as the recorded failure, which the profile reads as a failure, and keeps a session with no answer', async () => {
     const { root, home, bin, codexHome } = scratch();
     const agent = fakeAgent(codexFake, { bin });
     const lastMessageFile = path.join(root, 'last-message.txt');
 
     const out = await runFakeAgent(agent.executable, call.args({ prompt: '', promptFile: '', lastMessageFile }), `Go. ${FAKE_AGENT_MARKERS.fail}`, { cwd: root, env: { HOME: home, CODEX_HOME: codexHome } });
+    const session = await readSession(codexHome, threadOf(out.stdout), root);
 
-    expect({ code: out.code, read: call.read({ stdout: out.stdout, lastMessage: undefined }), wrote: fs.existsSync(lastMessageFile) })
-      .toMatchObject({ code: 1, read: { ok: false, message: expect.stringContaining('gpt-nonexistent') }, wrote: false });
+    // codex-cli 0.167.0, given a model it has no provider for, exited 1, wrote no -o file and kept the session.
+    expect({ code: out.code, read: call.read({ stdout: out.stdout, lastMessage: undefined }), wrote: fs.existsSync(lastMessageFile), roles: session.messages.map((message) => message.role) })
+      .toMatchObject({ code: 1, read: { ok: false, message: expect.stringContaining('gpt-nonexistent') }, wrote: false, roles: ['user'] });
+  });
+
+  it('refuses a step outside a git repository, as Codex does without --skip-git-repo-check', async () => {
+    const { root, home, bin, codexHome } = scratch();
+    const agent = fakeAgent(codexFake, { bin });
+
+    const out = await runFakeAgent(agent.executable, stepArgs('Review it.'), '', { cwd: root, env: { HOME: home, CODEX_HOME: codexHome } });
+
+    expect({ code: out.code, stdout: out.stdout, sessions: rollouts(codexHome) }).toEqual({ code: 1, stdout: '', sessions: [] });
   });
 
   it('prints its thread first, and only that when it hangs', async () => {
-    const { root, home, bin, codexHome } = scratch();
+    const { repo, home, bin, codexHome } = scratch();
     const agent = fakeAgent(codexFake, { bin, always: ['hang'] });
 
-    const out = await runFakeAgent(agent.executable, stepArgs('Go.'), '', { cwd: root, env: { HOME: home, CODEX_HOME: codexHome }, stopAfterMs: 800 });
+    const out = await runFakeAgent(agent.executable, stepArgs('Go.'), '', { cwd: repo, env: { HOME: home, CODEX_HOME: codexHome }, stopAfterMs: 800 });
 
     expect(out.stdout.trim().split('\n').map((line) => JSON.parse(line))).toEqual([{ type: 'thread.started', thread_id: expect.any(String) }]);
   });
 
   it('keeps a step\'s session where Codex does, under CODEX_HOME by the day it started, for the Codex reader', async () => {
-    const { root, home, bin, codexHome } = scratch();
+    const { repo, home, bin, codexHome } = scratch();
     const agent = fakeAgent(codexFake, { bin });
 
-    const out = await runFakeAgent(agent.executable, stepArgs('Review it.'), '', { cwd: root, env: { HOME: home, CODEX_HOME: codexHome } });
+    const out = await runFakeAgent(agent.executable, stepArgs('Review it.'), '', { cwd: repo, env: { HOME: home, CODEX_HOME: codexHome } });
     const thread = threadOf(out.stdout);
 
     // codex-cli 0.167.0 wrote sessions/2026/11/11/rollout-2026-11-11T07-43-39-<thread>.jsonl for a run it started then.
     expect(rollouts(codexHome)).toEqual([expect.stringMatching(new RegExp(`^\\d{4}/\\d{2}/\\d{2}/rollout-\\d{4}-\\d{2}-\\d{2}T\\d{2}-\\d{2}-\\d{2}-${thread}\\.jsonl$`))]);
-    const session = await new CodexAdapter('codex', path.join(codexHome, 'sessions'), { processes: HOST_PROCESSES, executablesOf: (tool) => [tool] }).readSession({ sessionId: thread, projectPath: root });
-    expect({ code: out.code, id: session.sessionId, cwd: session.cwd }).toEqual({ code: 0, id: thread, cwd: root });
+    const session = await readSession(codexHome, thread, repo);
+    expect({ code: out.code, id: session.sessionId, cwd: session.cwd }).toEqual({ code: 0, id: thread, cwd: repo });
   });
 
   it('continues the thread it is given to resume, in that thread\'s session', async () => {
-    const { root, home, bin, codexHome } = scratch();
+    const { repo, home, bin, codexHome } = scratch();
     const agent = fakeAgent(codexFake, { bin });
     const env = { HOME: home, CODEX_HOME: codexHome };
-    const first = await runFakeAgent(agent.executable, stepArgs('Review it.'), '', { cwd: root, env });
+    const first = await runFakeAgent(agent.executable, stepArgs('Review it.'), '', { cwd: repo, env });
 
-    const resumed = await runFakeAgent(agent.executable, stepArgs('Now fix it.', threadOf(first.stdout)), '', { cwd: root, env });
+    const resumed = await runFakeAgent(agent.executable, stepArgs('Now fix it.', threadOf(first.stdout)), '', { cwd: repo, env });
 
     expect({ thread: threadOf(resumed.stdout), sessions: rollouts(codexHome).length }).toEqual({ thread: threadOf(first.stdout), sessions: 1 });
+  });
+
+  it('refuses to resume a thread that has no session under its CODEX_HOME, as Codex does', async () => {
+    const { repo, home, bin, codexHome } = scratch();
+    const agent = fakeAgent(codexFake, { bin });
+
+    const out = await runFakeAgent(agent.executable, stepArgs('Now fix it.', '01a1c999-0000-7000-8000-000000000000'), '', { cwd: repo, env: { HOME: home, CODEX_HOME: codexHome } });
+
+    expect({ code: out.code, stdout: out.stdout, sessions: rollouts(codexHome) }).toEqual({ code: 1, stdout: '', sessions: [] });
   });
 
   it('writes nothing under CODEX_HOME for an ephemeral run, as Codex does', async () => {
     const { root, home, bin, codexHome } = scratch();
     const agent = fakeAgent(codexFake, { bin });
 
-    await runFakeAgent(agent.executable, ['exec', '--json', '--ephemeral', 'Judge it.'], '', { cwd: root, env: { HOME: home, CODEX_HOME: codexHome } });
+    await runFakeAgent(agent.executable, ['-a', 'never', 'exec', '--json', '--ephemeral', '--skip-git-repo-check', '-'], 'Judge it.', { cwd: root, env: { HOME: home, CODEX_HOME: codexHome } });
 
     expect(rollouts(codexHome)).toEqual([]);
   });
