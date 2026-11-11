@@ -83,6 +83,34 @@ describe('teamai-runtime-paseo', () => {
     expect(received().filter((request) => request.type === 'delete_agent_request')).toMatchObject([{ agentId }]);
   });
 
+  it('sends no prompt, removes the agent and fails the step naming what it could not journal, when it cannot journal the prompt as sent once the wrapper connected', async () => {
+    behave({ output: { verdict: 'approve' } });
+    const granted = path.join(dir, 'grant');
+    attempt = await serveAttemptSocket({ holdUntil: granted });
+    const { runtime } = startThrough(attempt);
+    await ready(runtime);
+    const { handle } = await openThrough(runtime, attempt);
+    runtime.send(promptRequest(handle, 'op-0000000b'));
+    await runtime.next(isOp('op-0000000b', 'display'));
+    const ops = path.join(dir, 'home', '.teamai', 'runtime-state', 'paseo', 'ops');
+    fs.chmodSync(ops, 0o500);
+
+    try {
+      fs.writeFileSync(granted, '');
+      const failed = await runtime.next(isEnd('op-0000000b'));
+      const agentId = createdAgent('op-0000000b');
+
+      expect(failed).toMatchObject({
+        event: 'failed',
+        failure: { code: 'tool_failed', message: expect.stringMatching(new RegExp(`^teamai-runtime-paseo could not journal that it sends the prompt to the claude agent ${agentId} \\(EACCES: .*\\), so it sent none, and removed the agent\\. Make that directory writable, then run the step again\\.$`)) },
+      });
+      expect(received().map((request) => request.type)).not.toContain('send_agent_message_request');
+      expect(received().filter((request) => request.type === 'delete_agent_request')).toMatchObject([{ agentId }]);
+    } finally {
+      fs.chmodSync(ops, 0o700);
+    }
+  });
+
   it('registers the agent again from a runtime started after this one was killed, so the sandbox serves its wrapper when Paseo starts it again', async () => {
     const release = path.join(dir, 'release');
     behave({ release, output: { verdict: 'approve' } });

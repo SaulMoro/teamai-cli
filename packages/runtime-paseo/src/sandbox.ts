@@ -116,10 +116,28 @@ export async function handOver(live: Daemon, { record, provider, registration, s
 
   if (outcome === 'stopped') return 'stopped';
 
+  /** Removes the agent, which got no prompt: what that did, for the step's failure. */
+  const removed = async (): Promise<string> => {
+    try {
+      await live.remove(agentId);
+
+      return 'removed the agent';
+    } catch (error) {
+      return `could not remove the agent (${error instanceof Error ? error.message : String(error)}); remove it in the Paseo app`;
+    }
+  };
+
   if (outcome === 'connected') {
     // Journaled first, so a stop that reads the record from now on knows the prompt may have been sent; a stop already
-    // made is seen next.
-    markSent();
+    // made is seen next. A prompt that cannot be journaled as sent is never sent: a runtime started again would send it twice.
+    try {
+      markSent();
+    } catch (error) {
+      return {
+        code: 'tool_failed',
+        message: `teamai-runtime-paseo could not journal that it sends the prompt to the ${record.tool} agent ${agentId} (${error instanceof Error ? error.message : String(error)}), so it sent none, and ${await removed()}. Make that directory writable, then run the step again.`,
+      };
+    }
 
     if (!isStillOurs()) {
       await live.remove(agentId).catch(() => {});
@@ -136,15 +154,7 @@ export async function handOver(live: Daemon, { record, provider, registration, s
     }
   }
 
-  const removal = await (async (): Promise<string> => {
-    try {
-      await live.remove(agentId);
-
-      return 'removed the agent';
-    } catch (error) {
-      return `could not remove the agent (${error instanceof Error ? error.message : String(error)}); remove it in the Paseo app`;
-    }
-  })();
+  const removal = await removed();
 
   return {
     code: 'isolation_unproven',
