@@ -184,7 +184,8 @@ async function withLock(filePath: string, wait: LockWait, mode: number, fn: () =
   const deadline = Date.now() + wait.budgetMs;
 
   for (;;) {
-    if (await acquireLock(lockPath)) {
+    // Judging a live holder reads its start, through ps outside Linux: the budget cuts that read short too.
+    if (await acquireLock(lockPath, { signal: AbortSignal.timeout(Math.max(1, deadline - Date.now())) })) {
       try {
         await foldSideRecords(filePath, mode);
         await fn();

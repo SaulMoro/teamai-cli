@@ -462,14 +462,14 @@ function parseLockContent(content: string): LockHolder | null {
  * A lock that names no owner, or is permission-denied, stays until removed by hand
  * if a crash left it, so it is named in a warning.
  */
-export async function lockState(resolved: string): Promise<'live' | 'stale' | 'missing'> {
-  return (await inspectLock(resolved)).state;
+export async function lockState(resolved: string, { signal }: { signal?: AbortSignal } = {}): Promise<'live' | 'stale' | 'missing'> {
+  return (await inspectLock(resolved, signal)).state;
 }
 
 /** lockState's verdict, with the dead holder when the lock is stale. */
 type LockVerdict = { state: 'live' } | { state: 'missing' } | { state: 'stale'; holder: LockHolder };
 
-async function inspectLock(resolved: string): Promise<LockVerdict> {
+async function inspectLock(resolved: string, signal?: AbortSignal): Promise<LockVerdict> {
   let content: string;
 
   try {
@@ -493,7 +493,7 @@ async function inspectLock(resolved: string): Promise<LockVerdict> {
     return { state: 'live' };
   }
 
-  if (!(await isHolderGone(parsed))) return { state: 'live' };
+  if (!(await isHolderGone(parsed, { ...(signal !== undefined && { signal }) }))) return { state: 'live' };
 
   // The owner may have released the lock and exited after the read, and
   // another process created a fresh one: only the dead owner's own file is stale.
@@ -512,12 +512,13 @@ const FOREIGN_HOLD_MS = 3_600_000;
  * Whether the process `holder` names is gone: no process has its pid, or a later one does, as a container hands pids
  * out again (`isSameProcess`). A live pid whose start nothing tells holds it. A lock another pid namespace wrote, as a
  * container sharing this home does, is held until `FOREIGN_HOLD_MS` after it was written: its pid says nothing here,
- * and a container that exited leaves it to a namespace no later process shares, so only its age frees it.
+ * and a container that exited leaves it to a namespace no later process shares, so only its age frees it. A holder whose
+ * start `signal` cut the read of short is not gone.
  */
-export async function isHolderGone(holder: LockHolder): Promise<boolean> {
+export async function isHolderGone(holder: LockHolder, { signal }: { signal?: AbortSignal } = {}): Promise<boolean> {
   // A lock this process holds names a live holder: asking when it started would run `ps` outside Linux for nothing.
   if (holder.owner !== undefined && holder.pid === process.pid && [...heldLockOwners.values()].includes(holder.owner)) return false;
-  const verdict = await isSameProcess(holder);
+  const verdict = await isSameProcess(holder, { ...(signal !== undefined && { signal }) });
 
   switch (verdict) {
     case 'other':
@@ -541,9 +542,9 @@ export async function isHolderGone(holder: LockHolder): Promise<boolean> {
  * lock a third process just made, and reporting busy would turn a free lock
  * away (#760).
  */
-async function createOrInspect(resolved: string, payload: string): Promise<'acquired' | 'live' | 'stale'> {
+async function createOrInspect(resolved: string, payload: string, signal?: AbortSignal): Promise<'acquired' | 'live' | 'stale'> {
   if (await exclusiveCreate(resolved, payload)) return 'acquired';
-  const state = await lockState(resolved);
+  const state = await lockState(resolved, { ...(signal !== undefined && { signal }) });
 
   if (state !== 'missing') return state;
 
@@ -696,11 +697,16 @@ async function removeDeadFile(target: string, owner: string): Promise<boolean> {
  * behind a reclaim sentinel and completed with an atomic rename-into-place, so
  * concurrent reclaimers cannot each end up believing they hold the lock, even
  * when a reclaimer dies holding the sentinel (see removeDeadFile).
+ *
+ * `signal` bounds how long judging a live holder may take (its start is read through ps outside Linux): a holder the
+ * read was cut short for is held, so a caller with a budget gets false, never a lock it did not win.
  */
 export async function acquireLock(
   lockPath?: string,
-  options: { dryRun?: boolean } = {},
+  options: { dryRun?: boolean; signal?: AbortSignal } = {},
 ): Promise<boolean> {
+  const { signal } = options;
+
   const resolved = lockPath ?? expandHome(getUpdateLockPath());
 
   // A preview does not take the lock, because taking one is itself a write:
@@ -712,7 +718,7 @@ export async function acquireLock(
   // real run would have reported contention, anything else means it would have
   // won. No owner is recorded, so `releaseLock` has nothing to undo.
   try {
-    if (options.dryRun) return (await lockState(resolved)) !== 'live';
+    if (options.dryRun) return (await lockState(resolved, { ...(signal !== undefined && { signal }) })) !== 'live';
     const owner = randomUUID();
     const payload = await lockPayload(owner);
 
@@ -722,7 +728,7 @@ export async function acquireLock(
     await ensureDir(path.dirname(resolved));
     // Fast path: no lock present. A live holder means busy; only a stale lock
     // may be reclaimed.
-    const first = await createOrInspect(resolved, payload);
+    const first = await createOrInspect(resolved, payload, signal);
 
     if (first === 'acquired') {
       heldLockOwners.set(resolved, owner);
@@ -739,7 +745,7 @@ export async function acquireLock(
 
     try {
       // Re-evaluate now that we are the sole reclaimer.
-      const second = await createOrInspect(resolved, payload);
+      const second = await createOrInspect(resolved, payload, signal);
 
       if (second === 'acquired') {
         heldLockOwners.set(resolved, owner);
