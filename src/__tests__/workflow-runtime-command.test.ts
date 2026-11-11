@@ -1,11 +1,15 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, onTestFinished } from 'vitest';
 import { runtimeCommand, runtimeLauncher } from '../workflow/steps/runtime-steps.js';
 import { stepLauncher } from '@teamai/runtime-tools';
 import { toolsLaunchDeps } from '../workflow/runtimes/sources.js';
-import type { AttemptRun } from '../workflow/runtimes/attempt.js';
+import { attemptRun, type AttemptRun } from '../workflow/runtimes/attempt.js';
+import type { DriverCan } from '../workflow/requirements.js';
+import type { LocalConfig } from '../types.js';
+import { AttemptIdSchema, RunIdSchema } from '../workflow/store.js';
+import type { StepRuntime } from '@teamai/runtime-protocol/step-runtime';
 
 /** An attempt on a step runtime whose `cancel`, like the real one, stops only an exec it has sent. */
 function commandRun(): { run: AttemptRun; execs: () => number } {
@@ -171,5 +175,60 @@ describe('the idle limit of a prompt\'s tool exec\'d on a step runtime', () => {
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }
+  });
+});
+
+describe('an attempt\'s operations on a step runtime', () => {
+  /** A step runtime that counts the execs it is sent, through the attempt's run as the driver builds it. */
+  function counted(): { run: AttemptRun; execs: () => number; done: () => void } {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-attempt-ops-'));
+    const config: LocalConfig = { repo: { localPath: root, remote: 'local', kind: 'self' }, username: 'tester', scope: 'project', additionalRoles: [], projectRoot: root, dataHome: path.join(root, 'data') };
+    let execs = 0;
+    const runtime: StepRuntime<DriverCan> = {
+      name: 'counted',
+      init: async () => ({ ok: true, can: {}, launchesAgents: false }),
+      open: async (_request, onAccepted) => {
+        await onAccepted('h-1');
+
+        return { kind: 'ready', handle: 'h-1' };
+      },
+      exec: async () => {
+        execs += 1;
+
+        return { kind: 'exited', code: 0, stdout: '' };
+      },
+      prompt: async () => ({ kind: 'cancelled' }),
+      cancel: async () => {},
+      collect: async () => ({ ok: true }),
+      reattach: async () => ({ kind: 'gone' }),
+      close: async () => ({ ok: true }),
+      dispose: async () => {},
+    };
+    const run = attemptRun({ config, run: RunIdSchema.parse('r0123abcd'), attempt: AttemptIdSchema.parse('a00000001'), runtime, driver: 'counted' });
+
+    return { run, execs: () => execs, done: () => fs.rmSync(root, { recursive: true, force: true }) };
+  }
+
+  it('sends no exec when the step is stopped while the attempt records the exec it is about to send', async () => {
+    const { run, execs, done } = counted();
+    onTestFinished(done);
+    const view = { worktree: '/work', readonly: [], result: '/work/out', runDir: '/work/scratch', toolHome: {} };
+    let stopStep = (): void => {};
+
+    const started = runtimeCommand({
+      run, view: async () => view, command: 'node build.js', env: {}, unset: [],
+      setUp: async () => {
+        // The stop lands once the exec is on its way: while the attempt reads and writes its record, before it sends it.
+        setImmediate(stopStep);
+
+        return undefined;
+      },
+    });
+    stopStep = () => {
+      void started.stop();
+    };
+
+    await expect(started.exit).resolves.toMatchObject({ exitCode: 130 });
+    expect(execs()).toBe(0);
   });
 });

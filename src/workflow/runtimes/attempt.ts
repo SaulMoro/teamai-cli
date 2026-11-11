@@ -570,6 +570,9 @@ export function attemptRun({ config, run, attempt, runtime, driver, deadline }: 
   let mayRun: RuntimeFailure | undefined;
   // The credentials the place was opened with, in memory only, so what the runtime says of the place is kept masked.
   let openedWith: Record<string, string> = {};
+  // The step was stopped: an exec, setup or prompt never sent is not sent, since a stop while the attempt recorded it
+  // found nothing running to cancel. One a restart sends again may run, and goes, for its stop to reach it.
+  let isStopped = false;
 
   const save = async (next: AttemptRuntimeRecord): Promise<void> => {
     record = next;
@@ -788,6 +791,8 @@ export function attemptRun({ config, run, attempt, runtime, driver, deadline }: 
 
       const exec = before.exec ?? { op: newOpId() };
       await save({ ...before, exec, phase: 'running' });
+
+      if (isStopped && !(before.exec && runtime.isExecReconnected)) return { kind: 'cancelled' };
       running = exec;
       const acceptance = accepting(events);
       const leaving = new Promise<{ kind: 'left' }>((resolve) => { leave = () => resolve({ kind: 'left' }); });
@@ -815,6 +820,8 @@ export function attemptRun({ config, run, attempt, runtime, driver, deadline }: 
 
       const setup = { op: newOpId() };
       await save({ ...before, setup, phase: 'running' });
+
+      if (isStopped) return { kind: 'cancelled' };
       running = setup;
       const acceptance = accepting(events);
       const end = await runtime.exec({ op: setup.op, handle, ...request }, { ...events, onAccepted: acceptance.onAccepted, onDisplay: acceptance.onDisplay }, 'setup');
@@ -884,6 +891,8 @@ export function attemptRun({ config, run, attempt, runtime, driver, deadline }: 
       const sent = before.prompt ?? { op: newOpId(), ...(continues && { continues }) };
 
       if (before.prompt === undefined) await save({ ...before, prompt: sent, phase: 'running' });
+
+      if (isStopped && before.prompt === undefined) return { kind: 'cancelled' };
       running = sent;
       const acceptance = accepting(events);
       const end = await runtime.prompt({ op: sent.op, handle, ...request }, { onAccepted: acceptance.onAccepted, onDisplay: acceptance.onDisplay });
@@ -894,6 +903,8 @@ export function attemptRun({ config, run, attempt, runtime, driver, deadline }: 
     },
 
     async stop() {
+      isStopped = true;
+
       if (running && cancelling?.op === running.op) return cancelling.landed;
 
       if (leave && runtime.isExecReconnected) {
@@ -906,6 +917,8 @@ export function attemptRun({ config, run, attempt, runtime, driver, deadline }: 
     },
 
     async cancel() {
+      isStopped = true;
+
       if (!running) return;
       cancelling = { op: running.op, landed: runtime.cancel(running.op) };
       await cancelling.landed;

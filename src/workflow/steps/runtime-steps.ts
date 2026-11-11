@@ -389,7 +389,8 @@ export function runtimePrompter(run: AttemptRun, { view, runId, step, tool, prov
     env.TEAMAI_WORKFLOW_RESULT = input.resultPath;
     let accepted = false;
     let timedOut = false;
-    // A stop before the prompt is sent, or while a restart reattaches, is kept and sent once the runtime accepts it.
+    // A stop before a new prompt is sent ends it unsent; one while a restart reattaches is kept and sent once the
+    // runtime accepts it.
     let stopped = false;
 
     const stop = (): void => {
