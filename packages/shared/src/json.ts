@@ -16,22 +16,35 @@ export type JsonlRecord = JsonObject;
 
 /**
  * Whether `value`, parsed or not, is a JSON object: a plain object, as JSON and YAML parse one, whose every value is JSON
- * in turn. A Date, a Map, a function or a class instance is not, at the top or below it.
+ * in turn. A Date, a Map, a function or a class instance is not, at the top or below it, nor an object that holds
+ * itself, as a YAML alias inside its own anchor parses to.
  */
 export function isJsonObject(value: unknown): value is JsonObject {
-  if (value === null || value === undefined || Array.isArray(value)) return false;
-  const prototype: unknown = Object.getPrototypeOf(value);
-
-  return (prototype === Object.prototype || prototype === null) && Object.values(value).every(isJsonValue);
+  return !Array.isArray(value) && isJsonContainer(value, new Set());
 }
 
-/** Whether `value` is JSON as JSON and YAML parse it: null, a boolean, a string, a number (YAML's .inf and .nan too), an array of JSON or a JSON object. */
-function isJsonValue(value: unknown): value is JsonValue {
+/** Whether `value` is a JSON array or object none of whose values, at any depth, is one of `holding`, the ones it is in. */
+function isJsonContainer(value: unknown, holding: Set<unknown>): value is JsonValue {
+  if (value === null || value === undefined || holding.has(value)) return false;
+
+  if (!Array.isArray(value)) {
+    const prototype: unknown = Object.getPrototypeOf(value);
+
+    if (prototype !== Object.prototype && prototype !== null) return false;
+  }
+
+  holding.add(value);
+  const isJson = Object.values(value).every((field) => isJsonScalar(field) || isJsonContainer(field, holding));
+  holding.delete(value);
+
+  return isJson;
+}
+
+/** Whether `value` is JSON as JSON and YAML parse it, and no array or object: null, a boolean, a string or a number (YAML's .inf and .nan too). */
+function isJsonScalar(value: unknown): value is JsonValue {
   if (value === null || value === true || value === false || String(value) === value) return true;
 
-  if (Number.isFinite(value) || Number.isNaN(value) || value === Infinity || value === -Infinity) return true;
-
-  return Array.isArray(value) ? value.every(isJsonValue) : isJsonObject(value);
+  return Number.isFinite(value) || Number.isNaN(value) || value === Infinity || value === -Infinity;
 }
 
 /**
