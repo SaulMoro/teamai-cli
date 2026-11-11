@@ -391,6 +391,30 @@ export function isStagingName(name: string, of?: string): boolean {
 }
 
 /**
+ * Puts what `from`, a folder, holds into `to`, a folder on the same filesystem, as `copyRegularTree(from, to)` would,
+ * but by rename, so nothing is read again: a folder in both is merged into, a file or link at `to` is replaced, and
+ * what only `to` holds stays. As the copy does, it refuses a folder over anything but a folder, and a file over a folder.
+ */
+export async function mergeRegularTree(from: string, to: string): Promise<void> {
+  for (const entry of await fs.promises.readdir(from)) {
+    const [source, target] = [path.join(from, entry), path.join(to, entry)];
+    const [moving, there] = await Promise.all([fs.promises.lstat(source), lstatOrMissing(target)]);
+
+    if (moving.isDirectory() && there?.isDirectory() === true) {
+      await mergeRegularTree(source, target);
+      continue;
+    }
+
+    if (moving.isDirectory() && there !== undefined) throw new Error(`${target} is not a folder, so teamai does not copy the folder ${source} over it`);
+
+    if (there?.isDirectory() === true) throw new Error(`${target} is a folder, so teamai does not copy ${source} over it`);
+
+    if (there !== undefined) await fs.promises.unlink(target);
+    await renameRetrying(source, target);
+  }
+}
+
+/**
  * Moves `from`, a file or a folder, to `to`, where nothing is yet, as fs-extra's `move` does: a rename, or across
  * filesystems a copy through `copyRegularTree` and then a removal of `from`. The copy goes into a folder beside `to`,
  * renamed into place once whole, so a copy that refuses an entry leaves `from` as it was and nothing at `to`.

@@ -1,4 +1,4 @@
-import { copyRegularTree, isStagingName, readRegularFile, stagingFolder } from '@teamai/shared/regular-file';
+import { copyRegularTree, isStagingName, mergeRegularTree, readRegularFile, stagingFolder } from '@teamai/shared/regular-file';
 import fse from 'fs-extra';
 import crypto from 'node:crypto';
 import path from 'node:path';
@@ -354,8 +354,8 @@ export async function writeJsonAtomic<T>(
 
 /**
  * Copy a directory recursively, all or nothing: into a folder beside `dest` first, so an entry the copy refuses, such
- * as a FIFO, leaves `dest` as it was, or absent. The whole copy is then renamed to `dest`, or merged into the folder
- * already there, which keeps what `skip` names and anything else of the member's in it.
+ * as a FIFO, leaves `dest` as it was, or absent. The whole copy is then renamed to `dest`, or moved entry by entry into
+ * the folder already there, which keeps what `skip` names and anything else of the member's in it.
  * If `dest` is a symlink (e.g. left over from setup-links.sh), it is removed once the copy is whole, so a real
  * directory takes its place.
  * With `onLink`, a link in `src` is not copied (nor followed): `onLink` gets its
@@ -397,7 +397,7 @@ export async function copyDir(
     if (there?.isSymbolicLink()) await fse.remove(destExpanded);
 
     if (there === undefined || there.isSymbolicLink()) await fse.rename(staging, destExpanded);
-    else await copyRegularTree(staging, destExpanded);
+    else await mergeRegularTree(staging, destExpanded);
   } finally {
     await fse.remove(staging);
   }

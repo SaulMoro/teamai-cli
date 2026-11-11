@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { copyRegularTree, moveRegularTree } from './regular-file.js';
+import { copyRegularTree, mergeRegularTree, moveRegularTree } from './regular-file.js';
 
 // The copy and move cases that hold on every platform, Windows included (WINDOWS_TESTS): no link, mode or FIFO. Those
 // are in regular-file.test.ts.
@@ -109,6 +109,34 @@ describe('moving a folder teamai staged, on any platform', () => {
 
     expect(fs.existsSync(path.join(dir, 'queue'))).toBe(false);
     expect(fs.readFileSync(path.join(dir, 'aside', 'a.md'), 'utf8')).toBe('a\n');
+  });
+
+  it('merges a staged folder into one already there by moving each file, keeping what only the destination holds, and refuses a file over a folder', async () => {
+    const dir = scratch();
+    const [staged, skill] = [path.join(dir, '.skill.1a2b3c4d.staging'), path.join(dir, 'skill')];
+    fs.mkdirSync(path.join(staged, 'scripts', 'new'), { recursive: true });
+    fs.writeFileSync(path.join(staged, 'SKILL.md'), '# new\n');
+    fs.writeFileSync(path.join(staged, 'scripts', 'run.sh'), 'echo new\n');
+    fs.writeFileSync(path.join(staged, 'scripts', 'new', 'a.md'), 'a\n');
+    fs.mkdirSync(path.join(skill, 'scripts'), { recursive: true });
+    fs.writeFileSync(path.join(skill, 'SKILL.md'), '# old\n');
+    fs.writeFileSync(path.join(skill, 'scripts', 'run.sh'), 'echo old\n');
+    fs.writeFileSync(path.join(skill, 'notes.md'), 'mine\n');
+    const movedFile = fs.statSync(path.join(staged, 'scripts', 'run.sh'), { bigint: true }).ino;
+
+    await mergeRegularTree(staged, skill);
+
+    expect(fs.readFileSync(path.join(skill, 'SKILL.md'), 'utf8')).toBe('# new\n');
+    expect(fs.readFileSync(path.join(skill, 'scripts', 'new', 'a.md'), 'utf8')).toBe('a\n');
+    expect(fs.readFileSync(path.join(skill, 'notes.md'), 'utf8')).toBe('mine\n');
+    // Moved, not copied again: the file is the one staged.
+    expect(fs.statSync(path.join(skill, 'scripts', 'run.sh'), { bigint: true }).ino).toBe(movedFile);
+    expect(fs.existsSync(path.join(staged, 'scripts', 'run.sh'))).toBe(false);
+
+    fs.writeFileSync(path.join(dir, 'scripts'), 'a file\n');
+    fs.mkdirSync(path.join(dir, 'over', 'scripts'), { recursive: true });
+    await expect(mergeRegularTree(path.join(dir, 'over'), dir)).rejects.toThrow('is not a folder');
+    expect(fs.readFileSync(path.join(dir, 'scripts'), 'utf8')).toBe('a file\n');
   });
 
   it('retries a rename Windows refuses for a moment, as while a scanner holds a file, instead of failing at once', async () => {
