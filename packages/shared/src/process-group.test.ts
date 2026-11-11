@@ -96,16 +96,16 @@ it.runIf(READS_PS)('only escalates captured descendants with the same start time
   const kill = vi.spyOn(child, 'kill').mockReturnValue(false);
   const processKill = vi.spyOn(process, 'kill').mockImplementation((_pid, signal) => {
     if (signal === 'SIGTERM') {
-      fs.writeFileSync(snapshot, '424243 1 Sun Oct 18 10:00:01 2026\n424244 424242 Sun Oct 18 10:00:00 2026\n424245 1 Sun Oct 18 10:00:00 2026\n');
+      fs.writeFileSync(snapshot, '424243 1 424242 Sun Oct 18 10:00:01 2026\n424244 424242 424242 Sun Oct 18 10:00:00 2026\n424245 1 424242 Sun Oct 18 10:00:00 2026\n');
     }
     return true;
   });
   try {
-    fs.writeFileSync(snapshot, '424243 424242 Sun Oct 18 10:00:00 2026\n424244 424242 Sun Oct 18 10:00:00 2026\n424245 424244 Sun Oct 18 10:00:00 2026\n');
+    fs.writeFileSync(snapshot, '424243 424242 424242 Sun Oct 18 10:00:00 2026\n424244 424242 424242 Sun Oct 18 10:00:00 2026\n424245 424244 424242 Sun Oct 18 10:00:00 2026\n');
     fs.writeFileSync(path.join(directory, 'ps'), `#!/bin/sh
 case "$3" in
   pid=,ppid=*) /bin/cat "${snapshot}" ;;
-  pid=,lstart=) while read -r pid parent start; do echo "$pid $start"; done < "${snapshot}" ;;
+  pid=,lstart=) while read -r pid parent group start; do echo "$pid $start"; done < "${snapshot}" ;;
 esac
 `, { mode: 0o755 });
     vi.stubEnv('PATH', directory);
@@ -474,6 +474,13 @@ it.runIf(process.platform === 'linux')('tells a process by its start ticks, and 
   expect(await isSameProcess({ ...own, pidNamespace: 'pid:[1]' })).toBe('foreign');
 });
 
+/** What a record keeps of when process `pid` started: its ticks on Linux, else ps's start. */
+async function recordedStart(pid: number): Promise<{ startTicks?: number } | { start: string }> {
+  return process.platform === 'linux'
+    ? { startTicks: (await identityOf(pid)).startTicks }
+    : { start: execFileSync('ps', ['-o', 'lstart=', '-p', String(pid)], { encoding: 'utf8', env: { ...process.env, LC_ALL: 'C' } }).trim() };
+}
+
 /** A detached shell that starts `sleep 600` in its group and prints its pid, then exits, or with `stays`, waits for it. */
 async function groupWithMember(stays: boolean): Promise<{ leader: number; member: number }> {
   const shell = spawn('sh', ['-c', `sleep 600 & echo $!${stays ? '; wait' : ''}`], { detached: true, stdio: ['ignore', 'pipe', 'ignore'] });
@@ -492,7 +499,7 @@ it.skipIf(process.platform === 'win32')('stops the group an attached command sha
   const { leader, member } = await groupWithMember(false);
   try {
     // The command's shell and its starter, which led the group, are gone; the command's child is left in the group.
-    fs.writeFileSync(path.join(directory, `group-${leader}.json`), JSON.stringify({ pid: leader, spawnedAt: Date.now(), tree: true, starterGroup: leader }));
+    fs.writeFileSync(path.join(directory, `group-${leader}.json`), JSON.stringify({ pid: leader, ...await recordedStart(member), tree: true, starterGroup: leader }));
     expect(isRunning(member)).toBe(true);
 
     await stopRecordedGroup(directory);
@@ -510,7 +517,7 @@ it.skipIf(process.platform === 'win32')('leaves the group an attached command sh
   const { leader, member } = await groupWithMember(true);
   try {
     // The command's pid names no process: only the group it shared with its starter is left to judge.
-    fs.writeFileSync(path.join(directory, `group-${member}.json`), JSON.stringify({ pid: 2147483646, spawnedAt: Date.now(), tree: true, starterGroup: leader }));
+    fs.writeFileSync(path.join(directory, `group-${member}.json`), JSON.stringify({ pid: 2147483646, ...await recordedStart(member), tree: true, starterGroup: leader }));
 
     await stopRecordedGroup(directory);
 
@@ -526,7 +533,7 @@ it.runIf(READS_PS)('leaves the group an attached command shared with its starter
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-starter-group-'));
   const { leader, member } = await groupWithMember(false);
   try {
-    fs.writeFileSync(path.join(directory, `group-${leader}.json`), JSON.stringify({ pid: leader, spawnedAt: Date.now(), tree: true, starterGroup: leader }));
+    fs.writeFileSync(path.join(directory, `group-${leader}.json`), JSON.stringify({ pid: leader, ...await recordedStart(member), tree: true, starterGroup: leader }));
     // No ps to tell this process's group, which the group to stop might be.
     vi.stubEnv('PATH', '');
 
@@ -535,6 +542,36 @@ it.runIf(READS_PS)('leaves the group an attached command shared with its starter
     expect(isRunning(member)).toBe(true);
   } finally {
     vi.unstubAllEnvs();
+    try { process.kill(-leader, 'SIGKILL'); } catch { /* Already stopped. */ }
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+it.skipIf(process.platform === 'win32')('stops only what started in the starter\'s group since the command did, leaving what ran there before it', async () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-starter-group-'));
+  // The group's leader starts a daemon, as an earlier step may leave one, then, a second later, the command's child.
+  const shell = spawn('sh', ['-c', 'sleep 600 & echo $!; sleep 1.2; sleep 601 & echo $!'], { detached: true, stdio: ['ignore', 'pipe', 'ignore'] });
+  const pids = await new Promise<number[]>((resolve) => {
+    let printed = '';
+    shell.stdout.on('data', (chunk: Buffer) => {
+      printed += String(chunk);
+      const found = printed.trim().split(/\s+/).map(Number);
+      if (found.length === 2) resolve(found);
+    });
+  });
+  await new Promise((resolve) => shell.once('exit', resolve));
+  if (shell.pid === undefined) throw new Error('sh did not start');
+  const leader = shell.pid;
+  const [daemon, child] = pids as [number, number];
+  try {
+    // The command started when its child did, to the second; its pid names no process now.
+    fs.writeFileSync(path.join(directory, `group-${leader}.json`), JSON.stringify({ pid: 2147483646, ...await recordedStart(child), tree: true, starterGroup: leader }));
+
+    await stopRecordedGroup(directory);
+
+    expect(isRunning(child)).toBe(false);
+    expect(isRunning(daemon)).toBe(true);
+  } finally {
     try { process.kill(-leader, 'SIGKILL'); } catch { /* Already stopped. */ }
     fs.rmSync(directory, { recursive: true, force: true });
   }

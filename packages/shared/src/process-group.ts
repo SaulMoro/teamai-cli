@@ -29,8 +29,8 @@ function isSameStart(a: ProcessStart, b: ProcessStart): boolean {
   return 'ticks' in a ? 'ticks' in b && a.ticks === b.ticks : 'lstart' in b && a.lstart === b.lstart;
 }
 
-/** A running process: its parent, and when it started. */
-interface RunningProcess { ppid: number; start: ProcessStart }
+/** A running process: its parent, its process group, and when it started. */
+interface RunningProcess { ppid: number; pgid: number; start: ProcessStart }
 
 /** Every running process by pid, from `/proc` on Linux and from ps elsewhere; undefined when neither can tell. */
 function runningProcesses(): Map<number, RunningProcess> | undefined {
@@ -93,13 +93,13 @@ function procProcesses(): Map<number, RunningProcess> | undefined {
       continue;
     }
 
-    if (fields !== undefined) running.set(Number(name), { ppid: fields.ppid, start: tickStart(fields.ticks, boot) });
+    if (fields !== undefined) running.set(Number(name), { ppid: fields.ppid, pgid: fields.pgid, start: tickStart(fields.ticks, boot) });
   }
 
   return running;
 }
 
-const PROCESSES_ARGS = ['-A', '-o', 'pid=,ppid=,lstart='];
+const PROCESSES_ARGS = ['-A', '-o', 'pid=,ppid=,pgid=,lstart='];
 
 /** Every running process, as ps lists it; undefined when ps cannot run or prints no start time. */
 function psProcesses(): Map<number, RunningProcess> | undefined {
@@ -114,10 +114,10 @@ function processesOf(stdout: string): Map<number, RunningProcess> {
   const running = new Map<number, RunningProcess>();
 
   for (const line of stdout.trim().split('\n')) {
-    const [pid, ppid, ...start] = line.trim().split(/\s+/);
+    const [pid, ppid, pgid, ...start] = line.trim().split(/\s+/);
     const lstart = start.join(' ');
 
-    if (pid && ppid && lstart) running.set(Number(pid), { ppid: Number(ppid), start: { lstart, at: Date.parse(lstart) } });
+    if (pid && ppid && pgid && lstart) running.set(Number(pid), { ppid: Number(ppid), pgid: Number(pgid), start: { lstart, at: Date.parse(lstart) } });
   }
 
   return running;
@@ -432,33 +432,30 @@ export async function stopGroup(group: Recorded): Promise<boolean> {
 
   // Without current identities, a pid reused since cannot be told apart, so the group is left alone.
   if (!running || (leader !== undefined && verdictOf(group, leader.start, await namespaceHere()) !== 'same')) return false;
-  await endGroup(group.pid);
-
-  return true;
-}
-
-/** Sends SIGTERM to group `pgid`, then SIGKILL once five seconds pass with any process of it still running. */
-async function endGroup(pgid: number): Promise<void> {
-  signalGroup(pgid, 'SIGTERM');
+  signalGroup(group.pid, 'SIGTERM');
 
   // Counted rather than timed, so a faked clock cannot stretch the grace period.
-  for (let probe = 0; signalGroup(pgid, 0); probe += 1) {
+  for (let probe = 0; signalGroup(group.pid, 0); probe += 1) {
     if (probe === 100) {
-      signalGroup(pgid, 'SIGKILL');
+      signalGroup(group.pid, 'SIGKILL');
       break;
     }
 
     await new Promise<void>((resolve) => setTimeout(resolve, 50));
   }
+
+  return true;
 }
 
 /**
- * Stops group `pgid`, the one an attached command shared with the starter that led it, once that leader is gone. While
- * any process of a group lives, POSIX reuses no pid equal to its id, so a group whose id no process has is still the
- * starter's, and what runs in it is what the starter left. A process with the id is the leader still running, or one
- * leading a later group of the same id: either way the group is left alone, and so is the group of this process.
+ * Stops what the attached command `recorded` left in group `pgid`, the one it shared with the starter that led it, once
+ * that leader is gone: each process of the group that started when the command did or later. While any process of a
+ * group lives, POSIX reuses no pid equal to its id, so a group whose id no process has is still the starter's. A process
+ * with the id is the leader still running, or one leading a later group of the same id: either way the group is left
+ * alone, and so is the group of this process. What ran in the group before the command, such as a server an earlier
+ * step left or a pipe the starter wrote to, is left running.
  */
-async function stopLeftStarterGroup(pgid: number): Promise<void> {
+async function stopLeftStarterGroup(recorded: Recorded, pgid: number): Promise<void> {
   if (!signalGroup(pgid, 0)) return;
 
   try {
@@ -474,7 +471,23 @@ async function stopLeftStarterGroup(pgid: number): Promise<void> {
 
   // A group this process cannot tell from its own is left alone too.
   if (own === undefined || own === pgid) return;
-  await endGroup(pgid);
+  const running = runningProcesses();
+
+  if (running === undefined) return;
+  await endProcesses([...running].flatMap(([pid, { pgid: group, start }]) => (group === pgid && pid !== process.pid && startedSince(start, recorded) ? [{ pid, start }] : [])));
+}
+
+/**
+ * Whether a process that started at `live` started when the command `recorded` names did or later. False when the
+ * record keeps no start to compare with.
+ */
+function startedSince(live: ProcessStart, recorded: Recorded): boolean {
+  if (recorded.startTicks !== undefined && 'ticks' in live) return live.ticks >= recorded.startTicks;
+
+  // ps prints a start to the second, so both are compared in whole seconds.
+  if (recorded.start !== undefined) return Math.floor(live.at / 1000) * 1000 >= Date.parse(recorded.start);
+
+  return false;
 }
 
 /** A process found running, and when it started, which tells it from a later process given its pid. */
@@ -521,7 +534,7 @@ async function stopTree(recorded: Recorded & { tree: true }): Promise<void> {
   if (process.platform === 'win32') return;
   await stopRecordedTree(recorded);
 
-  if (recorded.starterGroup !== undefined) await stopLeftStarterGroup(recorded.starterGroup);
+  if (recorded.starterGroup !== undefined) await stopLeftStarterGroup(recorded, recorded.starterGroup);
 }
 
 /** Stops the attached command `recorded` names and the processes it started that still descend from it. */
@@ -529,13 +542,16 @@ async function stopRecordedTree(recorded: Recorded): Promise<void> {
   const rootStart = runningProcesses()?.get(recorded.pid)?.start;
 
   if (rootStart === undefined || verdictOf(recorded, rootStart, await namespaceHere()) !== 'same') return;
-  const tree = [...descendantsOf(recorded.pid), { pid: recorded.pid, start: rootStart }];
+  await endProcesses([...descendantsOf(recorded.pid), { pid: recorded.pid, start: rootStart }]);
+}
 
-  /** Signals each process of the tree that is still the one recorded; whether any was reached. */
+/** Stops each process of `found` that still runs as found, with a five-second grace period before SIGKILL. */
+async function endProcesses(found: FoundProcess[]): Promise<void> {
+  /** Signals each process that is still the one found; whether any was reached. */
   const signal = (name: NodeJS.Signals | 0): boolean => {
     const now = runningProcesses() ?? new Map<number, RunningProcess>();
 
-    return tree.filter(({ pid, start }) => isStillRunning(now, { pid, start })).reduce((reached, { pid }) => {
+    return found.filter(({ pid, start }) => isStillRunning(now, { pid, start })).reduce((reached, { pid }) => {
       try {
         return process.kill(pid, name) || reached;
       } catch {
