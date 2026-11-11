@@ -295,7 +295,7 @@ it('refuses to run OpenCode where the directory holds links that loop, before it
   expect(await runConfined({ tool: 'opencode', dir, prompt: 'Say whether the fix landed.', level: 'best-effort', timeoutMs: 60_000, attempt: ATTEMPT }, { resolveTool: machineWith({ opencode }) })).toMatchObject({
     ok: false, code: 'confined_failed', message: expect.stringContaining('OpenCode would follow a symlink'),
   });
-}, 20_000);
+});
 
 it('refuses to run OpenCode where it would load an AGENTS.md above its copy of the directory', async () => {
   const { dir } = await evidenceDir();

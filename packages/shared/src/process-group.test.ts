@@ -125,7 +125,7 @@ esac
   } finally {
     fs.rmSync(directory, { recursive: true, force: true });
   }
-}, 15_000);
+});
 
 it.runIf(READS_PS)('escalates only the shell when the current process snapshot fails', async () => {
   // On the real clock: the grace period runs out while ps, which runs off the event loop, answers in real time.
@@ -150,7 +150,7 @@ echo '424243 424242 Sun Oct 18 10:00:00 2026'
   } finally {
     fs.rmSync(directory, { recursive: true, force: true });
   }
-}, 15_000);
+});
 
 /** Starts a detached shell that leads its own group and keeps a `sleep` in it, as a command's shell does. */
 async function detachedGroup() {
@@ -598,6 +598,7 @@ it.runIf(READS_PS)('lets a timer fire on time while it stops an attached command
     try { process.kill(left, 'SIGKILL'); } catch { /* Already stopped. */ }
     fs.rmSync(directory, { recursive: true, force: true });
   }
+  // The stop may wait out its five-second grace, with each ps it runs taking half a second.
 }, 20_000);
 
 it.skipIf(process.platform === 'win32')('tells each process read once, with the ps it ran or stands for, on every platform', async () => {
