@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import path from 'node:path';
 import os from 'node:os';
 import fse from 'fs-extra';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawn } from 'node:child_process';
 
 vi.mock('../config.js', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../config.js')>()),
@@ -143,17 +143,26 @@ describe('a pull and the homes the env moves', () => {
     expect(await fse.readFile(path.join(home, '.config', 'opencode', 'skills', 'deploy', 'SKILL.md'), 'utf8')).toContain('Deploy.');
   });
 
-  it('removes a staging folder a copy cut short left beside a skill an hour ago, and keeps a newer one a copy may still be writing', async () => {
+  it('removes a staging folder a copy cut short left beside a skill, at once when its copy\'s process is gone, else an hour on, and keeps one a copy may still be writing', async () => {
     const skills = path.join(home, '.config', 'opencode', 'skills');
-    const [stale, fresh] = ['.deploy.1a2b3c4d.staging', '.deploy.5e6f7a8b.staging'].map((name) => path.join(skills, name));
+    const [stale, fresh, orphaned, writing] = ['.deploy.1a2b3c4d.staging', '.deploy.5e6f7a8b.staging', '.review.9c0d1e2f.staging', '.review.3a4b5c6d.staging']
+      .map((name) => path.join(skills, name));
     for (const left of [stale, fresh]) await fse.outputFile(path.join(left, 'SKILL.md'), 'Half copied.\n');
     const twoHoursAgo = new Date(Date.now() - 2 * 3_600_000);
     await fse.utimes(stale, twoHoursAgo, twoHoursAgo);
+    // What a copy writes beside what it copies: the process copying, and the copy in a folder below.
+    const gone = await new Promise<number>((resolve) => { const child = spawn(process.execPath, ['-e', '']); child.on('exit', () => resolve(child.pid!)); });
+    for (const [left, pid] of [[orphaned, gone], [writing, process.pid]] as const) {
+      await fse.outputJson(path.join(left, 'owner.json'), { pid, host: os.hostname() });
+      await fse.outputFile(path.join(left, 'copy', 'SKILL.md'), 'Half copied.\n');
+    }
 
     await pull({});
 
     expect(await fse.pathExists(stale)).toBe(false);
     expect(await fse.pathExists(fresh)).toBe(true);
+    expect(await fse.pathExists(orphaned)).toBe(false);
+    expect(await fse.pathExists(writing)).toBe(true);
     expect(await fse.readFile(path.join(skills, 'deploy', 'SKILL.md'), 'utf8')).toContain('Deploy.');
   });
 

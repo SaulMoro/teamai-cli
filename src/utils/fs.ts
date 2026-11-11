@@ -1,10 +1,12 @@
 import { copyRegularTree, isStagingName, mergeRegularTree, readRegularFile, stagingFolder } from '@teamai/shared/regular-file';
 import fse from 'fs-extra';
 import crypto from 'node:crypto';
+import os from 'node:os';
 import path from 'node:path';
 import { z } from 'zod';
 import { log } from '@teamai/shared/log';
 import { expandHome } from '@teamai/shared/home';
+import { isSameProcess } from '@teamai/shared/process-group';
 import { parseJson, type JsonSyntax, isJsonObject } from '@teamai/shared/json';
 import { editJsonText, isPlainJson, parseJsonAs } from './json.js';
 
@@ -375,11 +377,14 @@ export async function copyDir(
   }
 
   if (there !== undefined && !there.isDirectory() && !there.isSymbolicLink()) throw new Error(`${destExpanded} is not a folder, so teamai does not copy the folder ${srcExpanded} over it`);
-  await removeStaleStaging(destExpanded);
+  await removeLeftStaging(destExpanded);
   const staging = stagingFolder(destExpanded);
+  // The copy sits a folder below, beside the process making it, so the next copy can tell a folder whose copy died.
+  const copy = path.join(staging, 'copy');
 
   try {
-    await copyRegularTree(srcExpanded, staging, {
+    await fse.outputFile(path.join(staging, STAGING_OWNER), JSON.stringify({ pid: process.pid, host: os.hostname() }));
+    await copyRegularTree(srcExpanded, copy, {
       filter: async (srcPath: string) => {
         if (isIgnored(path.basename(srcPath)) || isDraft(srcPath)) return false;
         // An entry `skip` names, and everything under it, is left as the destination has it.
@@ -396,26 +401,44 @@ export async function copyDir(
 
     if (there?.isSymbolicLink()) await fse.remove(destExpanded);
 
-    if (there === undefined || there.isSymbolicLink()) await fse.rename(staging, destExpanded);
-    else await mergeRegularTree(staging, destExpanded);
+    if (there === undefined || there.isSymbolicLink()) await fse.rename(copy, destExpanded);
+    else await mergeRegularTree(copy, destExpanded);
   } finally {
     await fse.remove(staging);
   }
 }
 
-/** How old a staging folder is before it counts as one a crash left: a copy takes seconds. */
+/** The file in a staging folder naming the process that copies into it, and its host. */
+const STAGING_OWNER = 'owner.json';
+
+const StagingOwnerSchema = z.object({ pid: z.number().int().positive(), host: z.string() });
+
+/** How old a staging folder is before it counts as one a crash left, when nothing tells its copy is gone: a copy takes seconds. */
 const STALE_STAGING_MS = 60 * 60 * 1000;
 
-/** Removes the staging folders beside `dest` that a copy of it cut short left over an hour ago. */
-async function removeStaleStaging(dest: string): Promise<void> {
+/**
+ * Removes the staging folders beside `dest` that copies cut short left, whichever folder they copied: at once when the
+ * process copying is gone from this host, else an hour on.
+ */
+async function removeLeftStaging(dest: string): Promise<void> {
   const parent = path.dirname(dest);
 
   for (const name of await fse.readdir(parent).catch(() => [])) {
-    if (!isStagingName(name, path.basename(dest))) continue;
-    const left = await fse.lstat(path.join(parent, name)).catch(() => undefined);
-
-    if (left !== undefined && left.mtimeMs + STALE_STAGING_MS < Date.now()) await fse.remove(path.join(parent, name));
+    if (isStagingName(name) && await isLeftBehind(path.join(parent, name))) await fse.remove(path.join(parent, name));
   }
+}
+
+async function isLeftBehind(staging: string): Promise<boolean> {
+  const left = await fse.lstat(staging).catch(() => undefined);
+
+  if (left === undefined) return false;
+
+  if (left.mtimeMs + STALE_STAGING_MS < Date.now()) return true;
+  // None yet, while a copy starts, or none at all, from a teamai that wrote none: the age alone tells then.
+  const owner = StagingOwnerSchema.safeParse(await readRegularFile(path.join(staging, STAGING_OWNER), 'utf8').then(parseJson).catch(() => undefined));
+
+  // A pid another host recorded, as a container sharing the home does, names nothing here.
+  return owner.success && owner.data.host === os.hostname() && await isSameProcess({ pid: owner.data.pid }) === 'other';
 }
 
 /**
