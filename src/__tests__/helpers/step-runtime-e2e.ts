@@ -1,7 +1,11 @@
 import { spawn } from 'node:child_process';
+import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { expect, onTestFinished } from 'vitest';
+import { codexFake } from '@teamai/tool-codex/testing';
 import { claudeProjectDirName } from '@teamai/tool-core/sessions/fs';
+import { fakeAgent, type FakeAgent } from '@teamai/tool-testing/fake-agent';
 import type { StepState } from '../../workflow/step-state.js';
 import type { WorkflowEnvelope } from '../../workflow/types.js';
 
@@ -56,8 +60,26 @@ export const CODEBUDDY_SESSIONS: SessionLayout = {
   record: "{ type: 'message', role: 'user', content: [{ type: 'input_text', text: 'step' }], timestamp: Date.now() }",
 };
 
+/**
+ * Codex on this test's PATH, in `bin`: the recorded `codexFake`, removed when the test finishes, which then fails if
+ * one it started is still running.
+ */
+export function codexOnPath(bin: string): FakeAgent {
+  const codex = fakeAgent(codexFake, { bin });
+
+  onTestFinished(() => {
+    const left = codex.stopLeft();
+
+    for (const file of ['codex', 'codex.calls.jsonl', 'codex.pids']) fs.rmSync(path.join(bin, file), { force: true });
+    expect(left, 'fake codex left running').toEqual([]);
+  });
+
+  return codex;
+}
+
 // A fake Claude Code or CodeBuddy: it writes its result, records how it was launched, keeps its session in the home its
-// variable names, laid out as the tool does, and on --resume continues that session.
+// variable names, laid out as the tool does, and on --resume continues that session. Codex is `codexOnPath`, recorded;
+// CodeBuddy has no recording (it is not installed where the recordings are made), so it keeps this script.
 export const fakeTool = ({ tool, version, homeVariable, sessions }: { tool: string; version: string; homeVariable: string; sessions: SessionLayout }): string => `#!/usr/bin/env node
 const fs = require('node:fs');
 const path = require('node:path');
