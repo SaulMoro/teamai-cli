@@ -737,19 +737,20 @@ async function readSettingsOnlyConfig(configPath: string): Promise<MemberSetting
 export async function saveLocalConfig(config: LocalConfig): Promise<void> {
   const configPath = expandHome(getUserConfigPath());
   const carriedSettings = await readSettingsOnlyConfig(configPath);
-  await writeFileAtomic(configPath, serializeLocalConfig(await keptAiSetting(config, configPath), carriedSettings));
+  await writeFileAtomic(configPath, serializeLocalConfig(await withKeptAiSetting(config, configPath), carriedSettings));
 }
 
 /** Writes a project/local config; its own file remains an install record. */
 async function writeLocalConfig(configPath: string, config: LocalConfig): Promise<void> {
-  await writeFileAtomic(configPath, serializeLocalConfig(await keptAiSetting(config, configPath)));
+  await writeFileAtomic(configPath, serializeLocalConfig(await withKeptAiSetting(config, configPath)));
 }
 
 /** `config`, keeping the `ai` its file `configPath` sets when it holds none itself. */
-async function keptAiSetting(config: LocalConfig, configPath: string): Promise<LocalConfig> {
-  const ai = config.ai ?? await readAiSetting(configPath);
+async function withKeptAiSetting(config: LocalConfig, configPath: string): Promise<LocalConfig> {
+  if (config.ai) return config;
+  const ai = await readAiSetting(configPath);
 
-  return ai && !config.ai ? markMemberSettingsWritten(config, { ai }) : config;
+  return ai ? markMemberSettingsWritten(config, { ai }) : config;
 }
 
 /**
