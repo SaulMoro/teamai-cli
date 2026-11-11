@@ -1378,7 +1378,7 @@ async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, given: 
         // the command starts. An attached command already has the signals its terminal sends to the whole group; a second
         // would force-quit some tools.
         const reachesCommand = !isParallel && await terminalReachesCommand();
-        const forwarded = !isParallel ? commandSignalPolicy(reachesCommand).forwarded : undefined;
+        const forwarded = isParallel ? undefined : commandSignalPolicy(reachesCommand).forwarded;
         // One command at a time keeps the terminal teamai has: Ctrl-C reaches it, and it can prompt on /dev/tty. Any other
         // command gets a process group of its own, which `stop` and the signal handlers below end as a whole, and which a
         // later driver stops whole once this one is gone, children its shell left included.

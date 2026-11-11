@@ -260,7 +260,10 @@ export async function identityOf(pid: number): Promise<ProcessIdentity> {
  * command's shell left included, which no tree from the command's pid reaches once the shell is gone.
  */
 const RecordedSchema = ProcessIdentitySchema.omit({ startedAt: true })
-  .extend({ tree: z.literal(true).optional(), starterGroup: z.number().int().positive().optional() })
+  .and(z.union([
+    z.object({ tree: z.literal(true), starterGroup: z.number().int().positive().optional() }),
+    z.object({ tree: z.undefined().optional() }),
+  ]))
   .refine(keepsStart);
 
 type Recorded = z.infer<typeof RecordedSchema>;
@@ -299,7 +302,7 @@ export function recordGroup(child: ChildProcess, dir: string, { isAttached = fal
   const recordsDir = path.resolve(dir);
 
   // The start is read at once; it is written after the records begun before it in `dir`, so `group.json` stays the latest.
-  const settled: Promise<void> = Promise.all([recordedStartOf(pid), isAttached && leadsOwnGroup(), pendingStarts.get(recordsDir)]).then(([start, leads]) => {
+  const settled: Promise<void> = Promise.all([recordedStartOf(pid), isAttached && leadsOwnGroup(), pendingStarts.get(recordsDir)]).then(([start, isStarterLeader]) => {
     if (pendingStarts.get(recordsDir) === settled) pendingStarts.delete(recordsDir);
 
     // Once this process reaped the child, its pid may name another process. A stop in another process may have removed
@@ -307,7 +310,7 @@ export function recordGroup(child: ChildProcess, dir: string, { isAttached = fal
     if (start === undefined || child.exitCode !== null || child.signalCode !== null || !fs.existsSync(file)) return;
     // A teamai that reads no `tree` signals a group led by this pid, which an attached command never leads: it stops nothing.
     // One that reads no `startTicks` still stops by `spawnedAt`.
-    const body = JSON.stringify({ pid, ...('startTicks' in start && { spawnedAt }), ...start, ...(isAttached && { tree: true }), ...(leads && { starterGroup: process.pid }) });
+    const body = JSON.stringify({ pid, ...('startTicks' in start && { spawnedAt }), ...start, ...(isAttached && { tree: true }), ...(isStarterLeader && { starterGroup: process.pid }) });
     writeGroup(file, body);
     // A teamai before #1523 reads only `group.json`, so the latest group is written there as well: a release that
     // predates the per-group files then stops one group rather than none. It reads the same group twice here, which
@@ -318,14 +321,14 @@ export function recordGroup(child: ChildProcess, dir: string, { isAttached = fal
   pendingStarts.set(recordsDir, settled);
 }
 
-let ownGroupLeader: Promise<boolean> | undefined;
+let isOwnGroupLeader: Promise<boolean> | undefined;
 
 /**
  * Whether this process leads its process group, as a terminal's job does: read once, since a shell sets a job's group
  * before the job runs. False when it cannot be read.
  */
 function leadsOwnGroup(): Promise<boolean> {
-  return ownGroupLeader ??= (async () => (await ownProcessGroup()) === process.pid)();
+  return isOwnGroupLeader ??= (async () => (await ownProcessGroup()) === process.pid)();
 }
 
 /** The process group of this process: on Linux from `/proc`, elsewhere from ps. Undefined when neither can tell. */
@@ -467,7 +470,10 @@ async function stopLeftStarterGroup(pgid: number): Promise<void> {
     if (error instanceof Error && 'code' in error && error.code === 'EPERM') return;
   }
 
-  if ((await ownProcessGroup()) === pgid) return;
+  const own = await ownProcessGroup();
+
+  // A group this process cannot tell from its own is left alone too.
+  if (own === undefined || own === pgid) return;
   await endGroup(pgid);
 }
 
@@ -511,7 +517,7 @@ function descendantsOf(pid: number): FoundProcess[] {
  * alone, as `stopGroup` leaves a group. Then the group it shared with the starter that led it, once that leader is
  * gone, which reaches what the command's shell left after it died. POSIX only.
  */
-async function stopTree(recorded: Recorded): Promise<void> {
+async function stopTree(recorded: Recorded & { tree: true }): Promise<void> {
   if (process.platform === 'win32') return;
   await stopRecordedTree(recorded);
 

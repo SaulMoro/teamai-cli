@@ -221,8 +221,9 @@ steps:
     setMaxParallel(1);
     const pidFile = path.join(pidRoot, 'orphan.pids');
     fs.rmSync(pidFile, { force: true });
+    // A session of its own, so the driver has no terminal however the suite runs.
     const driver = spawn(process.execPath, [CLI, 'workflow', 'start', 'orphan', '--driver', 'local'], {
-      cwd: repo, env: { ...process.env, FORCE_COLOR: '0' }, stdio: ['ignore', 'pipe', 'pipe'],
+      cwd: repo, env: { ...process.env, FORCE_COLOR: '0' }, stdio: ['ignore', 'pipe', 'pipe'], detached: true,
     });
     let stderr = '';
     driver.stderr.on('data', (chunk: Buffer) => { stderr += chunk.toString(); });

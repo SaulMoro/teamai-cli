@@ -482,7 +482,9 @@ async function groupWithMember(stays: boolean): Promise<{ leader: number; member
   // 'exit', not 'close': the sleep holds the shell's stdout open.
   if (!stays) await new Promise((resolve) => shell.once('exit', resolve));
 
-  return { leader: shell.pid ?? 0, member };
+  if (shell.pid === undefined) throw new Error('sh did not start');
+
+  return { leader: shell.pid, member };
 }
 
 it.skipIf(process.platform === 'win32')('stops the group an attached command shared with its starter once that group\'s leader is gone, members its shell left included', async () => {
@@ -507,6 +509,7 @@ it.skipIf(process.platform === 'win32')('leaves the group an attached command sh
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-starter-group-'));
   const { leader, member } = await groupWithMember(true);
   try {
+    // The command's pid names no process: only the group it shared with its starter is left to judge.
     fs.writeFileSync(path.join(directory, `group-${member}.json`), JSON.stringify({ pid: 2147483646, spawnedAt: Date.now(), tree: true, starterGroup: leader }));
 
     await stopRecordedGroup(directory);
@@ -514,6 +517,24 @@ it.skipIf(process.platform === 'win32')('leaves the group an attached command sh
     expect(isRunning(leader)).toBe(true);
     expect(isRunning(member)).toBe(true);
   } finally {
+    try { process.kill(-leader, 'SIGKILL'); } catch { /* Already stopped. */ }
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+it.runIf(READS_PS)('leaves the group an attached command shared with its starter when it cannot tell its own group', async () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-starter-group-'));
+  const { leader, member } = await groupWithMember(false);
+  try {
+    fs.writeFileSync(path.join(directory, `group-${leader}.json`), JSON.stringify({ pid: leader, spawnedAt: Date.now(), tree: true, starterGroup: leader }));
+    // No ps to tell this process's group, which the group to stop might be.
+    vi.stubEnv('PATH', '');
+
+    await stopRecordedGroup(directory);
+
+    expect(isRunning(member)).toBe(true);
+  } finally {
+    vi.unstubAllEnvs();
     try { process.kill(-leader, 'SIGKILL'); } catch { /* Already stopped. */ }
     fs.rmSync(directory, { recursive: true, force: true });
   }
