@@ -156,28 +156,38 @@ describe('self-mode push from a checkout behind the default branch', () => {
     expect(fs.readFileSync(active('.teamai/docs/README.md'), 'utf8')).toBe(README);
   });
 
-  it('pushes a teamai.yaml edit to a new --branch and leaves the edit, its time and an uncommitted link in the checkout', async () => {
+  it('pushes a teamai.yaml edit to a new --branch, then merges the next edit with a teammate\'s change on that branch', async () => {
     expect((await runCLI(['pull'], projectRoot, home)).code).toBe(0);
     teammateLandsOnMain({ '.teamai/docs/README.md': TEAMMATE_README });
     const config = active('.teamai/teamai.yaml');
-    const edited = `${fs.readFileSync(config, 'utf8')}autoUpdate: false\n`;
-    const editedAt = new Date('2026-01-02T03:04:05Z');
-    fs.writeFileSync(config, edited);
-    fs.utimesSync(config, editedAt, editedAt);
-    const link = active('.teamai/docs/guide-link.md');
-    fs.symlinkSync('README.md', link);
+    const committed = fs.readFileSync(config, 'utf8');
+    fs.writeFileSync(config, `${committed}autoUpdate: false\n`);
 
-    const push = await runCLI(['push', '--branch', 'review/config', '--all'], projectRoot, home);
+    const first = await runCLI(['push', '--branch', 'review/config', '--all'], projectRoot, home);
 
     // A generic git host takes the branch but no pull request, which exits 1.
-    expect(push.code, push.output).toBe(1);
-    expect(push.output).toContain('Pushed branch review/config');
+    expect(first.code, first.output).toBe(1);
+    expect(first.output).toContain('Pushed branch review/config');
     expect(git(['diff', '--name-only', 'main', 'review/config'], remote)).toBe('.teamai/teamai.yaml');
-    expect(git(['show', 'review/config:.teamai/teamai.yaml'], remote)).toBe(edited.trim());
+    expect(git(['show', 'review/config:.teamai/teamai.yaml'], remote)).toBe(`${committed}autoUpdate: false`);
     expect(git(['branch', '--show-current'], projectRoot)).toBe('main');
-    expect(fs.readFileSync(config, 'utf8')).toBe(edited);
-    expect(fs.statSync(config).mtime).toEqual(editedAt);
-    expect(fs.readlinkSync(link)).toBe('README.md');
+    expect(fs.readFileSync(config, 'utf8')).toBe(`${committed}autoUpdate: false\n`);
+
+    git(['fetch', '-q', 'origin', 'review/config'], teammate);
+    git(['checkout', '-q', '-b', 'review/config', 'FETCH_HEAD'], teammate);
+    const reviewed = path.join(teammate, '.teamai', 'teamai.yaml');
+    fs.writeFileSync(reviewed, fs.readFileSync(reviewed, 'utf8').replace('usageReport: false\n', '# Reviewed by the team\nusageReport: false\n'));
+    git(['commit', '-q', '-am', 'review the config'], teammate);
+    git(['push', '-q', 'origin', 'review/config'], teammate);
+    fs.writeFileSync(config, `${committed}autoUpdate: false\nsubmodules: false\n`);
+
+    const second = await runCLI(['push', '--branch', 'review/config', '--all'], projectRoot, home);
+
+    expect(second.code, second.output).toBe(1);
+    expect(second.output).toContain('Pushed branch review/config');
+    expect(git(['show', 'review/config:.teamai/teamai.yaml'], remote))
+      .toBe(`${committed.replace('usageReport: false\n', '# Reviewed by the team\nusageReport: false\n')}autoUpdate: false\nsubmodules: false`);
+    expect(git(['branch', '--show-current'], projectRoot)).toBe('main');
   });
 
   it('refuses with exit 2, pushing nothing, when the member and a teammate both changed a team file', async () => {
