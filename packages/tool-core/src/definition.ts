@@ -1,4 +1,4 @@
-import type { JsonSyntax } from './json.js';
+import type { JsonSyntax } from '@teamai/shared/json';
 
 /** The MCP config formats teamai writes (`src/resources/mcp-format.ts`); a tool's MCP channel names one. */
 export type McpFormat = 'claude' | 'cursor' | 'buddy' | 'codex' | 'opencode' | 'copilot' | 'pi' | 'muse' | 'agy' | 'openclaw' | 'hermes' | 'dsh';
@@ -387,7 +387,7 @@ export type ToolFeatures = {
   readonly stats: Support;
   /** The dashboard reads the tokens and model of each of the tool's requests (`tokens`), and prices them. */
   readonly tokens: Support;
-  /** teamai's own AI calls (enrich, codebase, import, maintenance) run on the tool's CLI (`tool-launch/call.ts`). */
+  /** teamai's own AI calls (enrich, codebase, import, maintenance) run on the tool's CLI (`src/workflow/runtimes/tool-caller.ts`). */
   readonly aiBackend: Support;
   /** With the skill driver and no verified judge of the tool here, the tool's session judges the workflow run it drives (#1386). */
   readonly sessionJudge: Support;
@@ -436,7 +436,7 @@ export type ToolDescriptor<TIds extends DescriptorIds = DescriptorIds> = {
    * adapter for. `'unknown'`: where it keeps them is unknown.
    */
   readonly sessions: readonly [TIds['platform'], ...TIds['platform'][]] | 'none' | 'unknown';
-  /** The adapter teamai launches the tool headless with (`src/tool-launch/adapters.ts`), or `'none'` when teamai never launches it. */
+  /** The adapter teamai launches the tool headless with (`LAUNCH_ADAPTERS` in `src/launch-registry.ts`), or `'none'` when teamai never launches it. */
   readonly launch: TIds['launch'] | 'none';
   /**
    * Where the dashboard reads the tool's token usage: a format of

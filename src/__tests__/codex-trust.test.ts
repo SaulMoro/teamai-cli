@@ -14,7 +14,7 @@ vi.mock('cross-spawn', async (importOriginal) => {
   return { ...actual, default: vi.fn(actual.default) };
 });
 
-vi.mock('@teamai/tool-core/log', () => ({
+vi.mock('@teamai/shared/log', () => ({
   log: { info: vi.fn(), success: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn(), persist: vi.fn() },
 }));
 
@@ -24,10 +24,10 @@ import { oldestCodexBuildVersion, readCodexHookTrust, removeOwnedCodexProjectTru
 import { reconcileCodexDispatchers, setCodexDispatcherHooks } from '../codex-team-hooks.js';
 import crossSpawn from 'cross-spawn';
 import { resolveAnchors, listWorktrees } from '../utils/git.js';
-import { log } from '../utils/logger.js';
+import { log } from '@teamai/shared/log';
 import { CODEX_TOOL_ID } from '../types.js';
 import type { HookDef, LocalConfig, TeamaiConfig } from '../types.js';
-import { fakeCodexVersionRuns, installFakeCodex, readFakeCodexState, writeFakeCodexOptions } from './helpers/fake-codex.js';
+import { fakeCodexVersionRuns, installFakeCodex, readFakeCodexState, writeFakeCodexOptions } from '@teamai/tool-codex/testing';
 
 let home: string;
 let repo: string;

@@ -22,14 +22,14 @@ import { z } from 'zod';
 import { AgentAdapter, ToolUnavailableError, type SessionMeta, type SessionReadRef } from '@teamai/tool-core/sessions/base';
 import type { ContentBlock, Message, Session } from '@teamai/tool-core/sessions/ir';
 import { dirExists, readJsonl, readJsonlHead, resolveRealCwd } from '@teamai/tool-core/sessions/fs';
-import type { JsonlRecord } from '@teamai/tool-core/json';
-import { JsonValueSchema, type JsonValue } from '@teamai/tool-core/json';
+import type { JsonlRecord } from '@teamai/shared/json';
+import { JsonValueSchema, type JsonValue } from '@teamai/shared/json';
 import { fallbackTitle } from '@teamai/tool-core/sessions/title';
 import { isSafeSessionFileId } from '@teamai/tool-core/sessions/ids';
 import { findSqlite3, snapshotSqlite } from '@teamai/tool-core/sessions/sqlite';
-import { execCommand, type ExecResult } from '@teamai/tool-core/exec';
-import { log } from '@teamai/tool-core/log';
-import { parseJson } from '@teamai/tool-core/json';
+import type { ExecResult, Processes } from '@teamai/shared/exec';
+import { log } from '@teamai/shared/log';
+import { parseJson } from '@teamai/shared/json';
 
 const SummaryRow = z.object({
   conversation_id: z.string(),
@@ -82,7 +82,7 @@ export class AgyAdapter extends AgentAdapter {
   static readonly platform = 'agy';
 
   /** @param storeRoots the stores to read, as `agyStoreRoots` names them. */
-  constructor(private readonly storeRoots: readonly string[]) {
+  constructor(private readonly storeRoots: readonly string[], private readonly processes: Processes) {
     super();
   }
 
@@ -122,8 +122,8 @@ export class AgyAdapter extends AgentAdapter {
 
     try {
       const copied = path.join(copy, 'conversation_summaries.db');
-      await snapshotSqlite(sqlite3, db, copied);
-      result = await execCommand(sqlite3, ['-json', copied, sql], { timeoutMs: 30_000 });
+      await snapshotSqlite(sqlite3, db, copied, this.processes.exec);
+      result = await this.processes.exec(sqlite3, ['-json', copied, sql], { timeoutMs: 30_000 });
     } finally {
       await fs.promises.rm(copy, { recursive: true, force: true });
     }

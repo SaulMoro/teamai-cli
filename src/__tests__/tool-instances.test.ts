@@ -55,7 +55,7 @@ home: { dir: .acme-claude, env: ACME_CLAUDE_CONFIG_DIR }
 async function load(repo: string) {
   const { loadTeamConfig } = await import('../config.js');
   const registry = await import('../tool-registry.js');
-  const { log } = await import('@teamai/tool-core/log');
+  const { log } = await import('@teamai/shared/log');
   const errors = vi.spyOn(log, 'error').mockImplementation(() => undefined);
   const config = await loadTeamConfig(repo);
 
@@ -127,7 +127,7 @@ describe('team tool instances', () => {
     const repo = teamRepo({ 'tools/acme-claude.yaml': ACME_CLAUDE.replace('command: acme-claude', "command: './scripts/acme-claude'") });
     const { loadTeamConfig } = await import('../config.js');
     const { resetWarnOnce } = await import('../utils/warn-once.js');
-    const { log } = await import('@teamai/tool-core/log');
+    const { log } = await import('@teamai/shared/log');
     const errors = vi.spyOn(log, 'error').mockImplementation(() => undefined);
 
     const shown = () => errors.mock.calls.map(([message]) => String(message));
@@ -191,6 +191,53 @@ describe('the sessions of an instance', () => {
     expect(platforms.filter((platform) => platform === 'claude-code')).toHaveLength(1);
     expect(platforms).toContain('acme-claude');
     expect(platforms).not.toContain('review-claude');
+  });
+
+  it('reads an OpenCode instance whose home moves XDG_DATA_HOME on a platform of its own, in that home\'s opencode', async () => {
+    vi.stubEnv('XDG_DATA_HOME', '');
+    await load(teamRepo({ 'tools/opencode-work.yaml': 'schemaVersion: v1alpha1\nname: opencode-work\nextends: opencode\nhome: { dir: .opencode-work, env: XDG_DATA_HOME }\n' }));
+    const { AgentSession } = await import('../session-flow/agent-session.js');
+    const { adapterOn, listAvailablePlatforms, storeDirOf } = await import('../session-flow/adapters/index.js');
+
+    expect(AgentSession.platformForTool('opencode-work')).toBe('opencode-work');
+    expect(listAvailablePlatforms()).toContain('opencode-work');
+    expect(storeDirOf('opencode-work', { kind: 'recorded', toolRoots: undefined })).toBe(path.join(home, '.opencode-work', 'opencode'));
+    expect(storeDirOf('opencode-work', { kind: 'tool-home', dir: path.join(root, 'attempt-home') })).toBe(path.join(root, 'attempt-home', 'opencode'));
+    expect(adapterOn('opencode-work', { kind: 'recorded', toolRoots: undefined }).platform).toBe('opencode-work');
+  });
+
+  it('keeps no platform for an OpenCode instance that moves only its config directory, whose sessions OpenCode keeps in the member\'s own data home', async () => {
+    vi.stubEnv('XDG_DATA_HOME', '');
+    await load(teamRepo({ 'tools/opencode-review.yaml': 'schemaVersion: v1alpha1\nname: opencode-review\nextends: opencode\nhome: { dir: .opencode-review, env: OPENCODE_CONFIG_DIR }\n' }));
+    const { AgentSession } = await import('../session-flow/agent-session.js');
+    const { listAvailablePlatforms } = await import('../session-flow/adapters/index.js');
+
+    expect(AgentSession.platformForTool('opencode-review')).toBeUndefined();
+    expect(listAvailablePlatforms()).not.toContain('opencode-review');
+  });
+});
+
+describe('the home of an instance', () => {
+  it('stays the instance\'s own directory when its variable is the home variable of the tool it extends, which the member set for that tool', async () => {
+    vi.stubEnv('CLAUDE_CONFIG_DIR', path.join(home, '.claude2'));
+    vi.stubEnv('XDG_DATA_HOME', path.join(home, 'data'));
+    await load(teamRepo({
+      'tools/claude-work.yaml': 'schemaVersion: v1alpha1\nname: claude-work\nextends: claude\nhome: { dir: .claude-work, env: CLAUDE_CONFIG_DIR }\n',
+      'tools/opencode-work.yaml': 'schemaVersion: v1alpha1\nname: opencode-work\nextends: opencode\nhome: { dir: .opencode-work, env: XDG_DATA_HOME }\n',
+    }));
+    const { storeDirOf } = await import('../session-flow/adapters/index.js');
+    const recorded = { kind: 'recorded', toolRoots: undefined } as const;
+
+    expect(storeDirOf('claude-work', recorded)).toBe(path.join(home, '.claude-work', 'projects'));
+    expect(storeDirOf('opencode-work', recorded)).toBe(path.join(home, '.opencode-work', 'opencode'));
+  });
+
+  it('follows the member\'s value of a variable of the instance\'s own', async () => {
+    vi.stubEnv('ACME_CLAUDE_CONFIG_DIR', path.join(root, 'acme'));
+    await load(teamRepo({ 'tools/acme-claude.yaml': ACME_CLAUDE }));
+    const { storeDirOf } = await import('../session-flow/adapters/index.js');
+
+    expect(storeDirOf('acme-claude', { kind: 'recorded', toolRoots: undefined })).toBe(path.join(root, 'acme', 'projects'));
   });
 });
 

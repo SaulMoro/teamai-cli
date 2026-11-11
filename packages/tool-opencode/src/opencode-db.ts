@@ -5,8 +5,8 @@ import { z } from 'zod';
 import { isSafeSessionFileId } from '@teamai/tool-core/sessions/ids';
 import { findSqlite3 } from '@teamai/tool-core/sessions/sqlite';
 import { addTokenUsage, emptyTokenUsage } from '@teamai/tool-core/tokens';
-import { execCommand } from '@teamai/tool-core/exec';
-import { log } from '@teamai/tool-core/log';
+import type { Processes } from '@teamai/shared/exec';
+import { log } from '@teamai/shared/log';
 import type { TokenReading, TokenRequest, TokenSource } from '@teamai/tool-core/tokens';
 
 const Count = z.number().finite().nonnegative().catch(0).default(0);
@@ -35,7 +35,7 @@ const Role = z.object({ role: z.string() }).catch({ role: '' });
  * versions to `message`; a message in both is read once. Reasoning tokens
  * are billed as output, and the cost OpenCode reports is kept when above zero.
  */
-export async function readOpencodeDb(source: TokenSource): Promise<TokenReading> {
+export async function readOpencodeDb(source: TokenSource, processes: Processes): Promise<TokenReading> {
   let tokens = emptyTokenUsage();
   const requests: TokenRequest[] = [];
 
@@ -52,7 +52,7 @@ export async function readOpencodeDb(source: TokenSource): Promise<TokenReading>
     return { tokens, requests };
   }
 
-  const tables = (await execCommand(sqlite3, ['-readonly', db, "SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('message', 'session_message');"], { timeoutMs: 30_000 }))
+  const tables = (await processes.exec(sqlite3, ['-readonly', db, "SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('message', 'session_message');"], { timeoutMs: 30_000 }))
     .stdout.split('\n').map((name) => name.trim()).filter(Boolean);
 
   if (!tables.length) return { tokens, requests };
@@ -61,7 +61,7 @@ export async function readOpencodeDb(source: TokenSource): Promise<TokenReading>
     .map((table) => `SELECT id, ${table === 'session_message' ? 'type' : 'NULL AS type'}, data FROM ${table} WHERE session_id = '${source.sessionId}'`)
     .join(' UNION ALL ') + ';';
 
-  const result = await execCommand(sqlite3, ['-readonly', '-json', db, sql], { timeoutMs: 30_000 });
+  const result = await processes.exec(sqlite3, ['-readonly', '-json', db, sql], { timeoutMs: 30_000 });
 
   if (result.code !== 0) {
     log.warn(`token-usage: sqlite3 could not read ${db}: ${result.stderr.trim() || `exit ${result.code}`}`);

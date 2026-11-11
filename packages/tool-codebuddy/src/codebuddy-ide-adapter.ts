@@ -22,7 +22,7 @@ import * as path from 'node:path';
 import { AgentAdapter, type SessionMeta, type SessionReadRef } from '@teamai/tool-core/sessions/base';
 import { z } from 'zod';
 import type { Session, SessionMetadata, Message, ContentBlock, ImageBlock, ToolResultBlock } from '@teamai/tool-core/sessions/ir';
-import { JsonValueSchema } from '@teamai/tool-core/json';
+import { JsonValueSchema } from '@teamai/shared/json';
 import {
   findIdeHistoryDirs,
   findIdeConversationDirs,
@@ -36,9 +36,10 @@ import {
   type IdeBlock,
   type IdeConversationEntry,
   type IdeMessageParsed,
-} from '@teamai/tool-core/formats/ide-history';
+} from './ide-history.js';
 import { cutTitle, isInjectedText, titleFromCandidates } from '@teamai/tool-core/sessions/title';
 import { deriveTargetSessionId } from '@teamai/tool-core/sessions/ids';
+import { readRegularFileSync } from '@teamai/shared/regular-file';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -119,7 +120,7 @@ function parseImageBlock(block: IdeBlock, convDir: string): ImageBlock | null {
   let data: string | undefined;
 
   try {
-    data = fs.readFileSync(filePath).toString('base64');
+    data = readRegularFileSync(filePath).toString('base64');
   } catch {
     data = undefined; // File missing (cleaned up / another machine): keep the pointer; the write side degrades
   }

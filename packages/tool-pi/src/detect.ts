@@ -1,11 +1,7 @@
-import { execVersion, type VersionDetector } from '@teamai/tool-core/detect';
-
-async function detectPiVersion(): Promise<string> {
-  // Pi Coding Agent: "1.4.0"
-  const raw = await execVersion('pi');
-
-  return raw.match(/\d+\.\d+\.\d+/)?.[0] ?? '';
-}
+import type { VersionDetector } from '@teamai/tool-core/detect';
 
 /** How teamai reads the version of pi; it reads none of omp. */
-export const detect = { pi: detectPiVersion } as const satisfies Record<string, VersionDetector>;
+export const detect = {
+  // Pi Coding Agent: "1.4.0"
+  pi: { probe: ['pi', '--version'], read: (raw) => raw.match(/\d+\.\d+\.\d+/)?.[0] ?? '' },
+} as const satisfies Record<string, VersionDetector>;

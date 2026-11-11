@@ -16,8 +16,8 @@ import { installationNotes } from './installations.js';
 import { hookSourceMatches } from './utils/hook-source.js';
 import { resolveCliEntry, teamaiWrapperPath, teamaiWrapperSource } from './builtin-hooks.js';
 import { LOGIN_DEFERRED_ENV } from './hook-fast-path.js';
-import { getUserHome } from './utils/home.js';
-import { log, setStderrOnly } from './utils/logger.js';
+import { getUserHome } from '@teamai/shared/home';
+import { log, setStderrOnly } from '@teamai/shared/log';
 import type { GlobalOptions } from './types.js';
 import {
   COPILOT_TOOL_ID,
@@ -26,6 +26,7 @@ import {
   detectToolRoot,
   resolveToolRootDir,
   toolRootRejection,
+  toolRootRejectionText,
   resolveHookScope,
   legacyManagedHooksPath,
   resolveBaseDir,
@@ -379,7 +380,7 @@ function buildToolRootChecks(localConfig: LocalConfig, teamConfig: TeamaiConfig 
         applyToolRoots({ [tool]: declared }, localConfig.toolRoots)[tool],
       ),
       fix: rejection
-        ? `${envVar} is ${detected}, which teamai cannot sync to (${rejection}); `
+        ? `${envVar} is ${detected}, which teamai cannot sync to (${toolRootRejectionText(rejection)}); `
           + `this config syncs ${label} to ${effective}. Point ${envVar} at a directory `
           + 'in your home, or anywhere under a `~/.config/<name>`, and re-run `teamai init`.'
         : `${envVar} is ${detected}; this config syncs ${label} to ${effective}`

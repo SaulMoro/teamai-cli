@@ -4,9 +4,12 @@ import path from 'node:path';
 import { parse as parseToml } from 'smol-toml';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { z } from 'zod';
-import { confinedOffers, installedConfinedTools, runConfined } from '../tool-launch/confined.js';
+import { confinedOffers, installedConfinedTools, runConfined } from '../workflow/confined-launch.js';
 
 let root = '';
+
+/** The attempt each run here belongs to. */
+const ATTEMPT = { run: 'r0123456789abcdef', attempt: 'a01234567' };
 beforeEach(async () => { root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'teamai-confined-'))); });
 afterEach(async () => { vi.unstubAllEnvs(); await fs.rm(root, { recursive: true, force: true }); });
 
@@ -68,7 +71,7 @@ const args=process.argv.slice(2);
 fs.writeFileSync(${JSON.stringify(record)}, JSON.stringify({ args, cwd: process.cwd(), env: process.env, stdin, profile: fs.readFileSync(require('path').join(process.env.CODEX_HOME,'config.toml'),'utf8') }));
 fs.writeFileSync(args[args.indexOf('-o')+1], JSON.stringify({ verdict: 'fixed' }));`);
 
-  const result = await runConfined({ tool: 'codex', dir, prompt: 'Say whether the fix landed.', schema: { type: 'object' }, level: 'verified', timeoutMs: 60_000 }, { resolveTool: machineWith({ codex }) });
+  const result = await runConfined({ tool: 'codex', dir, prompt: 'Say whether the fix landed.', schema: { type: 'object' }, level: 'verified', timeoutMs: 60_000, attempt: ATTEMPT }, { resolveTool: machineWith({ codex }) });
 
   expect(result).toEqual({ ok: true, reply: { verdict: 'fixed' }, run: { tool: 'codex', isolation: 'verified', access: 'read' } });
   const invocation = Invocation.parse(JSON.parse(await fs.readFile(record, 'utf8')));
@@ -91,7 +94,7 @@ const args=process.argv.slice(2); const file=args[args.indexOf('--append-system-
 fs.writeFileSync(${JSON.stringify(record)}, JSON.stringify({ args, cwd: process.cwd(), env: process.env, stdin, profile: fs.readFileSync(file,'utf8') + '\\n' + file }));
 console.log(JSON.stringify({ type: 'result', structured_output: { verdict: 'fixed' } }));`);
 
-  const result = await runConfined({ tool: 'claude', dir, prompt: 'Say whether the fix landed.', level: 'verified', timeoutMs: 60_000 }, { resolveTool: machineWith({ claude }) });
+  const result = await runConfined({ tool: 'claude', dir, prompt: 'Say whether the fix landed.', level: 'verified', timeoutMs: 60_000, attempt: ATTEMPT }, { resolveTool: machineWith({ claude }) });
 
   expect(result).toMatchObject({ ok: true, reply: { verdict: 'fixed' }, run: { tool: 'claude', isolation: 'verified', access: 'read' } });
   const invocation = Invocation.parse(JSON.parse(await fs.readFile(record, 'utf8')));
@@ -118,7 +121,7 @@ it('passes no team secret or credential to the tool, and marks its session as la
 fs.writeFileSync(${JSON.stringify(record)}, JSON.stringify({ args: [], cwd: process.cwd(), env: process.env, stdin }));
 console.log(JSON.stringify({ type: 'result', structured_output: { verdict: 'fixed' } }));`);
 
-  const result = await runConfined({ tool: 'claude', dir, prompt: 'Say whether the fix landed.', level: 'verified', timeoutMs: 60_000 }, { resolveTool: machineWith({ claude }) });
+  const result = await runConfined({ tool: 'claude', dir, prompt: 'Say whether the fix landed.', level: 'verified', timeoutMs: 60_000, attempt: ATTEMPT }, { resolveTool: machineWith({ claude }) });
 
   expect(result).toMatchObject({ ok: true, reply: { verdict: 'fixed' }, run: { tool: 'claude', isolation: 'verified' } });
   const { env } = Invocation.parse(JSON.parse(await fs.readFile(record, 'utf8')));
@@ -132,7 +135,7 @@ it('refuses a verified run on a tool that cannot reach verified, without startin
   const started = path.join(root, 'started');
   const cursor = await fakeTool('cursor', '2026.10.1', `fs.writeFileSync(${JSON.stringify(started)}, '');`);
 
-  const result = await runConfined({ tool: 'cursor', dir, prompt: 'Say whether the fix landed.', level: 'verified', timeoutMs: 60_000 }, { resolveTool: machineWith({ 'cursor-agent': cursor }) });
+  const result = await runConfined({ tool: 'cursor', dir, prompt: 'Say whether the fix landed.', level: 'verified', timeoutMs: 60_000, attempt: ATTEMPT }, { resolveTool: machineWith({ 'cursor-agent': cursor }) });
 
   expect(result).toEqual({ ok: false, code: 'confined_tool_unavailable', message: 'cursor 2026.10.1 has no verified judge profile. Install a supported version or use another driver.' });
   expect(await fs.access(started).then(() => true, () => false)).toBe(false);
@@ -142,7 +145,7 @@ it('fails a reply that is not JSON, keeping what the tool printed', async () => 
   const { dir } = await evidenceDir();
   const cursor = await fakeTool('cursor', '2026.10.1', "console.log(JSON.stringify({ type: 'result', result: 'The fix landed.' }));");
 
-  const result = await runConfined({ tool: 'cursor', dir, prompt: 'Say whether the fix landed.', level: 'best-effort', timeoutMs: 60_000 }, { resolveTool: machineWith({ 'cursor-agent': cursor }) });
+  const result = await runConfined({ tool: 'cursor', dir, prompt: 'Say whether the fix landed.', level: 'best-effort', timeoutMs: 60_000, attempt: ATTEMPT }, { resolveTool: machineWith({ 'cursor-agent': cursor }) });
 
   expect(result).toEqual({ ok: false, code: 'confined_reply_invalid', message: 'cursor did not reply with JSON. See the saved output, then retry.', raw: expect.stringContaining('The fix landed.') });
 });
@@ -161,7 +164,7 @@ it.each([
 fs.writeFileSync(${JSON.stringify(record)}, fs.readFileSync(require('path').join(process.env.OPENCODE_CONFIG_DIR, 'opencode.json'), 'utf8'));
 console.log(JSON.stringify({ type: 'text', part: { text: '{"verdict":"fixed"}' } }));`);
 
-  const result = await runConfined({ tool: 'opencode', dir, prompt: 'Say whether the fix landed.', level: 'best-effort', timeoutMs: 60_000 }, { resolveTool: machineWith({ opencode }) });
+  const result = await runConfined({ tool: 'opencode', dir, prompt: 'Say whether the fix landed.', level: 'best-effort', timeoutMs: 60_000, attempt: ATTEMPT }, { resolveTool: machineWith({ opencode }) });
 
   expect(result).toMatchObject(expected);
   const written = await fs.readFile(record, 'utf8').then((text) => z.object({ provider: z.object({ gateway: z.object({ options: z.object({ apiKey: z.string() }) }) }) }).parse(JSON.parse(text)).provider.gateway.options.apiKey, () => undefined);
@@ -182,7 +185,7 @@ it("gives the tool the member's own key where the team env replaced it, and drop
 fs.writeFileSync(${JSON.stringify(record)}, JSON.stringify({ key: process.env.ANTHROPIC_API_KEY ?? null, url: process.env.ANTHROPIC_BASE_URL ?? null }));
 console.log(JSON.stringify({ type: 'result', structured_output: {} }));`);
 
-  expect(await runConfined({ tool: 'claude', dir, prompt: 'Say whether the fix landed.', level: 'best-effort', timeoutMs: 60_000 }, { resolveTool: machineWith({ claude }) })).toMatchObject({ ok: true });
+  expect(await runConfined({ tool: 'claude', dir, prompt: 'Say whether the fix landed.', level: 'best-effort', timeoutMs: 60_000, attempt: ATTEMPT }, { resolveTool: machineWith({ claude }) })).toMatchObject({ ok: true });
   expect(JSON.parse(await fs.readFile(record, 'utf8'))).toEqual({ key: 'member-key', url: null });
 });
 
@@ -195,7 +198,7 @@ it('refuses a Codex provider whose key lives in a credential variable teamai blo
   vi.stubEnv('GH_TOKEN', 'member-gh-token');
   const codex = await fakeTool('codex', 'codex-cli 0.163.0');
 
-  expect(await runConfined({ tool: 'codex', dir, prompt: 'Say whether the fix landed.', level: 'best-effort', timeoutMs: 60_000 }, { resolveTool: machineWith({ codex }) })).toEqual({
+  expect(await runConfined({ tool: 'codex', dir, prompt: 'Say whether the fix landed.', level: 'best-effort', timeoutMs: 60_000, attempt: ATTEMPT }, { resolveTool: machineWith({ codex }) })).toEqual({
     ok: false, code: 'confined_failed', message: 'codex could not run confined: The confined profile uses blocked credential variable GH_TOKEN. Use a dedicated provider API-key variable instead. Fix that, then retry.',
   });
 });
@@ -217,7 +220,7 @@ const args=process.argv.slice(2);
 fs.writeFileSync(${JSON.stringify(record)}, JSON.stringify({ args, cwd: process.cwd(), env: process.env, stdin }));
 fs.writeFileSync(args[args.indexOf('-o')+1], JSON.stringify({ verdict: 'fixed' }));`);
 
-  const result = await runConfined({ tool: 'codex', dir, prompt: 'Say whether the fix landed.', schema: { type: 'object' }, level: 'verified', timeoutMs: 60_000 }, { resolveTool: machineWith({ codex }) });
+  const result = await runConfined({ tool: 'codex', dir, prompt: 'Say whether the fix landed.', schema: { type: 'object' }, level: 'verified', timeoutMs: 60_000, attempt: ATTEMPT }, { resolveTool: machineWith({ codex }) });
 
   expect(result).toMatchObject({ ok: true, reply: { verdict: 'fixed' } });
   const { env } = Invocation.parse(JSON.parse(await fs.readFile(record, 'utf8')));
@@ -248,7 +251,7 @@ const args=process.argv.slice(2);
 fs.writeFileSync(${JSON.stringify(record)}, JSON.stringify({ args, cwd: process.cwd(), env: process.env, stdin }));
 fs.writeFileSync(args[args.indexOf('-o')+1], JSON.stringify({ verdict: 'fixed' }));`);
 
-  const result = await runConfined({ tool: 'codex', dir, prompt: 'Say whether the fix landed.', schema: { type: 'object' }, level: 'verified', timeoutMs: 60_000 }, { resolveTool: machineWith({ codex }) });
+  const result = await runConfined({ tool: 'codex', dir, prompt: 'Say whether the fix landed.', schema: { type: 'object' }, level: 'verified', timeoutMs: 60_000, attempt: ATTEMPT }, { resolveTool: machineWith({ codex }) });
 
   expect(result).toMatchObject({ ok: true, reply: { verdict: 'fixed' } });
   const { env } = Invocation.parse(JSON.parse(await fs.readFile(record, 'utf8')));
@@ -286,16 +289,28 @@ it('refuses to run OpenCode where it would load an AGENTS.md above its copy of t
   await tmpUnder('AGENTS.md');
   const opencode = await fakeTool('opencode', 'opencode v2.1.2');
 
-  expect(await runConfined({ tool: 'opencode', dir, prompt: 'Say whether the fix landed.', level: 'best-effort', timeoutMs: 60_000 }, { resolveTool: machineWith({ opencode }) })).toMatchObject({
+  expect(await runConfined({ tool: 'opencode', dir, prompt: 'Say whether the fix landed.', level: 'best-effort', timeoutMs: 60_000, attempt: ATTEMPT }, { resolveTool: machineWith({ opencode }) })).toMatchObject({
     ok: false, code: 'confined_failed', message: expect.stringContaining(`OpenCode would load instructions from ${path.join(root, 'parent', 'AGENTS.md')}`),
   });
+});
+
+it.each([
+  ['fails usage_limited on an OpenCode error whose type is a usage limit, whatever its message says', 'provider.rate-limit', 'Too many requests', 'usage_limited'],
+  ['fails confined_failed on an OpenCode error whose type is no usage limit, though its message reads like one', 'provider.no-route', 'Rate limit reached for anthropic/claude-nonexistent-9 on no route', 'confined_failed'],
+])('%s', async (_, type, message, code) => {
+  const { dir } = await evidenceDir();
+  const opencode = await fakeTool('opencode', 'opencode v2.1.2', `console.log(JSON.stringify({ type: 'error', error: { type: ${JSON.stringify(type)}, message: ${JSON.stringify(message)} } })); process.exit(1);`);
+
+  const result = await runConfined({ tool: 'opencode', dir, prompt: 'Say whether the fix landed.', level: 'best-effort', timeoutMs: 60_000, attempt: ATTEMPT }, { resolveTool: machineWith({ opencode }) });
+
+  expect(result).toMatchObject({ ok: false, code, reported: message });
 });
 
 it('fails a tool that exits non-zero with only stderr by its exit code, keeping that stderr', async () => {
   const { dir } = await evidenceDir();
   const cursor = await fakeTool('cursor', '2026.10.1', "process.stderr.write('network unreachable'); process.exit(2);");
 
-  expect(await runConfined({ tool: 'cursor', dir, prompt: 'Say whether the fix landed.', level: 'best-effort', timeoutMs: 60_000 }, { resolveTool: machineWith({ 'cursor-agent': cursor }) })).toEqual({
+  expect(await runConfined({ tool: 'cursor', dir, prompt: 'Say whether the fix landed.', level: 'best-effort', timeoutMs: 60_000, attempt: ATTEMPT }, { resolveTool: machineWith({ 'cursor-agent': cursor }) })).toEqual({
     ok: false, code: 'confined_failed', message: 'cursor exited with code 2. See the saved output, then retry or use another tool or driver.', raw: '\nnetwork unreachable',
   });
 });
@@ -303,7 +318,7 @@ it('fails a tool that exits non-zero with only stderr by its exit code, keeping 
 it('fails a tool that is not on PATH without creating anything', async () => {
   const { dir, listing } = await evidenceDir();
 
-  expect(await runConfined({ tool: 'claude', dir, prompt: 'Say whether the fix landed.', level: 'best-effort', timeoutMs: 60_000 }, { resolveTool: machineWith({}) })).toEqual({
+  expect(await runConfined({ tool: 'claude', dir, prompt: 'Say whether the fix landed.', level: 'best-effort', timeoutMs: 60_000, attempt: ATTEMPT }, { resolveTool: machineWith({}) })).toEqual({
     ok: false, code: 'confined_tool_unavailable', message: 'The claude executable is not available on PATH. Install it, or use another tool or driver.',
   });
   expect(await listing()).toEqual(['transcript.md']);
@@ -320,7 +335,7 @@ it("keeps the member's Claude model and only the switch variables its profile al
 const args=process.argv.slice(2); fs.copyFileSync(args[args.indexOf('--settings')+1], ${JSON.stringify(record)});
 console.log(JSON.stringify({ type: 'result', structured_output: {} }));`);
 
-  expect(await runConfined({ tool: 'claude', dir, prompt: 'Say whether the fix landed.', level: 'best-effort', timeoutMs: 60_000 }, { resolveTool: machineWith({ claude }) })).toMatchObject({ ok: true });
+  expect(await runConfined({ tool: 'claude', dir, prompt: 'Say whether the fix landed.', level: 'best-effort', timeoutMs: 60_000, attempt: ATTEMPT }, { resolveTool: machineWith({ claude }) })).toMatchObject({ ok: true });
   expect(JSON.parse(await fs.readFile(record, 'utf8'))).toEqual({ model: 'member-model', env: { ANTHROPIC_BASE_URL: 'https://gateway.test' } });
 });
 
@@ -335,7 +350,7 @@ it('keeps the Codex model when the provider it names has no table', async () => 
 const args=process.argv.slice(2); fs.writeFileSync(${JSON.stringify(record)}, JSON.stringify(args));
 fs.writeFileSync(args[args.indexOf('-o')+1], '{}');`);
 
-  expect(await runConfined({ tool: 'codex', dir, prompt: 'Say whether the fix landed.', level: 'best-effort', timeoutMs: 60_000 }, { resolveTool: machineWith({ codex }) })).toMatchObject({ ok: true, run: { model: { requested: 'member-model' } } });
+  expect(await runConfined({ tool: 'codex', dir, prompt: 'Say whether the fix landed.', level: 'best-effort', timeoutMs: 60_000, attempt: ATTEMPT }, { resolveTool: machineWith({ codex }) })).toMatchObject({ ok: true, run: { model: { requested: 'member-model' } } });
   expect(z.array(z.string()).parse(JSON.parse(await fs.readFile(record, 'utf8'))).filter((arg) => arg.startsWith('model'))).toEqual(['model="member-model"']);
 });
 
@@ -343,7 +358,7 @@ it('records a cost the tool reported without its tokens', async () => {
   const { dir } = await evidenceDir();
   const cursor = await fakeTool('cursor', '2026.10.1', "console.log(JSON.stringify({ type: 'result', result: '{}', total_cost_usd: 0.02 }));");
 
-  expect(await runConfined({ tool: 'cursor', dir, prompt: 'Say whether the fix landed.', level: 'best-effort', timeoutMs: 60_000 }, { resolveTool: machineWith({ 'cursor-agent': cursor }) })).toEqual({
+  expect(await runConfined({ tool: 'cursor', dir, prompt: 'Say whether the fix landed.', level: 'best-effort', timeoutMs: 60_000, attempt: ATTEMPT }, { resolveTool: machineWith({ 'cursor-agent': cursor }) })).toEqual({
     ok: true, reply: {}, run: { tool: 'cursor', isolation: 'best-effort', access: 'full', usage: { cost: { amount: 0.02, unit: 'USD' } } },
   });
 });
@@ -352,5 +367,5 @@ it('fails a tool that exits 0 without a result record as a reply that is not JSO
   const { dir } = await evidenceDir();
   const cursor = await fakeTool('cursor', '2026.10.1', "console.log('done');");
 
-  expect(await runConfined({ tool: 'cursor', dir, prompt: 'Say whether the fix landed.', level: 'best-effort', timeoutMs: 60_000 }, { resolveTool: machineWith({ 'cursor-agent': cursor }) })).toMatchObject({ ok: false, code: 'confined_reply_invalid', raw: 'done\n\n' });
+  expect(await runConfined({ tool: 'cursor', dir, prompt: 'Say whether the fix landed.', level: 'best-effort', timeoutMs: 60_000, attempt: ATTEMPT }, { resolveTool: machineWith({ 'cursor-agent': cursor }) })).toMatchObject({ ok: false, code: 'confined_reply_invalid', raw: 'done\n\n' });
 });

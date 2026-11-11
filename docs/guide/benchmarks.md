@@ -707,7 +707,7 @@ $ teamai benchmark run fix-auth --sandbox
 ℹ Suite fix-auth: 54 trials (3 arms × 6 tasks × 3 repetitions), 36 judge calls, 4 calibration judge calls.
 ℹ Estimated 49.4–68.7 USD, incomplete (agents 41.4–56.7, judges 8–12), from run r1c0d9e2f4a7b3c51.
   claude 0.82 · codex unknown (no cost stated) · strong 1.95 USD per trial
-ℹ Run r38302f8e6a18c377 started. If it stops before it ends, continue it with: teamai workflow resume r38302f8e6a18c377
+ℹ Run r38302f8e6a18c377 started. If it stops before it ends, continue it here with: teamai workflow resume r38302f8e6a18c377, or hand it to another machine with: teamai workflow publish r38302f8e6a18c377
 ```
 
 `benchmark run` plans the suite first, so a suite that cannot run leaves no run. It then starts the workflow `teamai-benchmark` with the suite's `timeout`, on the driver `--driver` names, else the one [`workflows.driver`](reference.md#member-settings) names, else the local driver, which drives it here.

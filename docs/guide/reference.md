@@ -189,6 +189,8 @@ teamai's own AI calls (enrich, codebase, import, promote) run on the first insta
 2. `ai.tool` in the config of the workspace or self install the command runs in, `~/.teamai/projects/<slug>/config.yaml`.
 3. `ai.tool` in `~/.teamai/config.yaml`, for this machine. A command outside any install reads only this one.
 
+`teamai init --agent <tool>` sets `ai.tool` in the install's config to the first tool it names that teamai launches, unless that config or `~/.teamai/config.yaml` already names one.
+
 `~/.teamai/config.yaml` can hold only this setting on a machine with no user-scope install:
 
 ```yaml
@@ -217,7 +219,7 @@ CURSOR_DATA_DIR=~/.cursor-data teamai init
 CURSOR_CONFIG_DIR=~/.cursor-config teamai init
 ```
 
-The directory has to sit in your home or under `~/.config/`. Copilot uses its own `COPILOT_HOME`.
+teamai syncs to the directory when it sits in your home or under `~/.config/`. A directory outside your home is recorded too, but only for the tool's sessions: teamai reads the sessions there and keeps syncing the tool's other files to its default root, and `init` and `teamai doctor` say so. When the config already records a root in your home for the tool, `init` keeps it and says how to switch. Copilot uses its own `COPILOT_HOME`.
 
 Cursor CLI moves two directories: `CURSOR_DATA_DIR` holds the transcripts, `CURSOR_CONFIG_DIR` the `cli-config.json` the co-author setting goes into. Its user `mcp.json`, `rules/` and `commands/` stay in `~/.cursor` whatever the two variables say, so those keep their default paths. With `CURSOR_CONFIG_DIR` unset the config root is `$XDG_CONFIG_HOME/cursor` when that variable is set, `~/.cursor` otherwise.
 
@@ -273,6 +275,8 @@ teamai score --session <id> --source acme-claude --scorer review-quality
 
 The step runs `acme-claude`, and its session is read from `$ACME_CLAUDE_CONFIG_DIR/projects/`, else `~/.acme-claude/projects/`. It is recorded, resumed and scored as `acme-claude`'s, never as Claude's.
 
+teamai ignores your value of `env` when the variable also moves the extended tool's home, such as `CLAUDE_CONFIG_DIR` for an instance of `claude`, or when it is `XDG_CONFIG_HOME` or `XDG_DATA_HOME`. That value belongs to the tool, so the instance's home is always `~/<dir>`.
+
 **Accepting the command.** An instance that sets `command` runs a program a teammate named. Its first run asks in a terminal:
 
 ```text
@@ -321,7 +325,17 @@ Tool instance …/tools/acme-claude.yaml is not valid: it sets sessions, and an 
 Tool instance …/tools/acme-claude.yaml is not valid: command: command is the name of one executable on PATH, with no path, spaces or arguments, such as acme-claude. …
 ```
 
-Its own sessions need a tool whose format carries another platform id: Claude Code, Qoder, Codex, JoyCode and Cursor. An instance of another tool launches and receives files, and teamai reads no sessions of it. teamai does not render agents for an instance yet. Instances never appear on the [tool support](./tool-support.md) page.
+Its own sessions need a tool whose format carries another platform id: Claude Code, Qoder, Codex, JoyCode, Cursor and OpenCode. An instance of another tool launches and receives files, and teamai reads no sessions of it. OpenCode keeps its sessions under its data home, not its config directory, so where teamai reads an OpenCode instance's sessions depends on the variable its `home` moves:
+
+```yaml
+# tools/opencode-work.yaml: sessions in ~/.opencode-work/opencode
+schemaVersion: v1alpha1
+name: opencode-work
+extends: opencode
+home: { dir: .opencode-work, env: XDG_DATA_HOME }
+```
+
+With `env: OPENCODE_CONFIG_DIR`, the instance keeps its own settings, and its sessions stay in your OpenCode data home (`$XDG_DATA_HOME/opencode`, else `~/.local/share/opencode`), where teamai reads them as OpenCode's. teamai does not render agents for an instance yet. Instances never appear on the [tool support](./tool-support.md) page.
 
 ---
 

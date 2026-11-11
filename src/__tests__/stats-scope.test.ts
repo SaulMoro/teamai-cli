@@ -5,7 +5,7 @@ import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import YAML from 'yaml';
 import { showStats } from '../stats.js';
-import { _setLogFilePath, _resetState } from '@teamai/tool-core/debug-log';
+import { _setLogFilePath, _resetState } from '@teamai/shared/debug-log';
 import { resolveAnchors } from '../utils/git.js';
 import { resolvePartitionDir } from '../utils/partition.js';
 import { writeFile, ensureDir } from '../utils/fs.js';

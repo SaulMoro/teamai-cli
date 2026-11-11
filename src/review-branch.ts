@@ -28,7 +28,7 @@ import fse from 'fs-extra';
 import { findSkippedFolders, isInSkippedFolder, skippedFolderMessage, skippedFoldersIn } from './folder-markers.js';
 import { readTeamRules } from './resources/rules.js';
 import { RECALL_RULE_NAME, resolveRecall } from './builtin-rules.js';
-import { parseYaml } from './utils/yaml.js';
+import { parseYaml } from '@teamai/shared/yaml';
 import { z } from 'zod';
 
 import { resolveConfigForDir } from './config.js';
@@ -59,7 +59,7 @@ import { LocalConfigSchema, type GlobalOptions, type LocalConfig, type ResourceI
 import { splitFrontmatter, type FrontmatterValue } from './utils/frontmatter.js';
 import { isIgnored, listDirs, listFilesRecursive, pathExists, readFileIfExists, writeFile, ensureDir } from './utils/fs.js';
 import { getFileContentAtRev, getHeadCommit, getMergeBase, listTreeAtRev } from './utils/git.js';
-import { isSilent, log, setSilent } from './utils/logger.js';
+import { isSilent, log, setSilent } from '@teamai/shared/log';
 import { redact } from '@teamai/shared/redact';
 import { syncTeamDefinitions } from './benchmark/suite-cache.js';
 import { loadCachedWorkflow, loadWorkflowTree } from './workflow/cache.js';

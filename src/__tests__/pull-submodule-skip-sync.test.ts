@@ -134,7 +134,7 @@ vi.mock('../config.js', async (importOriginal) => ({
   }),
 }));
 
-vi.mock('@teamai/tool-core/log', () => ({
+vi.mock('@teamai/shared/log', () => ({
   log: { info: vi.fn(), success: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn(), dim: vi.fn() },
   spinner: vi.fn(() => ({
     start: vi.fn().mockReturnThis(),
@@ -147,7 +147,7 @@ vi.mock('@teamai/tool-core/log', () => ({
 }));
 
 const { pull, checkoutKey } = await import('../pull.js');
-const { log } = await import('../utils/logger.js');
+const { log } = await import('@teamai/shared/log');
 
 afterAll(() => {
   fs.rmSync(gitConfigRoot, { recursive: true, force: true });

@@ -12,7 +12,7 @@
  */
 
 import { z } from 'zod';
-import { JsonValueSchema, type JsonValue, JsonObjectSchema, parseJson } from '../json.js';
+import { JsonValueSchema, type JsonValue, JsonObjectSchema, parseJson } from '@teamai/shared/json';
 import { coercedText, OptionalString } from './fs.js';
 
 // ---------------------------------------------------------------------------

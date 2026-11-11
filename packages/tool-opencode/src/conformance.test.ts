@@ -1,7 +1,7 @@
 import path from 'node:path';
 import { afterAll } from 'vitest';
 import fs from 'node:fs';
-import { installFakeOpencode } from '@teamai/tool-testing/fake-opencode';
+import { installFakeOpencode } from './testing/index.js';
 import { describeFamily, fixtureText, type ReplayTarget } from '@teamai/tool-testing/conformance';
 import { family } from './index.js';
 

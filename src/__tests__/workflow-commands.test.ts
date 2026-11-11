@@ -20,15 +20,15 @@ vi.mock('../config.js', async (importOriginal) => {
   };
 });
 
-import { log, setStderrOnly } from '../utils/logger.js';
+import { log, setStderrOnly } from '@teamai/shared/log';
 import { acquireLock, releaseLock } from '../update.js';
-import { startRun } from '../workflow/engine.js';
-import { publishRun } from '../workflow/handoff.js';
+import { leaseNext, startRun } from '../workflow/engine.js';
+import { publishRun, resumeRun } from '../workflow/handoff.js';
 import { driverLockPath, readRun, runFilePath, runsDir } from '../workflow/store.js';
 import { benchmarkRun, workflowNext, workflowPublish, workflowReport, workflowRespond, workflowResume, workflowRetry, workflowStart } from '../workflow-commands.js';
 import { loadLocalConfigForScope } from '../config.js';
 import { knownSecrets } from '../env-resolution.js';
-import { skillHarness } from './helpers/skill-harness.js';
+import { sharedTeam, skillHarness, untilStopped } from './helpers/skill-harness.js';
 import { syncWorkflowDefinitions } from '../workflow/cache.js';
 
 const dirs: string[] = [];
@@ -228,7 +228,7 @@ describe('workflow next, report, start and resume without --driver skill', () =>
     ['next', { takeover: true }, '--takeover needs --driver skill'],
     ['next', { choice: 'h1' }, '--choice needs --driver skill'],
     ['next', { ack: 'dispatch.a00000000' }, '--ack needs --driver skill'],
-    ['next', { adopt: '/place' }, '--adopt needs --attempt, the attempt whose place the host made'],
+    ['next', { adopt: '/place' }, '--adopt needs --attempt, the attempt whose place the session host made'],
     ['next', { attempt: 'bogus' }, '--attempt needs --prepare'],
     ['next', { prepare: true, attempt: 'bogus' }, '--attempt takes the attempt of a lease, such as a1b2c3d4e; got bogus'],
     ['report', { driver: 'local' }, 'report takes --driver skill, not --driver local'],
@@ -252,7 +252,29 @@ describe('workflow next, report, start and resume without --driver skill', () =>
 });
 
 describe('workflow start and resume --driver', () => {
-  it.each(['acme-sandbox', 'fleet', 'none', 'acme sandbox'])('refuses --driver %s, which no driver of this machine is', async (named) => {
+  it('refuses --driver acme-sandbox, a driver definition name no team or member defines', async () => {
+    state.config = testConfig();
+    const refused = { error: { code: 'driver_not_found', message: expect.stringContaining('No driver definition is named "acme-sandbox".') } };
+
+    expect(await capture(() => workflowStart('mark', { driver: 'acme-sandbox' }))).toEqual(refused);
+    expect(await capture(() => workflowResume('r00000000', { driver: 'acme-sandbox' }))).toEqual(refused);
+    // A run taken for another member reads no definition of this member's own, and the refusal says so.
+    expect(await capture(() => workflowResume(undefined, { driver: 'acme-sandbox', next: true }))).toEqual({
+      error: { code: 'driver_not_found', message: expect.stringContaining('No driver definition of the team or teamai is named "acme-sandbox", and a definition in ~/.teamai/drivers/ does not count here.') },
+    });
+  });
+
+  it('takes a run with no --driver on the team\'s teamai-local, as --driver local does', async () => {
+    state.config = testConfig();
+    fs.mkdirSync(path.join(state.config.repo.localPath, 'drivers'), { recursive: true });
+    fs.writeFileSync(path.join(state.config.repo.localPath, 'drivers', 'teamai-local.yaml'), 'schemaVersion: v1alpha1\nname: teamai-local\nruntimes:\n  - use: acme-missing\n');
+    const asLocal = await capture(() => workflowResume(undefined, { driver: 'local', next: true }));
+
+    expect(asLocal).toMatchObject({ error: { message: expect.stringContaining('acme-missing') } });
+    expect(await capture(() => workflowResume(undefined, { next: true }))).toEqual(asLocal);
+  });
+
+  it.each(['fleet', 'none', 'acme sandbox'])('refuses --driver %s, which no driver of this machine is', async (named) => {
     state.config = testConfig();
     const refused = { error: { code: 'unsupported_driver', message: `Driver "${named}" is not available. Use --driver local or --driver skill.` } };
 
@@ -419,7 +441,7 @@ steps:
     expect(started).toMatchObject({ data: { done: { outcome: 'succeeded' } } });
     const done = started.data?.done;
     const runId = typeof done === 'object' && done !== null && 'run' in done ? String(done.run) : '';
-    expect(printed).toContainEqual({ line: expect.stringMatching(new RegExp(`Run ${runId} started\\. .*teamai workflow resume ${runId}$`)), ran: false });
+    expect(printed).toContainEqual({ line: expect.stringMatching(new RegExp(`Run ${runId} started\\. If it stops before it ends, continue it here with: teamai workflow resume ${runId}, or hand it to another machine with: teamai workflow publish ${runId}$`)), ran: false });
     expect(fs.existsSync(path.join(work, 'ran.marker'))).toBe(true);
   });
 
@@ -831,6 +853,42 @@ describe('workflow publish and resume --claim', () => {
     expect(process.exitCode).toBe(1);
   });
 
+  it('refuses to publish a run while a skill driver\'s runner of it runs a step here, or was spawned a moment ago and has not started yet', async () => {
+    const held = `schemaVersion: v1alpha1
+name: held
+description: One command that runs until stopped.
+steps:
+  - id: wait
+    command: node wait.js
+`;
+    const stops: string[] = [];
+    const made = await skillHarness({ held }, { runners: (runners) => ({ ...runners, command: () => untilStopped(() => { stops.push('wait'); }) }) });
+    dirs.push(made.root);
+    const started = await made.call({ kind: 'start', name: 'held', answers: { confirmed: false }, inputs: undefined });
+    if (!('data' in started) || !('turn' in started.data)) throw new Error(JSON.stringify(started));
+    const { run } = started.data.turn;
+    await made.call({ kind: 'next', run, wait: true });
+    state.config = made.config;
+    vi.spyOn(process, 'cwd').mockReturnValue(made.work);
+
+    expect(await capture(() => workflowPublish(run))).toMatchObject({ error: { code: 'driver_running', message: expect.stringContaining('"wait"') } });
+    expect(stops).toEqual([]);
+
+    // A runner that has not taken its lock yet runs the step all the same, once it starts.
+    const late = await skillHarness({ held }, { runners: (runners) => ({ ...runners, spawn: async () => {} }) });
+    dirs.push(late.root);
+    const spawned = await late.call({ kind: 'start', name: 'held', answers: { confirmed: false }, inputs: undefined });
+    if (!('data' in spawned) || !('turn' in spawned.data)) throw new Error(JSON.stringify(spawned));
+    const spawnedRun = spawned.data.turn.run;
+    state.config = late.config;
+    vi.spyOn(process, 'cwd').mockReturnValue(late.work);
+    expect(await capture(() => workflowPublish(spawnedRun))).toMatchObject({ error: { code: 'driver_running' } });
+
+    // One spawned longer ago than a runner takes to start is gone, and its step runs nowhere.
+    late.advance(60_000);
+    expect(await capture(() => workflowPublish(spawnedRun))).not.toMatchObject({ error: { code: 'driver_running' } });
+  });
+
   it('resume --claim answers with the claim refusal and runs nothing', async () => {
     const { config, runId } = await startBuild();
     state.config = { ...config, repo: { ...config.repo, kind: 'http' } };
@@ -885,6 +943,7 @@ describe('workflow publish and resume --claim', () => {
     expect(await readRun(bob.config, runId)).toBe('missing');
     expect(git(root, '--git-dir', origin, 'rev-parse', 'teamai-reports')).toBe(published);
   });
+
 });
 
 describe('workflow resume follows the invoke of the run it continues', () => {
@@ -961,6 +1020,29 @@ steps:
     expect(await capture(() => workflowResume(run, {}))).toMatchObject({ data: { done: { outcome: 'succeeded' } } });
   });
 
+  it('asks an agent session about the run\'s invoke: ask after the takeover its --confirmed answered, so one yes answers one question', async () => {
+    const shared = sharedTeam({ gated: workflow('gated', 'ask') });
+    const alice = await shared.install('alice');
+    const started = await startRun(alice.config, 'gated', {}, { secrets: {} });
+    if ('error' in started) throw new Error(started.error.message);
+    const runId = String(started.data.run);
+    expect(await publishRun(alice.config, runId, { env: {}, checkout: alice.checkout })).toMatchObject({ ok: true });
+    expect(await resumeRun(alice.config, runId, { claim: false, checkout: alice.checkout })).toMatchObject({ ok: true });
+    expect(await leaseNext(alice.config, runId, { kind: 'local', machine: 'alice', workspace: alice.checkout })).toMatchObject({ data: { lease: { step: 'one' } } });
+    const bob = await shared.install('bob');
+    state.config = bob.config;
+    vi.spyOn(process, 'cwd').mockReturnValue(bob.checkout);
+    vi.stubEnv('CLAUDE_CODE_SESSION_ID', 'session-b');
+    vi.stubEnv('TEAMAI_MODE', 'attended');
+
+    expect(await capture(() => workflowResume(runId, { claim: true }))).toMatchObject({ error: { code: 'owner_active' } });
+    // The person agreed to the takeover: it lands, and the invoke question comes next.
+    expect(await capture(() => workflowResume(runId, { claim: true, confirmed: true }))).toMatchObject({ error: { code: 'confirm_needed' } });
+    expect(await readRun(bob.config, runId)).toMatchObject({ steps: [{ id: 'one', status: 'pending' }] });
+    // The person agreed to continue it as well.
+    expect(await capture(() => workflowResume(runId, { claim: true, confirmed: true }))).toMatchObject({ data: { done: { outcome: 'succeeded' } } });
+  });
+
   it('checks a driver\'s next claim from an agent session as a resume, and names the resume that carries the person\'s yes, which a payload cannot', async () => {
     const { config, locked, gated, open } = await runs();
     const engine = await import('../workflow/engine.js');
@@ -1016,6 +1098,17 @@ describe('workflow start --driver local scores the passes it settles', () => {
     fs.writeFileSync(path.join(config.repo.localPath, 'scorers', 'quality.md'), QUALITY);
     await syncScorersThenWorkflows(config);
     state.config = config;
+    // The run works in a directory of its own, not the checkout the suite runs in, whose origin it would read, and
+    // finds git, node and the system's own commands, not the AI tools of the machine the suite runs on, which picking a
+    // judge would probe.
+    const work = fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-workflow-scored-'));
+    dirs.push(work);
+    vi.spyOn(process, 'cwd').mockReturnValue(work);
+    const bin = path.join(work, 'bin');
+    fs.mkdirSync(bin);
+    fs.symlinkSync(execFileSync('sh', ['-c', 'command -v git'], { encoding: 'utf8' }).trim(), path.join(bin, 'git'));
+    fs.symlinkSync(process.execPath, path.join(bin, 'node'));
+    vi.stubEnv('PATH', [bin, '/usr/bin', '/bin'].join(path.delimiter));
     return config;
   }
 
@@ -1035,7 +1128,7 @@ describe('workflow start --driver local scores the passes it settles', () => {
 
     const run = z.object({ done: z.object({ run: z.string(), outcome: z.literal('succeeded') }) }).parse(started.data).done.run;
     const scoring = await scoreRuns(config);
-    // Its command steps run the teamai on PATH, which in a unit test is not this build, so only its start and its end are this test's.
+    // Its command steps run the teamai on PATH, which this test's PATH does not hold, so only its start and its end are this test's.
     expect(scoring).toEqual([expect.objectContaining({ startedBy: 'cli', inputs: expect.objectContaining({ subject: `run:${run}:build:1`, demand: 'auto' }) })]);
     expect(scoring.map((item) => typeof item === 'object' && item.status)).not.toContain('running');
     expect([...said.mock.calls, ...warned.mock.calls].flat()).toContainEqual(expect.stringContaining(`run:${run}:build:1`));
@@ -1138,7 +1231,7 @@ steps:
 
   it('keeps --sandbox for a resume on this install, so the resume the start prints works as printed', async () => {
     const { config, runId, printed } = await started('sealed', sealed, { sandbox: true });
-    expect(printed).toContainEqual(expect.stringMatching(new RegExp(`continue it with: teamai workflow resume ${runId}$`)));
+    expect(printed).toContainEqual(expect.stringMatching(new RegExp(`continue it here with: teamai workflow resume ${runId}, or hand it to another machine with: teamai workflow publish ${runId}$`)));
     fs.writeFileSync(path.join(process.cwd(), 'built'), '');
 
     await capture(() => workflowRetry(runId, 'build'));

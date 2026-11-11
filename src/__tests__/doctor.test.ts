@@ -34,11 +34,10 @@ vi.mock('../utils/fs.js', async (importOriginal) => ({
     listDirs: vi.fn().mockResolvedValue([]),
     listFiles: vi.fn().mockResolvedValue([]),
     listFilesRecursive: vi.fn().mockResolvedValue([]),
-    expandHome: vi.fn((p: string) => p),
     symlinkTarget: vi.fn(async (p: string) => p),
 }));
 
-vi.mock('@teamai/tool-core/log', () => ({
+vi.mock('@teamai/shared/log', () => ({
     log: {
         info: vi.fn(),
         success: vi.fn(),
@@ -88,7 +87,7 @@ vi.mock('../hooks.js', async (importOriginal) => ({
 import { detectProjectConfig, loadLocalConfig, loadMemberSettings, loadTeamConfig } from '../config.js';
 import { pathExists, readFileSafe } from '../utils/fs.js';
 import { TEAMAI_HOOK_SUBCOMMANDS, readCodexHookTrustForScope } from '../hooks.js';
-import { log, setStderrOnly } from '../utils/logger.js';
+import { log, setStderrOnly } from '@teamai/shared/log';
 import { isGfInstalled, gfIsAuthenticated } from '../providers/tgit/index.js';
 import { buildChecks, doctor, resolveDoctorContext } from '../doctor.js';
 import { teamaiWrapperSource } from '../builtin-hooks.js';

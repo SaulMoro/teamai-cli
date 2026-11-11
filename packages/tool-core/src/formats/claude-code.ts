@@ -41,12 +41,13 @@ import {
   coercedText,
   OptionalString,
 } from '../sessions/fs.js';
-import { JsonValueSchema, type JsonValue, JsonObjectSchema, parseJson, type JsonlRecord } from '../json.js';
+import { JsonValueSchema, type JsonValue, JsonObjectSchema, parseJson, type JsonlRecord } from '@teamai/shared/json';
 import {
   cleanTitleText,
   fallbackTitle,
   titleFromCandidates,
 } from '../sessions/title.js';
+import { readRegularFileSync } from '@teamai/shared/regular-file';
 
 // ---------------------------------------------------------------------------
 // Tool-name normalization map
@@ -371,7 +372,7 @@ function irBlockToCc(block: ContentBlock, session?: Session): CcWrittenBlock | n
       // and its contents would then be embedded into the restored session.
       if (!data && block.filePath && mayReadLocalImageFile(session, block.filePath)) {
         try {
-          data = fs.readFileSync(block.filePath).toString('base64');
+          data = readRegularFileSync(block.filePath).toString('base64');
         } catch {
           data = undefined;
         }
@@ -438,7 +439,7 @@ const SubagentMetaSchema = z.object({
 
 function readJsonFile(file: string): JsonValue | undefined {
   try {
-    return parseJson(fs.readFileSync(file, 'utf-8'));
+    return parseJson(readRegularFileSync(file, 'utf-8'));
   } catch {
     return undefined;
   }

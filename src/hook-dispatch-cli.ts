@@ -16,16 +16,17 @@
 
 import { spawn } from 'node:child_process';
 import fs from 'node:fs';
+import { readRegularFileSync } from '@teamai/shared/regular-file';
 import os from 'node:os';
 import path from 'node:path';
 
 import { resolveCliEntry } from './builtin-hooks.js';
-import { captureTail } from './utils/exec.js';
+import { captureTail } from '@teamai/shared/exec';
 import { createDispatcher, HookStdinSchema, stdinString, type Dispatcher, type HookStdin } from './hook-dispatch.js';
 import { buildHandlerRegistry, filterHandlersForConfig } from './hook-handlers.js';
 import { resolveHookCwd } from './utils/hook-cwd.js';
 import { windowsPowerShell } from './utils/powershell.js';
-import { log, setSilent, setStderrOnly } from './utils/logger.js';
+import { log, setSilent, setStderrOnly } from '@teamai/shared/log';
 import { clearGitHookRepositoryEnv, GIT_HOOK_TOOL } from './git-hook.js';
 import { deriveDispatchSessionId } from './utils/session-id.js';
 import { claudeHookRunsInAnotherHost } from './claude-hook-host.js';
@@ -312,7 +313,7 @@ function quoteWindowsArg(arg: string): string {
  */
 function readStdinFile(file: string): string {
   try {
-    return fs.readFileSync(file, 'utf8');
+    return readRegularFileSync(file, 'utf8');
   } catch (e) {
     log.debug(`hook-dispatch: could not read STDIN file ${file}: ${e instanceof Error ? e.message : String(e)}`);
 

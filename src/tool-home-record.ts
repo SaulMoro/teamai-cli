@@ -2,7 +2,7 @@ import { withFileLock } from './update.js';
 import { homeVariables, TOOL_ORDER } from './tool-registry.js';
 import { envToolHome, realHost, type EnvToolHome, recordedHomes, reloadToolHomes, rememberToolHome, saveToolHomes, toolHomesPath, type Host } from './tool-home.js';
 import type { ToolId } from './tools.js';
-import { log } from './utils/logger.js';
+import { log } from '@teamai/shared/log';
 
 /** A change to the record: `dir` null when it was cleared. */
 export type ToolHomeChange = { readonly tool: ToolId; readonly variable: string; readonly dir: string | null };

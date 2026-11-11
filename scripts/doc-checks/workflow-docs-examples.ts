@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { isDeepStrictEqual } from 'node:util';
 
 import assert from 'node:assert/strict';
 import { check } from '../doc-check.js';
@@ -12,12 +13,23 @@ import { DefaultScorers } from '../../src/default-scorers.js';
 import { formatUnknownScorer, syncScorersThenWorkflows } from '../../src/scorers/team-sync.js';
 import { ciRecipesOf, runCommandsOf } from '../ci-recipe.js';
 import { formatScorerDiagnostic } from '../../src/scorers/definition.js';
-import { isJsonObject, JsonValueSchema, type JsonObject, type JsonValue, type LocalConfig, JsonObjectSchema } from '../../src/types.js';
+import { type LocalConfig } from '../../src/types.js';
+import { isJsonObject, JsonValueSchema, type JsonObject, type JsonValue, JsonObjectSchema } from '@teamai/shared/json';
 import { leaseNext, reportAttempt, startRun } from '../../src/workflow/engine.js';
 import { formatDiagnostic } from '../../src/workflow/parse.js';
-import { WORKSPACE_MODES, type DriverIdentity, type WorkflowEnvelope } from '../../src/workflow/types.js';
+import { WORKSPACE_MODES } from '@teamai/runtime-protocol';
+import type { DriverIdentity, WorkflowEnvelope } from '../../src/workflow/types.js';
 import { knownSecrets } from '../../src/env-resolution.js';
 import { parseSuite, type SourceFile } from '../../src/benchmark/suite.js';
+import { parseDriverDefinition } from '../../src/workflow/runtimes/definitions.js';
+import { engineOptions } from '../../src/workflow/runtimes/sources.js';
+import { parseFleetOptions, shadowedFleetEntries } from '../../src/workflow/fleet/owner.js';
+import { nestedOptions } from '../../src/workflow/runtimes/composed.js';
+import { hostStepRuntime } from '../../src/workflow/runtimes/host.js';
+import { parseOptions as parsePaseoOptions } from '../../packages/runtime-paseo/src/options.js';
+import { parseOptions as parseSandboxOptions } from '../../packages/runtime-sandbox/src/options.js';
+import { parseOptions as parseT3Options } from '../../packages/runtime-t3/src/options.js';
+import type { RuntimeOptions } from '@teamai/runtime-protocol';
 import { RESOURCE_LAYOUTS } from '../../src/resources/resolver.js';
 
 const ROOT = process.cwd();
@@ -346,6 +358,13 @@ for (const page of [...PAGES, ...SCORER_PAGES, ...OTHER_PAGES]) {
           (match) => match[1] ?? '',
         ),
       );
+
+      // A page with no complete workflow and no diagnostic it shows has nothing for pull to check.
+      if (byFile.size === 0 && shown.size === 0) {
+        assert.deepEqual(failures, []);
+
+        return;
+      }
 
       // The scorers a workflow example lists are the ones the scorer pages show.
       for (const example of SCORER_PAGES.flatMap(scorerExamplesOf)) {
@@ -717,4 +736,137 @@ await check('shows the same benchmark files and CI commands in every language', 
     assert.deepEqual(other.commands, english?.commands, other.page);
     assert.deepEqual(other.gitlab, english?.gitlab, other.page);
   }
+});
+
+/** A block's first line, `# drivers/<name>.yaml` (in any language), names the definition file it shows. */
+const DEFINITION_FILE = /^#.*\bdrivers\/([A-Za-z0-9._-]+)\.yaml\b/;
+
+type OptionsCheck = (options: RuntimeOptions) => Promise<{ ok: true } | { ok: false; failure: { key?: string; message: string } }>;
+
+/** Each runtime teamai ships or builds in, checking a definition's options the way that runtime does at `init`. */
+const RUNTIME_OPTIONS = new Map<string, OptionsCheck>([
+  // `local` is the old name of `tools`; like the host runtime, neither takes options.
+  ['local', (options) => hostStepRuntime().init({ options, mode: 'attended' })],
+  ['tools', (options) => hostStepRuntime().init({ options, mode: 'attended' })],
+  ['fleet', async (options) => parseFleetOptions(options)],
+  ['sandbox', async (options) => parseSandboxOptions(options)],
+  ['t3', async (options) => parseT3Options(options)],
+  ['paseo', async (options) => parsePaseoOptions(options)],
+]);
+
+/**
+ * The runtimes the guide defines itself, as examples of a team's own: their pages show the runtime's file or say it is
+ * one you write. Any other runtime an example names must be one teamai ships, so a misspelt name fails the check.
+ */
+const GUIDE_RUNTIMES: ReadonlySet<string> = new Set(['toy', 'threads', 'my-app', 'my-sandbox']);
+
+/** The runtimes teamai ships: `tools`, its old name `local`, and each `teamai-runtime-<name>` in package.json's `bin`. */
+function shippedRuntimes(): string[] {
+  const { bin } = z.object({ bin: z.record(z.string(), z.string()) }).parse(JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8')));
+
+  return ['tools', 'local', ...Object.keys(bin).flatMap((name) => /^teamai-runtime-(.+)$/.exec(name)?.[1] ?? [])];
+}
+
+// Fails closed: a runtime teamai ships whose options this check cannot read fails it, so its guide examples are never
+// let through unchecked.
+await check('every runtime teamai ships has its options checked in the guide examples', () => {
+  const unchecked = shippedRuntimes().filter((use) => !RUNTIME_OPTIONS.has(use));
+
+  assert.deepEqual(unchecked.map((use) => `teamai-runtime-${use} ships, and the docs check has no options check for it: add the parseOptions of packages/runtime-${use}/src/options.ts to RUNTIME_OPTIONS`), []);
+});
+
+/**
+ * Why a driver definition example would not run, or undefined. A block is one when its first line names a
+ * `drivers/<name>.yaml` file, or when it lists `runtimes` and no `steps`, and it shows the whole file. Each runtime's
+ * options pass what teamai reads of them (`max_parallel`, `credentials`), and the rest passes that runtime's own check
+ * when teamai ships it; a team's own runtime reads its options itself.
+ */
+async function definitionProblem(example: Example): Promise<string | undefined> {
+  const named = DEFINITION_FILE.exec(example.source.split('\n')[0] ?? '')?.[1];
+  const document = parseDocument(example.source);
+  const shown: JsonValue = document.errors.length > 0 ? null : document.toJS();
+  const listsRuntimes = isJsonObject(shown) && Array.isArray(shown.runtimes) && !('steps' in shown);
+
+  if (named === undefined && !listsRuntimes) return undefined;
+
+  if (document.errors.length > 0) return document.errors[0]?.message;
+  const parsed = parseDriverDefinition(`drivers/${named ?? (isJsonObject(shown) ? String(shown.name) : 'unnamed')}.yaml`, example.source);
+
+  if (!parsed.ok) return parsed.failure.message;
+  const [shadowed] = shadowedFleetEntries(parsed.definition.runtimes);
+
+  if (shadowed !== undefined) return shadowed;
+
+  for (const [index, { use, through, options }] of parsed.definition.runtimes.entries()) {
+    // An entry through another nests each runtime's options under its name, as the engine splits them at the start.
+    const nested = through === undefined ? undefined : nestedOptions(options ?? {}, { inner: use, outer: through });
+
+    if (nested?.ok === false) return `runtimes.${index} (${use} through ${through}) option ${nested.key}: ${nested.message}`;
+    const parts: Array<[string, RuntimeOptions]> = nested === undefined || through === undefined ? [[use, options ?? {}]] : [[use, nested.inner], [through, nested.outer]];
+
+    for (const [name, given] of parts) {
+      const problem = await runtimeOptionsProblem(name, given);
+
+      if (problem !== undefined) return `runtimes.${index} ${problem}`;
+    }
+  }
+
+  return undefined;
+}
+
+/** Why one runtime of an entry would refuse `options` at `init`, or why the guide may not name it, or undefined. */
+async function runtimeOptionsProblem(name: string, options: RuntimeOptions): Promise<string | undefined> {
+  const ownCheck = RUNTIME_OPTIONS.get(name);
+
+  if (ownCheck === undefined && !GUIDE_RUNTIMES.has(name)) return `names ${name}, a runtime teamai does not ship and the guide does not define: name a shipped runtime, or add it to GUIDE_RUNTIMES where the guide shows its file`;
+  const read = engineOptions(options);
+
+  if (!read.ok) return `(${name}) option ${read.key}: ${read.message}`;
+  const own = await ownCheck?.(read.runtime);
+
+  return own?.ok === false ? `(${name}) option ${own.failure.key ?? '?'}: ${own.failure.message}` : undefined;
+}
+
+/** A block's first line saying it shows a definition teamai ships, in English or Chinese: `# drivers/<name>.yaml, shipped with teamai`. */
+const SHIPPED_DEFINITION = /^#\s*drivers\/([A-Za-z0-9._-]+\.yaml)(?:, shipped with teamai|，随 teamai 提供)\s*$/;
+
+// Every definition teamai ships parses, and a guide block that says it shows one shows it as it is: word for word in
+// English, and as the same YAML on a page whose comments are translated.
+await check('every shipped driver definition parses, and a guide block naming it as shipped equals it', () => {
+  const shipped = new Map(fs.readdirSync(path.join(ROOT, 'drivers')).filter((file) => file.endsWith('.yaml')).map((file) => [file, fs.readFileSync(path.join(ROOT, 'drivers', file), 'utf8')]));
+
+  const unparsed = [...shipped].flatMap(([file, source]) => {
+    const parsed = parseDriverDefinition(`drivers/${file}`, source);
+
+    return parsed.ok ? [] : [`drivers/${file}: ${parsed.failure.message}`];
+  });
+
+  const differing = guidePages(/\.md$/).flatMap((page) => examplesOf(page).flatMap((example) => {
+    const [heading = '', ...body] = example.source.split('\n');
+    const file = SHIPPED_DEFINITION.exec(heading)?.[1];
+
+    if (file === undefined) return [];
+    const source = shipped.get(file);
+
+    if (source === undefined) return [`${example.label}: teamai ships no drivers/${file}`];
+    const shown = body.join('\n');
+    const isSame = page.includes('/zh-CN/') ? isDeepStrictEqual(parseDocument(shown).toJS(), parseDocument(source).toJS()) : shown.trim() === source.trim();
+
+    return isSame ? [] : [`${example.label}: differs from drivers/${file}`];
+  }));
+
+  assert.deepEqual([...unparsed, ...differing], []);
+});
+
+// Guide pages only: a design note may show a definition with fields it proposes.
+await check('every driver definition a guide page shows passes the definition schema and its runtimes\' options', async () => {
+  const examples = guidePages(/\.md$/).flatMap((page) => examplesOf(page));
+
+  const failures = (await Promise.all(examples.map(async (example) => {
+    const problem = await definitionProblem(example);
+
+    return problem === undefined ? [] : [`${example.label}: ${problem}`];
+  }))).flat();
+
+  assert.deepEqual(failures, []);
 });

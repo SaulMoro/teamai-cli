@@ -13,7 +13,7 @@ import crypto from 'node:crypto';
 import fse from 'fs-extra';
 import YAML from 'yaml';
 
-vi.mock('@teamai/tool-core/log', () => ({
+vi.mock('@teamai/shared/log', () => ({
   log: {
     info: vi.fn(),
     success: vi.fn(),
@@ -32,7 +32,7 @@ vi.mock('@teamai/tool-core/log', () => ({
 import { AgentsHandler, reportHeldAgents, type AgentResourceItem } from '../resources/agents.js';
 import type { AgentSpec, ToolName } from '../resources/agent-format.js';
 import { serializeAgentYaml } from '../resources/agent-format.js';
-import { log } from '../utils/logger.js';
+import { log } from '@teamai/shared/log';
 import { resetWarnOnce } from '../utils/warn-once.js';
 import { openLedger } from '../resources/delivered-copies.js';
 import { loadStateForScope, saveStateForScope } from '../config.js';

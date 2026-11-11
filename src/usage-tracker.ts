@@ -1,7 +1,8 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import { readRegularFile } from '@teamai/shared/regular-file';
 import { z } from 'zod';
-import { log } from './utils/logger.js';
+import { log } from '@teamai/shared/log';
 import { HookStdinSchema, type HookStdin } from './hook-dispatch.js';
 import {
   DEFAULT_TOOL_PATHS,
@@ -9,13 +10,13 @@ import {
   getTeamaiHomeDir,
   HookPayloadSchema,
   SKILL_NAME_REGEX,
-  type JsonValue,
   type LocalConfig,
   type UsageEvent,
 } from './types.js';
+import type { JsonValue } from '@teamai/shared/json';
 import { readJson, writeJson, writeFileAtomic, pathExists } from './utils/fs.js';
 import { appendJsonl, readJsonl, rewriteJsonl, type JsonlStoreOptions } from './utils/jsonl-store.js';
-import { getUserHome } from './utils/home.js';
+import { getUserHome } from '@teamai/shared/home';
 import { withFileLock } from './update.js';
 import { loadTeamConfig, resolveConfigForDir } from './config.js';
 import { samePath } from './utils/agent-path.js';
@@ -313,7 +314,7 @@ async function ignoreUsageSideFiles(config: LocalConfig, usagePath: string): Pro
   const gitignorePath = path.join(path.dirname(usagePath), '.gitignore');
 
   try {
-    const lines = (await fs.promises.readFile(gitignorePath, 'utf-8')).split('\n');
+    const lines = (await readRegularFile(gitignorePath, 'utf-8')).split('\n');
     const missing = USAGE_SIDE_FILE_PATTERNS.filter((p) => !lines.some((l) => l.trim() === p));
 
     if (!missing.length) return;

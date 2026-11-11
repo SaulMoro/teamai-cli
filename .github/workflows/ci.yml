@@ -48,8 +48,20 @@ jobs:
       - name: Type check
         run: npm run typecheck
 
+      # The sandbox containment suite skips without bubblewrap; REQUIRE_NATIVE_SANDBOX makes it fail instead.
+      - name: Install bubblewrap and let it make user namespaces
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y bubblewrap
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          # A WSL-style drive under /mnt, which a step must never see.
+          sudo mkdir -p /mnt/c/Windows/System32
+          bwrap --version
+
       - name: Unit tests
         run: npx vitest run
+        env:
+          REQUIRE_NATIVE_SANDBOX: '1'
 
   # The full suite. A git repo under os.tmpdir() resolves /var through
   # /private/var here and not on Linux (branch-worktree-retire, run

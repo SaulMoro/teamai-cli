@@ -18,12 +18,13 @@
  */
 import { randomBytes, randomUUID } from 'node:crypto';
 import fs from 'node:fs';
+import { readRegularFile } from '@teamai/shared/regular-file';
 import path from 'node:path';
 import { z } from 'zod';
-import { isJsonObject, type JsonlRecord, type JsonValue } from '@teamai/tool-core/json';
+import { isJsonObject, type JsonlRecord, type JsonValue } from '@teamai/shared/json';
 import { acquireLock, releaseLock } from '../update.js';
 import { ensureDir, errnoCode } from './fs.js';
-import { log } from './logger.js';
+import { log } from '@teamai/shared/log';
 
 /** How long a writer waits for the lock, in wall time. */
 export interface LockWait {
@@ -145,7 +146,7 @@ export async function rewriteJsonl(
     const target = await fs.promises.realpath(filePath);
     await removeOrphanTemps(target);
     await options.beforeSideFile?.();
-    const lines = (await fs.promises.readFile(target, 'utf-8')).split('\n').filter((l) => l.trim());
+    const lines = (await readRegularFile(target, 'utf-8')).split('\n').filter((l) => l.trim());
     const kept = keep(lines);
 
     if (!kept) return;
@@ -226,7 +227,7 @@ async function foldSideRecords(filePath: string, mode: number): Promise<void> {
 
   for (const pendingPath of await sideRecordPaths(filePath)) {
     try {
-      const content = await fs.promises.readFile(pendingPath, 'utf-8');
+      const content = await readRegularFile(pendingPath, 'utf-8');
 
       if (!content.endsWith('\n')) continue;
       const known = folded ??= new Set((await readOrEmpty(filePath).catch(() => '')).split('\n').map(pendingIdOf).filter((i) => i !== undefined));
@@ -299,7 +300,7 @@ function pendingIdOf(line: string): string | undefined {
 
 async function readOrEmpty(filePath: string): Promise<string> {
   try {
-    return await fs.promises.readFile(filePath, 'utf-8');
+    return await readRegularFile(filePath, 'utf-8');
   } catch (e) {
     if (errnoCode(e) === 'ENOENT') return '';
     throw e;

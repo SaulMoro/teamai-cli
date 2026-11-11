@@ -2,19 +2,21 @@ import { createHash } from 'node:crypto';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { z } from 'zod';
-import { isBareCommandName } from '@teamai/tool-core/cli-path';
+import { isBareCommandName } from '@teamai/shared/cli-path';
 import { INSTANCE_KEYS, type ToolInstance, type ToolInstanceHome } from '@teamai/tool-core/instance';
 import { isSafeNamespaceSegment } from './manifest-schema.js';
 import { resolveNamespacedItems, type NamespaceCandidate } from './namespace-resolver.js';
 import { isSessionPlatform } from './session-flow/adapters/platform-facts.js';
-import { isToolId, TOOL_ORDER, useToolInstances } from './tool-registry.js';
+import { homeEnvOf } from './tool-home.js';
+import { homeVariables, isToolId, TOOL_ORDER, useToolInstances } from './tool-registry.js';
 import type { ToolId } from './tools.js';
 import { DEFAULT_TOOL_PATHS, getTeamaiHomeDir, rerootToolPaths, ToolPathsSchema, type TeamaiConfig } from './types.js';
 import { writeJsonAtomic } from './utils/fs.js';
-import { getUserHome } from './utils/home.js';
-import { log } from './utils/logger.js';
+import { getUserHome } from '@teamai/shared/home';
+import { log } from '@teamai/shared/log';
 import { errorOnce, warnOnce } from './utils/warn-once.js';
-import { parseYaml } from './utils/yaml.js';
+import { parseYaml } from '@teamai/shared/yaml';
+import { readRegularFile } from '@teamai/shared/regular-file';
 
 // ─── Tool instances ──────────────────────────────────────
 //
@@ -117,7 +119,7 @@ async function readText(file: string): Promise<string | undefined> {
   try {
     const stat = await fs.lstat(file);
 
-    return stat.isFile() ? await fs.readFile(file, 'utf8') : undefined;
+    return stat.isFile() ? await readRegularFile(file, 'utf8') : undefined;
   } catch {
     return undefined;
   }
@@ -184,11 +186,22 @@ function resolveWithoutConflicts(candidates: readonly NamespaceCandidate<Resolve
   return resolveWithoutConflicts(candidates.filter((candidate) => candidate.name !== resolution.name), namespaces);
 }
 
-/** Where an instance's home is on this machine: its variable's value when set, else its directory under `$HOME`. */
-export function instanceHomeDir(home: ToolInstanceHome, env: NodeJS.ProcessEnv = process.env): string {
-  const moved = home.env === undefined ? undefined : env[home.env];
+/**
+ * Where an instance of `base` has its home on this machine: its variable's value when set, else its directory under
+ * `$HOME`. A variable that moves `base`'s own home, or an XDG base directory, is set for that tool or for every tool, so
+ * its value is never the instance's home: the instance's home is then its directory.
+ */
+export function instanceHomeDir(home: ToolInstanceHome, base: string, env: NodeJS.ProcessEnv = process.env): string {
+  const moved = home.env === undefined || movesSharedHome(home.env, base) ? undefined : env[home.env];
 
   return moved ? moved : path.join(getUserHome(), home.dir);
+}
+
+/** Whether `variable` moves the home of shipped tool `base` itself, or every XDG tool's. */
+function movesSharedHome(variable: string, base: string): boolean {
+  if (variable === 'XDG_CONFIG_HOME' || variable === 'XDG_DATA_HOME') return true;
+
+  return isToolId(base) && (homeEnvOf(base) === variable || homeVariables(base).includes(variable));
 }
 
 /** The member's own instance directory, `~/.teamai/tools/`: teamai reads it and never writes it. */
@@ -303,7 +316,7 @@ function trustFile(): string {
 
 async function readTrust(): Promise<z.infer<typeof TrustFileSchema>> {
   try {
-    return TrustFileSchema.parse(JSON.parse(await fs.readFile(trustFile(), 'utf8')));
+    return TrustFileSchema.parse(JSON.parse(await readRegularFile(trustFile(), 'utf8')));
   } catch {
     return { accepted: [] };
   }

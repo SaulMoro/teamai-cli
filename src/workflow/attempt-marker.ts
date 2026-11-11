@@ -1,9 +1,10 @@
-import { ATTEMPT_ENV, EPHEMERAL_CONFIG_ENV, RUN_DIR_ENV, RUN_MODE_ENV, type RunMode } from '../launch-context.js';
+import { RUN_DIR_ENV } from '@teamai/runtime-protocol';
+import { ATTEMPT_ENV, EPHEMERAL_CONFIG_ENV, RUN_MODE_ENV, type RunMode } from '../launch-context.js';
 import type { LocalConfig } from '../types.js';
 import { AGENT_SESSION_ENV } from '../utils/session-id.js';
 import { isRunId, runScratchDir } from './store.js';
 import type { WorkflowFailure } from './types.js';
-import { git, worktreeCheckout } from './worktree.js';
+import { git, gitAnswer, worktreeCheckout } from './worktree.js';
 
 /**
  * What every process of an attempt of `run` gets: the attempt marker, the run's mode, and the run's directory, and the
@@ -41,6 +42,18 @@ export function agentEvidence(env: NodeJS.ProcessEnv): AgentEvidence {
 }
 
 /**
+ * What a coding session teamai runs inside sets for its own children, and that changes how a tool teamai launches
+ * behaves: Claude Code turns transcript saving off in an interactive session that inherits `CLAUDE_CODE_CHILD_SESSION`,
+ * so teamai would find no session of the step to record, score or resume.
+ */
+const OUTER_SESSION_MARKERS: ReadonlySet<string> = new Set(['CLAUDE_CODE_CHILD_SESSION']);
+
+/** `env` without the markers of a coding session teamai runs inside, for a tool teamai launches (`OUTER_SESSION_MARKERS`). */
+export function withoutOuterSessionMarkers(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  return Object.fromEntries(Object.entries(env).filter(([name]) => !OUTER_SESSION_MARKERS.has(name)));
+}
+
+/**
  * `env` without what `agentEvidence` reads, for a process the CLI starts itself to drive a run of its own: the attempt
  * marker and run directory, and every agent session variable, which a hook inherits from the session it runs in.
  */
@@ -53,7 +66,7 @@ export function withoutAgentEvidence(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv 
 /**
  * Why this process may not start or drive a workflow run: it runs inside a workflow attempt, as the marker says; or, for
  * a start, it works in a workflow's place: a worktree under `.teamai/workflow-worktrees`, or a checkout on a workflow
- * branch, the only trace a place the host made keeps.
+ * branch, the only trace a place the session host made keeps.
  */
 export type Nested =
   | { kind: 'marker'; attempt: string }
@@ -78,7 +91,11 @@ export async function nestedStart(env: NodeJS.ProcessEnv, cwd: string): Promise<
   const checkout = worktreeCheckout(cwd);
 
   if (checkout !== undefined) return { kind: 'worktree-path', dir: cwd, checkout };
-  const branch = (await git(cwd, ['symbolic-ref', '--quiet', '--short', 'HEAD'])).stdout.trim();
+  const head = gitAnswer(await git(cwd, ['symbolic-ref', '--quiet', '--short', 'HEAD']));
+
+  // A git that did not answer has no workflow branch to refuse, and a start there fails on git with git's own cause.
+  if (head.said !== 'yes') return undefined;
+  const branch = head.result.stdout.trim();
   const [owner, run, ...rest] = branch.split('/');
 
   return owner === 'teamai' && run !== undefined && isRunId(run) && rest.length > 0 ? { kind: 'workflow-branch', dir: cwd, branch } : undefined;

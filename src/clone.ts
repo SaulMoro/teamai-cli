@@ -7,7 +7,7 @@ import { getGitHubToken } from './providers/github/gh-cli.js';
 import { getGitLabToken } from './providers/gitlab/gitlab-api.js';
 import { getGitCodeToken } from './providers/gitcode/gitcode-api.js';
 import { tgitGitCloneUrl } from './providers/tgit/rest-auth.js';
-import { log } from './utils/logger.js';
+import { log } from '@teamai/shared/log';
 import { sanitizeGitUrl } from '@teamai/shared/redact';
 import { assertSafeRepoCachePath } from './utils/repo-cache.js';
 
@@ -102,7 +102,7 @@ function runCommand(
 
         let stdout = '';
         let stderr = '';
-        // Same split-chunk UTF-8 handling as execCommand in utils/exec.ts.
+        // Same split-chunk UTF-8 handling as execCommand in @teamai/shared/exec.
         const stdoutDecoder = new StringDecoder('utf8');
         const stderrDecoder = new StringDecoder('utf8');
 

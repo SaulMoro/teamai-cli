@@ -6,13 +6,14 @@ import { realpath } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import fse from 'fs-extra';
+import { copyRegularTree, openRegularFileSync } from '@teamai/shared/regular-file';
 import { GitError, simpleGit, type SimpleGit, type SimpleGitOptions, type outputHandler } from 'simple-git';
 import { z } from 'zod';
-import { execCommand } from './exec.js';
+import { execCommand } from '@teamai/shared/exec';
 import { errnoCode } from './fs.js';
 import { GitAnswers } from './git-answers.js';
 import { gitFindsNoRepository, linkedWorktreesStamp, repositoryStamp } from './git-discovery.js';
-import { log } from './logger.js';
+import { log } from '@teamai/shared/log';
 
 /** What simple-git accepts as a custom binary without its unsafe opt-in. */
 const SIMPLE_GIT_SAFE_BINARY = /^([a-z]:)?([a-z0-9/.\\_~-]+)$/i;
@@ -114,7 +115,7 @@ const NATIVE_MAGIC = new Set(['7f454c46', 'feedface', 'feedfacf', 'cefaedfe', 'c
 function isNativeExecutable(file: string): boolean {
   try {
     fs.accessSync(file, fs.constants.X_OK);
-    const fd = fs.openSync(file, 'r');
+    const fd = openRegularFileSync(file);
 
     try {
       const head = Buffer.alloc(4);
@@ -1415,9 +1416,7 @@ async function carryWorkingTree(git: SimpleGit): Promise<CarriedWorkingTree | nu
   try {
     for (const [relative, present] of changes) {
       if (present) {
-        await fse.copy(path.join(top, relative), path.join(root, 'files', relative), {
-          overwrite: true, preserveTimestamps: true, dereference: false,
-        });
+        await copyRegularTree(path.join(top, relative), path.join(root, 'files', relative), { keepTimes: true });
       }
 
       entries.push({ relative, present });
@@ -1455,10 +1454,7 @@ async function restoreWorkingTree(git: SimpleGit, carried: CarriedWorkingTree | 
       const target = path.join(top, relative);
 
       if (present) {
-        await fse.ensureDir(path.dirname(target));
-        await fse.copy(path.join(carried.root, 'files', relative), target, {
-          overwrite: true, preserveTimestamps: true, dereference: false,
-        });
+        await copyRegularTree(path.join(carried.root, 'files', relative), target, { keepTimes: true });
       } else {
         await fse.remove(target);
       }

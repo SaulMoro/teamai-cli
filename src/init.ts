@@ -1,22 +1,40 @@
 import YAML from 'yaml';
-import { parseYaml } from './utils/yaml.js';
+import { parseYaml } from '@teamai/shared/yaml';
 import { z, type ZodTypeAny } from 'zod';
 import fs from 'node:fs';
 import path from 'node:path';
 import { readWorkspaceChildren } from './workspace-children.js';
 import { readSelfModeMarker } from './bootstrap.js';
-import { hasUserScopeInstall, saveLocalConfig, loadTeamConfig, saveLocalConfigForScope, loadLocalConfigForScope, loadStateForScope, refreshRoleAssignment, saveStateForScope, resolveProjectDataHome } from './config.js';
+import { hasUserScopeInstall, loadMemberSettings, markMemberSettingsWritten, saveLocalConfig, loadTeamConfig, saveLocalConfigForScope, loadLocalConfigForScope, loadStateForScope, refreshRoleAssignment, saveStateForScope, resolveProjectDataHome } from './config.js';
 import { codexTrustPolicy, deliveredHookFiles, describeUnappliedTeamHooks, hasTeamaiHooks, reconcileHooks, reconcileTeamHooksForConfig, reportCodexTrust, trustCodexForScope } from './hooks.js';
 import { configureGitUser, resolveAnchors, initRepo, isGitRepo, getRemoteUrl, getConfiguredRemoteUrl, remotesMatch, redactGitCredentials, pullRepoFastForward, DetachedTeamRepoError, pushRepoDirectly, autoPushViaMR, gitBlockTimeoutMs, createGitWithBlockTimeout } from './utils/git.js';
 import { withTimeout } from './utils/async.js';
 import { getProvider, detectProvider, detectProviderForInit, RepoNotFoundError, OrganizationNotFoundError, RepoCreatePermissionError } from './providers/index.js';
 import { parseGenericGitExistingRemote } from './providers/git/repo-url.js';
 import { probeSelfHostedGitLab } from './providers/gitlab/probe.js';
-import { ensureDir, writeFile, writeFileAtomic, pathExists, expandHome, readFileSafe, remove } from './utils/fs.js';
+import { ensureDir, writeFile, writeFileAtomic, pathExists, readFileSafe, remove } from './utils/fs.js';
 import { queueOwner, sameQueueOwner, setAsideQueueOnModeSwitch } from './utils/pending-learnings.js';
 import { dropAllSearchIndexes } from './utils/search-index.js';
 import { reportsBranch } from './utils/reports-branch.js';
 import { learningsBranch } from './utils/learnings-branch.js';
+
+/**
+ * The member's AI tool, which an answer step, a prompt step and teamai's own AI calls run on: the first of `agents`,
+ * as `--agent` named them, that teamai launches becomes `ai.tool` in this install's config. A tool the install's
+ * config or ~/.teamai/config.yaml already names stays the member's choice.
+ */
+async function adoptAgentTool(localConfig: LocalConfig, agents: readonly string[]): Promise<void> {
+  const tool = agents.find((agent) => launchTargetOf(agent) !== undefined);
+
+  if (tool === undefined || localConfig.ai?.tool !== undefined) return;
+  const ownConfig = localConfig.scope === 'user' ? getUserConfigPath() : path.join(getDataHome(localConfig), 'config.yaml');
+  const [own, machine] = await Promise.all([loadMemberSettings(expandHome(ownConfig)), loadMemberSettings()]);
+
+  if (own.ai?.tool !== undefined || machine.ai?.tool !== undefined) return;
+  // Marked as written, so the save keeps it in the install's own file.
+  Object.assign(localConfig, markMemberSettingsWritten(localConfig, { ai: { tool } }));
+  log.info(`AI tool: ${tool}, from --agent (ai.tool in ${expandHome(ownConfig)}).`);
+}
 
 /**
  * A re-init that changes the install's kind or team repository keeps the data
@@ -168,7 +186,7 @@ function settingsReinitKeeps(file: LocalConfig | null, remote: string) {
   return remotesMatch(repo.remote, remote) ? settings : anyTeamSettings;
 }
 
-import { log, spinner } from './utils/logger.js';
+import { log, spinner } from '@teamai/shared/log';
 import {
   CLAUDE_TOOL_ID,
   detectToolRoot,
@@ -177,6 +195,8 @@ import {
   resolveHookScope,
   scopedToolPaths,
   toolRootRejection,
+  toolRootRejectionText,
+  warnSessionsOnlyToolRoot,
   type TeamaiConfig,
   getTeamaiHomeDir,
   REPORTS_BRANCH,
@@ -191,10 +211,12 @@ import {
   getTeamaiHome,
   getConfigPath,
   getDataHome,
+  getUserConfigPath,
   installScopeName,
   selfModeGitignorePath,
 } from './types.js';
-import { getUserHome } from './utils/home.js';
+import { launchTargetOf } from './launch-registry.js';
+import { getUserHome, expandHome } from '@teamai/shared/home';
 import { describeRoles, listRoleIds, loadRolesManifest, RolesManifestNotFoundError } from './roles.js';
 import { loadRoleAssignmentsIfPresent, resolveAssignedRoles, ROLE_ASSIGNMENTS_FILE } from './role-assignments.js';
 import { loadProjectsManifest, listProjectIds, type ProjectsManifest } from './projects.js';
@@ -281,8 +303,24 @@ function recordToolRoots(localConfig: LocalConfig): void {
     if (!root) continue;
     const rejection = toolRootRejection(root);
 
+    // Session lookups read a root anywhere; the sync addresses only roots in the home directory.
+    if (rejection?.kind === 'outside_home') {
+      const kept = localConfig.toolRoots?.[tool];
+
+      // A recorded root the sync writes to is not given up for one that only holds sessions.
+      if (kept !== undefined && kept !== root && toolRootRejection(kept) === null) {
+        log.warn(`${envVar} (${root}) is outside the home directory, so teamai kept toolRoots.${tool} (${kept}), which it syncs ${label} to. To read ${label} sessions at ${root} instead, remove toolRoots.${tool} from the config and re-run teamai init.`);
+        continue;
+      }
+
+      localConfig.toolRoots = { ...localConfig.toolRoots, [tool]: root };
+      log.info(`Recorded ${envVar} as the ${label} root: ${root}`);
+      warnSessionsOnlyToolRoot(tool, root);
+      continue;
+    }
+
     if (rejection) {
-      log.warn(`${envVar} (${root}) was not recorded: ${rejection}.`);
+      log.warn(`${envVar} (${root}) was not recorded: ${toolRootRejectionText(rejection)}.`);
       continue;
     }
 
@@ -1019,6 +1057,7 @@ export async function initHttp(
   await releasePreviousToolRoots(teamConfig, existingLocalConfig, localConfig);
 
   await ensureDir(teamaiHome);
+  await adoptAgentTool(localConfig, requestedAgents);
   await settleModeSwitch(existingLocalConfig, localConfig, async () => {
     if (scope === 'project') {
       await saveLocalConfigForScope(localConfig, scope, projectRoot);
@@ -1748,6 +1787,7 @@ export async function initSelfMode(options: GlobalOptions & {
   // getDataHome, which now resolves to the partition.
   await ensureDir(teamaiHome);
   await ensureDir(partitionHome);
+  await adoptAgentTool(localConfig, normalizeAgentList(options.agent));
   await settleModeSwitch(preInitConfig, localConfig, () =>
     saveLocalConfigForScope(localConfig, 'project', businessRepoRoot));
   log.success(`Local config saved to ${partitionHome}/config.yaml`);
@@ -2842,6 +2882,7 @@ export async function init(options: GlobalOptions & {
   await ensureDir(teamaiHome);
 
   if (scope !== 'project') await ensureDir(getTeamaiHomeDir());
+  await adoptAgentTool(localConfig, normalizeAgentList(options.agent));
   await settleModeSwitch(existingLocalConfig ?? sameTeamSalvage, localConfig, () =>
     scope === 'project' ? saveLocalConfigForScope(localConfig, scope, projectRoot) : saveLocalConfig(localConfig));
 

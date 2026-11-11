@@ -2,7 +2,8 @@ import { findSkippedFolders, reportSkippedFolders } from './folder-markers.js';
 import { hookToolPathsForConfig, parseUserStats } from './types.js';
 import os from 'node:os';
 import path from 'node:path';
-import { readFile, realpath, stat } from 'node:fs/promises';
+import { realpath, stat } from 'node:fs/promises';
+import { readRegularFile } from '@teamai/shared/regular-file';
 import { isDeepStrictEqual } from 'node:util';
 import matter from 'gray-matter';
 import { z } from 'zod';
@@ -16,7 +17,7 @@ import { getHeadRev, getHeadCommit, createGit, getDefaultBranch, completeWorktre
 import { publishQueuedLearnings } from './utils/learnings-publish.js';
 import { pendingLearningsDir } from './utils/pending-learnings.js';
 import { indexableLearningsRoots } from './utils/learnings-roots.js';
-import { log, spinner } from './utils/logger.js';
+import { log, spinner } from '@teamai/shared/log';
 import { DetachedRecoveryError, transitionTeamRepo, teamRefBlocker, teamRefNotice, removedTeamResources, type RemovedTeamResources } from './team-ref.js';
 import { pathExists, readJson, writeJson, listFiles, listDirs, listFilesRecursive, readFileSafe, dirContentEqual, hasVcsMetadataRecursive } from './utils/fs.js';
 import { reconcilePlacementRecords } from './utils/pending-push.js';
@@ -45,7 +46,7 @@ import {
   blockingEntries, deliveredSkillFiles, describeMembersDirLeft, removeDelivered, holdsNonRegular, judgeCopy, judgeRemoval, keepsTrackedCopy, notTeamaisReason, openLedger, recordedUnder, reportKept,
   type DeliveredHashes, type DeliveryLedger,
 } from './resources/delivered-copies.js';
-import { BUILTIN_SKILL_NAMES } from './builtin-skills.js';
+import { BUILTIN_SKILL_NAMES } from './cli-skill-names.js';
 import type { AgentModelRecords, CodexBuildSkew, CopyOrigin, GlobalOptions, ResourceType, ResourceItem, TeamaiConfig, LocalConfig, State } from './types.js';
 import {
   getUserLearningsDir,
@@ -86,7 +87,7 @@ import { declaredSecretKeys } from './resources/secrets.js';
 import { envShVariables, keptFromUserScope, resolvesTeamEnv, resolveTeamEnv, variablesKeptWarning, type TeamEnv } from './env-resolution.js';
 import { reservedTeamEnvWarning } from './env-reserved.js';
 import { describeEnvAdvisory, envAdvisories } from './env-advisories.js';
-import { getUserHome } from './utils/home.js';
+import { getUserHome } from '@teamai/shared/home';
 import { acquireLock, releaseLock } from './update.js';
 import { mirrorLearnings } from './utils/learnings-mirror.js';
 import { withTimeout } from './utils/async.js';
@@ -3448,7 +3449,7 @@ export async function resolveInstructionBlocks(
   };
 
   try {
-    const cultureContent = await readFile(culturePath, 'utf8');
+    const cultureContent = await readRegularFile(culturePath, 'utf8');
     blocks.culture = compileCulture(cultureContent) ?? undefined;
 
     if (blocks.culture === undefined) {

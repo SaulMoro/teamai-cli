@@ -1,7 +1,7 @@
 import path from 'node:path';
 import { z } from 'zod';
 import type { LocalConfig, TeamaiConfig, State } from './types.js';
-import { JsonValueSchema, JsonObjectSchema } from './types.js';
+import { JsonValueSchema, JsonObjectSchema } from '@teamai/shared/json';
 import { isCodexTool } from './utils/tool-names.js';
 import {
   DEFAULT_CODEX_ROOT,
@@ -19,9 +19,9 @@ import {
   writeFile,
   pathExists,
 } from './utils/fs.js';
-import { log } from './utils/logger.js';
+import { log } from '@teamai/shared/log';
 import { hookSyntaxOf } from './tool-registry.js';
-import type { JsonSyntax } from './utils/json.js';
+import type { JsonSyntax } from '@teamai/shared/json';
 
 // ─── Co-author reconcile engine ──────────────────────────────
 //

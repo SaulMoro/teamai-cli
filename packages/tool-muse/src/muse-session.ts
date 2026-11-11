@@ -3,7 +3,7 @@ import path from 'node:path';
 import { z } from 'zod';
 
 import { addTokenUsage, emptyTokenUsage } from '@teamai/tool-core/tokens';
-import { getUserHome } from '@teamai/tool-core/home';
+import { getUserHome } from '@teamai/shared/home';
 import type { TokenReading, TokenRequest, TokenSource } from '@teamai/tool-core/tokens';
 import { forEachJsonLine } from '@teamai/tool-core/tokens';
 

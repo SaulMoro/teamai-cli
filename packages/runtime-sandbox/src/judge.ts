@@ -1,0 +1,295 @@
+import { z } from 'zod';
+import { JsonValueSchema } from '@teamai/shared/json';
+import { jsonLines, reportedTokens, type ConfinedAccess } from '@teamai/tool-core/launch';
+import { extractReply } from '@teamai/tool-core/reply';
+import type { TokenUsage } from '@teamai/tool-core/stdout';
+import type { ConfinedOffer, ConfinedPrompt, PromptLease, PromptResult, RuntimeFailure } from '@teamai/runtime-protocol';
+import { SIGN_IN } from './sign-in.js';
+
+// ─── A judge: one confined prompt, in a container of its own ───
+//
+//  teamai sends a judge as a `prompt` with `confined: { dir, … }` in a place opened with no view. The runtime starts a
+//  fresh container that mounts only `dir`, read-only, on a network whose one way out is a filter that lets through
+//  only the model provider's host, and runs the judge's tool there with the env credentials teamai sends:
+//
+//    claude  -p --tools Read,Grep,Glob --output-format json --json-schema <schema> --append-system-prompt <prompt> <ask>
+//    codex   exec --json --ephemeral --output-schema <file> <ask>        the container is its sandbox, so access is full
+//
+//  A `<tool>: login` stays on this machine: a judge container has no tool home, so a judge brings an API key instead,
+//  and `init` offers a judge only on the tools whose keys the definition names (`offersSignedIn`). A judge gets only
+//  the names a confined run of its own tool reads (its keys, base URL and model choices), never this machine's proxies or
+//  paths, and its filter lets through only the provider it signs in to: the public API, or the base URL its credentials
+//  name in place of it. The evidence is mounted at EVIDENCE_DIR, and the prompt names it
+//  there, so no mount point, working directory or prompt path tells the judge the member's home, username or project.
+//
+
+/** The user turn: the prompt itself goes in as Claude's system prompt, or ahead of this for Codex. */
+// A judge told only what it must not do may not even list its evidence, and labels a good pass on nothing.
+const ASK = 'List, search and read the files in this directory, and answer from them alone. Change nothing. Return only the requested JSON answer.';
+
+/** Where a judge's container sees the evidence directory, whatever its path on the host. */
+export const EVIDENCE_DIR = '/evidence';
+
+/** Where the judge's own files go inside its container, never in `dir`. */
+const JUDGE_FILES = '"$HOME/.teamai-judge"';
+
+/** The port the network filter listens on, inside the judge's network. */
+export const FILTER_PORT = 3128;
+
+export interface JudgeLaunch {
+  argv: string[];
+  /** Names the tool's process gets besides the credentials. */
+  env: Record<string, string>;
+}
+
+export type JudgeReading = { ok: true; session: string; result: PromptResult; usage?: TokenUsage } | { ok: false; message: string };
+
+interface JudgeTool {
+  /** What the tool can do in the container beyond answering. */
+  access: ConfinedAccess;
+  /** The env credentials it signs in with, of those teamai gives a confined prompt on it; a judge with none of them is refused. */
+  credentials: readonly string[];
+  /** The model provider's `host:port`, and the variable that points the tool at another one. */
+  endpoint: string;
+  baseUrlEnv: string;
+  /** The other names of its confined profile it reads as given, such as the model it picks. */
+  settings: readonly string[];
+  /** The credentials as the tool reads them: its own of those given, under the names it signs in with. */
+  signIn(own: Record<string, string>): Record<string, string>;
+  launch(lease: PromptLease, confined: ConfinedPrompt): JudgeLaunch;
+  read(stdout: string): JudgeReading;
+}
+
+/** Each JSON line of `stdout` that matches `schema`. */
+function linesOf<TLine>(stdout: string, schema: z.ZodType<TLine>): TLine[] {
+  return jsonLines(stdout).flatMap((line) => {
+    const parsed = schema.safeParse(line);
+
+    return parsed.success ? [parsed.data] : [];
+  });
+}
+
+const ClaudeResult = z.object({
+  type: z.literal('result'),
+  is_error: z.boolean().optional(),
+  session_id: z.string().min(1),
+  result: z.string().optional(),
+  structured_output: JsonValueSchema.optional(),
+  usage: z.object({ input_tokens: z.number().optional(), output_tokens: z.number().optional(), cache_read_input_tokens: z.number().optional() }).optional(),
+});
+
+const CodexLine = z.discriminatedUnion('type', [
+  z.object({ type: z.literal('thread.started'), thread_id: z.string().min(1) }),
+  z.object({ type: z.literal('item.completed'), item: z.object({ type: z.string(), text: z.string().optional() }) }),
+  z.object({ type: z.literal('turn.completed'), usage: z.object({ input_tokens: z.number().optional(), cached_input_tokens: z.number().optional(), output_tokens: z.number().optional() }) }),
+  z.object({ type: z.literal('turn.failed'), error: z.object({ message: z.string() }) }),
+  z.object({ type: z.literal('error'), message: z.string() }),
+]);
+
+/** The tools a judge runs on, by executable. */
+// oxlint-disable-next-line teamai/tool-facts -- the launch of each tool inside a judge container, which the container confines rather than the tool's own confined profile (src/workflow/confined-launch.ts)
+const JUDGE_TOOLS = {
+  claude: {
+    access: 'read',
+    credentials: SIGN_IN.claude.env,
+    endpoint: 'api.anthropic.com:443',
+    baseUrlEnv: 'ANTHROPIC_BASE_URL',
+    settings: ['ANTHROPIC_MODEL', 'ANTHROPIC_DEFAULT_OPUS_MODEL', 'ANTHROPIC_DEFAULT_SONNET_MODEL', 'ANTHROPIC_DEFAULT_HAIKU_MODEL', 'CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY'],
+    signIn: (own) => own,
+    launch: (lease, confined) => ({
+      argv: [
+        'claude', '-p', '--tools', 'Read,Grep,Glob', '--allowedTools', 'Read,Grep,Glob', '--strict-mcp-config', '--no-session-persistence', '--output-format', 'json',
+        ...(confined.schema === undefined ? [] : ['--json-schema', JSON.stringify(confined.schema)]),
+        ...(lease.model ? ['--model', lease.model.name] : []), ...(lease.model?.effort ? ['--effort', lease.model.effort] : []),
+        '--append-system-prompt', lease.prompt, ASK,
+      ],
+      // Telemetry and updates would only knock on the filter.
+      env: { CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1', DISABLE_AUTOUPDATER: '1' },
+    }),
+    read(stdout) {
+      const result = linesOf(stdout, ClaudeResult).at(-1);
+
+      if (!result) return { ok: false, message: 'Claude printed no result.' };
+
+      if (result.is_error) return { ok: false, message: `Claude reported an error: ${result.result ?? 'no reason given'}` };
+      const output = result.structured_output ?? extractReply(result.result ?? '', JsonValueSchema);
+      const usage = reportedTokens({ input: result.usage?.input_tokens, output: result.usage?.output_tokens, cachedInput: result.usage?.cache_read_input_tokens });
+
+      return { ok: true, session: result.session_id, result: output === undefined ? { failure: { code: 'reply_invalid', message: 'Claude did not reply with JSON.' } } : { output }, ...(usage && { usage }) };
+    },
+  },
+  codex: {
+    access: 'full',
+    credentials: SIGN_IN.codex.env,
+    endpoint: 'api.openai.com:443',
+    baseUrlEnv: 'OPENAI_BASE_URL',
+    settings: [],
+    // A fresh Codex home signs in with CODEX_API_KEY, and reads no OPENAI_API_KEY.
+    signIn: (own) => (own.CODEX_API_KEY !== undefined || own.OPENAI_API_KEY === undefined ? own : { ...own, CODEX_API_KEY: own.OPENAI_API_KEY }),
+    launch: (lease, confined) => ({
+      // The schema reaches Codex as a file, written in the container's own home, never in `dir`. Codex takes a base URL
+      // from its config, not its env, so the wrapper passes it from the container's env and it stays off every argv.
+      argv: [
+        '/bin/sh', '-c',
+        `mkdir -p ${JUDGE_FILES} && printf '%s' "$JUDGE_SCHEMA" > ${JUDGE_FILES}/schema.json && if [ -n "\${OPENAI_BASE_URL-}" ]; then set -- -c "openai_base_url=\\"$OPENAI_BASE_URL\\"" "$@"; fi && exec codex exec --json --ephemeral --skip-git-repo-check --dangerously-bypass-approvals-and-sandbox --output-schema ${JUDGE_FILES}/schema.json "$@"`,
+        'codex',
+        ...(lease.model ? ['--model', lease.model.name] : []), ...(lease.model?.effort ? ['-c', `model_reasoning_effort=${JSON.stringify(lease.model.effort)}`] : []),
+        `${lease.prompt}\n\n${ASK}`,
+      ],
+      env: { JUDGE_SCHEMA: JSON.stringify(confined.schema ?? { type: 'object' }) },
+    }),
+    read(stdout) {
+      const lines = linesOf(stdout, CodexLine);
+      let session: string | undefined;
+      let text: string | undefined;
+      let failed: string | undefined;
+      // An `error` line may be a retry Codex recovers from: it ends the judge only when the turn never completes.
+      let notice: string | undefined;
+      let completed = false;
+      let usage: TokenUsage | undefined;
+
+      for (const line of lines) {
+        switch (line.type) {
+          case 'thread.started':
+            session = line.thread_id;
+            break;
+          case 'item.completed':
+            if (line.item.type === 'agent_message' && line.item.text !== undefined) text = line.item.text;
+            break;
+          case 'turn.completed':
+            completed = true;
+            usage = reportedTokens({ input: line.usage.input_tokens, output: line.usage.output_tokens, cachedInput: line.usage.cached_input_tokens });
+            break;
+          case 'turn.failed':
+            failed = line.error.message;
+            break;
+          case 'error':
+            notice = line.message;
+            break;
+          default: {
+            const unhandled: never = line;
+
+            return unhandled;
+          }
+        }
+      }
+
+      const error = failed ?? (completed ? undefined : notice);
+
+      if (error !== undefined) return { ok: false, message: `Codex reported an error: ${error}` };
+
+      if (session === undefined) return { ok: false, message: 'Codex started no thread.' };
+      const output = text === undefined ? undefined : extractReply(text, JsonValueSchema);
+
+      return { ok: true, session, result: output === undefined ? { failure: { code: 'reply_invalid', message: 'Codex did not reply with JSON.' } } : { output }, ...(usage && { usage }) };
+    },
+  },
+} satisfies Record<string, JudgeTool>;
+
+/** The judge launch of `tool`, when this runtime judges on it. */
+export function judgeTool(tool: string): JudgeTool | undefined {
+  return Object.entries(JUDGE_TOOLS).find(([name]) => name === tool)?.[1];
+}
+
+function urlOf(text: string): URL | undefined {
+  try {
+    return new URL(text);
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * The offers a judge can take with the env credentials a definition names (`init.credentials.env`): each tool that
+ * signs in with one of them. A login never reaches a judge container, so a login-only tool is left to a later runtime.
+ */
+export function offersSignedIn(offers: ConfinedOffer[], names: readonly string[]): ConfinedOffer[] {
+  return offers.flatMap((offer) => {
+    const tools = offer.tools.filter((tool) => judgeTool(tool)?.credentials.some((name) => names.includes(name)) === true);
+
+    return tools.length > 0 ? [{ ...offer, tools }] : [];
+  });
+}
+
+/**
+ * `prompt` with every mention of the evidence directory's host path replaced by where the judge sees it. A mention
+ * ends the path, so a sibling such as `<dir>-old` or `<dir>.bak` keeps its host path.
+ */
+export function inEvidenceDir(prompt: string, dir: string): string {
+  return prompt.replace(new RegExp(`${dir.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?![\\w-]|\\.[\\w-])`, 'g'), EVIDENCE_DIR);
+}
+
+/** A judge ready to start: its tool's launch, the hosts its filter lets through, and the credentials it gets. */
+export interface Judge {
+  tool: JudgeTool;
+  hosts: string[];
+  credentials: Record<string, string>;
+}
+
+/** The first of `names` the member's environment (`shell`) sets, which a hint suggests first, else the first of them. */
+function exampleOf(names: readonly string[], shell: NodeJS.ProcessEnv): string {
+  return names.find((name) => shell[name]) ?? names[0];
+}
+
+/**
+ * The judge of `tool` with these credentials, or why it is refused before anything starts, suggesting the sign-in the
+ * member's environment (`shell`) sets.
+ */
+export function judgeOf(tool: string, credentials: Record<string, string>, shell: NodeJS.ProcessEnv): { ok: true; judge: Judge } | { ok: false; failure: RuntimeFailure } {
+  const launch = judgeTool(tool);
+
+  if (launch === undefined) return { ok: false, failure: { code: 'tool_unavailable', message: `The sandbox runtime judges on ${Object.keys(JUDGE_TOOLS).join(' or ')}, not ${tool}.` } };
+
+  if (!launch.credentials.some((name) => credentials[name] !== undefined)) {
+    return { ok: false, failure: { code: 'credential_missing', message: `A ${tool} judge in the sandbox signs in with ${launch.credentials.join(' or ')}, and the definition gives it none. Add one to the sandbox entry's credentials, for example ${exampleOf(launch.credentials, shell)}: env:${exampleOf(launch.credentials, shell)}. A login stays on this machine and never reaches a judge container.` } };
+  }
+
+  const own = Object.fromEntries(Object.entries(credentials).filter(([name]) => [...launch.credentials, launch.baseUrlEnv, ...launch.settings].includes(name)));
+  const base = own[launch.baseUrlEnv];
+
+  if (base === undefined) return { ok: true, judge: { tool: launch, hosts: [launch.endpoint], credentials: launch.signIn(own) } };
+  const url = urlOf(base);
+
+  if (url === undefined || !['https:', 'http:'].includes(url.protocol)) {
+    return { ok: false, failure: { code: 'bad_option', key: 'credentials', message: `${launch.baseUrlEnv} is not an http(s) URL, so the judge's network filter cannot let it through. Set it to the provider's base URL, such as https://llm.acme.internal:8443/v1, and start again.` } };
+  }
+
+  return { ok: true, judge: { tool: launch, hosts: [`${url.hostname}:${url.port || (url.protocol === 'http:' ? '80' : '443')}`], credentials: launch.signIn(own) } };
+}
+
+/**
+ * Why a judge that brings no credential at all is refused when its place opens, suggesting the Claude sign-in the
+ * member's environment (`shell`) sets.
+ */
+export function noJudgeCredential(shell: NodeJS.ProcessEnv): RuntimeFailure {
+  const claude = exampleOf(SIGN_IN.claude.env, shell);
+
+  return {
+    code: 'credential_missing',
+    message: `A judge in the sandbox signs in only with env credentials, and the definition gives the sandbox none: a codex: login stays on this machine and never reaches a judge container. Add one to the sandbox entry's credentials, for example ${claude}: env:${claude} for Claude or OPENAI_API_KEY: env:OPENAI_API_KEY for Codex, and start again.`,
+  };
+}
+
+/**
+ * The network filter, run with `node -e` in a container of the image on the engine's default network and the judge's
+ * internal one: it answers only `CONNECT host:port`, and plain HTTP requests, to the hosts it is started with, and
+ * pipes the bytes through.
+ */
+export const FILTER_SCRIPT = `const net = require('node:net'); const http = require('node:http');
+const [port, ...allowed] = process.argv.slice(1);
+const refuse = (response) => { response.writeHead(403); response.end('This network reaches only the model provider.\\n'); };
+const server = http.createServer((request, response) => {
+  let url; try { url = new URL(request.url); } catch { refuse(response); return; }
+  if (url.protocol !== 'http:' || !allowed.includes(url.hostname + ':' + (url.port || '80'))) { refuse(response); return; }
+  const upstream = http.request(url, { method: request.method, headers: request.headers }, (reply) => { response.writeHead(reply.statusCode, reply.headers); reply.pipe(response); });
+  upstream.on('error', () => response.destroy()); request.pipe(upstream);
+});
+server.on('connect', (request, socket, head) => {
+  const target = String(request.url);
+  const at = target.lastIndexOf(':');
+  if (!allowed.includes(target) || at < 1) { socket.end('HTTP/1.1 403 Forbidden\\r\\n\\r\\n'); return; }
+  const upstream = net.connect(Number(target.slice(at + 1)), target.slice(0, at), () => { socket.write('HTTP/1.1 200 Connection Established\\r\\n\\r\\n'); upstream.write(head); upstream.pipe(socket); socket.pipe(upstream); });
+  upstream.on('error', () => socket.destroy()); socket.on('error', () => upstream.destroy());
+});
+server.listen(Number(port), '0.0.0.0');
+process.on('SIGTERM', () => process.exit(0));`;

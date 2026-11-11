@@ -1,11 +1,12 @@
+import { copyRegularTree, isStagingName, readRegularFile, stagingFolder } from '@teamai/shared/regular-file';
 import fse from 'fs-extra';
 import crypto from 'node:crypto';
 import path from 'node:path';
 import { z } from 'zod';
-import { isJsonObject } from '../types.js';
-import { log } from './logger.js';
-import { expandHome } from './home.js';
-import { editJsonText, isPlainJson, parseJson, parseJsonAs, type JsonSyntax } from './json.js';
+import { log } from '@teamai/shared/log';
+import { expandHome } from '@teamai/shared/home';
+import { parseJson, type JsonSyntax, isJsonObject } from '@teamai/shared/json';
+import { editJsonText, isPlainJson, parseJsonAs } from './json.js';
 
 const IGNORED_NAMES = new Set([
   '__pycache__',
@@ -15,8 +16,23 @@ const IGNORED_NAMES = new Set([
   '.git',
 ]);
 
+/** A pre-push sync's update and backup of a skill (`replaceSkillDir`): `.<name>.<pid>.<12 hex>.teamai-sync` and `-prev`. */
+const SYNC_NAME = /^\..+\.\d+\.[0-9a-f]{12}\.teamai-(?:sync|prev)$/;
+
+/**
+ * The folders a pre-push sync builds beside skill folder `dir`: `staged`, the update, renamed into place once whole, and
+ * `previous`, the copy it replaces until then. A sync cut short leaves them, each holding a whole skill, which a scan
+ * passes over (`isIgnored`).
+ */
+export function syncFolders(dir: string) {
+  const tag = path.join(path.dirname(dir), `.${path.basename(dir)}.${process.pid}.${crypto.randomBytes(6).toString('hex')}`);
+
+  return { staged: `${tag}.teamai-sync`, previous: `${tag}.teamai-prev` };
+}
+
+/** Whether a scan or a copy passes `name` over: caches, git's folder, and a working folder a copy cut short left. */
 export function isIgnored(name: string): boolean {
-  return IGNORED_NAMES.has(name) || name.endsWith('.pyc');
+  return IGNORED_NAMES.has(name) || name.endsWith('.pyc') || isStagingName(name) || SYNC_NAME.test(name);
 }
 
 /**
@@ -30,8 +46,6 @@ export function isDraft(file: string): boolean {
   return file.endsWith(DRAFT_SUFFIX);
 }
 
-export { expandHome } from './home.js';
-
 const ErrnoErrorSchema = z.object({ code: z.string() });
 
 /**
@@ -44,6 +58,65 @@ export function errnoCode(cause: unknown): string | undefined {
   return parsed.success ? parsed.data.code : undefined;
 }
 
+/** The error codes of a write the filesystem refused: no permission, a sandbox's or a policy's refusal, a read-only volume. */
+const WRITE_REFUSALS = ['EACCES', 'EPERM', 'EROFS'] as const;
+
+/** The calls that write: an EACCES of `spawn` (a program that may not run) or `scandir` (a read) is not a refused write. */
+const WRITING_CALLS = new Set(['open', 'mkdir', 'mkdtemp', 'rename', 'unlink', 'rmdir', 'rm', 'link', 'symlink', 'copyfile', 'write', 'utime', 'futime', 'chmod', 'chown']);
+
+const RefusedWriteErrorSchema = z.object({ code: z.enum(WRITE_REFUSALS), path: z.string(), syscall: z.string() });
+
+/** The strerror git prints after the path it may not write, by the code it stands for. */
+const GIT_REFUSALS = [
+  { strerror: 'Permission denied', code: 'EACCES' },
+  { strerror: 'Operation not permitted', code: 'EPERM' },
+  { strerror: 'Read-only file system', code: 'EROFS' },
+] as const satisfies ReadonlyArray<{ strerror: string; code: (typeof WRITE_REFUSALS)[number] }>;
+
+/** Git's own error line, so ssh's `connect to host … port 22: Operation not permitted` is not read as a path. */
+const GIT_REFUSAL_LINE = /^(?:error|fatal): .*?(?:'([^']+)'|([^\s':]*\/[^\s':]*)):\s*(Permission denied|Operation not permitted|Read-only file system)\s*$/m;
+
+/** A write the filesystem refused: the folder it was refused in, and its error code. */
+export interface RefusedWrite {
+  folder: string;
+  code: (typeof WRITE_REFUSALS)[number];
+}
+
+/** A refused write, told as an error whose message says where and what to do; every retry fails the same way. */
+export class RefusedWriteError extends Error {
+  override name = 'RefusedWriteError';
+  constructor(readonly refused: RefusedWrite, options?: ErrorOptions) {
+    super(refusedWriteAdvice(refused), options);
+  }
+}
+
+/**
+ * The write the filesystem refused that `cause`, or an error it was caused by, reports; undefined for any other
+ * failure. A `RefusedWriteError` counts as it is. With `gitCwd`, a git error counts too when its text names the path
+ * git may not write, read from `gitCwd`, where git ran.
+ */
+export function refusedWrite(cause: unknown, { gitCwd }: { gitCwd?: string } = {}): RefusedWrite | undefined {
+  for (let current = cause, depth = 0; current !== undefined && depth < 8; depth++) {
+    if (current instanceof RefusedWriteError) return current.refused;
+    const errno = RefusedWriteErrorSchema.safeParse(current);
+
+    if (errno.success && WRITING_CALLS.has(errno.data.syscall)) return { folder: path.dirname(errno.data.path), code: errno.data.code };
+    const line = gitCwd !== undefined && current instanceof Error ? GIT_REFUSAL_LINE.exec(current.message) : null;
+    const written = line?.[1] ?? line?.[2];
+    const code = GIT_REFUSALS.find(({ strerror }) => strerror === line?.[3])?.code;
+
+    if (gitCwd !== undefined && written !== undefined && code !== undefined) return { folder: path.dirname(path.resolve(gitCwd, written)), code };
+    current = current instanceof Error ? current.cause : undefined;
+  }
+
+  return undefined;
+}
+
+/** What to tell the person of a write the filesystem refused: where, why, and what to do. */
+export function refusedWriteAdvice({ folder, code }: RefusedWrite): string {
+  return `teamai may not write in ${folder} (${code}). Give this process write access to that folder, or run the command outside its sandbox.`;
+}
+
 /**
  * Ensure a directory exists
  */
@@ -52,11 +125,11 @@ export async function ensureDir(dir: string): Promise<void> {
 }
 
 /**
- * Read a file, return null if not found
+ * Read a file, return null if not found or not a regular file
  */
 export async function readFileSafe(filePath: string): Promise<string | null> {
   try {
-    return await fse.readFile(expandHome(filePath), 'utf-8');
+    return await readRegularFile(expandHome(filePath), 'utf-8');
   } catch {
     return null;
   }
@@ -70,7 +143,7 @@ export async function readFileSafe(filePath: string): Promise<string | null> {
  */
 export async function readFileIfExists(filePath: string): Promise<string | null> {
   try {
-    return await fse.readFile(expandHome(filePath), 'utf-8');
+    return await readRegularFile(expandHome(filePath), 'utf-8');
   } catch (error) {
     if (errnoCode(error) === 'ENOENT') return null;
     throw error;
@@ -280,9 +353,11 @@ export async function writeJsonAtomic<T>(
 }
 
 /**
- * Copy a directory recursively.
- * If `dest` is a symlink (e.g. left over from setup-links.sh), remove it first
- * so fse.copy can create a real directory in its place.
+ * Copy a directory recursively, all or nothing: into a folder beside `dest` first, so an entry the copy refuses, such
+ * as a FIFO, leaves `dest` as it was, or absent. The whole copy is then renamed to `dest`, or merged into the folder
+ * already there, which keeps what `skip` names and anything else of the member's in it.
+ * If `dest` is a symlink (e.g. left over from setup-links.sh), it is removed once the copy is whole, so a real
+ * directory takes its place.
  * With `onLink`, a link in `src` is not copied (nor followed): `onLink` gets its
  * path relative to `src`. Without it, links are copied as links.
  */
@@ -290,33 +365,57 @@ export async function copyDir(
   src: string, dest: string, onLink?: (relativePath: string) => void, skip: readonly string[] = [],
 ): Promise<void> {
   const destExpanded = expandHome(dest);
+  const srcExpanded = expandHome(src);
+  let there: fse.Stats | undefined;
 
   try {
-    const stat = await fse.lstat(destExpanded);
-
-    if (stat.isSymbolicLink()) {
-      await fse.remove(destExpanded);
-    }
-  } catch {
-    // dest doesn't exist yet — that's fine
+    there = await fse.lstat(destExpanded);
+  } catch (error) {
+    if (errnoCode(error) !== 'ENOENT') throw error;
   }
 
-  const srcExpanded = expandHome(src);
-  await fse.copy(srcExpanded, destExpanded, {
-    overwrite: true,
-    filter: async (srcPath: string) => {
-      if (isIgnored(path.basename(srcPath)) || isDraft(srcPath)) return false;
-      // An entry `skip` names, and everything under it, is left as the destination has it.
-      const rel = path.relative(srcExpanded, srcPath).split(path.sep).join('/');
+  if (there !== undefined && !there.isDirectory() && !there.isSymbolicLink()) throw new Error(`${destExpanded} is not a folder, so teamai does not copy the folder ${srcExpanded} over it`);
+  await removeStaleStaging(destExpanded);
+  const staging = stagingFolder(destExpanded);
 
-      if (skip.some((entry) => rel === entry || rel.startsWith(`${entry}/`))) return false;
+  try {
+    await copyRegularTree(srcExpanded, staging, {
+      filter: async (srcPath: string) => {
+        if (isIgnored(path.basename(srcPath)) || isDraft(srcPath)) return false;
+        // An entry `skip` names, and everything under it, is left as the destination has it.
+        const rel = path.relative(srcExpanded, srcPath).split(path.sep).join('/');
 
-      if (onLink === undefined || srcPath === srcExpanded || !(await fse.lstat(srcPath)).isSymbolicLink()) return true;
-      onLink(path.relative(srcExpanded, srcPath).split(path.sep).join('/'));
+        if (skip.some((entry) => rel === entry || rel.startsWith(`${entry}/`))) return false;
 
-      return false;
-    },
-  });
+        if (onLink === undefined || srcPath === srcExpanded || !(await fse.lstat(srcPath)).isSymbolicLink()) return true;
+        onLink(path.relative(srcExpanded, srcPath).split(path.sep).join('/'));
+
+        return false;
+      },
+    });
+
+    if (there?.isSymbolicLink()) await fse.remove(destExpanded);
+
+    if (there === undefined || there.isSymbolicLink()) await fse.rename(staging, destExpanded);
+    else await copyRegularTree(staging, destExpanded);
+  } finally {
+    await fse.remove(staging);
+  }
+}
+
+/** How old a staging folder is before it counts as one a crash left: a copy takes seconds. */
+const STALE_STAGING_MS = 60 * 60 * 1000;
+
+/** Removes the staging folders beside `dest` that a copy of it cut short left over an hour ago. */
+async function removeStaleStaging(dest: string): Promise<void> {
+  const parent = path.dirname(dest);
+
+  for (const name of await fse.readdir(parent).catch(() => [])) {
+    if (!isStagingName(name, path.basename(dest))) continue;
+    const left = await fse.lstat(path.join(parent, name)).catch(() => undefined);
+
+    if (left !== undefined && left.mtimeMs + STALE_STAGING_MS < Date.now()) await fse.remove(path.join(parent, name));
+  }
 }
 
 /**
@@ -366,7 +465,7 @@ export async function pruneEmptyDirs(target: string): Promise<boolean> {
 export async function copyFile(src: string, dest: string): Promise<void> {
   const destExpanded = expandHome(dest);
   await fse.ensureDir(path.dirname(destExpanded));
-  await fse.copy(expandHome(src), destExpanded, { overwrite: true });
+  await copyRegularTree(expandHome(src), destExpanded);
 }
 
 /**
@@ -542,7 +641,7 @@ export async function getDirLatestMtime(dirPath: string): Promise<number> {
  */
 export async function fileHash(filePath: string): Promise<string | null> {
   try {
-    const content = await fse.readFile(filePath);
+    const content = await readRegularFile(filePath);
 
     return crypto.createHash('sha256').update(content).digest('hex');
   } catch {

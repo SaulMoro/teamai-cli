@@ -11,14 +11,13 @@ vi.mock('../utils/fs.js', () => ({
   writeJson: vi.fn(async (filePath: string, data: unknown) => {
     mockFiles[filePath] = JSON.parse(JSON.stringify(data));
   }),
-  expandHome: (p: string) => p,
   ensureDir: vi.fn(),
   // The tool homes (tool-home.ts) look for files through it.
   pathExists: vi.fn(async () => false),
   readFileSafe: vi.fn(async () => null),
 }));
 
-vi.mock('@teamai/tool-core/log', () => ({
+vi.mock('@teamai/shared/log', () => ({
   log: { info: vi.fn(), success: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
 }));
 

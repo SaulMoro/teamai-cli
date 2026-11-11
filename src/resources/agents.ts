@@ -5,10 +5,10 @@ import matter from 'gray-matter';
 import { z } from 'zod';
 import { holdsMarker, unreadMarker } from '../folder-markers.js';
 import { ResourceHandler, type PlacementRecords, type ScanForPushOptions } from './base.js';
-import { JsonValueSchema, type JsonValue, JsonObjectSchema } from '../types.js';
+import { JsonValueSchema, type JsonValue, JsonObjectSchema } from '@teamai/shared/json';
 import type { CopyOrigin, ResourceItem, ResourceItemStatus, DeliveryTarget, TeamaiConfig, LocalConfig, AgentModelRecords, RecordedAgentModel, Scope } from '../types.js';
 import { listFiles, listDirs, pathExists, copyFile, ensureDir, remove, fileContentEqual, fileContentEqualToBuffer, getFileMtime, writeFile, readFileSafe, fileHash } from '../utils/fs.js';
-import { log } from '../utils/logger.js';
+import { log } from '@teamai/shared/log';
 import { installScopeName, isAgentExcluded, isSelfMode } from '../types.js';
 import { BUILTIN_AGENT_NAMES, builtinAgentsReplacedByTeam, shippedAgentRender } from '../builtin-agents.js';
 import { isAgentToolId, isToolId, descriptorOf } from '../tool-registry.js';
@@ -44,7 +44,7 @@ import {
   ParsedFieldsSchema,
 } from './agent-format.js';
 import type { ParsedValue, ParsedFields, AgentSpec, ToolName, ParseResult, MergeConflict, MergeResult, RenderResult } from './agent-format.js';
-import { parseYaml } from '../utils/yaml.js';
+import { parseYaml } from '@teamai/shared/yaml';
 
 /**
  * Extended ResourceItem for agents — carries merged spec or skip reason

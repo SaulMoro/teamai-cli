@@ -8,7 +8,7 @@ import { z } from 'zod';
 import { resolveCliEntry } from '../../../builtin-hooks.js';
 import type { WorkflowEnv } from '../../../env-resolution.js';
 import { resolveRunMode, type RunMode } from '../../../launch-context.js';
-import type { CommandExit } from '../../../tool-launch/process-stop.js';
+import type { GroupedCommandExit } from '../../shell-command.js';
 import { isToolId, TOOL_ORDER } from '../../../tool-registry.js';
 import type { LocalConfig, TeamaiConfig } from '../../../types.js';
 import type { ToolId } from '../../../tools.js';
@@ -16,24 +16,26 @@ import { agentSessionFromEnv } from '../../../utils/session-id.js';
 import { WorkflowOffers } from '../../../workflow-offers.js';
 import { agentEvidence, isAttemptRunner, type AgentEvidence } from '../../attempt-marker.js';
 import { inProcessClient, invokeDeniedMessage, type ResumeClaim, type WorkflowClient } from '../../protocol.js';
+import type { SessionApp } from '../../session-apps.js';
 import type { WorkflowFailure } from '../../types.js';
-import { AttemptIdSchema, RunIdSchema, runsDir, takeRunLock, type AttemptId, type LockTaken, type RunId, type RunLock } from '../../store.js';
-import { canFor, HOST_CHOICES, sessionOffers, type HostChoice } from './host-profiles.js';
+import { AttemptIdSchema, RunIdSchema, runnerAlive, runsDir, takeRunLock, type AttemptId, type LockTaken, type RunId, type RunLock } from '../../store.js';
+import { canFor, SESSION_HOST_CHOICES, sessionOffers, type SessionHostChoice } from './session-host-profiles.js';
 import { journalCall } from './journal.js';
 import { describeLiteral, invocationOf, type Invocation } from './literals.js';
 import { askFor, attendedReason, ceilingOf, checkStartAnswers, localPromptTool, localReason, neededAnswers, needsTool, type HitlMode } from './preflight.js';
+import { needsAiTool } from '../../describe.js';
 import { drivesRun, readSkillState, writeSkillState } from './skill-state.js';
 import { detachedRunners, runRunner } from './skill-runner.js';
-import { agentReport, foreground, plannedState, poll } from './tick.js';
-import { describeRow, judgedBy, startRow, type ResumeAnswers, type RowId } from './transitions.js';
+import { agentReport, foreground, plannedState, poll, WAIT_GRACE_MS } from './tick.js';
+import { APP_CHECKED_ROWS, describeRow, judgedBy, startRow, type DescribeInput, type ResumeAnswers, type RowId } from './transitions.js';
 import { errorOf, type SkillAnswer, type SkillError } from './turn.js';
 
 // What the runs offered on teamai-reports are judged by outside this driver, as a resume through it judges them.
-export { canFor } from './host-profiles.js';
+export { canFor } from './session-host-profiles.js';
 
 export { ceilingOf, isLeft, listOf, localReason, personClauses } from './preflight.js';
 
-/** `tool`: `--tools default=<tool>`, the tool of the calling session, which its host may not name. */
+/** `tool`: `--tools default=<tool>`, the tool of the calling session, which its session host may not name. */
 export type SkillCall =
   | { kind: 'describe'; name: string; tool?: ToolId }
   /**
@@ -50,11 +52,11 @@ export type SkillCall =
   | { kind: 'next'; run: RunId; wait: boolean }
   /** `next --takeover`: this session drives the run from now on, as the person agreed; `confirmed` as a resume's. */
   | { kind: 'takeover'; run: RunId; confirmed: boolean }
-  /** `next --choice`: the agent's answer to the host question. */
-  | { kind: 'choose'; run: RunId; choice: HostChoice }
+  /** `next --choice`: the agent's answer to the session host question. */
+  | { kind: 'choose'; run: RunId; choice: SessionHostChoice }
   /** `next --ack dispatch.<a>`: the child of attempt `a` started. */
   | { kind: 'ack'; run: RunId; attempt: AttemptId }
-  /** `next --attempt <a> --adopt <dir>`: the host made `dir`, an absolute path, for the place attempt `a` asked for. */
+  /** `next --attempt <a> --adopt <dir>`: the session host made `dir`, an absolute path, for the place attempt `a` asked for. */
   | { kind: 'adopt'; run: RunId; attempt: AttemptId; dir: string }
   /** `respond --driver skill`: the agent's answer to an optional gate. */
   | { kind: 'respond'; run: RunId; step: string; pass: number; choice: string }
@@ -73,9 +75,9 @@ export interface RunnerJob {
 /** A step's command as its runner started it. */
 export interface CommandRun {
   /** Settles once the command exited and closed its output. `output` is stdout and stderr as they came, unmasked. */
-  exit: Promise<CommandExit>;
+  exit: Promise<GroupedCommandExit>;
   /** Stops the command and every process it started, and settles once they are gone. A second call changes nothing. */
-  stop(): Promise<CommandExit>;
+  stop(): Promise<GroupedCommandExit>;
 }
 
 /** How runners start, how a tick tells one is alive, how a runner runs its command, and how a call waits. */
@@ -84,7 +86,10 @@ export interface Runners {
   alive(run: RunId, attempt: AttemptId): Promise<boolean>;
   /** Starts the command of `attempt`, and records what it started where `stopLeft` finds it. */
   command(input: { run: RunId; attempt: AttemptId; command: string; cwd: string; env: NodeJS.ProcessEnv }): CommandRun;
-  /** Stops what the last setup or command of `attempt` left running when its runner died with it. */
+  /**
+   * Stops what the last setup, command or judge of `attempt` left running when its runner died with it, then ends the
+   * login that judge held.
+   */
   stopLeft(run: RunId, attempt: AttemptId): Promise<void>;
   /** Waits `ms`, or until `signal` aborts. */
   sleep(ms: number, signal?: AbortSignal): Promise<void>;
@@ -96,13 +101,18 @@ export interface SkillContext {
   toolPaths: TeamaiConfig['toolPaths'] | undefined;
   env: WorkflowEnv;
   client: WorkflowClient;
-  /** The calling agent session, undefined when its host names none. */
+  /** The calling agent session, undefined when its session host names none. */
   session: string | undefined;
   /** What says an agent runs the calling process, which a start of the workflow is checked against: its `invoke`. */
   evidence: AgentEvidence;
   /** The run mode of the calling process, which describe answers for and a start keeps for the run. */
   mode: RunMode;
-  /** The tool of that session, which a child's model is resolved for; undefined when its host names none. */
+  /**
+   * The app the calling session runs in, undefined outside one, with whether a run could start on its driver now, which
+   * describe asks before it offers that start: its runtimes open as for an unattended run, so none asks for a sign-in.
+   */
+  app: { session: SessionApp; canStart(): Promise<boolean> } | undefined;
+  /** The tool of that session, which a child's model is resolved for; undefined when its session host names none. */
   tool: ToolId | undefined;
   /** The tools the member names for `config`'s scope, the most specific first: TEAMAI_AI_TOOL, then `ai.tool`. */
   aiTools: readonly string[];
@@ -120,15 +130,16 @@ export interface SkillContext {
  * The context of a call from this process: its agent session, how the member ran teamai, the in-process protocol,
  * detached runners, and the real clock.
  */
-export async function skillContext(input: Pick<SkillContext, 'config' | 'toolPaths' | 'env' | 'cwd' | 'aiTools' | 'trace'>): Promise<SkillContext> {
+export async function skillContext(input: Pick<SkillContext, 'config' | 'toolPaths' | 'env' | 'cwd' | 'aiTools' | 'trace'> & { app?: SkillContext['app'] }): Promise<SkillContext> {
   const { config, env } = input;
   const session = await agentSessionFromEnv();
   const evidence = agentEvidence(process.env);
 
   return {
     ...input,
+    app: input.app,
     session: session.id,
-    // Only a coding agent drives --driver skill, so a host that sets no session variable is still an agent's.
+    // Only a coding agent drives --driver skill, so a session host that sets no session variable is still an agent's.
     evidence: evidence.kind === 'none' ? { kind: 'skill-driver' } : evidence,
     mode: resolveRunMode(process.env),
     tool: session.agent !== undefined && isToolId(session.agent) ? session.agent : undefined,
@@ -150,6 +161,33 @@ export async function sessionDrivesRun(config: LocalConfig, run: RunId): Promise
   return drivesRun(read.kind === 'found' ? read.state : undefined, (await agentSessionFromEnv()).id);
 }
 
+/**
+ * Runs `body` while no driver of run `run` runs a step on this machine, or answers `busy` with `driver_running`: it holds
+ * the run's driver.lock, which a local driver holds for its whole drive and every skill driver tick takes, and finds no
+ * skill runner of the run alive (its runner.lock) nor spawned within `WAIT_GRACE_MS`, as C10 counts one still starting.
+ * Every spawn happens under driver.lock, so no runner starts while `body` runs.
+ */
+export async function whileNoDriverHere<T>(config: LocalConfig, run: RunId, body: (lock: RunLock) => Promise<T>): Promise<LockTaken<T>> {
+  const taken = await takeRunLock(config, run, async (lock): Promise<{ kind: 'ran'; value: T } | { kind: 'runner'; step: string; attempt: AttemptId }> => {
+    const read = await readSkillState(config, run);
+
+    for (const open of read.kind === 'found' ? read.state.attempts : []) {
+      const starting = (open.phase === 'preparing' || open.phase === 'running') && Date.now() - Date.parse(open.spawnedAt) <= WAIT_GRACE_MS;
+
+      if (starting || await runnerAlive(config, run, open.attempt)) return { kind: 'runner', step: open.step, attempt: open.attempt };
+    }
+
+    return { kind: 'ran', value: await body(lock) };
+  }, { waitMs: 0 });
+
+  if (taken.kind === 'busy') return taken;
+
+  if (taken.value.kind === 'ran') return { kind: 'held', value: taken.value.value };
+  const { step, attempt } = taken.value;
+
+  return { kind: 'busy', error: { code: 'driver_running', message: `Step "${step}" of run ${run} runs on this machine, in the skill driver's runner of attempt ${attempt}. Wait until the skill driver reports it, then try again; if its coding session has ended, the runner stops an hour after that session last called.` } };
+}
+
 /** Whether agent session `session` drives, with the skill driver, a run of `config`'s scope whose skill.json records no end yet. */
 export async function drivesUndoneRun(config: LocalConfig, session: string): Promise<boolean> {
   const runs = (await fs.readdir(runsDir(config)).catch(() => [])).flatMap((name) => {
@@ -165,7 +203,7 @@ export async function drivesUndoneRun(config: LocalConfig, session: string): Pro
 
 const NAME = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 
-/** `--tools default=<tool>`: the tool this coding session works in, for a host that sets no session variable teamai reads. */
+/** `--tools default=<tool>`: the tool this coding session works in, for a session host that sets no session variable teamai reads. */
 const SessionToolSchema = z.string().transform((tools, ctx) => {
   const [pair = '', ...more] = tools.split(',');
   const separator = pair.indexOf('=');
@@ -215,7 +253,7 @@ const NextOptionsSchema = z.object({
   wait: z.boolean().optional(),
   takeover: z.boolean().optional(),
   confirmed: z.boolean().optional(),
-  choice: z.enum(HOST_CHOICES, { error: `--choice takes the id of a host question option: ${HOST_CHOICES.join(', ')}` }).optional(),
+  choice: z.enum(SESSION_HOST_CHOICES, { error: `--choice takes the id of a session host question option: ${SESSION_HOST_CHOICES.join(', ')}` }).optional(),
   ack: z.string().transform((offer, ctx) => {
     const attempt = AttemptIdSchema.safeParse(OFFER.exec(offer)?.[1]);
 
@@ -225,7 +263,7 @@ const NextOptionsSchema = z.object({
     return z.NEVER;
   }).optional(),
   attempt: AttemptIdSchema.optional(),
-  adopt: z.string().min(1, '--adopt takes the directory the host made').optional(),
+  adopt: z.string().min(1, '--adopt takes the directory the session host made').optional(),
   json: z.undefined({ error: '--driver skill takes no --json: the skill driver composes every request itself' }).optional(),
   prepare: z.undefined({ error: '--prepare is for --json drivers' }).optional(),
 }).refine((options) => (options.attempt === undefined) === (options.adopt === undefined), {
@@ -416,7 +454,7 @@ export async function runSkillCall(call: SkillCall, context: SkillContext): Prom
 }
 
 async function answerOf(call: SkillCall, caller: SkillContext): Promise<SkillAnswer> {
-  // The tool a session declares is the one it works in, whatever its host names, as a host may pass its env on to another tool.
+  // The tool a session declares is the one it works in, whatever its session host names, as a session host may pass its env on to another tool.
   const context = 'tool' in call && call.tool !== undefined ? { ...caller, tool: call.tool } : caller;
 
   switch (call.kind) {
@@ -468,15 +506,24 @@ async function start(call: Extract<SkillCall, { kind: 'describe' | 'start' }>, c
   const { description, judging, undeliverable } = described;
   const local = localReason(description);
   const why = local !== undefined ? { local } : {};
-  const denied = description.invoke === 'deny' && context.evidence.kind !== 'none' ? { denied: invokeDeniedMessage(description.name, context.evidence, { kind: 'start' }) } : {};
+  const { app } = context;
+  const from = app && { place: app.session.terminal, driver: app.session.driver };
+  const denied = description.invoke === 'deny' && context.evidence.kind !== 'none' ? { denied: invokeDeniedMessage(description.name, context.evidence, { kind: 'start', ...(from && { from }) }) } : {};
 
   if (call.kind === 'describe') {
     const attended = attendedReason(description, 'start');
 
-    const { row, verdict } = describeRow({
+    const input: DescribeInput = {
       needed: neededAnswers(description), ...denied, undeliverable: undeliverable?.message, ...why, judged: judgedBy(judging) !== undefined,
-      mode: context.mode, attended, needsTool: needsTool(description, { tool: context.tool, judged: true }),
-    });
+      mode: context.mode, attended, needsTool: needsTool(description, { tool: context.tool, judged: true }), isAiFree: !needsAiTool(description.facts),
+      ...(app && { app: { session: app.session, readiness: 'unchecked' } }),
+    };
+
+    const unchecked = describeRow(input);
+    // Whether a run could start on the app's driver is asked only where the answer would change: never for a run that
+    // already goes to the built-in host in the background.
+    const isChecked = app !== undefined && context.mode === 'attended' && unchecked.verdict.ask !== 'background' && APP_CHECKED_ROWS.has(unchecked.row);
+    const { row, verdict } = isChecked ? describeRow({ ...input, app: { session: app.session, readiness: await app.canStart() ? 'ready' : 'not-ready' } }) : unchecked;
 
     context.trace?.(row);
     const caller = { session: context.session, tool: call.tool ?? context.tool };

@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { getDispatchCommand, getTeamHookDispatchCommand } from './builtin-hooks.js';
 import { bridgedTeamHookEvents } from './bridged-team-hooks.js';
 import { listDirs, listFiles, pathExists, readFileSafe, readJsonObject, remove, writeFile, writeIfChanged } from './utils/fs.js';
-import { getUserHome } from './utils/home.js';
+import { getUserHome } from '@teamai/shared/home';
 import { hookAdapterDir } from './locate.js';
 
 /** A Kiro hook file's list of hooks, each as written. */

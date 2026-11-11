@@ -5,7 +5,7 @@ import fse from 'fs-extra';
 import YAML from 'yaml';
 import { parseFrontmatter } from '../utils/frontmatter.js';
 
-vi.mock('@teamai/tool-core/log', () => ({
+vi.mock('@teamai/shared/log', () => ({
   log: {
     info: vi.fn(),
     success: vi.fn(),
@@ -17,10 +17,11 @@ vi.mock('@teamai/tool-core/log', () => ({
 }));
 
 import { SkillsHandler } from '../resources/skills.js';
-import { skillsGuardBase } from '../builtin-skills.js';
-import { allowsSkillDirectory, mayDeleteSkillCopy, scanTeamRepoNamespaces, ensureSkillFrontmatter, createSkillPushItem } from '../resources/skills.js';
+import { skillsGuardBase } from '../skill-owned-files.js';
+import { mayDeleteSkillCopy, scanTeamRepoNamespaces, ensureSkillFrontmatter, createSkillPushItem } from '../resources/skills.js';
+import { allowsSkillDirectory } from '../skill-directory.js';
 import { contentHash } from '../resources/delivered-copies.js';
-import { log } from '../utils/logger.js';
+import { log } from '@teamai/shared/log';
 import { commitTeamRepo } from './helpers/team-repo-history.js';
 import type { TeamaiConfig, LocalConfig } from '../types.js';
 

@@ -23,6 +23,7 @@ vi.mock('@teamai/tool-core/sessions/sqlite', async (importOriginal) => {
 import { CodexAdapter } from '@teamai/tool-core/formats/codex';
 import { findSqlite3 } from '@teamai/tool-core/sessions/sqlite';
 import type { Session } from '@teamai/tool-core/sessions/ir';
+import { SESSION_HOST } from '../session-flow/adapters/index.js';
 
 let home = '';
 
@@ -104,7 +105,7 @@ function installFakeCodex(): string {
 describe('Codex CLI', () => {
   it.skipIf(process.platform === 'win32')('indexes a fresh copy with the codex found on PATH', async () => {
     vi.stubEnv('PATH', installFakeCodex());
-    const codex = new CodexAdapter('codex', path.join(home, '.codex', 'sessions'));
+    const codex = new CodexAdapter('codex', path.join(home, '.codex', 'sessions'), SESSION_HOST);
     const cwd = path.join(home, 'ws');
 
     const id = await codex.writeSession(mkSession(cwd), cwd);
@@ -119,7 +120,7 @@ describe('Codex CLI', () => {
 
 describe('Codex rollback', () => {
   it.runIf(HAS_SQLITE3)('removes the thread row Codex lists, then the rollout', async () => {
-    const codex = new CodexAdapter('codex', path.join(home, '.codex', 'sessions'));
+    const codex = new CodexAdapter('codex', path.join(home, '.codex', 'sessions'), SESSION_HOST);
     const cwd = path.join(home, 'ws');
     const id = await codex.writeSession(mkSession(cwd), cwd);
     const db = path.join(home, '.codex', 'state_5.sqlite');
@@ -132,7 +133,7 @@ describe('Codex rollback', () => {
   });
 
   it('reports that it could not unregister the thread when sqlite3 is missing, and keeps the rollout for a retry', async () => {
-    const codex = new CodexAdapter('codex', path.join(home, '.codex', 'sessions'));
+    const codex = new CodexAdapter('codex', path.join(home, '.codex', 'sessions'), SESSION_HOST);
     const cwd = path.join(home, 'ws');
     const id = await codex.writeSession(mkSession(cwd), cwd);
     // Codex lists threads from this database; the copy may be registered there.

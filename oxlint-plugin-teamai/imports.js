@@ -5,8 +5,11 @@ import { parse } from '@babel/parser';
 import { isIdentifier, traverseFast } from '@babel/types';
 import { stringLiteralValue } from './utils.js';
 
-/** @param {ESTree.ImportDeclaration['specifiers'][number]} specifier */
-function importedName(specifier) {
+/**
+ * The name `specifier` imports: `default` for a default import, `*` for a namespace import.
+ * @param {ESTree.ImportDeclaration['specifiers'][number]} specifier
+ */
+export function importedName(specifier) {
   if (specifier.type === 'ImportDefaultSpecifier') return 'default';
 
   if (specifier.type === 'ImportNamespaceSpecifier') return '*';
@@ -30,8 +33,47 @@ function mockedModule(node) {
   return stringLiteralValue(source);
 }
 
-/** Every import syntax the workflow policy owns, including dynamic imports and vi.mock. */
-export function importVisitors(/** @type {(edge: { node: ESTree.Node; specifier: string; typeOnly: boolean; names: string[] }) => void} */ visit) {
+/**
+ * The module a dynamic import or a `require` names: a string literal, or a template literal with no placeholder.
+ * @param {ESTree.Node | undefined} node
+ * @returns {string | undefined}
+ */
+function moduleName(node) {
+  if (node?.type === 'TemplateLiteral' && node.expressions.length === 0) return node.quasis[0]?.value.cooked ?? undefined;
+
+  return stringLiteralValue(node);
+}
+
+/**
+ * The names `const { a, b: c } = await import(...)` takes from the module; undefined for any other use of the
+ * module, a rest element or a computed key included, which may read any of its names.
+ * @param {ESTree.ImportExpression} node
+ * @returns {string[] | undefined}
+ */
+function destructuredNames(node) {
+  const awaited = node.parent;
+  const declarator = awaited?.type === 'AwaitExpression' ? awaited.parent : undefined;
+
+  if (declarator?.type !== 'VariableDeclarator' || declarator.init !== awaited || declarator.id.type !== 'ObjectPattern') return undefined;
+  /** @type {string[]} */
+  const names = [];
+
+  for (const property of declarator.id.properties) {
+    if (property.type !== 'Property' || property.computed || property.key.type !== 'Identifier') return undefined;
+    names.push(property.key.name);
+  }
+
+  return names;
+}
+
+/**
+ * Every import syntax the workflow policy owns: static imports and re-exports, `import()`, `require()` and vi.mock.
+ * `computed` gets an `import()` or `require()` whose module name is computed, which `visit` cannot be given.
+ */
+export function importVisitors(
+  /** @type {(edge: { node: ESTree.Node; specifier: string; typeOnly: boolean; names: string[] }) => void} */ visit,
+  /** @type {(node: ESTree.Node) => void} */ computed = () => {},
+) {
   return {
     /** @param {ESTree.ImportDeclaration} node */
     ImportDeclaration(node) {
@@ -48,15 +90,22 @@ export function importVisitors(/** @type {(edge: { node: ESTree.Node; specifier:
     },
     /** @param {ESTree.ImportExpression} node */
     ImportExpression(node) {
-      const specifier = stringLiteralValue(node.source);
+      const specifier = moduleName(node.source);
 
-      if (specifier !== undefined) visit({ node, specifier, typeOnly: false, names: ['*'] });
+      if (specifier === undefined) computed(node);
+      else visit({ node, specifier, typeOnly: false, names: destructuredNames(node) ?? ['*'] });
     },
     /** @param {ESTree.CallExpression} node */
     CallExpression(node) {
-      const specifier = mockedModule(node);
+      const mocked = mockedModule(node);
 
-      if (specifier !== undefined) visit({ node, specifier, typeOnly: false, names: ['*'] });
+      if (mocked !== undefined) visit({ node, specifier: mocked, typeOnly: false, names: ['*'] });
+
+      if (node.callee.type !== 'Identifier' || node.callee.name !== 'require' || node.arguments.length === 0) return;
+      const required = moduleName(node.arguments[0]);
+
+      if (required === undefined) computed(node);
+      else visit({ node, specifier: required, typeOnly: false, names: ['*'] });
     },
   };
 }
@@ -93,8 +142,12 @@ function staticModule(statement, includeTypes) {
   return includeTypes || statement.exportKind !== 'type' ? statement.source?.value : undefined;
 }
 
-/** @param {string} file @param {boolean} includeTypes */
-function sourceModules(file, includeTypes) {
+/**
+ * The modules `file` imports at its top level, its type-only imports too when `includeTypes`, and with them its dynamic
+ * imports and vi.mock calls.
+ * @param {string} file @param {boolean} includeTypes
+ */
+export function sourceModules(file, includeTypes) {
   const source = fs.readFileSync(file, 'utf8');
   const key = `${file}:${includeTypes}`;
   const cached = dependencyCache.get(key);

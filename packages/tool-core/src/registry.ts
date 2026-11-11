@@ -39,7 +39,7 @@ export interface ToolRegistry<TTools, TPlatform extends string, TInstance extend
 /**
  * A registry over `tools`, keyed by tool id, and the instances `instances` holds when a lookup runs (keyed by name, each
  * extending a tool of `tools`). An instance keeps sessions of its own only when `hostsInstances` says the platform of the
- * tool it extends can keep them under another id. Declare the table `as const satisfies`, so tool ids and session
+ * tool it extends can keep that instance's under another id. Declare the table `as const satisfies`, so tool ids and session
  * platforms stay literal.
  */
 export function makeToolRegistry<
@@ -49,7 +49,7 @@ export function makeToolRegistry<
 >(
   tools: TTools & Readonly<Record<string, RegisteredTool<TPlatform>>>,
   instances: () => ReadonlyMap<string, TInstance> = () => new Map(),
-  hostsInstances: (platform: TPlatform) => boolean = () => true,
+  hostsInstances: (platform: TPlatform, instance: TInstance) => boolean = () => true,
 ): ToolRegistry<TTools, TPlatform, TInstance> {
   const declared: Readonly<Record<string, RegisteredTool<TPlatform>>> = tools;
   const isToolId = (value: string): value is keyof TTools & string => Object.hasOwn(tools, value);
@@ -69,7 +69,7 @@ export function makeToolRegistry<
     const instance = isToolId(name) ? undefined : instances().get(name);
     const [platform] = instance?.home ? shippedPlatforms(instance.extends) : [];
 
-    return instance && platform !== undefined && hostsInstances(platform) ? instance : undefined;
+    return instance && platform !== undefined && hostsInstances(platform, instance) ? instance : undefined;
   };
 
   const sessionPlatformsOf = (tool: string): readonly (TPlatform | InstancePlatform)[] => {

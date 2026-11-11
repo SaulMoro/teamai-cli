@@ -2,9 +2,7 @@ import { isDeepStrictEqual } from 'node:util';
 import { applyEdits, createScanner, findNodeAtLocation, modify, parseTree, printParseErrorCode, type FormattingOptions, type JSONPath, type Node, type ParseError, SyntaxKind } from 'jsonc-parser';
 import JSON5 from 'json5';
 import { z } from 'zod';
-import { isJsonObject, JsonValueSchema, parseJson, type JsonObject, type JsonSyntax, type JsonValue } from '@teamai/tool-core/json';
-
-export * from '@teamai/tool-core/json';
+import { isJsonObject, JsonValueSchema, parseJson, type JsonObject, type JsonSyntax, type JsonValue } from '@teamai/shared/json';
 
 /** Whether `text` is blank or plain JSON, which teamai writes back as JSON.stringify writes it: no comment to keep. */
 export function isPlainJson(text: string): boolean {

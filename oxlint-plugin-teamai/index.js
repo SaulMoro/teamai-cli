@@ -19,9 +19,19 @@ import noLowValueComments from './rules/no-low-value-comments.js';
 import suppressionReason from './rules/suppression-reason.js';
 import yamlParse from './rules/yaml-parse.js';
 import packageBoundaries from './rules/package-boundaries.js';
+import runtimeServe from './rules/runtime-serve.js';
+import testSeams from './rules/test-seams.js';
 import toolRegistry from './rules/tool-registry.js';
 import mockSource from './rules/mock-source.js';
+import untrustedFinishGit from './rules/untrusted-finish-git.js';
+import gitExitCode from './rules/git-exit-code.js';
+import readlineError from './rules/readline-error.js';
+import spawnCommand from './rules/spawn-command.js';
+import regularFileReads from './rules/regular-file-reads.js';
+import stepPathWrites from './rules/step-path-writes.js';
+import toolFamily from './rules/tool-family-shape.js';
 import uncachedEntry from './rules/uncached-entry.js';
+import familyFacts from './rules/family-facts.js';
 
 // The anti-slop rules are vendored TypeScript. oxlint imports plugins with plain
 // Node, and `npm run lint` runs on Node 20 in CI, which can't import TypeScript:
@@ -51,9 +61,19 @@ export default definePlugin({
     'suppression-reason': suppressionReason,
     'yaml-parse': yamlParse,
     'package-boundaries': packageBoundaries,
+    'runtime-serve': runtimeServe,
+    'test-seams': testSeams,
     'tool-registry': toolRegistry,
     'mock-source': mockSource,
+    'untrusted-finish-git': untrustedFinishGit,
+    'git-exit-code': gitExitCode,
+    'readline-error': readlineError,
+    'spawn-command': spawnCommand,
+    'regular-file-reads': regularFileReads,
+    'step-path-writes': stepPathWrites,
+    'tool-family-shape': toolFamily,
     'uncached-entry': uncachedEntry,
+    'family-facts': familyFacts,
     ...antiSlopRules,
   },
 });

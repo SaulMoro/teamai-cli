@@ -8,7 +8,7 @@ import { detectProjectConfig, loadLocalConfig, loadTeamConfig } from './config.j
 import {
   isTeamScriptEvent, runTeamScript, syncMcpAfterPostInit, TEAM_SCRIPT_EVENTS, teamScriptPrompts,
 } from './team-scripts.js';
-import { log } from './utils/logger.js';
+import { log } from '@teamai/shared/log';
 import { isInteractive } from './utils/prompt.js';
 
 export async function scriptRun(eventName: string): Promise<void> {

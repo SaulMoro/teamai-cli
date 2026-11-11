@@ -14,7 +14,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import path from 'node:path';
 import os from 'node:os';
 import fse from 'fs-extra';
-vi.mock('@teamai/tool-core/log', () => ({
+vi.mock('@teamai/shared/log', () => ({
   log: {
     info: vi.fn(),
     success: vi.fn(),
@@ -129,14 +129,14 @@ describe('Cursor roots', () => {
       // `os.homedir()`, which is what the fs.ts helper reads, rather than the
       // stubbed HOME: on Windows the two disagree inside vitest.
       const fallback = path.join(os.homedir(), DEFAULT_CURSOR_ROOT, 'projects');
-      expect(sessionStoreDir('cursor', undefined)).toBe(fallback);
+      expect(sessionStoreDir('cursor', { kind: 'recorded', toolRoots: undefined })).toBe(fallback);
       // The config root is a separate directory and must not move the store.
-      expect(sessionStoreDir('cursor', { [CURSOR_CONFIG_TOOL_ID]: path.join(home, '.cursor-config') })).toBe(fallback);
+      expect(sessionStoreDir('cursor', { kind: 'recorded', toolRoots: { [CURSOR_CONFIG_TOOL_ID]: path.join(home, '.cursor-config') } })).toBe(fallback);
     });
 
     it('resolves <data root>/projects from the recorded root', () => {
       const root = path.join(home, '.cursor-data');
-      expect(sessionStoreDir('cursor', { [CURSOR_DATA_TOOL_ID]: root })).toBe(path.join(root, 'projects'));
+      expect(sessionStoreDir('cursor', { kind: 'recorded', toolRoots: { [CURSOR_DATA_TOOL_ID]: root } })).toBe(path.join(root, 'projects'));
     });
 
     it('keeps the recorded root when the profile home is not HOME, as on Windows', () => {
@@ -144,8 +144,8 @@ describe('Cursor roots', () => {
       const root = path.join(home, '.cursor-data');
       const profile = vi.spyOn(os, 'homedir').mockReturnValue(path.join(tmpDir, 'profile'));
       try {
-        expect(sessionStoreDir('cursor', { [CURSOR_DATA_TOOL_ID]: root })).toBe(path.join(root, 'projects'));
-        expect(sessionStoreDir('cursor', undefined)).toBe(path.join(tmpDir, 'profile', DEFAULT_CURSOR_ROOT, 'projects'));
+        expect(sessionStoreDir('cursor', { kind: 'recorded', toolRoots: { [CURSOR_DATA_TOOL_ID]: root } })).toBe(path.join(root, 'projects'));
+        expect(sessionStoreDir('cursor', { kind: 'recorded', toolRoots: undefined })).toBe(path.join(tmpDir, 'profile', DEFAULT_CURSOR_ROOT, 'projects'));
       } finally {
         profile.mockRestore();
       }

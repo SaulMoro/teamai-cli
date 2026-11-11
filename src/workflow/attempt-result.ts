@@ -6,9 +6,10 @@
  */
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import { readFileSafe, writeFileAtomic, writeJsonAtomic } from '../utils/fs.js';
+import { writeFileAtomic, writeJsonAtomic } from '../utils/fs.js';
 import { redact, redactJson } from '@teamai/shared/redact';
 import type { WorkflowFailure } from './types.js';
+import { readRegularFile } from '@teamai/shared/regular-file';
 
 /** What teamai writes as an attempt's result: the step's output and its failure, or the output a failed confined tool gave. */
 export type AttemptResultBody = { output?: unknown; failure?: WorkflowFailure } | { raw: string };
@@ -24,7 +25,7 @@ async function write(file: string, body: AttemptResultBody, secrets: Record<stri
  * is not JSON, such as one a tool stopped writing halfway, is masked as text.
  */
 async function mask(file: string, secrets: Record<string, string>): Promise<void> {
-  const text = await readFileSafe(file);
+  const text = await readRegularFile(file, 'utf8').catch(() => null);
 
   if (text === null) return;
   let kept: unknown;

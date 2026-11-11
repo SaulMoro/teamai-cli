@@ -14,7 +14,7 @@ import { AgentSession } from '../session-flow/agent-session.js';
 import { getAdapter } from '../session-flow/adapters/index.js';
 import { encodeCwdClaude } from '@teamai/tool-core/sessions/fs';
 import type { Session } from '@teamai/tool-core/sessions/ir';
-import { installFakeOpencode, opencodeExportFixture, plantOpencodeSession } from '@teamai/tool-testing/fake-opencode';
+import { installFakeOpencode, opencodeExportFixture, plantOpencodeSession } from '@teamai/tool-opencode/testing';
 
 const SECRET = 'sk-ABCDEFGH1234567890abcdefghij';
 const FAKE_OPENCODE_BIN = installFakeOpencode();

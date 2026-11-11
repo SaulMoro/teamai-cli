@@ -2,11 +2,13 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { z } from 'zod';
+import { readRegularFileSync } from '@teamai/shared/regular-file';
 import { type ToolId, type ShippedDescriptor } from './tools.js';
 import { type HomeMove } from '@teamai/tool-core/definition';
 import { homeVariables, descriptorOf, TOOL_ORDER } from './tool-registry.js';
 import { pathExists, readFileSafe, readJsonObject, writeJsonAtomic, type JsonObjectRead } from './utils/fs.js';
-import { getUserHome, normalizeHomePath, usesInstallHome } from './utils/home.js';
+import { getUserHome, normalizeHomePath, usesInstallHome } from '@teamai/shared/home';
+import { RELOCATABLE_TOOLS } from './types.js';
 
 export type Host = {
   readonly platform: NodeJS.Platform;
@@ -59,13 +61,28 @@ export function realHost(overrides: Partial<Pick<Host, 'env' | 'home'>> = {}): H
     existsNow: (file) => fs.existsSync(file),
     readTextNow: (file) => {
       try {
-        return fs.readFileSync(file, 'utf8');
+        // A tool home is where a step's tool writes, so a FIFO may be left there.
+        return readRegularFileSync(file, 'utf8');
       } catch {
         return null;
       }
     },
     userToolRoots: async () => (await (await import('./config.js')).loadLocalConfig())?.toolRoots,
   };
+}
+
+/**
+ * The one variable that moves `tool`'s whole home, its session store included: the variable `teamai init` records a
+ * relocated root under (Claude Code's `CLAUDE_CONFIG_DIR`, Codex's `CODEX_HOME`), else the tool's own `env` move.
+ * Undefined when no single variable does. A step runtime sets it to the attempt's tool home.
+ */
+export function homeEnvOf(tool: ToolId): string | undefined {
+  const recorded = Object.hasOwn(RELOCATABLE_TOOLS, tool) ? RELOCATABLE_TOOLS[tool]?.envVar : undefined;
+
+  if (recorded) return recorded;
+  const { home }: ShippedDescriptor = descriptorOf(tool);
+
+  return home.moves?.by.find((move) => move.kind === 'env')?.name;
 }
 
 /**
@@ -388,7 +405,7 @@ export function reloadToolHomesHistory(): ToolHomesHistory {
   let raw: string;
 
   try {
-    raw = fs.readFileSync(toolHomesHistoryPath(), 'utf8');
+    raw = readRegularFileSync(toolHomesHistoryPath(), 'utf8');
   } catch (e) {
     if (e instanceof Error && 'code' in e && e.code === 'ENOENT') return {};
 
@@ -454,7 +471,7 @@ function parseToolHomes(file: string): ToolHomesRead {
   let raw: string;
 
   try {
-    raw = fs.readFileSync(file, 'utf8');
+    raw = readRegularFileSync(file, 'utf8');
   } catch (e) {
     if (e instanceof Error && 'code' in e && e.code === 'ENOENT') return { kind: 'missing' };
 

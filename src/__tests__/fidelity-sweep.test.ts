@@ -25,14 +25,13 @@ vi.mock('node:os', async (importOriginal) => {
 
 import { ClaudeCodeAdapter } from '@teamai/tool-core/formats/claude-code';
 import { sessionStoreDir } from '../locate.js';
-import { getAdapter } from '../session-flow/adapters/index.js';
+import { getAdapter, SESSION_HOST } from '../session-flow/adapters/index.js';
 import { CodexAdapter } from '@teamai/tool-core/formats/codex';
 import * as crypto from 'node:crypto';
 import { degradeThinkingBlocks, fidelityFromSession } from '../session-flow/migrate.js';
 import type { Session, Message } from '@teamai/tool-core/sessions/ir';
 import type { AgentAdapter } from '@teamai/tool-core/sessions/base';
 import { encodeCwdClaude } from '@teamai/tool-core/sessions/fs';
-import { getUserDataBase } from '@teamai/tool-core/formats/ide-history';
 
 // ---------------------------------------------------------------------------
 // 报告容器
@@ -289,8 +288,8 @@ function clearIdeData(): void {
 }
 
 function ideHistoryRoot(): string {
-  const base = getUserDataBase();
-  if (!base) throw new Error('CodeBuddy IDE data dir is unavailable');
+  const base = process.env.TEAMAI_CODEBUDDY_IDE_DATA;
+  if (!base) throw new Error('TEAMAI_CODEBUDDY_IDE_DATA is not set for the CodeBuddy IDE fixtures');
   const root = path.join(base, 'ext-x', 'CodeBuddyIDE', 'ext-x', 'history');
   fs.mkdirSync(root, { recursive: true });
   return root;
@@ -299,13 +298,13 @@ function ideHistoryRoot(): string {
 function makeAdapter(platform: string): AgentAdapter {
   switch (platform) {
     case 'claude-code':
-      return new ClaudeCodeAdapter('claude-code', sessionStoreDir('claude-code', undefined));
+      return new ClaudeCodeAdapter('claude-code', sessionStoreDir('claude-code', { kind: 'recorded', toolRoots: undefined }));
     case 'codebuddy':
       return getAdapter('codebuddy');
     case 'codebuddy-ide':
       return getAdapter('codebuddy-ide');
     case 'codex':
-      return new CodexAdapter('codex', sessionStoreDir('codex', undefined));
+      return new CodexAdapter('codex', sessionStoreDir('codex', { kind: 'recorded', toolRoots: undefined }), SESSION_HOST);
     case 'cursor':
       return getAdapter('cursor');
     case 'workbuddy':
@@ -406,7 +405,7 @@ describe('fidelity sweep (QA, writes report to /tmp/session-fidelity-report.json
         // 孤儿节点：parentUuid 指向不存在记录
         rec('orphan', 'ghost-uuid', 'ORPHAN-Q'),
       ];
-      const adapter = new ClaudeCodeAdapter('claude-code', sessionStoreDir('claude-code', undefined));
+      const adapter = new ClaudeCodeAdapter('claude-code', sessionStoreDir('claude-code', { kind: 'recorded', toolRoots: undefined }));
       // 直接写入编码目录（必须复用适配器编码逻辑：macOS /var → /private/var realpath）
       const dir = path.join(tmpHome, '.claude', 'projects', encodeCwdClaude(cwd));
       fs.mkdirSync(dir, { recursive: true });
@@ -478,7 +477,7 @@ describe('fidelity sweep (QA, writes report to /tmp/session-fidelity-report.json
       // F2: 空 content 消息被多平台写入端静默丢弃（score 按 block 计，看不见消息级丢失）
       const fixtureEmpty = buildFixture();
       const cursor = getAdapter('cursor');
-      const claude = new ClaudeCodeAdapter('claude-code', sessionStoreDir('claude-code', undefined));
+      const claude = new ClaudeCodeAdapter('claude-code', sessionStoreDir('claude-code', { kind: 'recorded', toolRoots: undefined }));
       const fidEmpty = fidelityFromSession(fixtureEmpty, 'cursor');
       audit.push({ case: 'F2 fixture(empty msg) fidelity→cursor', score: Number(fidEmpty.score.toFixed(4)), note: '空消息 0 block，不扣分；但 cursor.writeSession 会静默丢弃该消息' });
 
@@ -535,7 +534,7 @@ describe('fidelity sweep (QA, writes report to /tmp/session-fidelity-report.json
       };
 
       const mem0 = process.memoryUsage();
-      const claude = new ClaudeCodeAdapter('claude-code', sessionStoreDir('claude-code', undefined));
+      const claude = new ClaudeCodeAdapter('claude-code', sessionStoreDir('claude-code', { kind: 'recorded', toolRoots: undefined }));
       let t0 = Date.now();
       const claudeSid = await claude.writeSession(session, cwd);
       const claudeWriteMs = Date.now() - t0;
@@ -545,7 +544,7 @@ describe('fidelity sweep (QA, writes report to /tmp/session-fidelity-report.json
       const back = (await claude.readSession({ sessionId: claudeSid, projectPath: cwd })) as Session;
       const claudeReadMs = Date.now() - t0;
 
-      const codex = new CodexAdapter('codex', sessionStoreDir('codex', undefined));
+      const codex = new CodexAdapter('codex', sessionStoreDir('codex', { kind: 'recorded', toolRoots: undefined }), SESSION_HOST);
       t0 = Date.now();
       // Every write derives its id, so read back by the id the write returned.
       const stressSid = (await codex.writeSession(session, cwd)) as string;

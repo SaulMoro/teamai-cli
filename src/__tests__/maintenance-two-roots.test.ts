@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
-vi.mock('@teamai/tool-core/log', () => ({
+vi.mock('@teamai/shared/log', () => ({
   log: {
     info: vi.fn(), success: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn(), dim: vi.fn(),
   },
@@ -11,7 +11,7 @@ vi.mock('@teamai/tool-core/log', () => ({
 
 import { writeBackConfidence } from '../maintenance/confidence.js';
 import { executePrune } from '../maintenance/prune.js';
-import { log } from '../utils/logger.js';
+import { log } from '@teamai/shared/log';
 
 /**
  * Learnings live in two roots after #485: the branch worktree, which is pushed,

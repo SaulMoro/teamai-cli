@@ -2,12 +2,13 @@ import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { nestedCall, nestedStart } from '../workflow/attempt-marker.js';
 
 const roots: string[] = [];
 
 afterEach(() => {
+  vi.unstubAllEnvs();
   for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true });
 });
 
@@ -25,6 +26,13 @@ describe('nested workflow starts', () => {
     expect(await nestedStart({}, checkout())).toBeUndefined();
   });
 
+  it('lets a start pass a checkout git cannot read, as a hook offering a workflow asks where no git is installed', async () => {
+    const dir = checkout();
+    vi.stubEnv('PATH', dir);
+
+    expect(await nestedStart({}, dir)).toBeUndefined();
+  });
+
   it('refuses a start inside an attempt, whatever the directory', async () => {
     expect(await nestedStart({ TEAMAI_WORKFLOW_ATTEMPT: 'r0123456789abcdef/a0000000a' }, checkout()))
       .toEqual({ kind: 'marker', attempt: 'r0123456789abcdef/a0000000a' });
@@ -36,7 +44,7 @@ describe('nested workflow starts', () => {
     expect(await nestedStart({}, dir)).toEqual({ kind: 'worktree-path', dir, checkout: main });
   });
 
-  it('refuses a start in a checkout on a workflow branch, as a place the host made is, and not on a branch that only looks like one', async () => {
+  it('refuses a start in a checkout on a workflow branch, as a place the session host made is, and not on a branch that only looks like one', async () => {
     const main = checkout();
     execFileSync('git', ['switch', '-q', '-c', 'teamai/r0123456789abcdef/work/p1'], { cwd: main });
     expect(await nestedStart({}, main)).toEqual({ kind: 'workflow-branch', dir: main, branch: 'teamai/r0123456789abcdef/work/p1' });

@@ -31,7 +31,7 @@ const logMocks = vi.hoisted(() => ({
   debug: vi.fn(),
   dim: vi.fn(),
 }));
-vi.mock('@teamai/tool-core/log', () => ({
+vi.mock('@teamai/shared/log', () => ({
   log: logMocks,
   setStderrOnly: vi.fn(() => undefined),
 }));

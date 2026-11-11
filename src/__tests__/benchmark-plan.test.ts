@@ -6,7 +6,7 @@ import path from 'node:path';
 import { afterEach, describe, expect, it, onTestFinished, vi } from 'vitest';
 import { z } from 'zod';
 import type { LocalConfig } from '../types.js';
-import * as cliPaths from '../utils/cli-path.js';
+import * as cliPaths from '@teamai/shared/cli-path';
 import { trialsOf } from '../benchmark/plan.js';
 import { planBenchmark } from '../benchmark/start.js';
 import { ScoreVerbs } from '../score-verbs.js';
@@ -413,7 +413,7 @@ describe('benchmark plan run', () => {
   it('holds every baseline and trial from its only driver when that driver is not a sandbox, rather than settling them', async () => {
     const { config, runId } = await startFix({ tasks: 2, parallel: 2 });
 
-    const next = await leaseNext(config, runId, driver, { can: { ...can, isolation: 'none' }, prepare: true, alone: true });
+    const next = await leaseNext(config, runId, driver, { can: { ...can, isolation: 'none' }, prepare: true, alone: { driver: 'local', offers: [{ runtime: 'local', can: { ...can, isolation: 'none' } }] } });
 
     expect(next).toMatchObject({ data: { wait: { held: [{ step: 'trials.baselines.t01', missing: ['isolation'] }, { step: 'trials.baselines.t02', missing: ['isolation'] }] } } });
     expect(await readRun(config, runId)).toMatchObject({ status: 'running', steps: expect.arrayContaining([expect.objectContaining({ id: 'trials.baselines', status: 'running' })]) });
@@ -432,7 +432,7 @@ describe('benchmark plan run', () => {
     const { config, runId } = await startFix({ arms: 2, tools: ['codex'] });
     await settleBaselines(config, runId, driver, can);
 
-    const next = await leaseNext(config, runId, driver, { can, prepare: true, alone: true });
+    const next = await leaseNext(config, runId, driver, { can, prepare: true, alone: { driver: 'local', offers: [{ runtime: 'local', can }] } });
 
     const run = await readRun(config, runId);
     expect(next).toMatchObject({ data: { lease: { step: 'trials.r1.t01.a02.prompt' } } });

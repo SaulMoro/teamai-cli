@@ -21,7 +21,7 @@ import { acquireLock, releaseLock } from '../update.js';
 import { getDataHome, getTeamaiHome, getTeamaiHomeDir, type LocalConfig } from '../types.js';
 import { pathExists, readFileIfExists, readFileSafe, writeFileAtomic } from '../utils/fs.js';
 import { gitCommonDir, nearestGitEntry } from '../utils/git.js';
-import { log } from '../utils/logger.js';
+import { log } from '@teamai/shared/log';
 import { projectsRootDir } from '../utils/partition.js';
 import { isWindowsFormPath, shellQuoteValue } from '../utils/shell-profile.js';
 

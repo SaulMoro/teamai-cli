@@ -27,11 +27,12 @@
  */
 import path from 'node:path';
 import fse from 'fs-extra';
+import { readRegularFile } from '@teamai/shared/regular-file';
 import type { SimpleGit, StatusResult } from 'simple-git';
 import { createGitWithBlockTimeout, isGitRepo, commitSkippingHooks, isDedicatedRepoRoot, gitCommonDir, checkoutLocation } from './git.js';
 import { acquireLock, releaseLock } from '../update.js';
-import { ensureDir, writeFile, pathExists } from './fs.js';
-import { isSilent, log } from './logger.js';
+import { ensureDir, writeFile, pathExists, refusedWrite, RefusedWriteError } from './fs.js';
+import { isSilent, log } from '@teamai/shared/log';
 import { projectsRootDir } from './partition.js';
 import {
   WORKTREE_DIRNAMES,
@@ -716,11 +717,11 @@ async function commonDirFromFiles(dir: string): Promise<string | null> {
 
   try {
     if ((await fse.stat(dotGit)).isDirectory()) return await fse.realpath(dotGit);
-    const pointer = /^gitdir:\s*(.+)$/m.exec(await fse.readFile(dotGit, 'utf-8'));
+    const pointer = /^gitdir:\s*(.+)$/m.exec(await readRegularFile(dotGit, 'utf-8'));
 
     if (!pointer) return null;
     const gitDir = path.resolve(dir, pointer[1].trim());
-    const common = await fse.readFile(path.join(gitDir, 'commondir'), 'utf-8').catch(() => null);
+    const common = await readRegularFile(path.join(gitDir, 'commondir'), 'utf-8').catch(() => null);
 
     if (common !== null) return await fse.realpath(path.resolve(gitDir, common.trim()));
 
@@ -1040,13 +1041,17 @@ async function updateImpl(
   try {
     const { wt, current, isFetched } = await openWorktree(spec, localConfig, options);
 
-    let isOriginFresh = isFetched;
+    let synced: OriginSync | undefined;
 
     try {
-      if (!current) isOriginFresh = (await syncWorktree(spec, wt)).origin === 'fetched';
+      if (!current) synced = await syncWorktree(spec, wt);
     } catch (e) {
       log.debug(`[${spec.logTag}] sync before write failed, writing onto the local copy: ${e instanceof Error ? e.message : String(e)}`);
     }
+
+    // Every write meets the refusal again, in its fetch and its commit alike: say where, and write nothing.
+    if (synced?.origin === 'refused') return { status: 'failed', reason: synced.error.message };
+    const isOriginFresh = synced === undefined ? isFetched : synced.origin === 'fetched';
 
     let delivered: (() => Promise<void>) | undefined;
 
@@ -1307,10 +1312,10 @@ async function restageSnapshotIndex(spec: BranchWorktreeSpec, git: SimpleGit, sh
 }
 
 /**
- * What a sync learned of origin's branch: fetched; absent, as origin answered, so it has nothing to sync from; or
- * unreachable, with why.
+ * What a sync learned of origin's branch: fetched; absent, as origin answered, so it has nothing to sync from;
+ * unreachable, with why; or refused, when the filesystem refused a write the fetch needs.
  */
-type OriginSync = { origin: 'fetched' } | { origin: 'absent' } | { origin: 'unreachable'; reason: string };
+type OriginSync = { origin: 'fetched' } | { origin: 'absent' } | { origin: 'unreachable'; reason: string } | { origin: 'refused'; error: RefusedWriteError };
 
 const FETCHED: OriginSync = { origin: 'fetched' };
 
@@ -1319,6 +1324,8 @@ const FETCHED: OriginSync = { origin: 'fetched' };
  * lock, so no publish runs at the same time.
  *
  *  - fetch fails (offline, or origin has no reports branch yet) → keep the local copy.
+ *  - fetch refused by the filesystem (a sandbox refuses FETCH_HEAD) → refused: every retry fails the same way, so the
+ *    local copy would never refresh.
  *  - no unpushed commits → fast-forward to origin.
  *  - unpushed commits (e.g. a push that failed offline) → rebase them onto origin
  *    so the next push delivers them.
@@ -1343,6 +1350,10 @@ async function syncWorktree(spec: BranchWorktreeSpec, wt: string): Promise<Origi
     // below sees fresh commits even in a --single-branch clone (#706).
     await fetchTrackingRef(git, spec.branch);
   } catch (e) {
+    // A fetch the filesystem refuses, as a sandbox refuses FETCH_HEAD, fails again on every retry: not the connection.
+    const refused = refusedWrite(e, { gitCwd: wt });
+
+    if (refused) return { origin: 'refused', error: new RefusedWriteError(refused, { cause: e }) };
     log.debug(`[${spec.logTag}] fetch failed, using the local copy: ${e instanceof Error ? e.message : String(e)}`);
 
     return await remoteBranchExists(spec, wt) === false ? { origin: 'absent' } : { origin: 'unreachable', reason: failureReason(e) };
@@ -1431,7 +1442,10 @@ async function syncWorktree(spec: BranchWorktreeSpec, wt: string): Promise<Origi
  * rewrites the checkout must stop instead: it may be another repository's, or
  * still being created. Failed, with the cause, when the checkout could not be
  * created or synced: a reader uses what is there, and a caller that rewrites
- * it stops, as the checkout may not exist. Unfetched, with the cause, when
+ * it stops, as the checkout may not exist. Failed too, with a RefusedWriteError,
+ * when the filesystem refused a write origin's fetch needs: every retry repeats
+ * it, so the local copy would never refresh, and a reader tells the person
+ * instead. Unfetched, with the cause, when
  * origin could not be fetched: the checkout is the local copy as it was, which
  * a reader uses, and a caller that acts on origin's state must not. Throws
  * only CheckoutRefusedError, when teamai will not use the checkout until the
@@ -1470,14 +1484,26 @@ async function refreshImpl(
     // checkout it keeps from being created.
     if (e instanceof CheckoutRefusedError) throw e;
 
-    return { status: 'failed', reason: failureReason(e).trim() };
+    return { status: 'failed', reason: failureReason(e).trim(), cause: e };
   } finally {
     if (locked) {
       await releaseLock(lockPath);
     }
   }
 
-  return synced.origin === 'unreachable' ? { status: 'unfetched', reason: synced.reason } : { status: 'done' };
+  switch (synced.origin) {
+    case 'fetched':
+    case 'absent':
+      return { status: 'done' };
+    case 'unreachable':
+      return { status: 'unfetched', reason: synced.reason };
+    case 'refused':
+      return { status: 'failed', reason: synced.error.message, cause: synced.error };
+    default: {
+      const unhandled: never = synced;
+      throw new Error(`Unhandled origin sync: ${JSON.stringify(unhandled)}`);
+    }
+  }
 }
 
 /**
@@ -1488,7 +1514,7 @@ export type RefreshResult =
   | { status: 'done' }
   | { status: 'unfetched'; reason: string }
   | { status: 'busy'; lockPath: string }
-  | { status: 'failed'; reason: string };
+  | { status: 'failed'; reason: string; cause?: unknown };
 
 /** One branch's worth of behaviour, behind one interface. */
 export interface BranchWorktree {

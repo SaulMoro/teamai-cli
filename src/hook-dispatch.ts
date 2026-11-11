@@ -13,9 +13,9 @@
  */
 
 import { z } from 'zod';
-import { JsonObjectSchema } from './types.js';
+import { JsonObjectSchema } from '@teamai/shared/json';
 import type { LocalConfig } from './types.js';
-import { log } from './utils/logger.js';
+import { log } from '@teamai/shared/log';
 
 // ─── Public types ───────────────────────────────────────
 

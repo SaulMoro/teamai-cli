@@ -9,7 +9,7 @@ import {
 } from './config.js';
 import { buildRolePullContext, resolveDesiredSkills } from './resources/desired.js';
 import { loadTagsConfig, collectTagStats, saveTagsConfig } from './utils/tags.js';
-import { log } from './utils/logger.js';
+import { log } from '@teamai/shared/log';
 import type { GlobalOptions, LocalConfig, TagsConfig } from './types.js';
 import { readWorkspaceChildren } from './workspace-children.js';
 

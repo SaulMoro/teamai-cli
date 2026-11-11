@@ -4,7 +4,7 @@ import path from 'node:path';
 import os from 'node:os';
 import fse from 'fs-extra';
 
-vi.mock('@teamai/tool-core/log', () => {
+vi.mock('@teamai/shared/log', () => {
   let silent = false;
   return {
     log: {

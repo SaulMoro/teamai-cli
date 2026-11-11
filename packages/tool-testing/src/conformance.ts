@@ -2,14 +2,20 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { HOST_PROCESSES, probeBinary } from '@teamai/shared/exec';
+import { readRegularFileSync } from '@teamai/shared/regular-file';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { readVersion } from '@teamai/tool-core/detect';
 import type { ToolFamily } from '@teamai/tool-core/family';
 import { ACCESS_LEVELS, type CallInput, type LaunchAdapter } from '@teamai/tool-core/launch';
 import type { AgentAdapter } from '@teamai/tool-core/sessions/base';
-import { locatesOwnStore, type SessionPlatformDefinition } from '@teamai/tool-core/sessions/platform';
+import { locatesOwnStore, type SessionHost, type SessionPlatformDefinition } from '@teamai/tool-core/sessions/platform';
 import type { TokenUsage } from '@teamai/tool-core/tokens';
 import { fakeCli } from './fake-cli.js';
 import { replayTranscript, type RecordedTranscript } from './replay-transcript.js';
+
+// A replayed transcript is only read, and only writing a session runs a tool's CLI.
+const SESSION_HOST: SessionHost = { processes: HOST_PROCESSES, executablesOf: (tool) => [tool] };
 
 export type { RecordedTranscript, ReplayTarget } from './replay-transcript.js';
 
@@ -46,7 +52,7 @@ export interface FamilyRecordings {
 
 /** The text of a recording beside a family's test, such as `new URL('./fixtures/x.json', import.meta.url)`. */
 export function fixtureText(url: URL): string {
-  return fs.readFileSync(fileURLToPath(url), 'utf8');
+  return readRegularFileSync(fileURLToPath(url), 'utf8');
 }
 
 const PROMPT = 'Reply with the name of the test runner.';
@@ -68,7 +74,7 @@ function scratch(label: string): string {
 
 function describeLaunch(id: string, profile: LaunchAdapter, call: RecordedCall): void {
   describe(`launch profile ${id}`, () => {
-    const input: CallInput = { prompt: PROMPT, promptFile: '/scratch/prompt.md', lastMessageFile: '/scratch/last-message.txt' };
+    const input: CallInput = { prompt: PROMPT, promptFile: '/scratch/prompt.md', lastMessageFile: '/scratch/last-message.txt', opencodeMajor: 2 };
     const args = profile.call.args(input);
 
     it(`hands the prompt over on ${profile.call.prompt}`, () => {
@@ -136,7 +142,7 @@ function replayed(platform: SessionPlatformDefinition, transcript: RecordedTrans
 
   for (const [variable, value] of Object.entries(transcript.env?.(store) ?? {})) vi.stubEnv(variable, value);
 
-  if (!locatesOwnStore(platform)) return { store, adapter: platform.adapter(store) };
+  if (!locatesOwnStore(platform)) return { store, adapter: platform.adapter(store, SESSION_HOST) };
 
   if (transcript.env === undefined) throw new Error('A platform that locates its own store needs a recording whose env points it at the replayed store.');
   const adapter: AgentAdapter = platform.adapter();
@@ -228,6 +234,13 @@ export function describeFamily(name: string, family: ToolFamily, recordings: Fam
       else describePlatform(id, platform, transcript);
     }
 
+    // A version recorded with no detector to read it means teamai records that tool with no version.
+    for (const id of Object.keys(recordings.versions)) {
+      it(`has a detector for the recorded version of ${id}`, () => {
+        expect(Object.keys(family.detect)).toContain(id);
+      });
+    }
+
     for (const [id, detector] of Object.entries(family.detect)) {
       const recording = recorded(recordings.versions, id, 'version');
 
@@ -246,7 +259,7 @@ export function describeFamily(name: string, family: ToolFamily, recordings: Fam
         vi.stubEnv('PATH', `${dir}${path.delimiter}${process.env.PATH ?? ''}`);
 
         try {
-          expect(await detector()).toBe(recording.version);
+          expect(await readVersion(detector, probeBinary)).toBe(recording.version);
         } finally {
           vi.unstubAllEnvs();
           fs.rmSync(dir, { recursive: true, force: true });
@@ -273,7 +286,7 @@ export function describeFamily(name: string, family: ToolFamily, recordings: Fam
 
           for (const [variable, value] of Object.entries(usage.env?.(dir) ?? {})) vi.stubEnv(variable, value);
 
-          expect((await format({ transcriptPath, sessionId: SESSION_ID, settled: true, storeDir: dir })).tokens).toEqual(usage.tokens);
+          expect((await format({ transcriptPath, sessionId: SESSION_ID, settled: true, storeDir: dir }, HOST_PROCESSES)).tokens).toEqual(usage.tokens);
         } finally {
           vi.unstubAllEnvs();
           fs.rmSync(dir, { recursive: true, force: true });

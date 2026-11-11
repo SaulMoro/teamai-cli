@@ -4,7 +4,7 @@ import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { LocalConfig } from '../types.js';
 import { acquireLock, releaseLock } from '../update.js';
-import { log } from '../utils/logger.js';
+import { log } from '@teamai/shared/log';
 import * as reportsBranch from '../utils/reports-branch.js';
 import { updateReports } from '../utils/reports-branch.js';
 import { leaseNext, reportAttempt, startRun } from '../workflow/engine.js';
@@ -15,7 +15,7 @@ import type { StepPass, StepState } from '../workflow/step-state.js';
 import { readRun, updateRun } from '../workflow/store.js';
 import type { RunState } from '../workflow/types.js';
 import { knownSecrets } from '../env-resolution.js';
-import { BUILD, dirs, editRun, git, originFile, originRef, receiveHook, reportsHead, runStep, settle, SHIP, start, startIn, team, work } from './helpers/workflow-handoff-fixture.js';
+import { BUILD, dirs, editRun, git, originFile, originRef, receiveHook, reportsHead, runStep, settle, SHIP, start, startIn, takeBack, team, work } from './helpers/workflow-handoff-fixture.js';
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -156,6 +156,23 @@ describe('workflow handoff through teamai-reports', () => {
 
     expect(await claimRun(bob.config, runId, { checkout: bob.checkout })).toMatchObject({ ok: false, error: { code: 'run_not_published' } });
     expect(originRef(acme.origin, 'refs/heads/teamai-reports')).toBeUndefined();
+  });
+
+  // A sandbox that refuses writes under ~/.teamai (Codex's workspace-write) fails the reports lock first.
+  it.skipIf(process.platform === 'win32' || process.getuid?.() === 0)('names the folder a claim may not write in, when its reports lock is refused', async () => {
+    const acme = team();
+    const alice = await acme.member('alice');
+    const bob = await acme.member('bob');
+    const runId = await start(alice);
+    await publishRun(alice.config, runId, { env: {}, checkout: alice.checkout });
+    const folder = path.dirname(reportsBranch.reportsBranch.dir(bob.config));
+    fs.mkdirSync(folder, { recursive: true });
+    fs.chmodSync(folder, 0o555);
+    try {
+      await expect(claimRun(bob.config, runId, { checkout: bob.checkout })).rejects.toThrow(`teamai may not write in ${folder} (EACCES). Give this process write access to that folder, or run the command outside its sandbox.`);
+    } finally {
+      fs.chmodSync(folder, 0o755);
+    }
   });
 
   it('says teamai-reports is unreachable, never that the run is unpublished, when origin cannot be read', async () => {
@@ -635,12 +652,14 @@ describe('workflow handoff through teamai-reports', () => {
     const runId = await start(alice);
     await runStep(alice, runId);
     await publishRun(alice.config, runId, { env: {}, checkout: alice.checkout });
+    await takeBack(alice, runId);
     await runStep(alice, runId);
     receiveHook(acme.origin, 'exit 1');
     expect(await publishRun(alice.config, runId, { env: {}, checkout: alice.checkout })).toMatchObject({ ok: false, error: { code: 'reports_failed' } });
     receiveHook(acme.origin, 'exit 0');
-    const claimed = await claimRun(bob.config, runId, { checkout: bob.checkout });
-    expect(claimed).toMatchObject({ ok: true, value: { ownership: 'claimed', stateRevision: 2 } });
+    // Alice took the run back a moment ago and may drive it, so the claim needs the person's yes.
+    const claimed = await claimRun(bob.config, runId, { checkout: bob.checkout, takeover: 'confirmed' });
+    expect(claimed).toMatchObject({ ok: true, value: { ownership: 'took_over', stateRevision: 2 } });
     const claim = originFile(acme.origin, `workflows/runs/${runId}/state.json`);
 
     expect(await updateReports(alice.config, async (worktree) => {
@@ -665,6 +684,7 @@ describe('workflow handoff through teamai-reports', () => {
     receiveHook(acme.origin, 'exit 1');
     expect(await claimRun(bob.config, runId, { checkout: bob.checkout })).toMatchObject({ ok: false, error: { code: 'reports_failed' } });
     receiveHook(acme.origin, 'exit 0');
+    await takeBack(alice, runId);
     await runStep(alice, runId);
     expect(await publishRun(alice.config, runId, { env: {}, checkout: alice.checkout })).toMatchObject({ ok: true, value: { publication: 'published', stateRevision: 2 } });
     const published = originFile(acme.origin, `workflows/runs/${runId}/state.json`);

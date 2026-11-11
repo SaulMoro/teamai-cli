@@ -3,7 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { syncScorersThenWorkflows } from '../scorers/team-sync.js';
-import { log } from '../utils/logger.js';
+import { log } from '@teamai/shared/log';
 import type { LocalConfig } from '../types.js';
 import { leaseNext, parseNextPayload, parseReport, reportAttempt, startRun, type NextOptions } from '../workflow/engine.js';
 import { callerProvenance, cancelRun, respondProvenance, respondToHitl, retryStep } from '../workflow/run-controls.js';

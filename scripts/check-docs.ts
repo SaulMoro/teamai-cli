@@ -1,5 +1,5 @@
 import fs from 'node:fs';
-import { setSilent } from '../src/utils/logger.js';
+import { setSilent } from '@teamai/shared/log';
 import { loadCommandTable } from './command-table.js';
 import path from 'node:path';
 import { TOOL_SUPPORT_PAGES, renderToolSupportPage } from './tool-support.js';
@@ -7,7 +7,7 @@ import { COMMANDS_REFERENCE_PATH, renderCommandsReference } from './commands-ref
 import { TOOL_ORDER } from '../src/tool-registry.js';
 
 const root = process.cwd();
-const CHECKS = ['readme-matrix', 'skill-commands-exist', 'team-wiki-codebase-skill', 'skill-content', 'workflow-docs-examples', 'glossary-terms'] as const;
+const CHECKS = ['readme-matrix', 'skill-commands-exist', 'team-wiki-codebase-skill', 'skill-content', 'workflow-docs-examples', 'glossary-terms', 'driver-can'] as const;
 const USAGE = `Usage: node scripts/check-docs.mjs [--write] [--only=<check>]\n<check> is one of: ${CHECKS.join(', ')}`;
 
 let write = false;

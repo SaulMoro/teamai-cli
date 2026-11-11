@@ -1,9 +1,10 @@
 import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
+import { leftSkillRunners, RUNNER_EXIT_MS, stopLeftSkillRunners } from './skill-runners.js';
 
 /** Track detached children before their parent exits, so a fixture can join them. */
-export function trackDetachedProcesses(root: string): { preload: string; nodeOptions: string; running: () => number[]; waitForExit: () => Promise<void> } {
+export function trackDetachedProcesses(root: string): { preload: string; nodeOptions: string; running: () => number[]; waitForExit: (options?: { runnerExitMs?: number }) => Promise<void> } {
   const children = path.join(root, 'detached-children');
   fs.mkdirSync(children);
   const preload = path.join(root, 'track-detached.cjs');
@@ -26,14 +27,15 @@ require('node:module').syncBuiltinESMExports();
     preload,
     nodeOptions: `--require ${JSON.stringify(preload)}`,
     running: () => runningIn(children),
-    waitForExit: () => waitForExitIn(children),
+    waitForExit: (options) => waitForExitIn(children, options?.runnerExitMs),
   };
 }
 
 /**
  * Wait for the detached children of every process this worker started, as a
  * test does before it asserts what they wrote. The teardown-writers setup file
- * tracks them.
+ * tracks them. A skill runner among them that does not end stops, with the
+ * groups its step started, and the wait fails naming it.
  */
 export function waitForDetachedChildren(): Promise<void> {
   return waitForExitIn(trackedChildren());
@@ -74,12 +76,15 @@ function runningIn(children: string): number[] {
   });
 }
 
-async function waitForExitIn(children: string): Promise<void> {
+async function waitForExitIn(children: string, runnerExitMs = RUNNER_EXIT_MS): Promise<void> {
   const deadline = Date.now() + 60_000;
+  // A runner whose attempt stays open polls its run for good: waited on alone, it would fail this wait and outlive it.
+  const stopped = stopLeftSkillRunners(() => runningIn(children), { exitMs: runnerExitMs });
   while (runningIn(children).length > 0) {
-    if (Date.now() >= deadline) throw new Error(`Detached fixture processes did not exit: ${runningIn(children).join(', ')}`);
+    if (Date.now() >= deadline) throw new Error([`Detached fixture processes did not exit: ${runningIn(children).join(', ')}`, ...(stopped.length > 0 ? [leftSkillRunners(stopped)] : [])].join('\n'));
     await new Promise(resolve => setTimeout(resolve, 25));
   }
+  if (stopped.length > 0) throw new Error(leftSkillRunners(stopped));
 }
 
 /**

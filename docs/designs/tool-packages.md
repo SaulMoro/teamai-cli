@@ -8,7 +8,7 @@ Tracking: workflow-first (#1589), connected drivers (`docs/designs/connected-dri
 
 The code for every tool teamai supports is spread across the repository by concern, not by tool:
 - the `TOOLS` descriptor table (`src/tools.ts`), whose type check lists every table that must decide a new tool;
-- launch adapters (`src/tool-launch/adapters.ts`);
+- launch adapters (`LAUNCH_ADAPTERS`);
 - session platforms and session adapters (`src/session-flow/adapters/`);
 - token formats (`src/token-usage/`);
 - writers for MCP, hooks, rules, blocks and agents (`src/resources/` and others);
@@ -50,6 +50,7 @@ packages/
 │   ├── package.json
 │   └── src/
 │       ├── index.ts               # export const family = { definitions } as const satisfies ToolFamily
+│       ├── facts.ts               # the `./facts` entry: definitions, session platform facts, version detectors; data only
 │       ├── definitions.ts         # the three definitions (data + the formats they select)
 │       ├── launch.ts  launch.test.ts   # the claude launch profile
 │       ├── sync.ts    sync.test.ts     # writers only Claude uses (agents)
@@ -63,6 +64,7 @@ packages/
 ├── tool-openclaw/  tool-hermes/  tool-dsh/  tool-joycode/  tool-zcode/
 ├── tool-definitions/
 │   └── src/registry.ts            # BUILT_IN_TOOLS: the ordered, literal list of every family
+│       facts.ts                   # BUILT_IN_FACTS: every family's `./facts`, the part startup loads
 └── tool-testing/
     └── src/
         ├── fake-cli.ts            # a fake tool executable that records argv, env and stdin and prints recorded stdout
@@ -75,6 +77,7 @@ packages/
   - A family package depends on `tool-core` and on no other family.
   - `tool-definitions` is the only package that imports the families.
   - The app imports `tool-definitions` and `tool-core`, never a family directly.
+  - Startup (the CLI entry, the hook dispatch) reads a family only through `@teamai/tool-definitions/facts`; adapters, launch profiles, token readers and schemas load where first used (`teamai/family-facts`).
   - `shared` holds helpers that belong to no domain, such as `@teamai/shared/redact`. Any package and the app may import it, and it imports no other package.
 - **Files:** one file per concept, tests beside the file they test (`*.test.ts`), fixtures in the package.
 - **Enforcement:** a `teamai/*` lint rule enforces the import direction.
@@ -149,8 +152,8 @@ paths: { skills: .acme-claude/skills }   # the toolPaths keys
 
 ## Registry
 
-- **What it holds.** `tool-definitions` builds `BUILT_IN_TOOLS` from the family packages, with every family's definitions and extra platforms. Adding a family to it, or a definition to a family, fails to compile until every table that must decide it does, as `TOOL_IDS` makes it today (`src/tools.ts:401`).
-- **What reads it.** At load, the app builds one registry from `BUILT_IN_TOOLS` and the resolved instances. Every reader of a tool id or a session platform goes through it:
+- **What it holds.** `tool-definitions` builds `BUILT_IN_TOOLS` from the family packages, with every family's definitions and extra platforms, and `BUILT_IN_FACTS` (`@teamai/tool-definitions/facts`) from each family's facts entry alone. Adding a family to it, or a definition to a family, fails to compile until every table that must decide it does, as `TOOL_IDS` makes it today (`src/tools.ts:401`).
+- **What reads it.** At load, the app builds one registry from `BUILT_IN_FACTS` and the resolved instances; a family's behaviour (`BUILT_IN_TOOLS`) loads where it is first needed. Every reader of a tool id or a session platform goes through it:
   - `pull`, `--tools`, launch, session find, migration, restore, token reading, `doctor` and the dashboard;
   - the gates `isToolId`, `sessionPlatformsOf`, `channelsOf` and `isLaunchTool`.
 - **Fixed-id tables** (`LaunchedToolId`, `CodexToolId`, `SessionPlatform`, `DETECTORS`, `DEFAULT_TOOL_PATHS`, …) stay keyed by shipped definition or platform id, never collapsed to a family, so `tclaude` never merges into `claude`. An instance reaches them through the definition it extends; only its session identity is its own name, a validated instance platform id rather than a member of the union.

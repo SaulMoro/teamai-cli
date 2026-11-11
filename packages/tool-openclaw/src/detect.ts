@@ -1,11 +1,6 @@
-import { execVersion, type VersionDetector } from '@teamai/tool-core/detect';
-
-async function detectOpenclawVersion(): Promise<string> {
-  const raw = await execVersion('openclaw');
-  const match = raw.match(/^([\d.]+)/);
-
-  return match?.[1] ?? '';
-}
+import type { VersionDetector } from '@teamai/tool-core/detect';
 
 /** How teamai reads the version of OpenClaw. */
-export const detect = { openclaw: detectOpenclawVersion } as const satisfies Record<string, VersionDetector>;
+export const detect = {
+  openclaw: { probe: ['openclaw', '--version'], read: (raw) => raw.match(/^([\d.]+)/)?.[1] ?? '' },
+} as const satisfies Record<string, VersionDetector>;

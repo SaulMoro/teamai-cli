@@ -22,15 +22,14 @@ import { randomBytes } from 'node:crypto';
 import * as fs from 'node:fs';
 import { createServer } from 'node:net';
 import * as path from 'node:path';
-import crossSpawn from 'cross-spawn';
 import { tmpdir } from 'node:os';
 import { z } from 'zod';
 import { AgentAdapter, ToolUnavailableError, type SessionMeta, type SessionReadRef, type Subagent, type SubagentsRead } from '@teamai/tool-core/sessions/base';
 import { imagePlaceholderText, ToolArgumentsSchema, type ContentBlock, type ImageBlock, type Message, type Session, type ToolArguments } from '@teamai/tool-core/sessions/ir';
-import { JsonValueSchema } from '@teamai/tool-core/json';
+import { JsonValueSchema } from '@teamai/shared/json';
 import { resolveRealCwd } from '@teamai/tool-core/sessions/fs';
 import { deriveOpencodeMessageIds, deriveTargetSessionId } from '@teamai/tool-core/sessions/ids';
-import { execCommand, probeBinary, type ExecResult } from '@teamai/tool-core/exec';
+import type { ExecResult, Processes } from '@teamai/shared/exec';
 
 const OPENCODE_TO_IR_TOOL: ReadonlyMap<string, string> = new Map([
   ['read', 'read_file'],
@@ -73,12 +72,12 @@ type ChildServer =
   | { status: 'ready'; children(parent: string): Promise<string[]>; stop(): Promise<void> }
   | { status: 'unavailable'; reason: string };
 
-async function startChildServer(): Promise<ChildServer> {
+async function startChildServer(env: NodeJS.ProcessEnv, processes: Processes): Promise<ChildServer> {
   const port = await freePort();
   const password = randomBytes(16).toString('hex');
 
-  const child = crossSpawn('opencode', ['serve', '--hostname', '127.0.0.1', '--port', String(port)], {
-    env: { ...process.env, OPENCODE_SERVER_PASSWORD: password },
+  const child = processes.spawn('opencode', ['serve', '--hostname', '127.0.0.1', '--port', String(port)], {
+    env: { ...env, OPENCODE_SERVER_PASSWORD: password },
     stdio: 'ignore',
     windowsHide: true,
   });
@@ -258,7 +257,7 @@ function assistantTurns(message: z.infer<typeof AssistantMessage>): Message[] {
   return turns;
 }
 
-function sessionFromExport(stdout: string): Session {
+function sessionFromExport(stdout: string, platform: string): Session {
   const exported = ExportedSession.parse(JSON.parse(stdout));
   const messages: Message[] = [];
 
@@ -277,7 +276,7 @@ function sessionFromExport(stdout: string): Session {
     sessionId: info.id,
     title: info.title,
     cwd: info.location.directory,
-    platform: 'opencode',
+    platform,
     createdAt: iso(info.time.created),
     updatedAt: iso(info.time.updated),
     messages,
@@ -444,22 +443,34 @@ function blockText(block: ContentBlock): string {
 export class OpencodeAdapter extends AgentAdapter {
   static readonly platform = 'opencode';
 
-  /** @param storageRoot OpenCode's data directory (`sessionStoreDir`): `$XDG_DATA_HOME/opencode`, `~/.local/share/opencode` by default. */
-  constructor(private readonly storageRoot: string) {
+  /**
+   * @param storageRoot OpenCode's data directory (`sessionStoreDir`): `$XDG_DATA_HOME/opencode`, `~/.local/share/opencode` by default.
+   * @param platform The session platform this store is: 'opencode', or an instance's own name.
+   */
+  constructor(private readonly storageRoot: string, private readonly processes: Processes, private readonly sessionPlatform = 'opencode') {
     super();
   }
 
   get platform(): string {
-    return 'opencode';
+    return this.sessionPlatform;
   }
 
   isReady(): boolean {
     return fs.existsSync(this.storageRoot);
   }
 
+  /**
+   * The environment OpenCode's CLI reads this adapter's store in: `XDG_DATA_HOME` set to the directory that holds
+   * `storageRoot`, so a store a runtime reported, such as a Paseo daemon's data home, is read there and not in the
+   * member's own.
+   */
+  private storeEnv(): NodeJS.ProcessEnv {
+    return path.basename(this.storageRoot) === 'opencode' ? { ...process.env, XDG_DATA_HOME: path.dirname(this.storageRoot) } : process.env;
+  }
+
   /** Run an `opencode session` command; throws `ToolUnavailableError` when no OpenCode 2 runs here. */
   private async session(args: string[], cwd?: string): Promise<ExecResult> {
-    const version = await probeBinary('opencode');
+    const version = await this.processes.probe('opencode');
     const major = /(\d+)\.\d+/.exec(version)?.[1];
 
     if (!major || Number(major) < 2) {
@@ -470,7 +481,7 @@ export class OpencodeAdapter extends AgentAdapter {
       );
     }
 
-    return execCommand('opencode', ['session', ...args, '--standalone'], { cwd });
+    return this.processes.exec('opencode', ['session', ...args, '--standalone'], { cwd, env: this.storeEnv() });
   }
 
   /**
@@ -498,7 +509,7 @@ export class OpencodeAdapter extends AgentAdapter {
       sessionId: listed.id,
       title: listed.title,
       cwd: listed.directory,
-      platform: 'opencode',
+      platform: this.platform,
       createdAt: iso(listed.created),
       updatedAt: iso(listed.updated),
       // The listing carries no message count or size, so neither is reported; exporting each
@@ -512,7 +523,7 @@ export class OpencodeAdapter extends AgentAdapter {
 
     if (result.code !== 0) throw new Error(result.stderr.trim() || `opencode session export exited ${result.code}`);
 
-    return sessionFromExport(result.stdout);
+    return sessionFromExport(result.stdout, this.platform);
   }
 
   /**
@@ -521,7 +532,7 @@ export class OpencodeAdapter extends AgentAdapter {
    * reads each child with `session export`, and stops it.
    */
   async readSubagents(session: Session, _ref: SessionReadRef): Promise<SubagentsRead> {
-    const server = await startChildServer();
+    const server = await startChildServer(this.storeEnv(), this.processes);
 
     if (server.status === 'unavailable') return { status: 'unread', reason: server.reason };
 

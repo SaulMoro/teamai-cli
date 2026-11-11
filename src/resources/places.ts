@@ -4,7 +4,7 @@ import { realHost, toolHome, type Host } from '../tool-home.js';
 import { isToolId, skillsFollowSession } from '../tool-registry.js';
 import type { State } from '../types.js';
 import { samePath } from '../utils/agent-path.js';
-import { log } from '../utils/logger.js';
+import { log } from '@teamai/shared/log';
 
 type CheckoutRecord = NonNullable<State['lastPullByWorkspace']>[string];
 

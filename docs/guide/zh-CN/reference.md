@@ -189,6 +189,8 @@ teamai 自身的 AI 调用（enrich、codebase、import、promote）使用 teama
 2. 命令所在的 workspace 或 self 安装的配置 `~/.teamai/projects/<slug>/config.yaml` 中的 `ai.tool`。
 3. `~/.teamai/config.yaml` 中的 `ai.tool`，作用于本机。不在任何安装中运行的命令只读取这一项。
 
+`teamai init --agent <tool>` 会把安装配置中的 `ai.tool` 设为它列出的第一个 teamai 能启动的工具，除非该配置或 `~/.teamai/config.yaml` 已经指定了工具。
+
 本机没有 user scope 安装时，`~/.teamai/config.yaml` 可以只包含这一项设置：
 
 ```yaml
@@ -217,7 +219,7 @@ CURSOR_DATA_DIR=~/.cursor-data teamai init
 CURSOR_CONFIG_DIR=~/.cursor-config teamai init
 ```
 
-目录要在 home 下，或在 `~/.config/` 下面。Copilot 用自己的 `COPILOT_HOME`。
+目录在 home 下或 `~/.config/` 下面时，teamai 会同步到那里。home 之外的目录也会记下，但只用于该工具的会话：teamai 从那里读会话，其他文件仍同步到工具的默认根目录，`init` 和 `teamai doctor` 会说明这一点。如果配置里已经记下了该工具在 home 下的根目录，`init` 会保留它，并说明怎样切换。Copilot 用自己的 `COPILOT_HOME`。
 
 Cursor CLI 会搬两个目录：`CURSOR_DATA_DIR` 放会话记录，`CURSOR_CONFIG_DIR` 放写协同署名设置的 `cli-config.json`。用户级 `mcp.json`、`rules/`、`commands/` 不管这两个变量怎么设都留在 `~/.cursor`，所以它们仍然用默认路径。没设 `CURSOR_CONFIG_DIR` 时，配置根目录取 `$XDG_CONFIG_HOME/cursor`（设了该变量的话），否则取 `~/.cursor`。
 
@@ -273,6 +275,8 @@ teamai score --session <id> --source acme-claude --scorer review-quality
 
 步骤运行 `acme-claude`，会话从 `$ACME_CLAUDE_CONFIG_DIR/projects/` 读取，未设置时从 `~/.acme-claude/projects/` 读取。记录、续跑和打分都算在 `acme-claude` 名下，不会算成 Claude 的。
 
+如果 `env` 也是所扩展工具自己的 home 变量（例如 `claude` 实例的 `CLAUDE_CONFIG_DIR`），或者是 `XDG_CONFIG_HOME`、`XDG_DATA_HOME`，teamai 不使用你给它设置的值。这个值属于工具本身，所以实例的 home 始终是 `~/<dir>`。
+
 **接受命令。** 设了 `command` 的实例会运行队友指定的程序。第一次运行时在终端里询问：
 
 ```text
@@ -321,7 +325,17 @@ Tool instance …/tools/acme-claude.yaml is not valid: it sets sessions, and an 
 Tool instance …/tools/acme-claude.yaml is not valid: command: command is the name of one executable on PATH, with no path, spaces or arguments, such as acme-claude. …
 ```
 
-实例要有自己的会话，被扩展的工具的格式必须能带另一个平台 id：Claude Code、Qoder、Codex、JoyCode 和 Cursor。其他工具的实例可以启动、接收文件，但 teamai 不读取它的会话。teamai 目前还不为实例渲染 agents。实例不会出现在[工具支持](./tool-support.md)页面上。
+实例要有自己的会话，被扩展的工具的格式必须能带另一个平台 id：Claude Code、Qoder、Codex、JoyCode、Cursor 和 OpenCode。其他工具的实例可以启动、接收文件，但 teamai 不读取它的会话。OpenCode 把会话放在它的数据目录下，而不是配置目录下，所以 teamai 在哪里读取 OpenCode 实例的会话，取决于它的 `home` 移动的是哪个变量：
+
+```yaml
+# tools/opencode-work.yaml：会话在 ~/.opencode-work/opencode
+schemaVersion: v1alpha1
+name: opencode-work
+extends: opencode
+home: { dir: .opencode-work, env: XDG_DATA_HOME }
+```
+
+如果是 `env: OPENCODE_CONFIG_DIR`，实例有自己的设置，会话仍在你的 OpenCode 数据目录中（`$XDG_DATA_HOME/opencode`，否则为 `~/.local/share/opencode`），teamai 把它们当作 OpenCode 的会话读取。teamai 目前还不为实例渲染 agents。实例不会出现在[工具支持](./tool-support.md)页面上。
 
 ---
 

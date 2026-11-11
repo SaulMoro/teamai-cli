@@ -7,13 +7,18 @@ import { type LocalConfig } from '../types.js';
 import { leaseNext, reportAttempt } from '../workflow/engine.js';
 import { LeaseIdSchema } from '../workflow/lease-wire.js';
 import { cancelRun, respondProvenance, respondToHitl, retryStep } from '../workflow/run-controls.js';
-import { type LocalToolAdapter } from '../workflow/drivers/local/local-tool-adapter.js';
+import { type StepLauncher } from '@teamai/runtime-tools';
 import { _setDriverPollMs, runLocalDriver } from '../workflow/drivers/local/local-driver.js';
 import { driverIdentity } from '../driver-identity.js';
-import { attemptDir, readRun, RunIdSchema } from '../workflow/store.js';
+import { attemptDir, readRun, RunIdSchema, takeRunLock, type AttemptId, type RunId } from '../workflow/store.js';
+import { attemptRuntimePath, attemptToolHome } from '../workflow/runtimes/attempt.js';
+import { stopCancelledAttempts } from '../workflow/runtimes/cancelled.js';
+import { log } from '@teamai/shared/log';
+import { holdLogin, holdLoginFrom, loginHolder, loginHome } from '../workflow/runtimes/login.js';
 import { knownSecrets } from '../env-resolution.js';
 import { alive, dirs, exitsWithin, LOG, parallelFixture, toolPaths, TWO_BARRIERS, workflowFixture } from './helpers/workflow-local-driver-fixture.js';
-import { recordGroup } from '../tool-launch/process-stop.js';
+import { recordGroup } from '@teamai/shared/process-group';
+import * as envExec from '../env-exec.js';
 
 _setDriverPollMs(20);
 
@@ -148,7 +153,7 @@ ${workspaceLine}    prompt: Implement the right half.
     let running = 0;
     let overlap = 0;
     const together = (): boolean => running === 2;
-    const adapter: LocalToolAdapter = {
+    const adapter: StepLauncher = {
       runInteractive: vi.fn(),
       run: vi.fn(async () => {
         running += 1;
@@ -182,7 +187,7 @@ steps:
       ok: boolean
 `, 2);
     const commandExitedFirst: boolean[] = [];
-    const adapter: LocalToolAdapter = {
+    const adapter: StepLauncher = {
       runInteractive: vi.fn(),
       run: vi.fn(async () => {
         commandExitedFirst.push(fs.existsSync(path.join(workspace, '..', 'slow.done')));
@@ -247,7 +252,7 @@ steps:
 ${steps(mark)}`, 2);
     const exists = (name: string): boolean => fs.existsSync(path.join(markers, name));
     const seen: string[] = [];
-    const adapter: LocalToolAdapter = {
+    const adapter: StepLauncher = {
       runInteractive: vi.fn(),
       run: vi.fn(async () => {
         for (const deadline = Date.now() + 3000; Date.now() < deadline && !overlaps.every(exists);) await new Promise((resolve) => setTimeout(resolve, 20));
@@ -288,7 +293,7 @@ steps:
     needs: [w]
     command: node -e "process.exit(0)"
 `, 2);
-    const adapter: LocalToolAdapter = { runInteractive: vi.fn(), run: vi.fn(async () => ({ started: true as const, exitCode: 0, output: { ok: true } })) };
+    const adapter: StepLauncher = { runInteractive: vi.fn(), run: vi.fn(async () => ({ started: true as const, exitCode: 0, output: { ok: true } })) };
 
     const done = await runLocalDriver(config, runId, workspace, { adapter, toolPaths });
 
@@ -452,7 +457,7 @@ setInterval(() => {}, 1000);
     execFileSync('git', ['add', 'lingering.js', 'finish.js'], { cwd: workspace });
     execFileSync('git', ['-c', 'user.name=Test', '-c', 'user.email=test@example.com', 'commit', '-qm', 'scripts'], { cwd: workspace });
     const commandExitedFirst: boolean[] = [];
-    const adapter: LocalToolAdapter = {
+    const adapter: StepLauncher = {
       runInteractive: vi.fn(),
       run: vi.fn(async () => {
         commandExitedFirst.push(fs.existsSync(path.join(workspace, '..', 'markers', 'lingering.exited')));
@@ -512,9 +517,11 @@ const timer = setInterval(() => { if (fs.existsSync('go')) clearInterval(timer);
   });
 
   it.skipIf(process.platform === 'win32').each([
-    [1, 'the driver\'s process group', true],
-    [2, 'a process group of its own', false],
-  ] as const)('runs a command with max_parallel %i in %s', async (maxParallel, _group, shared) => {
+    [1, 'the terminal reaches', 'the driver\'s process group', true],
+    [1, 'no terminal reaches', 'a process group of its own', false],
+    [2, 'the terminal reaches', 'a process group of its own', false],
+  ] as const)('runs a command with max_parallel %i that %s in %s', async (maxParallel, terminal, _group, shared) => {
+    vi.spyOn(envExec, 'terminalReachesCommand').mockResolvedValue(terminal === 'the terminal reaches');
     const { config, workspace, runId } = await parallelFixture(`schemaVersion: v1alpha1
 name: build
 description: Report the process group a command runs in.
@@ -587,6 +594,123 @@ steps:
     }
   });
 
+  // A Codex judge holds the login lock in teamai's own process; a driver killed then never reaches its release.
+  it('releases the login an attempt of a killed driver held, once it stopped what that attempt left running', async () => {
+    const { config, workspace, runId } = await workflowFixture(`schemaVersion: v1alpha1
+name: build
+description: A step whose earlier driver was killed while it held the Codex login.
+steps:
+  - id: check
+    command: "true"
+`);
+    const leased = await leaseNext(config, runId, driverIdentity('local', workspace));
+    if (!('data' in leased)) throw new Error(leased.error.message);
+    const run = RunIdSchema.parse(runId);
+    const attempt = LeaseIdSchema.parse(leased.data.lease).attempt;
+    fs.mkdirSync(loginHome('codex'), { recursive: true });
+    fs.writeFileSync(path.join(loginHome('codex'), 'auth.json'), JSON.stringify({ tokens: { account_id: 'acct-1', refresh_token: 'r1' } }), { mode: 0o600 });
+    const held = await holdLogin({ tool: 'codex', run, attempt, toolHome: attemptToolHome(config, run, attempt, 'codex'), signal: new AbortController().signal, onWait: async () => {} });
+    expect(held).toEqual({ ok: true });
+
+    expect(await runLocalDriver(config, runId, workspace)).toMatchObject({ data: { done: { outcome: 'succeeded' } } });
+
+    expect(await loginHolder('codex')).toBeUndefined();
+  });
+
+  // Codex rotates its refresh token on a refresh and refuses the old one after (refresh_token_reused).
+  it.each([
+    ['whose lease the next driver takes back', '', undefined],
+    ['whose step timed out before the next driver ran', '    timeout: 1s\n', undefined],
+    ['whose judge kept the login in a home of its own', '', 'judge-home'],
+  ])('writes back the Codex login a killed judge refreshed, of an attempt %s, before it releases it', async (_case, timeoutLine, judgeHome) => {
+    const { config, workspace, runId } = await workflowFixture(`schemaVersion: v1alpha1
+name: build
+description: A step whose earlier driver was killed while its Codex judge held the member's login.
+steps:
+  - id: check
+    command: "true"
+${timeoutLine}`);
+    const leased = await leaseNext(config, runId, driverIdentity('local', workspace));
+    if (!('data' in leased)) throw new Error(leased.error.message);
+    const run = RunIdSchema.parse(runId);
+    const attempt = LeaseIdSchema.parse(leased.data.lease).attempt;
+    const daily = path.join(path.dirname(workspace), 'codex');
+    const login = (refresh: string): string => JSON.stringify({ auth_mode: 'chatgpt', tokens: { account_id: 'acct-1', refresh_token: refresh } });
+    fs.mkdirSync(daily);
+    fs.writeFileSync(path.join(daily, 'auth.json'), login('refresh-1'), { mode: 0o600 });
+    const toolHome = judgeHome === undefined ? attemptToolHome(config, run, attempt, 'codex') : path.join(attemptDir(config, run, attempt), judgeHome);
+    const held = await holdLoginFrom({ tool: 'codex', executable: 'codex', from: daily, toolHome, run, attempt, signal: new AbortController().signal });
+    expect(held.ok).toBe(true);
+    // The judge's Codex refreshed its login as Codex 0.167.0 does, then its teamai was killed before the judge released it.
+    fs.writeFileSync(path.join(toolHome, 'auth.json.tmp'), login('refresh-2'));
+    fs.renameSync(path.join(toolHome, 'auth.json.tmp'), path.join(toolHome, 'auth.json'));
+    // Past the step's 1s timeout, so the next driver finds it timed out.
+    if (timeoutLine) await new Promise((resolve) => setTimeout(resolve, 1_200));
+
+    await runLocalDriver(config, runId, workspace);
+
+    expect({ daily: JSON.parse(fs.readFileSync(path.join(daily, 'auth.json'), 'utf8')).tokens.refresh_token, holder: await loginHolder('codex') })
+      .toEqual({ daily: 'refresh-2', holder: undefined });
+  });
+
+  describe('a cancel of a run whose killed driver\'s Codex judge held the member\'s login', () => {
+    const login = (refresh: string): string => JSON.stringify({ auth_mode: 'chatgpt', tokens: { account_id: 'acct-1', refresh_token: refresh } });
+
+    /** A run whose driver was killed while its judge held the login of `daily`, which the judge's Codex refreshed. */
+    const killedJudge = async (): Promise<{ config: LocalConfig; runId: string; run: RunId; attempt: AttemptId; daily: string }> => {
+      const { config, workspace, runId } = await workflowFixture(`schemaVersion: v1alpha1
+name: build
+description: A step whose earlier driver was killed while its Codex judge held the member's login.
+steps:
+  - id: check
+    command: "true"
+`);
+      const leased = await leaseNext(config, runId, driverIdentity('local', workspace));
+      if (!('data' in leased)) throw new Error(leased.error.message);
+      const run = RunIdSchema.parse(runId);
+      const { attempt } = LeaseIdSchema.parse(leased.data.lease);
+      const daily = path.join(path.dirname(workspace), 'codex');
+      fs.mkdirSync(daily);
+      fs.writeFileSync(path.join(daily, 'auth.json'), login('refresh-1'), { mode: 0o600 });
+      const toolHome = attemptToolHome(config, run, attempt, 'codex');
+      expect((await holdLoginFrom({ tool: 'codex', executable: 'codex', from: daily, toolHome, run, attempt, signal: new AbortController().signal })).ok).toBe(true);
+      fs.writeFileSync(path.join(toolHome, 'auth.json'), login('refresh-2'));
+      return { config, runId, run, attempt, daily };
+    };
+
+    /** `teamai workflow cancel` of the run, which stops what its cancelled attempts left while it holds the run's lock. */
+    const cancelHere = async (config: LocalConfig, runId: string, run: RunId): Promise<void> => {
+      expect(await cancelRun(config, runId, await knownSecrets(config))).not.toHaveProperty('error');
+      expect(await takeRunLock(config, run, (lock) => stopCancelledAttempts(config, lock), { waitMs: 0 })).toMatchObject({ kind: 'held' });
+    };
+
+    const refreshOf = (daily: string): unknown => JSON.parse(fs.readFileSync(path.join(daily, 'auth.json'), 'utf8')).tokens.refresh_token;
+
+    it('writes the login back before it releases it, though the attempt\'s runtime record cannot be read', async () => {
+      const { config, runId, run, attempt, daily } = await killedJudge();
+      fs.writeFileSync(attemptRuntimePath(config, run, attempt), '{"runtime":');
+
+      await cancelHere(config, runId, run);
+
+      expect({ daily: refreshOf(daily), holder: await loginHolder('codex') }).toEqual({ daily: 'refresh-2', holder: undefined });
+    });
+
+    it.skipIf(process.platform === 'win32')('releases the login and says why it was not written back when the member\'s Codex home refuses the write', async () => {
+      const { config, runId, run, daily } = await killedJudge();
+      const warn = vi.spyOn(log, 'warn').mockImplementation(() => undefined);
+      fs.chmodSync(daily, 0o555);
+
+      try {
+        await cancelHere(config, runId, run);
+      } finally {
+        fs.chmodSync(daily, 0o755);
+      }
+
+      expect({ daily: refreshOf(daily), holder: await loginHolder('codex') }).toEqual({ daily: 'refresh-1', holder: undefined });
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining(`The codex login the step used was not written back to ${path.join(daily, 'auth.json')}: writing it failed (EACCES`));
+    });
+  });
+
   it('runs a prompt an earlier driver leased alone, between the commands leased before and after it', async () => {
     const { config, workspace, runId } = await parallelFixture(`schemaVersion: v1alpha1
 name: build
@@ -615,7 +739,7 @@ steps:
       if ('data' in leased) running.push((leased.data.lease as { attempt: string }).attempt);
     }
     const logAtPrompt: string[] = [];
-    const adapter: LocalToolAdapter = {
+    const adapter: StepLauncher = {
       runInteractive: vi.fn(),
       run: vi.fn(async () => {
         logAtPrompt.push(fs.readFileSync(path.join(workspace, '..', 'log.txt'), 'utf8'));

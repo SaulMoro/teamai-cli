@@ -27,7 +27,7 @@ vi.mock('../update.js', () => ({
   releaseLock: vi.fn().mockResolvedValue(undefined),
   withFileLock: async <T>(_lock: string, _wait: unknown, body: () => Promise<T>) => ({ held: true, value: await body() }),
 }));
-vi.mock('@teamai/tool-core/log', () => ({
+vi.mock('@teamai/shared/log', () => ({
   log: { persist: vi.fn(), info: vi.fn(), success: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn(), dim: vi.fn() },
   spinner: vi.fn(() => ({ start: vi.fn().mockReturnThis(), succeed: vi.fn().mockReturnThis(), fail: vi.fn().mockReturnThis(), warn: vi.fn().mockReturnThis(), info: vi.fn().mockReturnThis(), stop: vi.fn().mockReturnThis() })),
 }));
@@ -45,12 +45,13 @@ vi.mock('../skill-content.js', async (importOriginal) => {
 });
 
 import { pull } from '../pull.js';
+import { syncFolders } from '../utils/fs.js';
 import { resolveDesiredSkills } from '../resources/desired.js';
 import { deployBuiltinSkills } from '../builtin-skills.js';
 import { packagedSkillRoots } from '../skill-content.js';
 import { getHandler } from '../resources/index.js';
 import { detectProjectConfig, loadLocalConfigForScope, loadStateForScope, loadTeamConfig, saveStateForScope } from '../config.js';
-import { log } from '../utils/logger.js';
+import { log } from '@teamai/shared/log';
 import { TeamaiConfigSchema, type LocalConfig, type State } from '../types.js';
 import { realHost, recordedHomes, saveToolHomes, toolHomesPath } from '../tool-home.js';
 
@@ -91,6 +92,69 @@ describe('a pull and the homes the env moves', () => {
     await fse.remove(blocked);
     await pull({});
     expect(await fse.pathExists(path.join(blocked, 'deploy', 'SKILL.md'))).toBe(true);
+  });
+
+  it.skipIf(process.platform === 'win32')('leaves a team skill with a FIFO in it as an earlier pull delivered it, or not there at all, and names the skill and the file', async () => {
+    await fse.ensureDir(path.join(home, '.config', 'opencode'));
+    await fse.ensureDir(path.join(home, '.hermes'));
+    await pull({});
+    const skillsDirs = [path.join(home, '.config', 'opencode', 'skills'), path.join(home, '.hermes', 'skills')];
+    for (const dir of skillsDirs) expect(await fse.readFile(path.join(dir, 'deploy', 'SKILL.md'), 'utf8')).toContain('Deploy.');
+    for (const skill of ['deploy', 'fresh']) {
+      await fse.outputFile(path.join(repo, 'skills', skill, 'SKILL.md'), `---\nname: ${skill}\ndescription: d\n---\nVersion two.\n`);
+      for (const name of ['a.md', 'b.md', 'c.md']) await fse.outputFile(path.join(repo, 'skills', skill, name), `${name}\n`);
+      execFileSync('mkfifo', [path.join(repo, 'skills', skill, 'notes.md')]);
+      for (const name of ['x.md', 'y.md']) await fse.outputFile(path.join(repo, 'skills', skill, name), `${name}\n`);
+    }
+
+    await pull({ force: true });
+
+    for (const dir of skillsDirs) {
+      expect(await fse.readdir(path.join(dir, 'deploy'))).toEqual(['SKILL.md']);
+      expect(await fse.readFile(path.join(dir, 'deploy', 'SKILL.md'), 'utf8')).toContain('Deploy.');
+      expect((await fse.readdir(dir)).filter((name) => name.includes('deploy') || name.includes('fresh'))).toEqual(['deploy']);
+    }
+    const warned = vi.mocked(log.warn).mock.calls.flat().join('\n');
+    for (const skill of ['deploy', 'fresh']) {
+      expect(warned).toContain(`Skipped skill ${skill} for opencode`);
+      expect(warned).toContain(`${path.join(repo, 'skills', skill, 'notes.md')} is a pipe, not a regular file`);
+    }
+  });
+
+  it('delivers no staging folder a copy cut short left in the team checkout, as a skill of its own', async () => {
+    await fse.ensureDir(path.join(home, '.config', 'opencode'));
+    await fse.outputFile(path.join(repo, 'skills', '.deploy.1a2b3c4d.staging', 'SKILL.md'), '---\nname: deploy\ndescription: d\n---\nHalf copied.\n');
+
+    await pull({});
+
+    expect(await fse.readdir(path.join(home, '.config', 'opencode', 'skills'))).not.toContainEqual(expect.stringContaining('staging'));
+    expect(await fse.readFile(path.join(home, '.config', 'opencode', 'skills', 'deploy', 'SKILL.md'), 'utf8')).toContain('Deploy.');
+  });
+
+  it('delivers none of the folders a pre-push sync cut short leaves beside a skill, as a skill of its own', async () => {
+    await fse.ensureDir(path.join(home, '.config', 'opencode'));
+    for (const left of Object.values(syncFolders(path.join(repo, 'skills', 'deploy')))) {
+      await fse.outputFile(path.join(left, 'SKILL.md'), '---\nname: deploy\ndescription: d\n---\nHalf synced.\n');
+    }
+
+    await pull({});
+
+    expect(await fse.readdir(path.join(home, '.config', 'opencode', 'skills'))).not.toContainEqual(expect.stringMatching(/\.teamai-(?:sync|prev)$/));
+    expect(await fse.readFile(path.join(home, '.config', 'opencode', 'skills', 'deploy', 'SKILL.md'), 'utf8')).toContain('Deploy.');
+  });
+
+  it('removes a staging folder a copy cut short left beside a skill an hour ago, and keeps a newer one a copy may still be writing', async () => {
+    const skills = path.join(home, '.config', 'opencode', 'skills');
+    const [stale, fresh] = ['.deploy.1a2b3c4d.staging', '.deploy.5e6f7a8b.staging'].map((name) => path.join(skills, name));
+    for (const left of [stale, fresh]) await fse.outputFile(path.join(left, 'SKILL.md'), 'Half copied.\n');
+    const twoHoursAgo = new Date(Date.now() - 2 * 3_600_000);
+    await fse.utimes(stale, twoHoursAgo, twoHoursAgo);
+
+    await pull({});
+
+    expect(await fse.pathExists(stale)).toBe(false);
+    expect(await fse.pathExists(fresh)).toBe(true);
+    expect(await fse.readFile(path.join(skills, 'deploy', 'SKILL.md'), 'utf8')).toContain('Deploy.');
   });
 
   it('records an env-moved home that exists on the first pull that sees it, and keeps an existing record', async () => {

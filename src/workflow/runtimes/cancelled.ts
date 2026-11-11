@@ -1,0 +1,329 @@
+import fs from 'node:fs/promises';
+import { resolveRunMode } from '../../launch-context.js';
+import type { LocalConfig } from '../../types.js';
+import { log } from '@teamai/shared/log';
+import type { RunStatus, WorkflowFailure } from '../types.js';
+import { existingCheckout } from '../run-location.js';
+import { attemptDir, AttemptIdSchema, attemptsDir, readRun, runnerAlive, type AttemptId, type RunId, type RunLock } from '../store.js';
+import { knownSecrets } from '../../env-resolution.js';
+import { attemptRun, attemptRuntimePath, attemptToolHome, maskAttemptResults, readAttemptPlacement, releaseAttemptRuntime, type AttemptRuntimeRecord } from './attempt.js';
+import { endLogin, LOGIN_TOOLS, loginHolder, type LoginTool } from './login.js';
+import { disposeDriver, openDriver } from './sources.js';
+import { retryCommand } from './retry-command.js';
+import { CANCEL_FAILED } from '@teamai/runtime-protocol';
+import { stopRecordedGroup } from '@teamai/shared/process-group';
+
+// ─── What cancelled attempts left on their step runtimes ─
+//
+//  A driver killed while its attempt ran leaves the tool running on the step runtime, and the attempt's login held.
+//  `teamai workflow cancel`, holding the run's lock so no local driver of it is live, stops each such attempt the way
+//  its driver would have: it cancels the exec, brings the place's work back, closes the place, and only then writes
+//  the login back and releases it (`endLogin`). An attempt it cannot stop keeps its place, its records and its
+//  login, so no second copy runs beside it, and the next `teamai workflow cancel` of the run tries again. Each
+//  runtime is opened in `recover` mode for this, and for new work only when it refuses that mode (sources.ts).
+//
+//  A skill driver's runner works outside that lock, and stops its own attempt, ending what it holds, once it sees the
+//  cancel. The cancel leaves an attempt whose runner still runs to it, so its process group and its login never have
+//  two owners; one whose runner is gone it stops as any other.
+//
+
+/**
+ * Stops what each cancelled attempt of the locked run left open on its step runtime, and each other attempt whose place
+ * a runtime still holds, such as one whose stop or close failed before, then releases the logins of the attempts that
+ * no longer run. A cancelled attempt whose skill runner still runs is left to that runner, which stops it itself. Says what it released, and which login stays held and how to free it. Attempt `release` goes through
+ * the same stop, and what its runtime cannot confirm, such as a close it can never clear, does not hold it: the person
+ * checked that nothing of it still runs, so teamai writes its login back and lets it go. Answers the run's status and
+ * the attempts whose place it closed or let go.
+ */
+export async function stopCancelledAttempts(config: LocalConfig, lock: RunLock, release?: AttemptId): Promise<StoppedAttempts | undefined> {
+  const { run } = lock;
+  const state = await readRun(config, run);
+
+  if (state === 'missing' || state === 'corrupt') return undefined;
+  const leased = new Set(state.steps.flatMap((step) => (step.status === 'leased' ? [step.lease.attempt] : [])));
+  const stillRunning = new Set<string>();
+
+  const cancelled = (state.cancelledAttempts ?? []).flatMap((id) => {
+    const attempt = AttemptIdSchema.safeParse(id);
+
+    return attempt.success ? [attempt.data] : [];
+  });
+
+  const runnerOwned = new Set<AttemptId>();
+
+  // What a killed driver of this install started for a cancelled attempt, which its record reaches, and the login one
+  // in teamai's process held, written back; what one runs on a step runtime, the fleet's member included, its runtime
+  // stops below.
+  for (const attempt of cancelled) {
+    if (!await runnerAlive(config, run, attempt)) {
+      await stopLeftInProcess(config, run, attempt);
+      continue;
+    }
+
+    runnerOwned.add(attempt);
+    log.info(`Attempt ${attempt} of run ${run} runs in the skill driver's runner on this machine, which stops it and releases what it holds once it sees the cancel. If that runner (teamai workflow report ${run} --driver skill --attempt ${attempt}) still runs in a minute, stop it; once it has ended, teamai workflow cancel ${run} again releases what it left.`);
+  }
+
+  const left = new Set([...cancelled, ...await placesLeftOpen(config, run, leased)].filter((attempt) => !runnerOwned.has(attempt)));
+
+  if (release !== undefined && !left.has(release) && !runnerOwned.has(release)) log.warn(`Attempt ${release} of run ${run} holds no place on a step runtime, so there is nothing to release.`);
+
+  const stopped: StoppedAttempts = { status: state.status, closed: [], released: [] };
+  // Each runtime starts in the run's checkout, or, once that folder is gone, where this cancel runs.
+  const checkout = await existingCheckout(state) ?? process.cwd();
+
+  // What an agent wrote itself into an attempt's result file was never masked by a driver killed before it read it.
+  const masks: Record<string, string> = {};
+
+  for (const attempt of left) {
+    // A step that failed because its stop was not confirmed can run again once it is.
+    const lost = state.steps.find((step) => step.status === 'failed' && step.attempt === attempt && (step.failure?.code === 'runtime_lost' || step.failure?.code === CANCEL_FAILED));
+    const { ended, masked } = await stopAttempt(config, run, attempt, { isReleased: attempt === release, checkout, ...(lost && { retry: { run, step: lost.id } }) });
+    Object.assign(masks, masked);
+
+    if (ended === 'running') stillRunning.add(attempt);
+    else if (ended !== 'none') stopped[ended].push(attempt);
+  }
+
+  await maskAttemptResults(config, run, { ...await knownSecrets(config), ...masks });
+
+  for (const tool of LOGIN_TOOLS) {
+    const holder = await loginHolder(tool);
+
+    if (holder?.run !== run || runnerOwned.has(holder.attempt) || leased.has(holder.attempt)) continue;
+
+    if (stillRunning.has(holder.attempt)) {
+      log.warn(`The ${tool} login teamai keeps stays held by attempt ${holder.attempt} of run ${run}, whose tool may still run. Stop that tool on its step runtime, then run teamai workflow cancel ${run} --release ${holder.attempt}, which lets the attempt go and ends its login.`);
+      continue;
+    }
+
+    // An attempt no longer open holds a login only because nothing ended it, as one whose record cannot be read.
+    await endLeftLogin(config, tool, { run, attempt: holder.attempt });
+  }
+
+  return stopped;
+}
+
+/** What a cancel stopped of a run: its status, and the attempts whose place it closed, or let go as the person asked. */
+export interface StoppedAttempts {
+  status: RunStatus;
+  closed: AttemptId[];
+  released: AttemptId[];
+}
+
+/** How a stop of an attempt ended: its place closed or let go, nothing left to stop, or its work may still run. */
+type AttemptStop = 'closed' | 'released' | 'none' | 'running';
+
+/** How `stopAttempt` ended: still `running`, with why, or done; `masked` holds the values its runtime's messages are masked with. */
+type Stopped = ({ ended: Exclude<AttemptStop, 'running'> } | { ended: 'running'; why: string }) & { masked?: Record<string, string> };
+
+/** The attempts of `run` that no lease runs, whose record says a step runtime still holds their place. */
+async function placesLeftOpen(config: LocalConfig, run: RunId, leased: ReadonlySet<string>): Promise<AttemptId[]> {
+  const names = await fs.readdir(attemptsDir(config, run)).catch(() => []);
+  const open: AttemptId[] = [];
+
+  for (const name of names.sort()) {
+    const attempt = AttemptIdSchema.safeParse(name);
+
+    if (!attempt.success || leased.has(attempt.data)) continue;
+    // One in teamai's process holds no place: the cancel stops its process group instead. An unreadable record names
+    // no place to stop.
+    const placement = await readAttemptPlacement(config, run, attempt.data);
+
+    if (placement.kind === 'external' && placement.record.phase !== 'closed') open.push(attempt.data);
+  }
+
+  return open;
+}
+
+/** How a close tells the runtime the person let the attempt go. */
+const RELEASE = { release: true } as const;
+
+/**
+ * Stops what a killed teamai left running of attempt `attempt` in its own process, then writes back and releases the
+ * logins it held, as a Codex judge holds one: nothing of it runs any more to use them. One on a step runtime keeps its
+ * login until that runtime closes its place (`stopOnRecordedDriver`).
+ */
+export async function stopLeftInProcess(config: LocalConfig, run: RunId, attempt: AttemptId): Promise<void> {
+  await stopRecordedGroup(attemptDir(config, run, attempt));
+  const placement = await readAttemptPlacement(config, run, attempt);
+
+  if (placement.kind !== 'in_process' && placement.kind !== 'unrecorded') return;
+  await endLeftLogins(config, run, attempt);
+}
+
+/**
+ * Ends each login attempt `attempt` of run `run` holds, nothing of which runs any more (`endLogin`): writes it back,
+ * then releases it, and says so; warns of one not written back. `toolHome` is the tool home its step runtime recorded and
+ * `isCollected` whether that runtime brought it back; one in teamai's process had its tool keep the login in the
+ * attempt's own tool home.
+ */
+export async function endLeftLogins(config: LocalConfig, run: RunId, attempt: AttemptId, placed: { toolHome?: AttemptRuntimeRecord['toolHome']; isCollected?: boolean } = {}): Promise<void> {
+  for (const tool of LOGIN_TOOLS) await endLeftLogin(config, tool, { run, attempt, ...placed });
+}
+
+async function endLeftLogin(config: LocalConfig, tool: LoginTool, { run, attempt, toolHome, isCollected = true }: { run: RunId; attempt: AttemptId; toolHome?: AttemptRuntimeRecord['toolHome']; isCollected?: boolean }): Promise<void> {
+  const ended = await endLogin(tool, { run, attempt, toolHome: toolHome?.tool === tool ? toolHome.dir : attemptToolHome(config, run, attempt, tool), isCollected });
+
+  if (!ended.wasHeld) return;
+
+  if (ended.notBack) log.warn(ended.notBack.message);
+  log.info(`Released the ${tool} login teamai keeps, which attempt ${attempt} of run ${run} held.`);
+}
+
+/**
+ * Stops what a killed teamai left of attempt `attempt` on the step runtime its record names, through the driver recorded
+ * for it, as `teamai workflow cancel` does, and closes its place there, before a driver without that runtime runs the
+ * attempt's step again, and releases the login it held once its place closed. Answers why the stop or the close is not
+ * confirmed, so the place is kept, or undefined once it is closed, or when the attempt holds no place open there.
+ */
+export async function stopOnRecordedDriver(config: LocalConfig, run: RunId, attempt: AttemptId, { checkout }: { checkout: string }): Promise<WorkflowFailure | undefined> {
+  const placement = await readAttemptPlacement(config, run, attempt);
+  const stopped = await stopAttempt(config, run, attempt, { isReleased: false, checkout, isQuiet: true });
+
+  if (stopped.ended !== 'running' || placement.kind !== 'external') return undefined;
+  const { record } = placement;
+
+  return {
+    code: 'runtime_lost',
+    message: `Attempt ${attempt} ran on step runtime "${record.runtime}" of driver "${record.driver}", which could not stop what ran there, so it may still run: ${stopped.why} Resume the run with --driver ${record.driver}.`,
+  };
+}
+
+/**
+ * Stops attempt `attempt` on the step runtime its record names, or says why it could not (`running`, with `why`). A
+ * released attempt the runtime cannot stop or close is let go instead, as the person asked. `isQuiet` leaves the warning
+ * to the caller, which reports `why` itself.
+ */
+async function stopAttempt(config: LocalConfig, run: RunId, attempt: AttemptId, { isReleased, checkout, retry, isQuiet = false }: { isReleased: boolean; checkout: string; retry?: { run: string; step: string }; isQuiet?: boolean }): Promise<Stopped> {
+  const placement = await readAttemptPlacement(config, run, attempt);
+
+  // One in teamai's process holds no place on a step runtime, and an unreadable record names none.
+  if (placement.kind !== 'external' || placement.record.phase === 'closed') return { ended: 'none' };
+  const { record } = placement;
+
+  const cannot = async (why: string): Promise<Stopped> => {
+    if (isReleased) return { ended: await releaseAttempt(config, run, attempt, why, record) };
+
+    if (!isQuiet) log.warn(`Could not stop attempt ${attempt} of run ${run} on step runtime "${record.runtime}" of driver "${record.driver}": ${why}`);
+
+    return { ended: 'running', why };
+  };
+
+  const opened = await openDriver(config, record.driver, { personal: true, mode: resolveRunMode(process.env), canAsk: false, purpose: 'stop', checkout });
+
+  if (!opened.ok) return cannot(opened.failure.message);
+
+  try {
+    const entry = opened.opened.runtimes.find((one) => one.kind === 'external' && one.use === record.runtime);
+
+    if (entry?.kind !== 'external') return cannot(`driver "${record.driver}" no longer uses that runtime.`);
+    const masked = entry.masks;
+    const placed = attemptRun({ config, run, attempt, runtime: entry.runtime, driver: record.driver });
+
+    const notStopped = await placed.stopLeftOperation();
+
+    // Nothing is brought back or closed while what ran may still write the place. A person who released the attempt
+    // checked that nothing of it runs, so the runtime is still told to forget the place before teamai lets it go.
+    if (notStopped && isReleased) await placed.close(RELEASE);
+
+    if (notStopped) return cannot(`its exec or prompt may still run, since the runtime did not confirm it stopped (${notStopped.code}): ${notStopped.message}`);
+    // A place whose work already came back is not brought back again.
+    const notCollected = record.phase === 'collected' ? undefined : await placed.collect();
+
+    if (notCollected) log.warn(notCollected.message);
+    const notClosed = await placed.close(isReleased ? RELEASE : undefined);
+
+    if (!notClosed) {
+      // Nothing of the attempt runs there any more, and the attempt runs again elsewhere, if at all.
+      await endLeftLogins(config, run, attempt, { toolHome: record.toolHome, isCollected: notCollected === undefined });
+      const then = retry ? ` Then run: ${retryCommand(retry)}` : '';
+
+      if (record.closeFailed) log.info(`Closed the place of attempt ${attempt} of run ${run} on step runtime "${record.runtime}", which an earlier close had kept.${then}`);
+      else log.info(`Stopped attempt ${attempt} of run ${run} on step runtime "${record.runtime}" and closed its place.${then}`);
+
+      return { ended: 'closed', masked };
+    }
+
+    return isReleased ? { ended: await releaseAttempt(config, run, attempt, notClosed.message, record), masked } : cannot(`${notClosed.message} Once you checked that nothing of it still runs there, run teamai workflow cancel ${run} --release ${attempt}.`);
+  } catch (error) {
+    return cannot(error instanceof Error ? error.message : String(error));
+  } finally {
+    await disposeDriver(opened.opened);
+  }
+}
+
+/**
+ * Stops what attempt `attempt` of run `run` left on its step runtime, as `workflow cancel` does for a cancelled attempt,
+ * from `checkout`: undefined once nothing of it runs there, else why it may still run.
+ */
+export async function stopLeftAttempt(config: LocalConfig, run: RunId, attempt: AttemptId, checkout: string): Promise<string | undefined> {
+  const stopped = await stopAttempt(config, run, attempt, { isReleased: false, checkout });
+
+  return stopped.ended === 'running' ? stopped.why : undefined;
+}
+
+/**
+ * Lets attempt `attempt` go though its runtime could not confirm its stop or close (`why`), as the person asked: ends
+ * the login it holds, written back when its tool home came back, and records its place as no longer teamai's to close.
+ * `before` is its record as the cancel found it open; the release's own close may have closed it since.
+ */
+async function releaseAttempt(config: LocalConfig, run: RunId, attempt: AttemptId, why: string, before: AttemptRuntimeRecord): Promise<'released'> {
+  const now = await readAttemptPlacement(config, run, attempt);
+  const record = now.kind === 'external' ? now.record : before;
+  await endLeftLogins(config, run, attempt, { toolHome: record.toolHome, isCollected: record.phase === 'collected' });
+
+  if (record.phase !== 'closed') await releaseAttemptRuntime(config, run, attempt, record);
+  log.info(`Released attempt ${attempt} of run ${run} on step runtime "${record.runtime}" without its confirmation, as asked. What ran in its place may still be there, since the runtime did not confirm its end: ${why}`);
+
+  return 'released';
+}
+
+/**
+ * Closes again one place each step runtime closed for each run of `runs`, whose clone or team folder teamai removed
+ * outside the drive that ran it, such as at the start of a later drive: the runtime sees the folder gone at a close,
+ * the verb it cleans up at (T3 removes a project it added there). A close of a handle already closed answers `closed`.
+ * Each definition is opened in `recover` mode, as a cancel opens it; what fails is only logged.
+ */
+export async function closeAfterSweep(config: LocalConfig, runs: readonly RunId[]): Promise<void> {
+  for (const run of runs) {
+    const state = await readRun(config, run);
+    // The place each runtime of each definition closed last, by definition: the record written last.
+    const closed = new Map<string, Map<string, { handle: string; at: number }>>();
+
+    for (const name of await fs.readdir(attemptsDir(config, run)).catch((): string[] => [])) {
+      const attempt = AttemptIdSchema.safeParse(name);
+      const placement = attempt.success ? await readAttemptPlacement(config, run, attempt.data) : undefined;
+      const record = placement?.kind === 'external' ? placement.record : undefined;
+
+      if (!attempt.success || record?.phase !== 'closed' || record.open.handle === undefined) continue;
+      const at = (await fs.stat(attemptRuntimePath(config, run, attempt.data))).mtimeMs;
+      const byRuntime = closed.get(record.driver) ?? new Map<string, { handle: string; at: number }>();
+
+      if ((byRuntime.get(record.runtime)?.at ?? -1) < at) byRuntime.set(record.runtime, { handle: record.open.handle, at });
+      closed.set(record.driver, byRuntime);
+    }
+
+    const checkout = (state === 'missing' ? undefined : await existingCheckout(state)) ?? process.cwd();
+
+    for (const [driver, handles] of closed) {
+      const opened = await openDriver(config, driver, { personal: true, mode: resolveRunMode(process.env), canAsk: false, purpose: 'stop', checkout });
+
+      if (!opened.ok) {
+        log.debug(`Driver "${driver}" did not open to close again the places of run ${run} after teamai removed its clone: ${opened.failure.message}`);
+        continue;
+      }
+
+      try {
+        for (const entry of opened.opened.runtimes) {
+          const handle = entry.kind === 'external' ? handles.get(entry.use)?.handle : undefined;
+          const again = entry.kind === 'external' && handle !== undefined ? await entry.runtime.close(handle) : undefined;
+
+          if (again && !again.ok) log.debug(`Runtime ${entry.use} did not close ${handle} again after teamai removed a clone of run ${run}: ${again.failure.message}`);
+        }
+      } finally {
+        await disposeDriver(opened.opened);
+      }
+    }
+  }
+}

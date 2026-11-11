@@ -37,7 +37,7 @@ import { AgentSession, noAdapter } from '../session-flow/agent-session.js';
 import { getAdapter } from '../session-flow/adapters/index.js';
 import type { AgentAdapter } from '@teamai/tool-core/sessions/base';
 import type { Session } from '@teamai/tool-core/sessions/ir';
-import { installFakeOpencode, setFakeOpencodeExportError, setFakeOpencodeVersion } from '@teamai/tool-testing/fake-opencode';
+import { installFakeOpencode, setFakeOpencodeExportError, setFakeOpencodeVersion } from '@teamai/tool-opencode/testing';
 import { WRITABLE } from './helpers/writable-platforms.js';
 
 /** OpenCode keeps its sessions behind its CLI: a stand-in `opencode`, the only command on PATH. */

@@ -10,7 +10,7 @@ vi.mock('../config.js', async (importOriginal) => ({
   loadTeamConfig: vi.fn(),
 }));
 
-vi.mock('@teamai/tool-core/log', () => ({
+vi.mock('@teamai/shared/log', () => ({
   log: {
     debug: vi.fn(), error: vi.fn(), info: vi.fn(), success: vi.fn(), warn: vi.fn(), dim: vi.fn(),
   },
@@ -26,7 +26,7 @@ vi.mock('../resources/desired.js', async (importOriginal) => {
 
 import { loadLocalConfig, loadTeamConfig } from '../config.js';
 import { resolveDesiredSkills } from '../resources/desired.js';
-import { log } from '../utils/logger.js';
+import { log } from '@teamai/shared/log';
 import { loadStateForScope, saveStateForScope } from '../config.js';
 import { buildChecks, doctor, resolveDoctorContext, type Check, type DoctorReport } from '../doctor.js';
 import { checkoutKey } from '../pull.js';

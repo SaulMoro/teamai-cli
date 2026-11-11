@@ -4,6 +4,7 @@
  */
 import { randomUUID } from 'node:crypto';
 import fs from 'node:fs/promises';
+import { readRegularFile } from '@teamai/shared/regular-file';
 import path from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
 import { z } from 'zod';
@@ -15,8 +16,8 @@ import { DeliveredSkillInfoSchema, deliveredTeamSkills, type DeliveredSkillInfo 
 import { getDataHome, type DeliverySelection, type LocalConfig } from '../types.js';
 import { acquireLock, releaseLock } from '../update.js';
 import { getHeadState, type HeadState } from '../utils/git.js';
-import { log } from '../utils/logger.js';
-import { AgentSession } from './agent-session.js';
+import { log } from '@teamai/shared/log';
+import { platformForTool, toolForPlatform } from '../tool-registry.js';
 import { OptionalString } from '@teamai/tool-core/sessions/fs';
 import type { Session } from '@teamai/tool-core/sessions/ir';
 import type { SessionSyncMeta } from './sync.js';
@@ -102,7 +103,7 @@ async function writeCapture(config: LocalConfig, capture: SessionCapture): Promi
  * that fails is logged at debug level, so it never fails the hook.
  */
 async function atStart(config: LocalConfig, tool: string, payload: HookStdin, env: NodeJS.ProcessEnv): Promise<string | undefined> {
-  const platform = AgentSession.platformForTool(tool);
+  const platform = platformForTool(tool);
 
   if (launchedBy(env) || payload.source === 'compact') return undefined;
   const fields = StartPayloadSchema.safeParse(payload);
@@ -168,7 +169,7 @@ async function headWithin(cwd: string, ms: number): Promise<HeadState | null> {
  * as it was. Written to a file of its own, then renamed, so a reader never sees half of it.
  */
 async function atStop(config: LocalConfig, tool: string, payload: HookStdin): Promise<void> {
-  const platform = AgentSession.platformForTool(tool);
+  const platform = platformForTool(tool);
   const fields = StopPayloadSchema.safeParse(payload);
 
   if (!platform || !fields.success) return;
@@ -201,7 +202,7 @@ async function atStop(config: LocalConfig, tool: string, payload: HookStdin): Pr
 
 /** The end record of one session, or undefined when it has none or it does not parse. */
 async function endOf(config: LocalConfig, platform: string, sessionId: string): Promise<SessionEnd | undefined> {
-  const text = await fs.readFile(path.join(sessionDir(config, platform, sessionId), END_FILE), 'utf8').catch(() => undefined);
+  const text = await readRegularFile(path.join(sessionDir(config, platform, sessionId), END_FILE), 'utf8').catch(() => undefined);
 
   if (text === undefined) return undefined;
 
@@ -240,7 +241,7 @@ async function rewrite(config: LocalConfig, platform: string, sessionId: string,
   try {
     for (const name of (await fs.readdir(dir)).filter((fileName) => fileName.endsWith('.json') && pick(fileName))) {
       const file = path.join(dir, name);
-      const parsed = SessionCaptureSchema.safeParse(JSON.parse(await fs.readFile(file, 'utf8')));
+      const parsed = SessionCaptureSchema.safeParse(JSON.parse(await readRegularFile(file, 'utf8')));
 
       if (!parsed.success) continue;
       await fs.writeFile(`${file}.tmp`, `${JSON.stringify(change(parsed.data), null, 2)}\n`, { mode: 0o600 });
@@ -253,7 +254,7 @@ async function rewrite(config: LocalConfig, platform: string, sessionId: string,
 
 /** In the hook's background pass: adds the tool's version, which the start leaves out so it never waits on it. */
 async function addToolVersion(config: LocalConfig, tool: string, payload: HookStdin): Promise<void> {
-  const platform = AgentSession.platformForTool(tool);
+  const platform = platformForTool(tool);
   const fields = ToolVersionPayloadSchema.safeParse(payload);
 
   if (!platform || !fields.success) return;
@@ -313,7 +314,7 @@ function withTeamSkillInfo(capture: SessionCapture, pulled: Record<string, Deliv
  * held `before` it.
  */
 async function markTeamChanged(config: LocalConfig, tool: string, payload: HookStdin, before: CheckoutDelivery): Promise<void> {
-  const platform = AgentSession.platformForTool(tool);
+  const platform = platformForTool(tool);
   const fields = PulledPayloadSchema.safeParse(payload);
 
   if (!platform || !fields.success) return;
@@ -345,7 +346,7 @@ async function read(config: LocalConfig, platform: string, sessionId: string): P
   const captures: SessionCapture[] = [];
 
   for (const file of files.filter((name) => name.endsWith('.json'))) {
-    const text = await fs.readFile(path.join(dir, file), 'utf8');
+    const text = await readRegularFile(path.join(dir, file), 'utf8');
 
     try {
       const parsed = SessionCaptureSchema.safeParse(JSON.parse(text));
@@ -482,7 +483,7 @@ function reportedModelOf(session: Session): string | undefined {
  */
 async function archivedFacts(platform: string, session: Session, fallback: LocalConfig | undefined): Promise<Pick<SessionSyncMeta, 'agent' | 'commits'>> {
   const { resolveHookConfig } = await import('../dashboard-collector.js');
-  const scope = session.cwd ? await resolveHookConfig({ cwd: session.cwd, session_id: session.sessionId }, AgentSession.toolForPlatform(platform)) : null;
+  const scope = session.cwd ? await resolveHookConfig({ cwd: session.cwd, session_id: session.sessionId }, toolForPlatform(platform)) : null;
   const config = scope ?? fallback;
 
   if (!config) return {};

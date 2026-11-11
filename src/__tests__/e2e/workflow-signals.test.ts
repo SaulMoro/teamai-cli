@@ -18,9 +18,13 @@ import { hasPython, IN_TERMINAL, TYPED_TERMINAL } from '../helpers/in-terminal.j
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
 const CLI = path.join(ROOT, 'dist', 'index.js');
 
-/** Starts a child that holds none of its output, so only a group kill stops it, then writes both pids to `<argv[2]>.pids` and waits. */
+/**
+ * Starts a child that holds none of its output, so only a group kill stops it, then writes both pids to `<argv[2]>.pids`
+ * and waits. With `ignore-hangup` as argv[3] the child ignores SIGHUP, as a command under nohup does.
+ */
 const HOLD = `const { spawn } = require('child_process');
-const child = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore' });
+const hold = process.argv[3] === 'ignore-hangup' ? 'process.on("SIGHUP", () => {}); setInterval(() => {}, 1000)' : 'setInterval(() => {}, 1000)';
+const child = spawn(process.execPath, ['-e', hold], { stdio: 'ignore' });
 require('fs').writeFileSync(process.argv[2] + '.pids', process.pid + ' ' + child.pid);
 setInterval(() => {}, 1000);
 `;
@@ -119,6 +123,15 @@ steps:
   - id: once
     command: test -f ${pidRoot}/once.pids || node hold.js ${pidRoot}/once
 `);
+    for (const [name, hold] of [['orphan', ''], ['orphan-hangup', ' ignore-hangup']]) {
+      fs.writeFileSync(path.join(workflows, `${name}.yaml`), `schemaVersion: v1alpha1
+name: ${name}
+description: A command whose child outlives it the first time, and that ends at once after that.
+steps:
+  - id: left
+    command: test -f ${pidRoot}/${name}.pids || node hold.js ${pidRoot}/${name}${hold}
+`);
+    }
     fs.writeFileSync(path.join(workflows, 'pair.yaml'), `schemaVersion: v1alpha1
 name: pair
 description: An interactive step beside a HITL request.
@@ -201,6 +214,79 @@ steps:
     } finally {
       for (const pid of pids.filter(alive)) process.kill(pid, 'SIGKILL');
       if (driver.exitCode === null && driver.signalCode === null) driver.kill('SIGKILL');
+    }
+  });
+
+  it('stops the child a killed driver\'s command left once both died, before resume runs the step again', async () => {
+    setMaxParallel(1);
+    const pidFile = path.join(pidRoot, 'orphan.pids');
+    fs.rmSync(pidFile, { force: true });
+    // A session of its own, so the driver has no terminal however the suite runs.
+    const driver = spawn(process.execPath, [CLI, 'workflow', 'start', 'orphan', '--driver', 'local'], {
+      cwd: repo, env: { ...process.env, FORCE_COLOR: '0' }, stdio: ['ignore', 'pipe', 'pipe'], detached: true,
+    });
+    let stderr = '';
+    driver.stderr.on('data', (chunk: Buffer) => { stderr += chunk.toString(); });
+    const ended = new Promise<void>((resolve) => { driver.on('close', () => resolve()); });
+    let pids: number[] = [];
+    try {
+      expect(await waitFor(() => fs.existsSync(pidFile), 20_000), stderr).toBe(true);
+      pids = fs.readFileSync(pidFile, 'utf8').trim().split(' ').map(Number);
+      const [command, child] = pids as [number, number];
+
+      // A crash takes the driver and the command, and leaves what the command started.
+      driver.kill('SIGKILL');
+      process.kill(command, 'SIGKILL');
+      await ended;
+      expect(alive(child)).toBe(true);
+      const runId = /Run (\S+) started/.exec(stderr)?.[1];
+      expect(runId, stderr).toBeDefined();
+
+      const resumed = await runCLI(['workflow', 'resume', String(runId)], repo);
+
+      expect(resumed.code, `${resumed.stdout}\n${resumed.stderr}`).toBe(0);
+      expect(JSON.parse(resumed.stdout)).toMatchObject({ data: { done: { outcome: 'succeeded' } } });
+      expect(await waitFor(() => !alive(child), 2000), `still running: ${child}`).toBe(true);
+    } finally {
+      for (const pid of pids.filter(alive)) process.kill(pid, 'SIGKILL');
+      if (driver.exitCode === null && driver.signalCode === null) driver.kill('SIGKILL');
+    }
+  });
+
+  it.skipIf(!hasPython)('stops the child a killed driver\'s command left in its terminal once both died, before resume runs the step again', async () => {
+    setMaxParallel(1);
+    const pidFile = path.join(pidRoot, 'orphan-hangup.pids');
+    const files = ['terminal.pid', 'terminal.out', 'terminal.in'].map((file) => path.join(repo, file));
+    const [terminalPid, output, input] = files as [string, string, string];
+    for (const file of [pidFile, ...files]) fs.rmSync(file, { force: true });
+    const printed = (): string => (fs.existsSync(output) ? fs.readFileSync(output, 'utf8') : '');
+    const wrapper = spawn('python3', ['-c', TYPED_TERMINAL, terminalPid, output, input, process.execPath, CLI, 'workflow', 'start', 'orphan-hangup', '--driver', 'local'], {
+      cwd: repo, env: { ...process.env, FORCE_COLOR: '0' }, stdio: 'ignore',
+    });
+    const ended = new Promise<void>((resolve) => { wrapper.on('close', () => resolve()); });
+    let pids: number[] = [];
+    try {
+      expect(await waitFor(() => fs.existsSync(terminalPid) && fs.existsSync(pidFile), 20_000), printed()).toBe(true);
+      pids = fs.readFileSync(pidFile, 'utf8').trim().split(' ').map(Number);
+      const [command, child] = pids as [number, number];
+
+      // The driver leads the terminal's foreground group, which its command shares. The child ignores the hangup its
+      // terminal sends that group once the driver is gone.
+      process.kill(Number(fs.readFileSync(terminalPid, 'utf8')), 'SIGKILL');
+      process.kill(command, 'SIGKILL');
+      await ended;
+      expect(alive(child)).toBe(true);
+      const runId = /Run (\S+) started/.exec(printed())?.[1];
+      expect(runId, printed()).toBeDefined();
+
+      const resumed = await runCLI(['workflow', 'resume', String(runId)], repo);
+
+      expect(resumed.code, `${resumed.stdout}\n${resumed.stderr}`).toBe(0);
+      expect(JSON.parse(resumed.stdout)).toMatchObject({ data: { done: { outcome: 'succeeded' } } });
+      expect(await waitFor(() => !alive(child), 2000), `still running: ${child}`).toBe(true);
+    } finally {
+      for (const pid of pids.filter(alive)) process.kill(pid, 'SIGKILL');
+      if (wrapper.exitCode === null && wrapper.signalCode === null) wrapper.kill('SIGKILL');
     }
   });
 

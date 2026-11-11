@@ -3,19 +3,26 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { defineRule } from '@oxlint/plugins';
 import { z } from 'zod';
-import { inProductionSource, lintedPath, sourcePath, stringLiteralValue, workspaceRoot } from '../utils.js';
+import { FAMILY, inProductionSource, lintedPath, sourcePath, stringLiteralValue, workspaceRoot } from '../utils.js';
 
 /** The descriptor, the one place a per-tool fact is written. */
 const DESCRIPTOR = 'src/tools.ts';
 
-/** A family package (`packages/tool-<family>/src/`): not the contract, the test kit or the list of families. */
-const FAMILY_PACKAGE = /^packages\/tool-(?!(?:core|testing|definitions)\/)[^/]+\/src\//;
+/**
+ * Whether `relative` is in a family package's source (`packages/tool-<family>/src/`).
+ * @param {string} relative
+ */
+function inFamilyPackage(relative) {
+  const folder = /^packages\/([^/]+)\/src\//.exec(relative)?.[1];
+
+  return folder !== undefined && FAMILY.test(folder);
+}
 
 /** The contract tables a family declares its tools in: their descriptors, session platforms, launch profiles and version detectors. */
-const FAMILY_TABLE = /^(?:Readonly<)?Record<\s*string\s*,\s*(?:ToolDescriptor|SessionPlatformDefinition|LaunchAdapter|VersionDetector)\s*>>?$/;
+const FAMILY_TABLE = /^(?:Readonly<)?Record<\s*string\s*,\s*(?:ToolDescriptor|SessionPlatformDefinition|SessionPlatformFacts|LaunchAdapter|VersionDetector)\s*>>?$/;
 
-/** The one list of every family (`BUILT_IN_TOOLS`), whose keys are family names that share tool names. */
-const FAMILY_LIST = /^(?:Readonly<)?Record<\s*string\s*,\s*ToolFamily\s*>>?$/;
+/** The lists of every family (`BUILT_IN_TOOLS`) and of every family's facts (`BUILT_IN_FACTS`), whose keys are family names that share tool names. */
+const FAMILY_LIST = /^(?:Readonly<)?Record<\s*(?:string|keyof typeof BUILT_IN_FACTS)\s*,\s*ToolFamily(?:Facts)?\s*>>?$/;
 
 const DEFINITIONS_PACKAGE = 'packages/tool-definitions/src/';
 
@@ -92,7 +99,7 @@ function isExhaustive(types) {
  * @returns {boolean}
  */
 function declaresFamily(relative, types) {
-  const pattern = FAMILY_PACKAGE.test(relative) ? FAMILY_TABLE : relative.startsWith(DEFINITIONS_PACKAGE) ? FAMILY_LIST : null;
+  const pattern = inFamilyPackage(relative) ? FAMILY_TABLE : relative.startsWith(DEFINITIONS_PACKAGE) ? FAMILY_LIST : null;
 
   return pattern !== null && types.some((type) => pattern.test(type.trim()));
 }

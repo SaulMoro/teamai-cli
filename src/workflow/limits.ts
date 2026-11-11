@@ -7,9 +7,12 @@ import { isUnder, passesWithin, runPasses } from './loop.js';
 import type { Limit, TurnLimits } from './requirements.js';
 import { stepDefinitions, topScope, type GrantedAllowance, type Scope } from './scope.js';
 import { passOf, settled, stopAttempt, stopWhere, timeOut, type LeasedStep, type LimitsFrom, type StepState, type StoppedAttempt } from './step-state.js';
-import type { TokenUsage } from '../tool-launch/stdout.js';
+import { budgeted, type TokenUsage } from '@teamai/tool-core/stdout';
+import type { LocalConfig } from '../types.js';
+import { durationMs } from './parse.js';
+import { z } from 'zod';
 import type { WorkflowResult } from './engine.js';
-import { isWorkflowFile, workflowRunBy, type RunState, type WorkflowStep } from './types.js';
+import { isWorkflowFile, workflowRunBy, type RunState, type WorkflowFailure, type WorkflowStep } from './types.js';
 
 function after(from: string, ms: number): string {
   return new Date(Date.parse(from) + ms).toISOString();
@@ -45,18 +48,37 @@ export function spentTokens(run: RunState, under: (id: string) => boolean): numb
 
 /** The tokens `states` spent, and those archived or released under `under`. A step with no pass yet is not parsed. */
 function spentBy(states: readonly StepState[], run: RunState, under: (id: string) => boolean): number {
-  let spent = 0;
+  return budgeted(usageBy(states, run, under));
+}
+
+/** The tokens `states` spent, and those archived or released under `under`, by kind. */
+function usageBy(states: readonly StepState[], run: RunState, under: (id: string) => boolean): Required<TokenUsage> {
+  const spent = { input: 0, output: 0, cachedInput: 0 };
+
+  const add = (tokens: TokenUsage | undefined): void => {
+    spent.input += tokens?.input ?? 0;
+    spent.output += tokens?.output ?? 0;
+    spent.cachedInput += tokens?.cachedInput ?? 0;
+  };
 
   for (const state of states) {
-    for (const pass of state.passes ?? []) spent += budgeted(pass.tokens);
+    for (const pass of state.passes ?? []) add(pass.tokens);
     const current = settled(state) ? passOf(state) : undefined;
 
-    if (current) spent += budgeted(current.tokens);
+    if (current) add(current.tokens);
   }
 
-  for (const entry of [...run.archive ?? [], ...run.releasedTokens ?? []]) if (under(entry.step)) spent += budgeted(entry.tokens);
+  for (const entry of [...run.archive ?? [], ...run.releasedTokens ?? []]) if (under(entry.step)) add(entry.tokens);
 
   return spent;
+}
+
+/**
+ * The tokens every step of run `run` spent, by kind: what the nested run of a workflow step leased whole returns, so the
+ * owner counts it against the budgets around that step.
+ */
+export function spentUsage(run: RunState): Required<TokenUsage> {
+  return usageBy(run.steps.filter((state) => settled(state) || state.passes?.length), run, () => true);
 }
 
 /**
@@ -72,11 +94,6 @@ function spentUnder(run: RunState, state: StepState): number {
   while (end < run.steps.length && under(run.steps[end]?.id ?? '')) end += 1;
 
   return spentBy(run.steps.slice(at, end), run, under);
-}
-
-/** What a budget counts of `tokens`: input plus output. Cached input is shown, never counted. */
-export function budgeted(tokens: TokenUsage | undefined): number {
-  return (tokens?.input ?? 0) + (tokens?.output ?? 0);
 }
 
 /**
@@ -300,4 +317,22 @@ export function spendAllowances(run: RunState, scope: Scope, limits: TurnLimits,
 
     if (state?.status === 'running' && remainder !== undefined && remainder <= leased) state.allowanceSpent = true;
   }
+}
+
+/**
+ * `workflows.idle_timeout` in milliseconds, unset when the member set none; a value that is no duration fails the step.
+ * The one reading of it, for an answer step's call and a prompt step's launch alike.
+ */
+export function idleLimit(config: LocalConfig): { ms?: number } | { failure: WorkflowFailure } {
+  const idle = config.workflows?.idle_timeout;
+
+  if (idle === undefined) return {};
+  const text = z.string().safeParse(idle);
+  const ms = text.success ? durationMs(text.data) : undefined;
+
+  if (ms === undefined) {
+    return { failure: { code: 'tool_unconfigured', message: `workflows.idle_timeout is ${JSON.stringify(idle)}, which is no duration. Set it to one, such as 2m, or remove it.` } };
+  }
+
+  return { ms };
 }

@@ -16,7 +16,7 @@ import { isRecordableLabel, isRecordableName } from '../agent-observation.js';
 import { RoleIdSchema } from '../roles.js';
 import type { ScorerLabel } from '../scorers/definition.js';
 import type { PinnedScorer } from '../scorers/pin.js';
-import type { JsonObject } from '../types.js';
+import type { JsonObject } from '@teamai/shared/json';
 import { definedFields } from '../utils/defined-fields.js';
 import { defaultsArmOf, type Suite, type Task, type TaskCheck, TaskJudge } from './suite.js';
 import type { CommittedSuite } from './trial.js';

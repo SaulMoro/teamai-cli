@@ -292,7 +292,12 @@ function workflowRuns() {
 }
 function gate(s) {
  return '<div class="resource"><h3 data-verbatim>'+e(s.step)+'</h3><p>'+label(s.gate.kind==='approve'?'Approve':'Choose')+' · '+label('Pass')+' '+number(s.pass)+(s.gate.required?' · <span class="amber">'+label('Required: a person must answer')+'</span>':'')+'</p><div class="actions">'
-  +s.gate.options.map(choice=>'<button class="primary" data-answer-step="'+e(s.step)+'" data-answer-pass="'+e(s.pass)+'" data-answer-choice="'+e(choice)+'"'+(answering?' disabled':'')+' data-verbatim>'+e(choice)+'</button>').join('')+'</div></div>';
+  +s.gate.options.map(choice=>'<button class="primary" data-answer-step="'+e(s.step)+'" data-answer-pass="'+e(s.pass)+'" data-answer-choice="'+e(choice)+'"'+(answering?' disabled':'')+' data-verbatim>'+e(choice)+'</button>').join('')+'</div>'
+  +(s.gate.respond?'<p class="respond-line">'+label('Answer from a terminal')+': <code data-verbatim>'+e(s.gate.respond)+'</code></p>':'')+'</div>';
+}
+function heldHtml(h) {
+ return '<p>'+label('Each runtime of the driver held these steps back the last time it was offered them.')+'</p><ul class="held-list">'
+  +h.runtimes.flatMap(r=>r.held.map(x=>'<li><b data-verbatim>'+e(x.step)+'</b> · <span data-verbatim>'+e(r.runtime)+'</span>: <span data-verbatim>'+e(x.reason)+'</span></li>')).join('')+'</ul>';
 }
 // A benchmark cell is the CLI's own text, kept as printed; only the column names the table fixes are translated.
 function textTable(t, named) { return '<div class="table-scroll"><table><thead><tr>'+t.header.map((x,i)=>'<th>'+(i<named?label(x):'<span data-verbatim>'+e(x)+'</span>')+'</th>').join('')+'</tr></thead><tbody>'+t.rows.map(r=>'<tr>'+r.map(c=>'<td data-verbatim>'+e(c)+'</td>').join('')+'</tr>').join('')+'</tbody></table></div>'; }
@@ -301,6 +306,7 @@ function runDetailHtml(d) {
  const r=d.run, local=r.source==='local', gates=d.steps.filter(s=>s.gate), counts=r.stepCounts;
  return '<div class="caption">'+label(local?'Local run':'Team-reported run')+'</div><h2 id="detailTitle" data-verbatim>'+e(r.alias||r.workflow)+'</h2><div class="tag">'+(r.alias?'<span data-verbatim>'+e(r.workflow)+'</span> · ':'')+'<span data-verbatim>'+e(r.run)+'</span> · '+label(runStatusNames[r.status]||r.status)+'</div>'
   +(gates.length?detailSection('Waiting for an answer','<p>'+label('Read the question where the driver of this run asks it. The dashboard does not show HITL messages, because they can include step outputs.')+'</p>'+gates.map(gate).join('')+(answering?'<p role="status">'+label('Answering…')+'</p>':'')+(answerError?'<p class="amber" role="alert">'+e(answerError)+'</p>':'')):(answerError?'<p class="amber" role="alert">'+e(answerError)+'</p>':''))
+  +(d.held?detailSection('Held back',heldHtml(d.held)):'')
   +detailSection('Run','<p>'+label('Driver')+': <span data-verbatim>'+e(r.driver||'—')+'</span> · '+label('End')+': <span data-verbatim>'+e(r.end||'—')+'</span><br>'+label('Started')+': '+e(when(r.startedAt))+(r.endedAt?'<br>'+label('Ended')+': '+e(when(r.endedAt)):'')+'<br>'+label('Duration')+': '+runDurationHtml(r)+' · '+label('Tokens')+': '+number(r.tokens)+(local?'':'<br>'+label('Member')+': <span data-verbatim>'+e(r.username)+'</span>')+'</p><p>'+label('Definition')+': '+revision(r)+'</p>'+(counts?'<p>'+number(counts.total)+' '+label('Steps')+' · '+number(counts.succeeded)+' '+label('Succeeded')+' · '+number(counts.failed)+' '+label('Failed')+' · '+number(counts.skipped)+' '+label('Skipped')+' · '+number(counts.cancelled)+' '+label('Cancelled')+'</p>':'')+(r.prs.length?'<p>'+label('Pull requests')+': '+prLinks(r)+'</p>':'')+(r.learnings.length?'<p>'+label('Learnings')+': <span class="outcomes">'+learningTags(r)+'</span></p>':''))
   +(d.benchmark?detailSection('Benchmark results',benchmarkHtml(d.benchmark)):'')
   +detailSection('Steps',runStepsTable(d.steps,r.run)+(d.scoring&&d.scoring.judged?'<p>'+label('Scoring')+': '+number(d.scoring.judged)+' '+label('judged')+' · '+label('Tokens')+': '+number(d.scoring.inputTokens+d.scoring.outputTokens)+'</p>':''))

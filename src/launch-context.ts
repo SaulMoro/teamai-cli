@@ -80,17 +80,8 @@ export function resolveRunMode(env: NodeJS.ProcessEnv): RunMode {
  */
 export const ATTEMPT_ENV = 'TEAMAI_WORKFLOW_ATTEMPT';
 
-/**
- * The variable every process of a step gets: a directory of the root run under the data home, which its steps share,
- * sub-workflows included, and which the engine removes when the run ends.
- */
-export const RUN_DIR_ENV = 'TEAMAI_RUN_DIR';
-
-/**
- * The variable every process of a step of a workflow written as a folder gets: the run's copy of the folder that defines
- * the step, under the data home. Unset for a step of a workflow written as a single file.
- */
-export const WORKFLOW_DIR_ENV = 'TEAMAI_WORKFLOW_DIR';
+// The runtime protocol owns it, so a runtime's agent gets it as it gets RUN_DIR_ENV.
+export { WORKFLOW_DIR_ENV } from '@teamai/runtime-protocol';
 
 /**
  * The variable every process of a run with no `teamai init` gets: the config file the run built for itself, which

@@ -2,11 +2,12 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { z } from 'zod';
 
-import { log } from '@teamai/tool-core/log';
-import { type JsonValue, JsonObjectSchema } from '@teamai/tool-core/json';
+import { log } from '@teamai/shared/log';
+import { type JsonValue, JsonObjectSchema } from '@teamai/shared/json';
 import { addTokenUsage, emptyTokenUsage, INTERVENTION_SCAN_MAX_BYTES, type TokenUsage } from '@teamai/tool-core/tokens';
 import type { TokenReading, TokenRequest, TokenSource } from '@teamai/tool-core/tokens';
 import { forEachJsonLine } from '@teamai/tool-core/tokens';
+import { readRegularFile } from '@teamai/shared/regular-file';
 
 const Count = z.number().finite().nonnegative();
 const Fields = JsonObjectSchema;
@@ -109,7 +110,7 @@ async function blobModel(conversation: string, messageId: string): Promise<strin
   if (!/^[\w.-]+$/.test(messageId)) return undefined;
 
   try {
-    const blob = MessageBlob.parse(JSON.parse(await fs.promises.readFile(path.join(conversation, 'messages', `${messageId}.json`), 'utf-8')));
+    const blob = MessageBlob.parse(JSON.parse(await readRegularFile(path.join(conversation, 'messages', `${messageId}.json`), 'utf-8')));
     const extra = Extra.parse(JSON.parse(blob.extra));
 
     return (extra.modelName ?? extra.modelId)?.replace(/^custom-local:/, '');
@@ -128,7 +129,7 @@ async function readIdeIndex(file: string): Promise<TokenReading | undefined> {
     const { size } = await fs.promises.stat(file);
 
     if (size === 0 || size > INTERVENTION_SCAN_MAX_BYTES) return undefined;
-    const document = IndexDocument.parse(JSON.parse(await fs.promises.readFile(file, 'utf-8')));
+    const document = IndexDocument.parse(JSON.parse(await readRegularFile(file, 'utf-8')));
     let tokens = emptyTokenUsage();
     const requests: TokenRequest[] = [];
 

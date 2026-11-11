@@ -209,7 +209,7 @@ describe('#1083 workflow run records', () => {
     'merge_conflict', 'base_config', 'push_failed', 'workspace_base', 'unreported_changes', 'bad_session',
     'missing_env', 'env_unavailable', 'env_conflict', 'timeout', 'budget_exceeded', 'budget_unmeasured',
     'setup_failed', 'setup_dirty', 'setup_secret', 'delivery_failed', 'protected_path',
-    'trial_prepare_failed', 'clone_prepare_failed',
+    'trial_prepare_failed', 'clone_prepare_failed', 'bad_delivery', 'no_base_branch',
   ])('publishes the classified step failure %s', (code) => {
     const failed = runState({
       status: 'failed',
@@ -217,6 +217,17 @@ describe('#1083 workflow run records', () => {
     });
     expect(buildEndRecord(failed, driver, 'tester').failure).toEqual({ code });
   });
+
+  // A step runtime's own refusal reaches the step as it is, so the record keeps it as it keeps the engine's codes.
+  it.each(['runtime_not_found', 'runtime_not_accepted', 'runtime_protocol', 'runtime_gone', 'runtime_exited', 'credential_missing', 'bad_option', 'exec_failed'])(
+    'publishes the step runtime failure %s', (code) => {
+      const failed = runState({
+        status: 'failed',
+        steps: [{ id: 'one', status: 'failed', outcome: 'failed', attempt: 'a1', settledAt: 2, failure: { code, message: 'private detail' } }],
+      });
+      expect(buildEndRecord(failed, driver, 'tester').failure).toEqual({ code });
+    },
+  );
 
   it('publishes the first failure teamai can name, under a top-level step whose own code it cannot', () => {
     const run = runState({
@@ -709,25 +720,35 @@ it('keeps a replacement end queued when its producer starts after the dequeue re
     delivered = true;
     return { status: 'published' };
   });
-  const readFile = fsp.readFile.bind(fsp);
   let producer: Promise<void> | undefined;
-  vi.spyOn(fsp, 'readFile').mockImplementation(async (...args) => {
-    const contents = await readFile(...args);
+  /** Starts the producer of the replacement right after the dequeue read of the queued end. */
+  const startProducer = async (): Promise<void> => {
+    const held = await acquireLock(lock);
+    producer = (async () => {
+      if (!held) {
+        while (!await acquireLock(lock)) await new Promise((resolve) => setTimeout(resolve, 10));
+      }
+      try {
+        await enqueueRecord(config, replacement, {});
+      } finally {
+        await releaseLock(lock);
+      }
+    })();
+    if (held) await producer;
+  };
+  // The queue reads a file through a handle it opens, so the read of the queued end is that handle's.
+  const open = fsp.open.bind(fsp);
+  vi.spyOn(fsp, 'open').mockImplementation(async (...args) => {
+    const handle = await open(...args);
     if (delivered && !producer && String(args[0]).endsWith(`${old.run}.end.json`)) {
-      const held = await acquireLock(lock);
-      producer = (async () => {
-        if (!held) {
-          while (!await acquireLock(lock)) await new Promise((resolve) => setTimeout(resolve, 10));
-        }
-        try {
-          await enqueueRecord(config, replacement, {});
-        } finally {
-          await releaseLock(lock);
-        }
-      })();
-      if (held) await producer;
+      const readFile = handle.readFile.bind(handle);
+      vi.spyOn(handle, 'readFile').mockImplementation(async (...readArgs) => {
+        const contents = await readFile(...readArgs);
+        if (!producer) await startProducer();
+        return contents;
+      });
     }
-    return contents;
+    return handle;
   });
   await publishPendingRecords(config);
   expect(producer).toBeDefined();

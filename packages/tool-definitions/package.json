@@ -4,6 +4,7 @@
   "type": "module",
   "description": "Every built-in tool family, the one place the app reads them from; bundled into teamai-cli.",
   "exports": {
-    ".": "./src/registry.ts"
+    ".": "./src/registry.ts",
+    "./facts": "./src/facts.ts"
   }
 }

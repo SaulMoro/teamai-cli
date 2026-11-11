@@ -1,19 +1,12 @@
 import type { AgentAdapter } from '@teamai/tool-core/sessions/base';
-import type { SessionPlatformDefinition } from '@teamai/tool-core/sessions/platform';
 import { AgyAdapter, agyStoreRoots } from './session-adapter.js';
+import type { SessionPlatformDefinition } from '@teamai/tool-core/sessions/platform';
+import { facts } from './facts.js';
 
-/** agy keeps its conversations beside its config root, and the Antigravity app its own beside them; teamai reads them and writes none. */
+/** Each session platform's adapter on its store, over the facts the family declares (`facts.ts`). */
 export const platforms = {
   'agy': {
-    // agy 1.4.8 keeps its conversations beside its config root: ~/.gemini/antigravity-cli.
-    store: { in: 'tool-home', home: 'agy', dir: '../antigravity-cli' },
-    resume: (id) => `agy --conversation ${id}`,
-    thinking: true, images: false,
-    nativeTools: new Set(['bash', 'read_file', 'write_file', 'edit_file', 'grep', 'glob', 'web_search', 'web_fetch', 'task']),
-    legacyIdWithoutWorkspace: false,
-    sqliteRegistrationOnWindows: false,
-    idFormat: 'uuid',
-    readOnly: true,
-    adapter: (storeDir): AgentAdapter => new AgyAdapter(agyStoreRoots(storeDir)),
+    ...facts.platforms.agy,
+    adapter: (storeDir, { processes }): AgentAdapter => new AgyAdapter(agyStoreRoots(storeDir), processes),
   },
-} as const satisfies Record<string, SessionPlatformDefinition>;
+} as const satisfies Record<keyof typeof facts.platforms, SessionPlatformDefinition>;

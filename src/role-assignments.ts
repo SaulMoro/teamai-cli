@@ -1,13 +1,13 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import { parseYaml } from './utils/yaml.js';
-import type { JsonValue } from './types.js';
+import { parseYaml } from '@teamai/shared/yaml';
+import type { JsonValue } from '@teamai/shared/json';
 import { z } from 'zod';
 import { caseFoldKey, emptyManifestError, parseManifest, parseManifestOnce, readManifestFile } from './manifest-schema.js';
 import { getDefaultBranch, getFileContentAtRev, getHeadCommit, readFileAtRev } from './utils/git.js';
 import { readOriginHeadFromFiles } from './utils/git-ref-files.js';
 import { GitAnswers } from './utils/git-answers.js';
-import { log } from './utils/logger.js';
+import { log } from '@teamai/shared/log';
 
 /** Where a team declares who holds which role. Relative to the team repo root. */
 export const ROLE_ASSIGNMENTS_FILE = 'manifest/members.yaml';

@@ -16,7 +16,7 @@ import { roleDeclaration, type RoleDeclaration } from '../../roles.js';
 import { realHost, type Host } from '../../tool-home.js';
 import { getProjectSearchIndexPath, selfModeGitignorePath, type LocalConfig, type TeamaiConfig } from '../../types.js';
 import { getHeadCommit } from '../../utils/git.js';
-import { log } from '../../utils/logger.js';
+import { log } from '@teamai/shared/log';
 import type { Executor } from '../requirements.js';
 import type { WorkflowFailure } from '../types.js';
 import { AGENT_PATHS } from '../worktree.js';
@@ -366,6 +366,8 @@ export async function setUpWorktreeRole(input: { dir: string; step: string; exec
 export function launchedTools(input: { executor: Executor; tool: string | undefined; enabled: readonly string[] }): string[] {
   switch (input.executor) {
     case 'command':
+    // A whole workflow runs no step with a role (`notWhole`), so its copy gets no role's tools.
+    case 'workflow':
       return [];
     case 'prompt':
       return input.tool !== undefined ? [input.tool] : [...input.enabled];

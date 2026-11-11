@@ -22,7 +22,7 @@ import { markContributed } from '../contribute-check.js';
 import { SessionPublish } from '../session-flow/session-publish.js';
 import { encodeCwdClaude } from '@teamai/tool-core/sessions/fs';
 import type { LocalConfig } from '../types.js';
-import { log } from '../utils/logger.js';
+import { log } from '@teamai/shared/log';
 import { AGENT_SESSION_ENV } from '../utils/session-id.js';
 import { projectDataHome } from '../utils/partition.js';
 import { Marks } from '../scorers/marks.js';

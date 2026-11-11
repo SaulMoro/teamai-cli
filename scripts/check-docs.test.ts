@@ -10,18 +10,25 @@ const command = path.join(ROOT, 'scripts/check-docs.mjs');
 const dirs: string[] = [];
 afterEach(() => { for (const dir of dirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true }); });
 // Each run of the check is a new process that compiles and loads about 320 TypeScript modules: about 1 s of one core
-// when the machine is idle. A run without --only also executes the workflow examples in the docs: about 5.5 s idle,
-// and 11 to 17 s while the full suite keeps every core busy. A case gets 30 s per run. Cases run one at a time: run
-// concurrently on a CI runner busy with the full suite, they split the same cores and every full run passed 30 s.
+// when the machine is idle. A run without --only also pulls every workflow example of the guide pages into a temporary
+// team repo and runs the lease examples through the engine, with about 120 short git processes: about 4 s of one core
+// when the machine is idle, and several times that while the full suite keeps every core busy. A case gets 30 s per run.
+// Cases run one at a time: run concurrently on a CI runner busy with the full suite, they split the same cores and every
+// full run passed 30 s.
 const RUN_MS = 30_000;
 vi.setConfig({ testTimeout: RUN_MS });
 /** The shipped tool ids check-docs generates for teamai/tool-facts. */
 const TOOL_IDS = 'oxlint-plugin-teamai/tool-ids.generated.json';
+/** The source that declares DriverCan. */
+const DRIVER_CAN = 'src/workflow/requirements.ts';
 
 function checkout(): string {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-docs-command-'));
   dirs.push(root);
-  for (const name of ['docs', 'skill-data', 'skills', 'AGENTS.md', '.github', TOOL_IDS, ...fs.readdirSync(ROOT).filter((file) => /^README.*\.md$/.test(file))]) {
+  // The shipped driver definitions are checked against the guide blocks that show them.
+  // package.json's `bin` lists the runtimes teamai ships, whose options the guide examples are checked against.
+  // workflow-engine.md names the keys DriverCan declares in requirements.ts.
+  for (const name of ['docs', 'skill-data', 'skills', 'drivers', 'package.json', 'AGENTS.md', '.github', TOOL_IDS, DRIVER_CAN, ...fs.readdirSync(ROOT).filter((file) => /^README.*\.md$/.test(file))]) {
     fs.cpSync(path.join(ROOT, name), path.join(root, name), { recursive: true });
   }
   return root;
@@ -107,6 +114,66 @@ it('check pulls an unnamed workflow fragment on a page that is not a workflow pa
   expect(checked.output).toContain(`docs/guide/dashboard.md:${before.split('\n').length + 2}`);
   expect(checked.output).toContain('retries_forever');
 });
+it('check rejects a driver definition example whose runtime options teamai refuses, naming its page and line', () => {
+  const root = checkout();
+  const page = path.join(root, 'docs/guide/workflow-advanced.md');
+  const before = fs.readFileSync(page, 'utf8');
+  const kept = '      max_parallel: 2\n';
+  expect(before).toContain(kept);
+  fs.writeFileSync(page, before.replace(kept, `${kept}      credentials: { claude: login }\n`));
+  const checked = run(root);
+  expect(checked.status).toBe(1);
+  expect(checked.output).toMatch(/docs\/guide\/workflow-advanced\.md:\d+ \(# drivers\/sandboxed\.yaml\)/);
+  expect(checked.output).toContain('credentials.claude');
+});
+it('check reads a driver definition on any guide page, and rejects a key a definition does not take', () => {
+  const root = checkout();
+  const page = path.join(root, 'docs/guide/dashboard.md');
+  const before = fs.readFileSync(page, 'utf8');
+  fs.writeFileSync(page, `${before}\n\`\`\`yaml\n# drivers/boxed.yaml\nschemaVersion: v1alpha1\nname: boxed\nruntime:\n  - use: sandbox\n\`\`\`\n`);
+  const checked = run(root);
+  expect(checked.status).toBe(1);
+  expect(checked.output).toContain(`docs/guide/dashboard.md:${before.split('\n').length + 2}`);
+  expect(checked.output).toContain('runtime');
+});
+it('check rejects a driver definition example whose options the runtime itself refuses', () => {
+  const root = checkout();
+  const page = path.join(root, 'docs/guide/dashboard.md');
+  const before = fs.readFileSync(page, 'utf8');
+  fs.writeFileSync(page, `${before}\n\`\`\`yaml\n# drivers/boxed.yaml\nschemaVersion: v1alpha1\nname: boxed\nruntimes:\n  - use: sandbox\n    options:\n      provider: sbx\n      image: ghcr.io/acme/agent:1\n\`\`\`\n`);
+  const checked = run(root);
+  expect(checked.status).toBe(1);
+  expect(checked.output).toContain(`docs/guide/dashboard.md:${before.split('\n').length + 2}`);
+  expect(checked.output).toContain('Provider sbx takes no option "image"');
+});
+it('check reads each runtime of an entry through another with that runtime\'s own options', () => {
+  const root = checkout();
+  const page = path.join(root, 'docs/guide/dashboard.md');
+  const before = fs.readFileSync(page, 'utf8');
+  fs.writeFileSync(page, `${before}\n\`\`\`yaml\n# drivers/boxed.yaml\nschemaVersion: v1alpha1\nname: boxed\nruntimes:\n  - use: t3\n    through: sandbox\n    options:\n      t3: { environment: local }\n      sandbox: { provider: sbx, image: ghcr.io/acme/agent:1 }\n\`\`\`\n`);
+  const checked = run(root);
+  expect(checked.status).toBe(1);
+  expect(checked.output).toContain(`docs/guide/dashboard.md:${before.split('\n').length + 2}`);
+  expect(checked.output).toContain('runtimes.0 (sandbox) option image: Provider sbx takes no option "image"');
+});
+it('check rejects a driver definition example naming a runtime teamai does not ship and the guide does not define', () => {
+  const root = checkout();
+  const page = path.join(root, 'docs/guide/dashboard.md');
+  const before = fs.readFileSync(page, 'utf8');
+  fs.writeFileSync(page, `${before}\n\`\`\`yaml\n# drivers/boxed.yaml\nschemaVersion: v1alpha1\nname: boxed\nruntimes:\n  - use: sandbx\n\`\`\`\n`);
+  const checked = run(root);
+  expect(checked.status).toBe(1);
+  expect(checked.output).toContain('runtimes.0 names sandbx');
+});
+it('check fails for a runtime teamai ships whose options it cannot validate', () => {
+  const root = checkout();
+  const manifest = path.join(root, 'package.json');
+  const shipped = JSON.parse(fs.readFileSync(manifest, 'utf8'));
+  fs.writeFileSync(manifest, JSON.stringify({ ...shipped, bin: { ...shipped.bin, 'teamai-runtime-vm': 'dist/runtime-vm.js' } }));
+  const checked = run(root);
+  expect(checked.status).toBe(1);
+  expect(checked.output).toContain('teamai-runtime-vm');
+});
 it.each([
   ['teamai codebase --no-such-flag', 'unknown flag "--no-such-flag"'],
   ['teamai skill gett core', 'unknown subcommand "gett"'],
@@ -148,6 +215,17 @@ it('check refuses a deployed stub that pre-approves starting any workflow', () =
   expect(checked.status).toBe(1);
   expect(checked.output).toContain('pre-approves only read-only skill and workflow calls');
 });
+it('check refuses a workflow skill whose run-next rule stops naming a refusal only the person may confirm', () => {
+  const root = checkout();
+  const skill = path.join(root, 'skill-data/workflow/SKILL.md');
+  const text = fs.readFileSync(skill, 'utf8');
+  const rule = 'and an `owner_active` or a `confirm_needed` whose `next` carries `--confirmed`.';
+  expect(text).toContain(rule);
+  fs.writeFileSync(skill, text.replace(rule, 'and a `confirm_needed` whose `next` carries `--confirmed`.'));
+  const checked = run(root);
+  expect(checked.status).toBe(1);
+  expect(checked.output).toContain('owner_active');
+});
 it('check refuses a quoted glossary Avoid spelling in prose and ignores it in code, also an indented fence, HTML and link targets', () => {
   const root = checkout();
   fs.appendFileSync(path.join(root, 'docs/guide/workflow.md'), '\nIn folder resource form, a hook carries its script.\n');
@@ -156,4 +234,16 @@ it('check refuses a quoted glossary Avoid spelling in prose and ignores it in co
   expect(checked.status).toBe(1);
   expect(checked.output).toContain('docs/guide/workflow.md uses "folder resource" 1 times.');
   expect(checked.output).not.toContain('docs/guide/sharing.md');
+});
+it('check refuses a DriverCan key the workflow engine page does not name', () => {
+  const root = checkout();
+  const source = path.join(root, DRIVER_CAN);
+  const text = fs.readFileSync(source, 'utf8');
+  const keys = 'workflow?: true;\n};';
+  expect(text).toContain(keys);
+  fs.writeFileSync(source, text.replace(keys, 'workflow?: true; queue?: true;\n};'));
+  const checked = run(root, '--only=driver-can');
+  expect(checked.status).toBe(1);
+  expect(checked.output).toContain('Documentation check failed: docs/dev/workflow-engine.md names every key DriverCan adds to the protocol\'s can');
+  expect(checked.output).toContain('queue');
 });

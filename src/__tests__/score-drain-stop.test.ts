@@ -25,7 +25,7 @@ vi.mock('node:child_process', async (importOriginal) => ({
 vi.mock('../pull.js', () => ({ pull: vi.fn(async () => undefined), settleLateUsageReport: vi.fn(async () => undefined) }));
 vi.mock('../update.js', async (importOriginal) => ({ ...(await importOriginal<typeof import('../update.js')>()), doUpdate: vi.fn(async () => undefined) }));
 vi.mock('../local-agent.js', () => ({ reportAndSyncFromHook: vi.fn(async () => null) }));
-vi.mock('@teamai/tool-core/cli-path', async (importOriginal) => ({ ...(await importOriginal<typeof import('@teamai/tool-core/cli-path')>()), resolveCliPath: () => null, resolvePathCommand: () => null }));
+vi.mock('@teamai/shared/cli-path', async (importOriginal) => ({ ...(await importOriginal<typeof import('@teamai/shared/cli-path')>()), resolveCliPath: () => null, resolvePathCommand: () => null }));
 vi.mock('../session-flow/finished-sessions.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../session-flow/finished-sessions.js')>();
   return { ...actual, FinishedSessions: { ...actual.FinishedSessions, start: vi.fn(async () => ({ kind: 'idle' })) } };

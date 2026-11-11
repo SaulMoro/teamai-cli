@@ -23,7 +23,7 @@ vi.mock('cross-spawn', () => ({
   default: Object.assign(vi.fn(), { sync: vi.fn() }),
 }));
 
-vi.mock('@teamai/tool-core/log', () => ({
+vi.mock('@teamai/shared/log', () => ({
   log: { info: vi.fn(), success: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn(), dim: vi.fn() },
   spinner: () => ({
     start: vi.fn().mockReturnThis(),
@@ -37,7 +37,7 @@ vi.mock('@teamai/tool-core/log', () => ({
 import { execFileSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import crossSpawn from 'cross-spawn';
-import { pickWindowsCommand, resolveCliPath, resolvePathCommand } from '../utils/cli-path.js';
+import { pickWindowsCommand, resolveCliPath, resolvePathCommand } from '@teamai/shared/cli-path';
 import { ghExec, isGhInstalled } from '../providers/github/gh-cli.js';
 import { cnbExec, isCnbInstalled } from '../providers/cnb/cnb-cli.js';
 

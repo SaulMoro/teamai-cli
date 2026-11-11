@@ -27,12 +27,13 @@ import { z } from 'zod';
 import { encodeCwdClaude } from '@teamai/tool-core/sessions/fs';
 import { getReportsDir, REPORTS_LOCK_FILENAME, type LocalConfig } from '../types.js';
 import { acquireLock, releaseLock } from '../update.js';
-import { log } from '../utils/logger.js';
+import { log } from '@teamai/shared/log';
 import { AGENT_SESSION_ENV } from '../utils/session-id.js';
-import * as cliPaths from '../utils/cli-path.js';
+import * as cliPaths from '@teamai/shared/cli-path';
 import { leaseNext, parseReport, reportAttempt, startRun } from '../workflow/engine.js';
 import { projectRun } from '../workflow/snapshot.js';
-import { readRun, readRuns } from '../workflow/store.js';
+import { runPasses } from '../workflow/loop.js';
+import { attemptsDir, readRun, readRuns, RunIdSchema, updateRun } from '../workflow/store.js';
 import type { WorkflowEnvelope } from '../workflow/types.js';
 import { runShortcut, workflowResume, workflowStart } from '../workflow-commands.js';
 
@@ -421,6 +422,64 @@ describe('teamai score --drain', () => {
     expect(again).toEqual({ code: 0, lines: ['✔ Nothing left to do here'] });
   });
 
+  it('archives beside a step session the evidence its step left in out/: the text masked, an image listed only', async () => {
+    const { origin, config } = await team({ 'workflows/review.yaml': WORKFLOW.replace('    scorers: [quality]\n', '') });
+    claudeSession(STEP_SESSION, 'Reviewed it.');
+    const runId = await settledRun(config, 'unattended', { tool: 'claude', session: STEP_SESSION });
+    const run = await readRun(config, runId);
+    if (run === 'missing' || run === 'corrupt') throw new Error(`run ${runId} is ${run}`);
+    const [pass, ...others] = runPasses(run);
+    expect(others).toEqual([]);
+    const out = path.join(attemptsDir(config, RunIdSchema.parse(runId)), String(pass?.attempt), 'out');
+    fs.mkdirSync(out, { recursive: true });
+    fs.writeFileSync(path.join(out, 'deploy.log'), `deployed with ${TOKEN}\n`);
+    fs.writeFileSync(path.join(out, 'screen.png'), Buffer.from([0x89, 0x50, 0x4e, 0x47]));
+    fs.writeFileSync(path.join(out, 'result.json'), '{"output":{}}');
+    vi.stubEnv('CI', 'true');
+
+    const drained = await drain();
+
+    expect(drained.code, drained.lines.join('\n')).toBe(0);
+    const [file, ...more] = onReports(origin, 'sessions').filter((name) => name.endsWith('.evidence.json'));
+    expect(more).toEqual([]);
+    const text = readOnReports(origin, String(file));
+    expect(text).not.toContain(TOKEN);
+    expect(JSON.parse(text)).toMatchObject({ version: 1, files: [
+      { kind: 'text', path: 'deploy.log', text: expect.stringMatching(/^deployed with <REDACTED:/) },
+      { kind: 'listed', path: 'screen.png', type: 'image/png', size: 4 },
+    ] });
+    expect(JSON.parse(text).files).toHaveLength(2);
+  });
+
+  it('archives with a session that a loop ran again the evidence its latest pass left, not an earlier one', async () => {
+    const { origin, config } = await team({ 'workflows/review.yaml': WORKFLOW.replace('    scorers: [quality]\n', '') });
+    claudeSession(STEP_SESSION, 'Reviewed it.');
+    const runId = await settledRun(config, 'unattended', { tool: 'claude', session: STEP_SESSION });
+    const earlier = 'a0000e1d0';
+    await updateRun(config, runId, {}, async (run) => {
+      if (run === 'missing') return { value: undefined };
+      const [pass] = runPasses(run);
+      if (!pass) return { value: undefined };
+
+      return { value: undefined, write: { ...run, archive: [{ ...pass, attempt: earlier, end: '2000-01-01T00:00:00.000Z' }] } };
+    });
+    const run = await readRun(config, runId);
+    if (run === 'missing' || run === 'corrupt') throw new Error(`run ${runId} is ${run}`);
+    const latest = runPasses(run).find((pass) => pass.attempt !== earlier)?.attempt;
+    const outOf = (attempt: string): string => path.join(attemptsDir(config, RunIdSchema.parse(runId)), attempt, 'out');
+    fs.mkdirSync(outOf(earlier), { recursive: true });
+    fs.writeFileSync(path.join(outOf(earlier), 'earlier.log'), 'the first round\n');
+    fs.mkdirSync(outOf(String(latest)), { recursive: true });
+    fs.writeFileSync(path.join(outOf(String(latest)), 'latest.log'), 'the second round\n');
+    vi.stubEnv('CI', 'true');
+
+    const drained = await drain();
+
+    expect(drained.code, drained.lines.join('\n')).toBe(0);
+    const file = onReports(origin, 'sessions').find((name) => name.endsWith('.evidence.json'));
+    expect(JSON.parse(readOnReports(origin, String(file))).files.map((each: { path: string }) => each.path)).toEqual(['latest.log']);
+  });
+
   it('says the step sessions of one run it cannot find here in one line, whichever sessions they are', async () => {
     const { config } = await team({ 'workflows/review.yaml': `${WORKFLOW.replace('    scorers: [quality]\n', '')}  - id: check\n    needs: [review]\n    prompt: Check the change.\n` });
     const runId = await settledRun(config, 'unattended', { tool: 'claude', session: '7c1e0000-0000-4000-8000-000000000031' }, { tool: 'claude', session: '7c1e0000-0000-4000-8000-000000000032' });
@@ -796,8 +855,9 @@ steps:
   });
 
   /** A team whose teamai.yaml sets `workflows.driver: <driver>`, and whose teamai-finished-sessions has one command step, with an unattended session captured. */
-  async function finishedSessionsFor(driver: string): Promise<LocalConfig> {
+  async function finishedSessionsFor(driver: string, files: Record<string, string> = {}): Promise<LocalConfig> {
     const { config } = await team({
+      ...files,
       'teamai.yaml': `team: acme\nrepo: https://example.com/acme/team.git\nworkflows: { driver: ${driver} }\n`,
       'workflows/teamai-finished-sessions.yaml': `schemaVersion: v1alpha1
 name: teamai-finished-sessions
@@ -831,6 +891,32 @@ steps:
     expect(drained.code, drained.lines.join('\n')).toBe(0);
     expect(drained.lines).toContain(`ℹ ${ran?.id} waits for driver acme-sandbox, which this machine does not run. To drive it here: teamai workflow resume ${ran?.id} --driver local`);
     expect(drained.lines).not.toContain('✔ Nothing left to do here');
+  });
+
+  it('drives its run here on the driver definition workflows.driver names, when this machine runs it', async () => {
+    const config = await finishedSessionsFor('acme-local', { 'drivers/acme-local.yaml': 'schemaVersion: v1alpha1\nname: acme-local\nruntimes:\n  - use: local\n' });
+
+    const drained = await drain();
+
+    const [ran, ...others] = (await readRuns(config)).filter((one) => one.name === 'teamai-finished-sessions');
+    expect(others).toEqual([]);
+    expect(ran, drained.lines.join('\n')).toMatchObject({ status: 'succeeded', steps: [{ id: 'mark', status: 'succeeded' }] });
+    expect(ran?.awaits).toBeUndefined();
+    expect(drained.lines.join('\n')).not.toContain('waits for driver');
+  });
+
+  it('leaves its run awaiting a definition whose team runtime no one accepted here, and names that driver to resume it with', async () => {
+    const config = await finishedSessionsFor('acme-team', {
+      'drivers/acme-team.yaml': 'schemaVersion: v1alpha1\nname: acme-team\nruntimes:\n  - use: teamtoy\n',
+      'runtimes/teamtoy/runtime': '#!/bin/sh\nexit 1\n',
+    });
+
+    const drained = await drain();
+
+    const ran = (await readRuns(config)).find((one) => one.name === 'teamai-finished-sessions');
+    expect(ran).toMatchObject({ status: 'running', awaits: { driver: 'acme-team' }, steps: [{ id: 'mark', status: 'pending' }] });
+    expect(drained.code, drained.lines.join('\n')).toBe(0);
+    expect(drained.lines).toContain(`ℹ ${ran?.id} waits for driver acme-team, whose team runtime this machine has not accepted. To review it and drive the run here: teamai workflow resume ${ran?.id} --driver acme-team`);
   });
 
   it('says again, on the next drain, which driver its open run awaits, not that it works here', async () => {

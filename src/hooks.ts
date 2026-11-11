@@ -4,9 +4,9 @@ import { isDeepStrictEqual } from 'node:util';
 import { realpathSync } from 'node:fs';
 import { lstat, readdir, realpath, rm } from 'node:fs/promises';
 import { z } from 'zod';
-import { readJson, readJsonObject, writeJson, writeJsonKeepingComments, readFileSafe, writeFile, expandHome, ensureDir, pathExists } from './utils/fs.js';
-import { log } from './utils/logger.js';
-import { mapStrings, type JsonSyntax } from './utils/json.js';
+import { readJson, readJsonObject, writeJson, writeJsonKeepingComments, readFileSafe, writeFile, ensureDir, pathExists } from './utils/fs.js';
+import { log } from '@teamai/shared/log';
+import { mapStrings, type JsonSyntax, isJsonObject, JsonValueSchema, type JsonValue } from '@teamai/shared/json';
 import {
   COPILOT_TOOL_ID,
   TEAMAI_HOOK_DESCRIPTION_PREFIX,
@@ -21,8 +21,7 @@ import {
   hookToolPathsForConfig,
   toolGateRoot,
 } from './types.js';
-import { isJsonObject, JsonValueSchema } from './types.js';
-import type { HookDef, JsonValue, TeamaiConfig, LocalConfig, ManagedMcpManifest, Scope } from './types.js';
+import type { HookDef, TeamaiConfig, LocalConfig, ManagedMcpManifest, Scope } from './types.js';
 import type { ToolId } from './tools.js';
 import {
   CODEX_TOOL_ID,
@@ -46,7 +45,7 @@ import { DeliveredFolders } from './resources/delivered-folders.js';
 import { deliverHookFolders, historicalFolderHookDef, pruneHookFolders, parseTeamHooks, readBuiltinOverride, resolveTeamHooks, teamHookToDef } from './resources/hooks.js';
 import { entryLayout } from './namespaced-entries.js';
 import { historicalContents } from './utils/team-history.js';
-import { getUserHome } from './utils/home.js';
+import { getUserHome, expandHome } from '@teamai/shared/home';
 import { LEGACY_CLAUDE_HOOK_OTHER_HOST_SKIP, claudeHookOtherHostSkip, claudeHookUsesPowerShell, copilotRunsEntries } from './claude-hook-host.js';
 import { gitCommonDir, listWorktrees, resolveAnchors } from './utils/git.js';
 import { staleWorkspaces } from './utils/partition.js';
@@ -4808,7 +4807,7 @@ async function codexTrustFingerprint(targets: CodexTrustTargets): Promise<string
   const hash = createHash('sha256').update(JSON.stringify({ ...targets, inputs: undefined }));
 
   for (const file of targets.inputs) hash.update(`\0${file}\0${await readFileSafe(file) ?? ''}`);
-  hash.update(`\0${codexBuildsIdentity()}`);
+  hash.update(`\0${await codexBuildsIdentity()}`);
 
   return hash.digest('hex');
 }

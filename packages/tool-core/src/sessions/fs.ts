@@ -11,7 +11,8 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { StringDecoder } from 'node:string_decoder';
 import { z } from 'zod';
-import { JsonValueSchema, JsonObjectSchema, type JsonlRecord } from '../json.js';
+import { openRegularFileSync } from '@teamai/shared/regular-file';
+import { JsonValueSchema, JsonObjectSchema, type JsonlRecord } from '@teamai/shared/json';
 import type { Session } from './ir.js';
 
 // ---------------------------------------------------------------------------
@@ -38,12 +39,27 @@ export function resolveRealCwd(cwd: string): string {
 }
 
 /**
- * Claude Code cwd encoding: every non-alphanumeric character → `-`, with a leading `-`.
+ * The project directory Claude Code names after `realCwd`, a cwd with its links resolved: every non-alphanumeric
+ * character `-`, so a leading `-`. A name over 200 characters is cut to 200 and gets `-` and Claude Code's 32-bit
+ * string hash of the whole cwd over UTF-16 code units, in base 36. It names nothing outside its body, which
+ * `fs.test.ts` runs it to check: a fake Claude written as a script carries its source (`String(claudeProjectDirName)`).
  * Example: `/home/user/project` → `-home-user-project`
  *          `/Users/foo/my project` → `-Users-foo-my-project`
  */
+export function claudeProjectDirName(realCwd: string): string {
+  const encoded = realCwd.replace(/[^a-zA-Z0-9]/g, '-');
+
+  if (encoded.length <= 200) return encoded;
+  let hash = 0;
+
+  for (let at = 0; at < realCwd.length; at++) hash = (Math.imul(31, hash) + realCwd.charCodeAt(at)) | 0;
+
+  return `${encoded.slice(0, 200)}-${Math.abs(hash).toString(36)}`;
+}
+
+/** Claude Code's project directory name for `cwd`, as {@link claudeProjectDirName} names its resolved path. */
 export function encodeCwdClaude(cwd: string): string {
-  return resolveRealCwd(cwd).replace(/[^a-zA-Z0-9]/g, '-');
+  return claudeProjectDirName(resolveRealCwd(cwd));
 }
 
 /**
@@ -191,8 +207,9 @@ export function* readJsonlHead(filePath: string, maxLines: number): Generator<Js
   }
 }
 
+/** The lines of a transcript, which must be a regular file: a FIFO a step left at its path would stall the process. */
 function* jsonlLines(filePath: string): Generator<string> {
-  const fd = fs.openSync(filePath, 'r');
+  const fd = openRegularFileSync(filePath);
 
   try {
     const decoder = new StringDecoder('utf8');

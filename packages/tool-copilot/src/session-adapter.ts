@@ -1,13 +1,14 @@
 /** Read GitHub Copilot CLI's append-only session event log without invoking the CLI. */
 import * as fs from 'node:fs';
+import { readRegularFileSync } from '@teamai/shared/regular-file';
 import * as path from 'node:path';
 import { z } from 'zod';
 import { AgentAdapter, ToolUnavailableError, type SessionMeta, type SessionReadRef } from '@teamai/tool-core/sessions/base';
 import { toolArgumentsFrom, type ContentBlock, type Message, type Session } from '@teamai/tool-core/sessions/ir';
 import { readJsonl, resolveRealCwd } from '@teamai/tool-core/sessions/fs';
-import { JsonValueSchema } from '@teamai/tool-core/json';
-import { parseYaml } from '@teamai/tool-core/yaml';
-import { log } from '@teamai/tool-core/log';
+import { JsonValueSchema } from '@teamai/shared/json';
+import { parseYaml } from '@teamai/shared/yaml';
+import { log } from '@teamai/shared/log';
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -50,7 +51,7 @@ interface ParsedCopilot {
 
 function workspaceCwd(filePath: string): string {
   try {
-    const stored = parseYaml(fs.readFileSync(path.join(path.dirname(filePath), 'workspace.yaml'), 'utf8'));
+    const stored = parseYaml(readRegularFileSync(path.join(path.dirname(filePath), 'workspace.yaml'), 'utf8'));
     const parsed = z.object({ cwd: z.string() }).safeParse(stored);
 
     return parsed.success ? parsed.data.cwd : '';

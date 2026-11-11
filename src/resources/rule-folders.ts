@@ -4,6 +4,7 @@
  * tool reads the folder's files, and delivers the folder there (`DeliveredFolders`, common rule 9).
  */
 import fs from 'node:fs/promises';
+import { readRegularFile } from '@teamai/shared/regular-file';
 import path from 'node:path';
 import { z } from 'zod';
 import type { DeliveryLedger } from './delivered-copies.js';
@@ -14,7 +15,7 @@ import { splitRuleFrontmatter } from './team-rule.js';
 import { ruleFolderReachOf } from '../tool-registry.js';
 import type { LocalConfig, ResourceItem, TeamaiConfig } from '../types.js';
 import { pathExists, readJsonObject, writeJson } from '../utils/fs.js';
-import { log } from '../utils/logger.js';
+import { log } from '@teamai/shared/log';
 import { warnOnce } from '../utils/warn-once.js';
 
 /** The marker and base text of a rule folder. */
@@ -47,7 +48,7 @@ async function isDelivered(localConfig: LocalConfig, name: string): Promise<bool
 
 /** A text file of a rule folder, read as common rule 12 says; null when it cannot be read. */
 async function readTextFile(file: string): Promise<string | null> {
-  const raw = await fs.readFile(file, 'utf8').catch(() => null);
+  const raw = await readRegularFile(file, 'utf8').catch(() => null);
 
   return raw === null ? null : FolderFiles.text(raw);
 }

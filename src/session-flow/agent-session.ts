@@ -15,9 +15,8 @@ import path from 'node:path';
 import { resolveMemberToolRoots } from '../config.js';
 import { getTeamaiHomeDir, type LocalConfig } from '../types.js';
 import { acquireLock, releaseLock } from '../update.js';
-import { getAdapter, listAvailablePlatforms, listInstalledPlatforms } from './adapters/index.js';
-import { isSessionPlatform, sessionPlatformFacts as shippedPlatformFacts } from './adapters/platform-facts.js';
-import { instancePlatform, sessionPlatformOwner, sessionPlatformsOf } from '../tool-registry.js';
+import { adapterAt, listAvailablePlatforms, listInstalledPlatforms, storeDirOf } from './adapters/index.js';
+import { platformFactsOf, platformForTool, toolForPlatform } from '../tool-registry.js';
 import { ToolUnavailableError, type AgentAdapter, type SessionMeta, type SubagentsRead } from '@teamai/tool-core/sessions/base';
 import { imagePlaceholderText, type ContentBlock, type Message, type Session } from '@teamai/tool-core/sessions/ir';
 import { deriveTargetSessionId, legacyTargetSessionIds } from '@teamai/tool-core/sessions/ids';
@@ -27,9 +26,11 @@ import { publishedPathRoots } from './sync.js';
 
 /**
  * A session in one tool: its platform, its id there, and the workspace to look in. A caller that
- * listed the session passes the `filePath` it listed, so exactly that session is read.
+ * listed the session passes the `filePath` it listed, so exactly that session is read. `storeDir`
+ * is the session store to read instead of the member's: the one in the tool home a workflow
+ * attempt ran in (`attemptSessionStore`).
  */
-export type AgentSessionRef = { platform: string; sessionId: string; cwd?: string; filePath?: string };
+export type AgentSessionRef = { platform: string; sessionId: string; cwd?: string; filePath?: string; storeDir?: string };
 
 export type AgentSessionFailure =
   | { code: 'no_adapter'; platform: string; reason: 'unknown tool' | 'unsupported on win32' | 'read-only'; message: string }
@@ -159,7 +160,7 @@ export function noAdapter(
     };
   }
 
-  if (use === 'write' && sessionPlatformFacts(platform)?.readOnly) {
+  if (use === 'write' && platformFactsOf(platform)?.readOnly) {
     return {
       code: 'no_adapter',
       platform,
@@ -168,7 +169,7 @@ export function noAdapter(
     };
   }
 
-  if (use === 'write' && os === 'win32' && sessionPlatformFacts(platform)?.sqliteRegistrationOnWindows) {
+  if (use === 'write' && os === 'win32' && platformFactsOf(platform)?.sqliteRegistrationOnWindows) {
     return {
       code: 'no_adapter',
       platform,
@@ -183,13 +184,6 @@ export function noAdapter(
 }
 
 type ToolRoots = LocalConfig['toolRoots'];
-
-/** The facts of `platform`: a shipped platform's, or for an instance's own, those of the platform whose format it keeps. */
-function sessionPlatformFacts(platform: string): ReturnType<typeof shippedPlatformFacts> {
-  const hosted = instancePlatform(platform);
-
-  return shippedPlatformFacts(platform) ?? (hosted ? shippedPlatformFacts(hosted.platform) : undefined);
-}
 
 /**
  * The member's recorded tool roots as seen from `cwd`: a relocated Claude Code or Codex keeps its
@@ -216,8 +210,9 @@ export function toolRootsLookup(): ToolRootsLookup {
   };
 }
 
-function adapterFor(platform: string, use: 'read' | 'write', toolRoots: ToolRoots): AgentAdapter | AgentSessionFailure {
-  return noAdapter(platform, use) ?? getAdapter(platform, toolRoots);
+/** `platform`'s adapter on `storeDir`, else on the store the member's recorded `toolRoots` resolve to. */
+function adapterFor(platform: string, use: 'read' | 'write', toolRoots: ToolRoots, storeDir?: string): AgentAdapter | AgentSessionFailure {
+  return noAdapter(platform, use) ?? adapterAt({ platform, storeDir: storeDir ?? storeDirOf(platform, { kind: 'recorded', toolRoots }) });
 }
 
 const messageOf = (cause: unknown): string => (cause instanceof Error ? cause.message : String(cause));
@@ -266,7 +261,7 @@ async function existingCopyId(
 
   if (derived) return derived;
 
-  const legacyIdWithoutWorkspace = sessionPlatformFacts(copyInfo.targetPlatform)?.legacyIdWithoutWorkspace === true;
+  const legacyIdWithoutWorkspace = platformFactsOf(copyInfo.targetPlatform)?.legacyIdWithoutWorkspace === true;
 
   for (const id of legacyTargetSessionIds({ ...copyInfo, legacyIdWithoutWorkspace })) {
     const found = await target.existingSessionId(id, copyInfo.cwd);
@@ -316,7 +311,7 @@ export async function writeCopyOnce(
   try {
     targetId = deriveTargetSessionId({
       targetPlatform,
-      idFormat: sessionPlatformFacts(targetPlatform)?.idFormat ?? 'uuid',
+      idFormat: platformFactsOf(targetPlatform)?.idFormat ?? 'uuid',
       targetCwd: cwd,
       sourceSessionId: session.sessionId,
       sourceCreatedAt: session.createdAt,
@@ -462,7 +457,7 @@ async function find(
   ref: AgentSessionRef,
   { scrub = true, toolRootsFor = recordedToolRoots, subagents = false }: AgentSessionFindOptions = {},
 ): Promise<AgentSessionFound> {
-  const source = adapterFor(ref.platform, 'read', await toolRootsFor(ref.cwd));
+  const source = adapterFor(ref.platform, 'read', await toolRootsFor(ref.cwd), ref.storeDir);
 
   if ('code' in source) return { status: 'failed', failure: source };
   const session = await readSource(source, ref);
@@ -495,7 +490,7 @@ async function readSubagents(source: AgentAdapter, session: Session, ref: AgentS
 }
 
 async function copy({ from, to, scrub = false, toolRootsFor = recordedToolRoots }: AgentSessionCopyRequest): Promise<AgentSessionCopy> {
-  const source = adapterFor(from.platform, 'read', await toolRootsFor(from.cwd));
+  const source = adapterFor(from.platform, 'read', await toolRootsFor(from.cwd), from.storeDir);
 
   if ('code' in source) return failed(source);
   const targetToolRoots = await toolRootsFor(to.cwd);
@@ -593,14 +588,6 @@ function transcript(session: Session): AgentSessionTranscriptEntry[] {
   });
 }
 
-/**
- * The session platform a tool (a workflow step's `tool`) reads and writes: the first of its
- * `TOOLS` entry's `sessions`, or a platform named directly. Undefined when it has none.
- */
-function platformForTool(tool: string): string | undefined {
-  return sessionPlatformsOf(tool)[0] ?? (isSessionPlatform(tool) ? tool : undefined);
-}
-
 /** The tools of `tools` teamai reads no sessions from, in their order: their sessions are never captured, published or judged. */
 function toolsWithoutSessions(tools: readonly string[]): string[] {
   return tools.filter((tool) => platformForTool(tool) === undefined);
@@ -608,10 +595,5 @@ function toolsWithoutSessions(tools: readonly string[]): string[] {
 
 /** One string per session, for a set or a map keyed by session. */
 export const sessionKey = ({ platform, sessionId }: Pick<AgentSessionRef, 'platform' | 'sessionId'>): string => `${platform}\0${sessionId}`;
-
-/** The tool whose sessions `platform` holds, the reverse of `platformForTool`. */
-function toolForPlatform(platform: string): string {
-  return sessionPlatformOwner(platform) ?? sessionPlatformFacts(platform)?.tool ?? platform;
-}
 
 export const AgentSession = { list, copy, find, transcript, platformForTool, toolsWithoutSessions, toolForPlatform } as const satisfies AgentSession;

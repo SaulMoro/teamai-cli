@@ -14,7 +14,7 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { errnoCode } from './utils/fs.js';
-import { log } from './utils/logger.js';
+import { log } from '@teamai/shared/log';
 import { warnOnce } from './utils/warn-once.js';
 
 const MARKED_TYPES = ['workflows', 'hooks', 'rules', 'mcp', 'benchmarks', 'scorers', 'agents'] as const;

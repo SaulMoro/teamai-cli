@@ -5,7 +5,8 @@ import { z } from 'zod';
 import { AgentAdapter, ToolUnavailableError, type SessionMeta, type SessionReadRef } from '@teamai/tool-core/sessions/base';
 import { toolArgumentsFrom, type ContentBlock, type Message, type Session } from '@teamai/tool-core/sessions/ir';
 import { resolveRealCwd } from '@teamai/tool-core/sessions/fs';
-import { JsonValueSchema } from '@teamai/tool-core/json';
+import { JsonValueSchema } from '@teamai/shared/json';
+import { readRegularFileSync } from '@teamai/shared/regular-file';
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -73,7 +74,7 @@ function parseMuseFile(filePath: string): ParsedMuse | undefined {
   let last: string | undefined;
   const messages: Message[] = [];
 
-  for (const line of fs.readFileSync(filePath, 'utf8').split(/\r?\n/)) {
+  for (const line of readRegularFileSync(filePath, 'utf8').split(/\r?\n/)) {
     if (!line.trim()) continue;
     let stored: unknown;
 

@@ -4,9 +4,10 @@ import { FOLDER_MARKERS } from './folder-markers.js';
 import { packageRoot } from './package-info.js';
 import { DeliveredFolders } from './resources/delivered-folders.js';
 import { FolderFiles, type FolderFile } from './resources/folder-files.js';
-import { isJsonObject, type JsonObject, type JsonValue, type LocalConfig, type TeamaiConfig } from './types.js';
-import { log } from './utils/logger.js';
-import { parseYaml } from './utils/yaml.js';
+import { type LocalConfig, type TeamaiConfig } from './types.js';
+import { isJsonObject, type JsonObject, type JsonValue } from '@teamai/shared/json';
+import { log } from '@teamai/shared/log';
+import { parseYaml } from '@teamai/shared/yaml';
 
 // ─── Default hooks (#1787) ───────────────────────────────
 //

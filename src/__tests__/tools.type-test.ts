@@ -1,7 +1,7 @@
 /** Checked by `tsc` only: Vitest runs `*.test.ts`. */
 import type { AgentToolId, InlineRulesWithoutBlocksFile, ToolsWithTwoMcpFormats, ShippedDescriptor } from '../tools.js';
 import type { BlocksTarget, HomeRead, RunTime } from '@teamai/tool-core/definition';
-import type { LaunchedToolId, LaunchOrderTool } from '../tool-launch/tools.js';
+import type { LaunchedToolId, LaunchOrderTool } from '../launch-registry.js';
 
 declare const full: ShippedDescriptor;
 declare const withoutMcp: Omit<ShippedDescriptor, 'mcp'>;

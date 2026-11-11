@@ -22,13 +22,14 @@ import type { LocalConfig } from '../types.js';
 import { providerForRemote } from '../providers/registry.js';
 import type { PullRequestRecord } from '../providers/types.js';
 import { canonicalJson } from '../utils/canonical-json.js';
-import { execCommand } from '../utils/exec.js';
+import { execCommand } from '@teamai/shared/exec';
 import { getConfiguredRemoteUrl } from '../utils/git.js';
 import { loadCachedWorkflow } from '../workflow/cache.js';
 import type { ResolvedWorkflow } from '../workflow/types.js';
 import { benchmarkRuns } from './benchmarks.js';
 import { readScorerLabels, rubricLabelsOf, sidesOf } from './scorers.js';
 import { listLocalRuns, listReportedRuns, type LocalRunRow, type ReportedRunRow } from './workflow-runs.js';
+import { readRegularFile } from '@teamai/shared/regular-file';
 
 
 /** One scorer's loop: how its default measurement passes, and what a run would start from now. */
@@ -332,7 +333,7 @@ async function ciJobs(config: LocalConfig): Promise<Setup['jobs']> {
   const actions = (await fs.readdir(path.join(top, '.github', 'workflows')).catch((): string[] => []))
     .filter((file) => /\.ya?ml$/.test(file)).sort().map((file) => `.github/workflows/${file}`);
 
-  const texts = await Promise.all([...actions, '.gitlab-ci.yml'].map(async (relative) => ({ relative, text: await fs.readFile(path.join(top, relative), 'utf8').catch(() => '') })));
+  const texts = await Promise.all([...actions, '.gitlab-ci.yml'].map(async (relative) => ({ relative, text: await readRegularFile(path.join(top, relative), 'utf8').catch(() => '') })));
   const first = (command: RegExp): string | undefined => texts.find(({ text }) => command.test(text))?.relative;
   const [improve, proof] = [first(/\bself-improvement run\b/), first(/\bbenchmark run\b/)];
 

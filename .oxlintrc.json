@@ -1,5 +1,7 @@
 {
   "$schema": "./node_modules/oxlint/configuration_schema.json",
+  // oxlint's defaults, and import for import/no-cycle: the module graph it needs is built only when import is on here.
+  "plugins": ["typescript", "unicorn", "oxc", "import"],
   "jsPlugins": ["./oxlint-plugin-teamai/index.js"],
   "ignorePatterns": [
     // Agent tooling a member's tools install into the checkout: their skills and hooks, not this repository's source.
@@ -89,6 +91,16 @@
     "teamai/remove-delivered": "error",
     // An attempt's result file is written masked, through AttemptResult.write.
     "teamai/attempt-result-writes": "error",
+    // A step's work is committed with untrustedGit, so no hook it planted runs on the host.
+    "teamai/untrusted-finish-git": "error",
+    "teamai/git-exit-code": "error",
+    "teamai/spawn-command": "error",
+    // readline re-emits a socket's or stream's errors on its interface, and throws them when nothing listens there.
+    "teamai/readline-error": "error",
+    // A step writes the paths the engine reads; a FIFO it leaves there would block a plain read past every deadline.
+    "teamai/regular-file-reads": "error",
+    // Opening a FIFO for writing blocks until a reader comes, as a read blocks until a writer does.
+    "teamai/step-path-writes": "error",
     // getUserHome owns the HOME / USERPROFILE fallback that keeps Windows paths safe.
     "teamai/home-env": "error",
     "teamai/learnings-root": "error",
@@ -102,8 +114,15 @@
     "teamai/rules-locate": "error",
     "teamai/workflow-failure-codes": "error",
     "teamai/tool-facts": "error",
+    // A tool family builds argv and reads output, and never starts a process; its index.ts exports only `family`.
+    "teamai/tool-family-shape": "error",
     // packages/* never imports src/, src/ never imports a runtime package, and a package is reached only by its name.
     "teamai/package-boundaries": "error",
+    // A runtime serves protocol 1 only through @teamai/runtime-kit: no request loop or op end of its own.
+    // Files not on the kit yet go in its notYetOnTheKit option, a list that only shrinks; every runtime is on it now.
+    "teamai/runtime-serve": "error",
+    // A package's test reaches its own package only through the module it is named after, src/testing/ and the package's exports.
+    "teamai/test-seams": "error",
     // TOOLS, LAUNCH_ADAPTERS and ADAPTER_REGISTRY are read only through src/tool-registry.ts.
     "teamai/tool-registry": "error",
     // A test mocks a module where it is defined: a mock of a re-export misses package code that imports the module itself.
@@ -111,6 +130,8 @@
     // parseYaml returns JSON values; yaml's own parse can return a Set, Buffer or Date.
     "teamai/yaml-parse": "error",
     "teamai/uncached-entry": "error",
+    // Startup and the facts modules load a tool family's facts only; its adapters, launch profiles and schemas load on first use.
+    "teamai/family-facts": "error",
     // A reducer that copies its accumulator each step is quadratic.
     "oxc/no-accumulating-spread": "error",
     // The generic rules of anti-slop (#828), vendored in
@@ -136,9 +157,18 @@
     // CONTRIBUTING: comments explain why, not what.
     "teamai/no-low-value-comments": "error",
     // A suppression with no reason can't be reviewed or removed later.
-    "teamai/suppression-reason": "error"
+    "teamai/suppression-reason": "error",
+    // `fs.readFile` off a default import is how this repository reads files; the rule would flag every one.
+    "import/no-named-as-default-member": "off"
   },
   "overrides": [
+    {
+      // No import cycle in production source: a module in a cycle can be read before it is initialized, and a cycle
+      // joins two concepts that should have one owner. A cycle of type-only imports is allowed: it is erased.
+      "files": ["src/**", "packages/*/src/**"],
+      "excludeFiles": ["src/__tests__/**", "**/*.test.ts", "src/testing/**", "packages/*/src/testing/**"],
+      "rules": { "import/no-cycle": ["error", { "ignoreTypes": true }] }
+    },
     {
       // The anti-slop rules hold production code. Tests build partial and
       // malformed values on purpose, and CONTRIBUTING asks them to mock
@@ -163,6 +193,39 @@
         "teamai/no-widen-then-assert": "off",
         "teamai/require-readable-spacing": "off",
         "teamai/require-safety-comment-for-type-assertion": "off"
+      }
+    },
+    {
+      // A package's src/testing/ is test support, which teamai/package-boundaries keeps everything that ships from
+      // importing, so it builds the loose records tests build.
+      "files": ["src/testing/**", "packages/*/src/testing/**"],
+      "rules": {
+        "teamai/no-unsafe-dictionary-type": "off"
+      }
+    },
+    {
+      // Paseo is a prerequisite the member installs: teamai-runtime-paseo loads its client from that install
+      // (daemon/client.ts), so shipped code imports only its types, and the bundle holds none of its code.
+      "files": ["packages/runtime-paseo/src/**"],
+      "rules": {
+        "no-restricted-imports": [
+          "error",
+          {
+            "patterns": [
+              {
+                "group": ["@getpaseo/*", "ws"],
+                "allowTypeImports": true,
+                "message": "Import only types from Paseo's packages: the runtime loads them from the member's Paseo install (daemon/client.ts)."
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "files": ["packages/runtime-paseo/src/testing/**", "packages/runtime-paseo/src/**/*.test.ts"],
+      "rules": {
+        "no-restricted-imports": "off"
       }
     },
     {

@@ -4,9 +4,9 @@ import path from 'node:path';
 import { afterEach, expect, it, onTestFinished, vi } from 'vitest';
 import { z } from 'zod';
 import { readConfigFrom } from '../config.js';
-import { createToolCaller } from '../tool-launch/call.js';
+import { createToolCaller } from '../workflow/runtimes/tool-caller.js';
 import { getDataHome, getUserConfigPath, type LocalConfig } from '../types.js';
-import { log } from '../utils/logger.js';
+import { log } from '@teamai/shared/log';
 
 let root = '';
 afterEach(async () => { vi.unstubAllEnvs(); if (root) await fs.rm(root, { recursive: true, force: true }); root = ''; });
@@ -138,6 +138,15 @@ it('runs OpenCode with the prompt on stdin and joins the text parts it prints, w
   const { args, stdin } = await opencode.invocation();
   expect(args).toEqual(['run', '--format', 'json']);
   expect(stdin).toBe('Summarize');
+});
+
+it.each([
+  ['fails usage_limited on an OpenCode error whose type is a usage limit, whatever its message says', 'provider.rate-limit', 'Too many requests', 'usage_limited'],
+  ['fails call_failed on an OpenCode error whose type is no usage limit, though its message reads like one', 'provider.no-route', 'Rate limit reached for anthropic/claude-nonexistent-9 on no route', 'call_failed'],
+])('%s', async (_, type, message, kind) => {
+  const opencode = await fakeTool('opencode', { stdout: JSON.stringify({ type: 'error', sessionID: 'ses_1', error: { type, message } }), exitCode: 1 });
+
+  await expect(only('opencode', opencode.executable).callTool('Summarize', { launchedBy: 'answer' })).rejects.toMatchObject({ kind });
 });
 
 it('runs WorkBuddy through the CodeBuddy adapter, which prints Claude\'s result record', async () => {

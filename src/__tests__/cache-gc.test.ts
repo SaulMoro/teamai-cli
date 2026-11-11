@@ -13,8 +13,8 @@ import {
     saveCacheIndex,
     type CacheIndex,
 } from '../utils/cache-index.js';
-import { setVerbose } from '../utils/logger.js';
-import { _resetState, _setLogFilePath } from '@teamai/tool-core/debug-log';
+import { setVerbose } from '@teamai/shared/log';
+import { _resetState, _setLogFilePath } from '@teamai/shared/debug-log';
 
 // ─── Helpers ────────────────────────────────────────────
 

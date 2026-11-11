@@ -4,7 +4,7 @@ import path from 'node:path';
 import os from 'node:os';
 import matter from 'gray-matter';
 
-vi.mock('@teamai/tool-core/log', () => ({
+vi.mock('@teamai/shared/log', () => ({
   log: { info: vi.fn(), success: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn(), dim: vi.fn() },
 }));
 

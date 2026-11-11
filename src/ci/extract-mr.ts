@@ -12,11 +12,12 @@ import { z } from 'zod';
 import { ImportInputError } from '../import-from-repo.js';
 import { ImportLearnings } from '../import-local.js';
 import { getDefaultBranch, pushRepoDirectly } from '../utils/git.js';
-import { log } from '../utils/logger.js';
+import { log } from '@teamai/shared/log';
 import type { LearningDraft } from '../types.js';
 import { githubApiUrl, postOrUpdateMrComment, postIndividualComments, postCodebaseGraphComment, parseMrUrl } from './mr-comment.js';
 import { readRejections, shouldWrite } from './read-rejections.js';
 import { tgitFetch } from '../providers/tgit/rest-auth.js';
+import { readRegularFile } from '@teamai/shared/regular-file';
 
 const WORKFLOW = 'teamai-ci-extract-mr';
 
@@ -48,7 +49,7 @@ async function draftedOf(learnings: string): Promise<{ learning: LearningDraft; 
 
   if (drafted === undefined) throw new ImportInputError(`--learnings holds no learning. Pass what the ${WORKFLOW} step passes.`);
 
-  return { learning: { title: drafted.title, content: await fs.readFile(drafted.file, 'utf-8') }, repoUrl: drafted.repo_url };
+  return { learning: { title: drafted.title, content: await readRegularFile(drafted.file, 'utf-8') }, repoUrl: drafted.repo_url };
 }
 
 // ─── Git user setup ───────────────────────────────────────

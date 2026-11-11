@@ -19,12 +19,13 @@ import * as crypto from 'node:crypto';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { spawnSync } from 'node:child_process';
 import { z } from 'zod';
-import type { JsonValue } from '@teamai/tool-core/json';
+import type { JsonValue } from '@teamai/shared/json';
 import { OptionalString } from '@teamai/tool-core/sessions/fs';
 import type { ToolArguments } from '@teamai/tool-core/sessions/ir';
+import type { Processes } from '@teamai/shared/exec';
 import { findSqlite3 } from '@teamai/tool-core/sessions/sqlite';
+import { readRegularFileSync } from '@teamai/shared/regular-file';
 
 // ---------------------------------------------------------------------------
 // Paths and helpers
@@ -82,7 +83,7 @@ export function resolveCursorWorkspaceId(cwd: string): { id: string; uri: Cursor
     let raw: string;
 
     try {
-      raw = fs.readFileSync(wj, 'utf-8');
+      raw = readRegularFileSync(wj, 'utf-8');
     } catch {
       continue;
     }
@@ -582,7 +583,7 @@ export interface RegisterResult {
  * Failures always return {ok:false, reason}; the caller must not treat it as a
  * migration failure -- the transcript is on disk, a failed registration only
  */
-export function registerCursorComposer(args: RegisterCursorComposerArgs): RegisterResult {
+export function registerCursorComposer(args: RegisterCursorComposerArgs, processes: Processes): RegisterResult {
   const invalidId = assertCursorSessionId(args.composerId);
 
   if (invalidId) return { ok: false, reason: invalidId };
@@ -654,7 +655,7 @@ export function registerCursorComposer(args: RegisterCursorComposerArgs): Regist
   // predictable (pid + timestamp) and -- even created 0600 -- would be written
   // through a symlink pre-planted at that exact name.
   try {
-    const r = spawnSync(sqlite3, [dbPath], {
+    const r = processes.spawnSync(sqlite3, [dbPath], {
       input: stmts.join('\n'),
       maxBuffer: 32 * 1024 * 1024,
       timeout: 30_000,
@@ -680,7 +681,7 @@ export function registerCursorComposer(args: RegisterCursorComposerArgs): Regist
  * could not write either (no store, no sqlite3 CLI, an id that is not a UUID, a workspace Cursor
  * does not know), the answer is no, since a write leaves the store alone there.
  */
-export function cursorComposerExists(composerId: string, cwd?: string): { ok: true; exists: boolean } | { ok: false; reason: string } {
+export function cursorComposerExists(composerId: string, processes: Processes, cwd?: string): { ok: true; exists: boolean } | { ok: false; reason: string } {
   if (assertCursorSessionId(composerId)) return { ok: true, exists: false };
   const dbPath = getCursorStateDbPath();
 
@@ -704,7 +705,7 @@ export function cursorComposerExists(composerId: string, cwd?: string): { ok: tr
   }
 
   try {
-    const r = spawnSync(sqlite3, [dbPath], { input: `PRAGMA busy_timeout=5000;\n${sql}`, timeout: 30_000 });
+    const r = processes.spawnSync(sqlite3, [dbPath], { input: `PRAGMA busy_timeout=5000;\n${sql}`, timeout: 30_000 });
 
     if (r.status !== 0) {
       const stderr = (r.stderr?.toString() ?? '').trim();
@@ -722,7 +723,7 @@ export function cursorComposerExists(composerId: string, cwd?: string): { ok: tr
  * Remove the session from Cursor's Agents list (called on rollback / delete).
  * Only rows for our own composerId are touched; best-effort.
  */
-export function unregisterCursorComposer(composerId: string): RegisterResult {
+export function unregisterCursorComposer(composerId: string, processes: Processes): RegisterResult {
   const invalidId = assertCursorSessionId(composerId);
 
   if (invalidId) return { ok: false, reason: invalidId };
@@ -744,7 +745,7 @@ export function unregisterCursorComposer(composerId: string): RegisterResult {
     'COMMIT;';
 
   try {
-    const r = spawnSync(sqlite3, [dbPath], {
+    const r = processes.spawnSync(sqlite3, [dbPath], {
       input: sql,
       maxBuffer: 32 * 1024 * 1024,
       timeout: 30_000,

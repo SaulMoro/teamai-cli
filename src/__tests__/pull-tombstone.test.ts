@@ -29,7 +29,7 @@ vi.mock('../utils/git.js', async (importOriginal) => ({
   getHeadRev: vi.fn().mockResolvedValue(HEAD_REV),
 }));
 
-vi.mock('@teamai/tool-core/log', () => ({
+vi.mock('@teamai/shared/log', () => ({
   log: {
     info: vi.fn(),
     success: vi.fn(),
@@ -409,7 +409,7 @@ describe('pull role-aware sync and cleanup', () => {
   });
 
   it('reports no synced culture when every instruction target was left alone (#945)', async () => {
-    const { log } = await import('../utils/logger.js');
+    const { log } = await import('@teamai/shared/log');
     const base = (await loadTeamConfig(repoPath))!;
     vi.mocked(loadTeamConfig).mockResolvedValue({ ...base, toolPaths: { cursor: { skills: '.cursor/skills', rules: '.cursor/rules' } } });
     await fse.ensureDir(path.join(homeDir, '.cursor', 'skills'));
@@ -505,7 +505,7 @@ describe('pull role-aware sync and cleanup', () => {
       scope: 'user',
       subscribedTags: ['wanted'],
     });
-    const { log } = await import('../utils/logger.js');
+    const { log } = await import('@teamai/shared/log');
     vi.mocked(log.dim).mockClear();
 
     await pull({ force: true });
@@ -680,7 +680,7 @@ describe('pull role-aware sync and cleanup', () => {
 
     await pull({});
 
-    const { log } = await import('../utils/logger.js');
+    const { log } = await import('@teamai/shared/log');
     expect(log.warn).toHaveBeenCalledWith(expect.stringContaining('Roles manifest not found'));
   });
 
@@ -696,7 +696,7 @@ describe('pull role-aware sync and cleanup', () => {
 
     // pull logs the manifest error and returns before any resource is written,
     // which is what an invalid projects manifest already does.
-    const { log } = await import('../utils/logger.js');
+    const { log } = await import('@teamai/shared/log');
     expect(log.error).toHaveBeenCalledWith(expect.stringContaining('Invalid roles manifest'));
   });
 

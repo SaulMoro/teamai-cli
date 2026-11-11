@@ -6,13 +6,13 @@
  */
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import { loadTeamConfig } from '../config.js';
+import { loadTeamConfig, loadTeamConfigIfPresent } from '../config.js';
 import { getReportsDir, isUsageReportEnabled, usesBranchWorktree, type LocalConfig } from '../types.js';
 import { readFileSafe, writeFileAtomic, writeJsonAtomic } from '../utils/fs.js';
-import { log } from '../utils/logger.js';
+import { log } from '@teamai/shared/log';
 import { scoresDir, scoresLocked } from './home.js';
 import { isStageDecider, labelId, type Decider, labelVersion, newestLabels, parseScoreLabel, parseScoreLabels, type ScoreLabel } from './label.js';
-import type { ConfinedUsage } from '../tool-launch/confined-level.js';
+import type { ConfinedUsage } from '@teamai/tool-core/stdout';
 
 function labelsFile(config: LocalConfig): string {
   return path.join(scoresDir(config), 'labels.jsonl');
@@ -280,7 +280,8 @@ export const LabelStore = {
 
     if (pending.length === 0) return { files: [], labels: 0 };
 
-    if (!isUsageReportEnabled(config, (await loadTeamConfig(config.repo.localPath)) ?? {})) return { files: [], labels: 0, reason: 'Usage reporting is off, so labels stay on this machine.' };
+    // A teamai.yaml that cannot be read says nothing of usage reporting, so it stages nothing rather than read as none.
+    if (!isUsageReportEnabled(config, (await loadTeamConfigIfPresent(config.repo.localPath)) ?? {})) return { files: [], labels: 0, reason: 'Usage reporting is off, so labels stay on this machine.' };
     const username = config.username ?? 'unknown';
     const byFile = new Map<string, Array<{ id: string; label: ScoreLabel }>>();
 

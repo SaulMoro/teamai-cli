@@ -1,11 +1,7 @@
-import { execVersion, type VersionDetector } from '@teamai/tool-core/detect';
-
-async function detectAgyVersion(): Promise<string> {
-  // Antigravity CLI: "1.4.10"
-  const raw = await execVersion('agy');
-
-  return raw.match(/\d+\.\d+\.\d+/)?.[0] ?? '';
-}
+import type { VersionDetector } from '@teamai/tool-core/detect';
 
 /** How teamai reads the version of agy. */
-export const detect = { agy: detectAgyVersion } as const satisfies Record<string, VersionDetector>;
+export const detect = {
+  // Antigravity CLI: "1.4.10"
+  agy: { probe: ['agy', '--version'], read: (raw) => raw.match(/\d+\.\d+\.\d+/)?.[0] ?? '' },
+} as const satisfies Record<string, VersionDetector>;

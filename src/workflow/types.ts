@@ -1,5 +1,6 @@
 /** Workflow types for the v1alpha1 local-driver subset. */
 
+import type { WORKSPACE_MODES } from '@teamai/runtime-protocol';
 import type { WorkflowFolderFile } from './folder.js';
 import type { ContractCode, RunOrigin } from '../default-workflows.js';
 import type { RunMode } from '../launch-context.js';
@@ -10,8 +11,9 @@ import type { OnLimit, Requirements, Setup, TurnLimits, Unenforced } from './req
 import type { LeaseSession } from './workspace.js';
 import type { ConfinedLease } from './lease-wire.js';
 import type { StepModel } from './step-model.js';
+import type { RunId } from './store.js';
 import type { ClonePlace } from './clone.js';
-import type { JsonValue } from '../types.js';
+import type { JsonValue } from '@teamai/shared/json';
 import type { DriverName } from './driver-name.js';
 
 /** The driver's lease ownership, independent of its per-request capabilities. */
@@ -56,7 +58,19 @@ export interface StepHitl {
  * answers is skipped instead.
  */
 export function onlyPersonAnswers(hitl: Pick<StepHitl, 'kind' | 'required' | 'default'>, { autoApprove }: { autoApprove: boolean }): boolean {
-  return hitl.required || (hitl.kind === 'choose' && !(autoApprove && hitl.default !== undefined));
+  return unattendedChoice(hitl, { autoApprove }) === undefined;
+}
+
+/**
+ * The choice a driver nobody attends answers `hitl` with: `yes` or `no` to an optional approval, as `autoApprove` says,
+ * and an optional choice's default under `autoApprove`. Undefined when only a person can answer it.
+ */
+export function unattendedChoice(hitl: Pick<StepHitl, 'kind' | 'required' | 'default'>, { autoApprove }: { autoApprove: boolean }): string | undefined {
+  if (hitl.required) return undefined;
+
+  if (hitl.kind === 'approve') return autoApprove ? 'yes' : 'no';
+
+  return autoApprove ? hitl.default : undefined;
 }
 
 export interface WorkflowStep {
@@ -202,12 +216,6 @@ export interface StepLoop {
   while?: string;
   maxIterations: number;
 }
-
-/**
- * Where a step runs: in the checkout as it is, in a new copy, in the copy an enclosing step opened, in a fresh clone
- * teamai prepares, or in a fresh clone of the team repo. A driver lists the ones it provides in `can.workspace`.
- */
-export const WORKSPACE_MODES = ['read-only', 'new', 'continue', 'clone', 'team'] as const;
 
 /**
  * The team repo branch a step commits to, `{ team: { branch } }`: a template that reads only `inputs`, so every run
@@ -441,6 +449,11 @@ export interface StepLease {
   leasedAt?: string;
   /** The run mode the driver runs the lease in, as its `next` reported it, so the pass keeps it however it settles. */
   runMode?: RunMode;
+  /**
+   * The runtime of the driver definition the lease was offered on, as its `use` names it, or `host`, the definition's
+   * host command slot. Absent for a driver that runs no definition.
+   */
+  runtime?: string;
   /** The turn limits the lease carried, for a driver that ends the turn at them. */
   limits?: TurnLimits;
   /** The terms a confined step was last leased with, which its report is checked against. Absent on a lease issued before teamai kept them. */
@@ -477,6 +490,12 @@ export interface RunState {
   status: RunStatus;
   /** Identity of the latest driver that called next, retained so resume can recover its workspace. */
   driver?: DriverIdentity;
+  /**
+   * Whether the latest driver that called next has a runtime that runs a `workflow:` step whole (`can.workflow`, the
+   * fleet's). While it is not false, reconcile leaves a step that could go whole unexpanded for `next` to lease whole;
+   * once it is false, such a step starts at reconcile as every other workflow step does. Local run state only.
+   */
+  takesWhole?: boolean;
   /** The end this run reached, set when it settles. */
   end?: string;
   /** Set while the run's `finally` steps run, from when its steps end until it settles. Its status stays `running`. */
@@ -500,6 +519,11 @@ export interface RunState {
   runMode?: RunMode;
   /** Whether `definition` is the team's or teamai's default. A claim keeps it. Absent on runs started before it was recorded, all team runs. */
   origin?: RunOrigin;
+  /**
+   * The owner's run whose whole `workflow:` step a fleet member runs as this nested run. Its steps read that run's id
+   * as `run.id`, which is the same in every workflow a run runs.
+   */
+  nestedIn?: RunId;
   /** Who started the run. A claim keeps it. Absent on runs started before it was recorded. */
   startedBy?: StartedBy;
   /** The driver `workflows.driver` started the run for, which the machine that started it does not run. Absent on a run started for no driver in particular. */
@@ -614,11 +638,14 @@ export interface DriveOptions {
   /** `false` after `resume --no-auto-approve`, which overrides `workflows.auto_approve` as the flag does. */
   autoApprove?: boolean;
   sandbox?: true;
+  /** The driver definition the run was last driven with, by its canonical name; absent for plain `local`. */
+  driver?: string;
 }
 
 /**
  * Why a branch of a settled run stays: a pull request uses it, it holds the run's final copy, no branch that stays holds
- * its tip, or the host has it checked out in the checkout, which keeps it there though origin deleted it.
+ * its tip, or the session host has it checked out in the checkout, which keeps it there though origin deleted it. The
+ * value `host` names the session host; run state and `--json` keep that spelling.
  */
 export type KeptBranchReason = 'pr' | 'final' | 'unmerged' | 'host';
 

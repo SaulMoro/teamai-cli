@@ -1,5 +1,5 @@
 import path from 'node:path';
-import { log } from './utils/logger.js';
+import { log } from '@teamai/shared/log';
 import { listDirs, pathExists } from './utils/fs.js';
 import { SkillsHandler } from './resources/skills.js';
 import { loadTagsConfig } from './utils/tags.js';
@@ -12,7 +12,7 @@ import {
   type SkillSource,
 } from './agent-skills.js';
 import { detectInstalledAgents, type ResolvedAgent } from './known-agents.js';
-import { LEGACY_BUILTIN_SKILL_NAMES } from './builtin-skills.js';
+import { LEGACY_BUILTIN_SKILL_NAMES } from './cli-skill-names.js';
 import {
   blockNote,
   detectTeam,

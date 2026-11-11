@@ -7,9 +7,10 @@
  *  - Fallback: return '' when detection fails (best-effort, never throws).
  */
 
-import { log } from './utils/logger.js';
-import { BUILT_IN_TOOLS } from '@teamai/tool-definitions';
-import { readPlistVersion, type VersionDetector } from '@teamai/tool-core/detect';
+import { log } from '@teamai/shared/log';
+import { BUILT_IN_FACTS } from '@teamai/tool-definitions/facts';
+import { probeBinary } from '@teamai/shared/exec';
+import { readPlistVersion, readVersion, type VersionDetector } from '@teamai/tool-core/detect';
 import { type ToolId } from './tools.js';
 import { isToolId } from './tool-registry.js';
 
@@ -21,13 +22,13 @@ const VERSION_CACHE = new Map<string, string>();
 
 /** How teamai reads each tool's version, or null when it reads none. */
 const DETECTORS: Record<ToolId, VersionDetector | null> = {
-  claude: BUILT_IN_TOOLS.claude.detect.claude,
-  codex: null,
+  claude: BUILT_IN_FACTS.claude.detect.claude,
+  codex: BUILT_IN_FACTS.codex.detect.codex,
   'codex-internal': null,
   'claude-internal': null,
   tclaude: null,
   tcodex: null,
-  cursor: BUILT_IN_TOOLS.cursor.detect.cursor,
+  cursor: BUILT_IN_FACTS.cursor.detect.cursor,
   copilot: null,
   joycode: null,
   qoder: null,
@@ -37,20 +38,20 @@ const DETECTORS: Record<ToolId, VersionDetector | null> = {
   'trae-cn': null,
   zcode: null,
   omp: null,
-  pi: BUILT_IN_TOOLS.pi.detect.pi,
-  codebuddy: BUILT_IN_TOOLS.codebuddy.detect.codebuddy,
-  openclaw: BUILT_IN_TOOLS.openclaw.detect.openclaw,
-  hermes: BUILT_IN_TOOLS.hermes.detect.hermes,
-  dsh: BUILT_IN_TOOLS.dsh.detect.dsh,
-  workbuddy: BUILT_IN_TOOLS.codebuddy.detect.workbuddy,
+  pi: BUILT_IN_FACTS.pi.detect.pi,
+  codebuddy: BUILT_IN_FACTS.codebuddy.detect.codebuddy,
+  openclaw: BUILT_IN_FACTS.openclaw.detect.openclaw,
+  hermes: BUILT_IN_FACTS.hermes.detect.hermes,
+  dsh: BUILT_IN_FACTS.dsh.detect.dsh,
+  workbuddy: BUILT_IN_FACTS.codebuddy.detect.workbuddy,
   opencode: null,
-  muse: BUILT_IN_TOOLS.muse.detect.muse,
-  agy: BUILT_IN_TOOLS.agy.detect.agy,
+  muse: BUILT_IN_FACTS.muse.detect.muse,
+  agy: BUILT_IN_FACTS.agy.detect.agy,
 };
 
 /** The detector for `agentType`: a tool's, or the CodeBuddy IDE's (`codebuddy-ide`). */
 function detectorOf(agentType: string): VersionDetector | null {
-  if (agentType === 'codebuddy-ide') return BUILT_IN_TOOLS.codebuddy.detect['codebuddy-ide'];
+  if (agentType === 'codebuddy-ide') return BUILT_IN_FACTS.codebuddy.detect['codebuddy-ide'];
 
   return isToolId(agentType) ? DETECTORS[agentType] : null;
 }
@@ -67,7 +68,7 @@ export async function getAgentVersion(agentType: string): Promise<string> {
 
   if (detector) {
     try {
-      version = await detector();
+      version = await readVersion(detector, probeBinary);
     } catch {
       // best-effort
     }

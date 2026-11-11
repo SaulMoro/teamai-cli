@@ -1,12 +1,7 @@
-import { execVersion, type VersionDetector } from '@teamai/tool-core/detect';
-
-async function detectClaudeVersion(): Promise<string> {
-  const raw = await execVersion('claude');
-  // "2.1.199 (Claude Code)" → "2.1.199"
-  const match = raw.match(/^([\d.]+)/);
-
-  return match?.[1] ?? raw;
-}
+import type { VersionDetector } from '@teamai/tool-core/detect';
 
 /** How teamai reads the version of each Claude build it reads one of. */
-export const detect = { claude: detectClaudeVersion } as const satisfies Record<string, VersionDetector>;
+export const detect = {
+  // "2.1.199 (Claude Code)" → "2.1.199"
+  claude: { probe: ['claude', '--version'], read: (raw) => raw.match(/^([\d.]+)/)?.[1] ?? raw },
+} as const satisfies Record<string, VersionDetector>;

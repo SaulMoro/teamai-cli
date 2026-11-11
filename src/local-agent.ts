@@ -5,9 +5,10 @@ import { execFile } from 'node:child_process';
 import { isDeepStrictEqual } from 'node:util';
 import { promisify } from 'node:util';
 import fse from 'fs-extra';
+import { copyRegularFile, copyRegularTree, openRegularFile, readRegularFile, readRegularFileSync } from '@teamai/shared/regular-file';
 import { z } from 'zod';
-import { log } from './utils/logger.js';
-import { detachChild } from './utils/exec.js';
+import { log } from '@teamai/shared/log';
+import { detachChild } from '@teamai/shared/exec';
 import { parseFrontmatter } from './utils/frontmatter.js';
 import {
   ensureDir,
@@ -108,8 +109,6 @@ import {
   managedMcpWorkspaceId,
   type DashboardEvent,
   type DeliveryTarget,
-  JsonValueSchema,
-  type JsonValue,
   type LocalConfig,
   type ManagedMcpManifest,
   type ManagedMcpRecord,
@@ -118,7 +117,7 @@ import {
   type ResourceItem,
   type TeamaiConfig,
 } from './types.js';
-import { getUserHome } from './utils/home.js';
+import { getUserHome } from '@teamai/shared/home';
 import { checkoutForRepoAnchor, gitCommonDir, isLiveCheckout, listWorktrees, resolveAnchors } from './utils/git.js';
 import {
   ensure as ensureGitExclude, gitExcludeFile, gitTracks, gitUntracked, remove as removeGitExclude, report as reportGitExclude, stateHomeRecord,
@@ -132,9 +131,9 @@ import { skillOrigin, withSkillFrontmatter } from './resources/skills.js';
 import { hookSettingsFile, installOf, locate, ownOf, writable, type FilePlace } from './locate.js';
 import { DELIVERED_MODEL_TOOLS, mcpFormatOf, mcpScopeFor, type DeliveredModelTool } from './tool-registry.js';
 import { acquireLock, releaseLock } from './update.js';
-import { isJsonObject, JsonObjectSchema, type JsonObject } from './types.js';
-import { editJsonText, parseJson, parseJsonAs } from './utils/json.js';
-import { parseYaml } from './utils/yaml.js';
+import { parseJson, JsonValueSchema, type JsonValue, isJsonObject, JsonObjectSchema, type JsonObject } from '@teamai/shared/json';
+import { editJsonText, parseJsonAs } from './utils/json.js';
+import { parseYaml } from '@teamai/shared/yaml';
 import { resolveOpenclawConfigPath } from './openclaw-home.js';
 import { realHost, toolHome } from './tool-home.js';
 import YAML from 'yaml';
@@ -1307,7 +1306,7 @@ export async function localAgentCopyFiles(
     const expected = new Map<string, string>();
 
     for (const rel of await pathExists(sourcePath) ? await listFilesRecursive(sourcePath) : []) {
-      const bytes = await fse.readFile(path.join(sourcePath, rel));
+      const bytes = await readRegularFile(path.join(sourcePath, rel));
       const text = bytes.toString('utf-8');
       const written = rel === 'SKILL.md' ? withSkillFrontmatter(text, name) : text;
       expected.set(rel.split(path.sep).join('/'), contentHash(written === text ? bytes : written));
@@ -1922,7 +1921,7 @@ function hintMarkerPath(prefix: string, key: string): string {
 /** Whether the marker still suppresses the hint (written within the TTL). */
 function bindingHintMarkerFresh(marker: string): boolean {
   try {
-    const stamp = Number(fs.readFileSync(marker, 'utf8'));
+    const stamp = Number(readRegularFileSync(marker, 'utf8'));
 
     return Number.isFinite(stamp) && Date.now() - stamp < BINDING_MARKER_TTL_MS;
   } catch {
@@ -2865,7 +2864,7 @@ async function downloadResource(downloadUrl: string): Promise<string> {
 const ZIP_MAGIC = Buffer.from([0x50, 0x4b, 0x03, 0x04]);
 
 async function isZipFile(filePath: string): Promise<boolean> {
-  const fd = await fs.promises.open(filePath, 'r');
+  const fd = await openRegularFile(filePath);
 
   try {
     const buf = Buffer.alloc(4);
@@ -3079,7 +3078,7 @@ async function installDownloadedResource(input: {
         : []);
 
       await remove(dest);
-      await fse.copy(skillRoot, dest, { overwrite: true });
+      await copyRegularTree(skillRoot, dest);
       const fm = await readFrontmatter(path.join(dest, 'SKILL.md'));
       displayName = fm.name ?? displayName;
       await handler.pullItem(item, teamConfig, localConfig);
@@ -3101,7 +3100,7 @@ async function installDownloadedResource(input: {
         : []);
 
       await fse.ensureDir(path.dirname(dest));
-      await fse.copyFile(ruleFile, dest);
+      await copyRegularFile(ruleFile, dest);
       // Every rule in the cache reaches this tool; one whose copy here is the
       // member's is left out, as the installed one would be (#915).
       const scope = getManifestScope(await loadManifest(), input.scope, input.workspacePath);
@@ -3123,7 +3122,7 @@ async function installDownloadedResource(input: {
       const dest = path.join(repoPath, 'claudemd', `${input.slug}.md`);
       await fse.ensureDir(path.dirname(dest));
       const previous = await readFileSafe(dest);
-      await fse.copyFile(mdFile, dest);
+      await copyRegularFile(mdFile, dest);
 
       try {
         reachedPrompts = await syncClaudemd(teamConfig, localConfig, repoPath, input.workspacePath, fullTeamConfig);
@@ -6832,7 +6831,7 @@ interface FileSnapshot {
 
 async function fileSnapshot(file: string): Promise<FileSnapshot> {
   try {
-    const [content, stat] = await Promise.all([fs.promises.readFile(file, 'utf8'), fs.promises.stat(file)]);
+    const [content, stat] = await Promise.all([readRegularFile(file, 'utf8'), fs.promises.stat(file)]);
 
     return { content, mode: stat.mode & 0o777 };
   } catch (error) {
@@ -7446,7 +7445,7 @@ async function profileBundles(profileDir: string): Promise<string[] | null> {
   let raw: string;
 
   try {
-    raw = await fs.promises.readFile(path.join(profileDir, 'package.json'), 'utf8');
+    raw = await readRegularFile(path.join(profileDir, 'package.json'), 'utf8');
   } catch {
     return null;
   }
@@ -7468,7 +7467,7 @@ async function bundlePatchPaths(bundle: string, profilesDir: string, profileDir:
     let raw: string;
 
     try {
-      raw = await fs.promises.readFile(path.join(dir, 'package.json'), 'utf8');
+      raw = await readRegularFile(path.join(dir, 'package.json'), 'utf8');
     } catch {
       continue;
     }

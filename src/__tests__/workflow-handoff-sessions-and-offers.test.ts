@@ -8,7 +8,7 @@ import { getAdapter } from '../session-flow/adapters/index.js';
 import { AgentSession } from '../session-flow/agent-session.js';
 import type { LocalConfig } from '../types.js';
 import { acquireLock, releaseLock } from '../update.js';
-import { log } from '../utils/logger.js';
+import { log } from '@teamai/shared/log';
 import * as reportsBranch from '../utils/reports-branch.js';
 import { syncScorersThenWorkflows } from '../scorers/team-sync.js';
 import { leaseNext, reportAttempt, resumableSessions, startRun } from '../workflow/engine.js';
@@ -16,13 +16,13 @@ import { claimOffered, claimRun, publishRun, resumeRun, settledSteps } from '../
 import { pendingRecords, queueRunRecord } from '../workflow/records.js';
 import { runLocalDriver } from '../workflow/drivers/local/local-driver.js';
 import { cancelRun } from '../workflow/run-controls.js';
-import type { LocalToolAdapter } from '../workflow/drivers/local/local-tool-adapter.js';
+import { type StepLauncher } from '@teamai/runtime-tools';
 import { installOwner, readRun } from '../workflow/store.js';
 import { PublishedRuns, type Taker } from '../workflow-published-runs.js';
 import type { WorkflowDefinition, WorkflowEnvelope } from '../workflow/types.js';
 import { worktreePath } from '../workflow/worktree.js';
 import { resolveWorkflowEnv } from '../env-resolution.js';
-import { archiveOnDefaultBranch, BUILD, dirs, git, holdBasePin, Member, onGitHub, originFile, originRef, pull, runStep, SHIP, start, startIn, team, work, WORKSPACES } from './helpers/workflow-handoff-fixture.js';
+import { archiveOnDefaultBranch, BUILD, dirs, git, holdBasePin, Member, onGitHub, originFile, originRef, pull, runStep, SHIP, start, startIn, takeBack, team, work, WORKSPACES } from './helpers/workflow-handoff-fixture.js';
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -139,7 +139,7 @@ steps:
     bob.config.workflows = { tools: { default: 'claude' } };
     expect(await claimRun(bob.config, runId, { checkout: bob.checkout })).toMatchObject({ ok: true, value: { ownership: 'claimed' } });
     const resumed: Array<string | undefined> = [];
-    const tool: LocalToolAdapter = {
+    const tool: StepLauncher = {
       runInteractive: vi.fn(),
       run: vi.fn(async (_name, input) => {
         resumed.push(input.resume);
@@ -237,7 +237,7 @@ steps:
     fs.writeFileSync(lock, '');
     const warn = vi.spyOn(log, 'warn');
     const resumed: Array<string | undefined> = [];
-    const tool: LocalToolAdapter = {
+    const tool: StepLauncher = {
       runInteractive: vi.fn(),
       run: vi.fn(async (_name, input) => {
         resumed.push(input.resume);
@@ -339,6 +339,7 @@ steps:
     const session = await claudeSession(alice.checkout, 'Found two problems.');
     await reviewed(alice, runId, session);
     expect(await publishRun(alice.config, runId, { env: {}, checkout: alice.checkout, sessions: resumableSessions })).toMatchObject({ ok: true });
+    await takeBack(alice, runId);
     await reviewed(alice, runId, 'copy-1', { tool: 'claude', id: session });
     await forget(alice.checkout, session);
 
@@ -417,7 +418,8 @@ describe('a run taken back on the machine that worked on it', () => {
     const wrote = await work(alice, runId, 'write.txt');
     await publishRun(alice.config, runId, { env: {}, checkout: alice.checkout });
     await claimRun(bob.config, runId, { checkout: bob.checkout });
-    expect(await claimRun(alice.config, runId, { checkout: alice.checkout })).toMatchObject({ ok: true, value: { ownership: 'claimed' } });
+    // Bob claimed it a moment ago and may drive it, so taking it back needs the person's yes.
+    expect(await claimRun(alice.config, runId, { checkout: alice.checkout, takeover: 'confirmed' })).toMatchObject({ ok: true, value: { ownership: 'took_over' } });
     const dir = worktreePath(alice.checkout, wrote.branch);
     expect(git(alice.checkout, 'rev-parse', wrote.branch)).toBe(wrote.commit);
     fs.writeFileSync(path.join(dir, 'abandoned.txt'), 'left by an attempt that never reported\n');
@@ -492,7 +494,7 @@ steps:
     member.config.workflows = { tools: { default: 'claude' } };
     expect(await claimRun(member.config, runId, { checkout: member.checkout })).toMatchObject({ ok: true, value: { ownership: 'claimed' } });
     const resumed: Array<string | undefined> = [];
-    const tool: LocalToolAdapter = {
+    const tool: StepLauncher = {
       runInteractive: vi.fn(),
       run: vi.fn(async (_name, input) => {
         resumed.push(input.resume);
@@ -587,7 +589,7 @@ steps:
    * A Claude Code stand-in that answers each prompt with `replies[prompt]`: in the session it resumes, as Claude Code
    * does, or in a session of its own. It reports the session it ran in.
    */
-  function claudeTool(replies: Record<string, string>, seen: Seen[]): LocalToolAdapter {
+  function claudeTool(replies: Record<string, string>, seen: Seen[]): StepLauncher {
     return {
       runInteractive: vi.fn(),
       run: vi.fn(async (_name, input) => {
@@ -605,7 +607,7 @@ steps:
    * Drives the run on `member`'s machine until it asks for an approval nobody there gives. With `approve`, the first
    * approval it asks for is given, so the step behind it runs here.
    */
-  async function driveHere(member: Member, runId: string, tool: LocalToolAdapter, approve: boolean): Promise<WorkflowEnvelope> {
+  async function driveHere(member: Member, runId: string, tool: StepLauncher, approve: boolean): Promise<WorkflowEnvelope> {
     member.config.workflows = { tools: { default: 'claude' } };
     let asked = 0;
     const question = async (): Promise<string> => {
@@ -1046,6 +1048,39 @@ steps:
     const keyed = await publishedRuns(runner, runnerTaker(), { SIGNING_KEY: 'k' });
     expect(keyed[0]?.offer).toMatchObject({ lacks: [] });
     expect(PublishedRuns.candidates(keyed, { repository: 'github.com/acme/app', hasPerson: false, self }).map((run) => run.run)).toEqual([runId]);
+  });
+
+  const RENDER = `schemaVersion: v1alpha1
+name: render
+description: Build, then render on a GPU.
+steps:
+  - id: build
+    command: echo build
+  - id: render
+    needs: [build]
+    requires: { labels: [gpu] }
+    command: echo render
+`;
+
+  it('lists an offered run whose steps left require a label this machine does not declare as lacking it, which no runner here takes', async () => {
+    const acme = team({ render: RENDER });
+    const alice = await acme.member('alice');
+    const runner = await acme.member('runner');
+    originAt('https://github.com/acme/app.git', [alice, runner]);
+    const started = await startRun(alice.config, 'render', {}, { secrets: {} });
+    const runId = 'data' in started ? String(started.data.run) : '';
+    await publishRun(alice.config, runId, { env: {}, checkout: alice.checkout });
+
+    const runs = await publishedRuns(runner);
+    expect(runs[0]?.offer?.lacks).toEqual([{
+      reason: 'render requires labels gpu, which workflows.labels on this machine does not declare', fix: 'add them to workflows.labels on a machine that has them',
+    }]);
+    const self = (await installOwner(runner.config)).id;
+    expect(PublishedRuns.candidates(runs, { repository: 'github.com/acme/app', hasPerson: true, self })).toEqual([]);
+
+    runner.config.workflows = { tools: {}, ...runner.config.workflows, labels: ['gpu'] };
+    const labelled = await publishedRuns(runner);
+    expect(labelled[0]?.offer).toMatchObject({ lacks: [] });
   });
 
   const DOCS = `schemaVersion: v1alpha1

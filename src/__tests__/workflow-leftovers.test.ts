@@ -8,13 +8,13 @@ import { syncWorkflowDefinitions } from '../workflow/cache.js';
 import { leaseNext, reportAttempt, startRun } from '../workflow/engine.js';
 import { _setDriverPollMs, runLocalDriver } from '../workflow/drivers/local/local-driver.js';
 import { readRun } from '../workflow/store.js';
-import { claimRun, publishRun } from '../workflow/handoff.js';
+import { claimRun, publishRun, resumeRun } from '../workflow/handoff.js';
 import { retryStep } from '../workflow/run-controls.js';
 import { sweepLeftovers } from '../workflow/leftovers.js';
 import { runCopyToMerge } from '../workflow/workspace.js';
 import { getReportsDir, REPORTS_LOCK_FILENAME } from '../types.js';
 import { acquireLock, releaseLock } from '../update.js';
-import { log } from '../utils/logger.js';
+import { log } from '@teamai/shared/log';
 import { fakeGh } from './helpers/fake-gh.js';
 import type { LocalConfig } from '../types.js';
 import type { RunState } from '../workflow/types.js';
@@ -470,6 +470,7 @@ describe('doctor --fix past workflows.retention', () => {
     const { config, cwd, root, origin, runId } = await fixture(FAILS_LAST);
     shareTeam(config, root);
     expect(await publishRun(config, runId, { checkout: cwd, env: {} })).toMatchObject({ ok: true });
+    expect(await resumeRun(config, runId, { claim: false, checkout: cwd })).toMatchObject({ ok: true });
     expect(await runLocalDriver(config, runId, cwd)).toMatchObject({ data: { done: { outcome: 'failed' } } });
     const ended = await state(config, runId);
     const other = await otherInstall(config, root, origin);
@@ -490,6 +491,7 @@ describe('doctor --fix past workflows.retention', () => {
     shareTeam(config, root);
     fakeGh(path.join(root, 'gh'));
     expect(await publishRun(config, runId, { checkout: cwd, env: {} })).toMatchObject({ ok: true });
+    expect(await resumeRun(config, runId, { claim: false, checkout: cwd })).toMatchObject({ ok: true });
     expect(await runLocalDriver(config, runId, cwd)).toMatchObject({ data: { done: { outcome: 'failed' } } });
     const ended = await state(config, runId);
     const other = await otherInstall(config, root, origin);
@@ -533,6 +535,7 @@ describe('doctor --fix past workflows.retention', () => {
     const { config, cwd, root, origin, runId } = await fixture(FAILS_LAST);
     shareTeam(config, root);
     expect(await publishRun(config, runId, { checkout: cwd, env: {} })).toMatchObject({ ok: true });
+    expect(await resumeRun(config, runId, { claim: false, checkout: cwd })).toMatchObject({ ok: true });
     expect(await runLocalDriver(config, runId, cwd)).toMatchObject({ data: { done: { outcome: 'failed' } } });
     const ended = await state(config, runId);
     const other = await otherInstall(config, root, origin);
@@ -568,6 +571,7 @@ describe('doctor --fix past workflows.retention', () => {
     const { config, cwd, root, origin, runId } = await fixture(FAILS_LAST);
     shareTeam(config, root);
     expect(await publishRun(config, runId, { checkout: cwd, env: {} })).toMatchObject({ ok: true });
+    expect(await resumeRun(config, runId, { claim: false, checkout: cwd })).toMatchObject({ ok: true });
     expect(await runLocalDriver(config, runId, cwd)).toMatchObject({ data: { done: { outcome: 'failed' } } });
     const ended = await state(config, runId);
     const before = branches(origin, runId);
@@ -773,6 +777,7 @@ describe('a run that settled longer ago than workflows.retention', () => {
     const { config, cwd, root, origin, runId } = await fixture(FAILS_LAST);
     shareTeam(config, root);
     expect(await publishRun(config, runId, { checkout: cwd, env: {} })).toMatchObject({ ok: true });
+    expect(await resumeRun(config, runId, { claim: false, checkout: cwd })).toMatchObject({ ok: true });
     expect(await runLocalDriver(config, runId, cwd)).toMatchObject({ data: { done: { outcome: 'failed', record: 'published' } } });
     const until = Date.parse((await state(config, runId)).retainedUntil ?? '');
     // A snapshot an older teamai wrote as it settled the run again, which publishes no retainedUntil.
@@ -903,6 +908,7 @@ describe('a retry of a run that succeeded', () => {
     const { config, cwd, root, origin, runId } = await fixture(CHOOSES);
     shareTeam(config, root);
     expect(await publishRun(config, runId, { checkout: cwd, env: {} })).toMatchObject({ ok: true });
+    expect(await resumeRun(config, runId, { claim: false, checkout: cwd })).toMatchObject({ ok: true });
     expect(await runLocalDriver(config, runId, cwd, { autoApprove: true })).toMatchObject({ data: { done: { outcome: 'succeeded', record: 'published' } } });
     const change = `teamai/${runId}/change/p1`;
     const tip = (await state(config, runId)).copies?.[change]?.commit;
