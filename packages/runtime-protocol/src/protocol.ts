@@ -402,13 +402,14 @@ export const InitInstanceSchema = z.object({
 
 export type InitInstance = z.infer<typeof InitInstanceSchema>;
 
-/** The extensions Windows starts a command by name with, as npm's shims for it are named. */
+/** The extensions Windows starts a command by name with, as its default PATHEXT lists the scripts among them. */
 const WINDOWS_COMMAND_EXTENSIONS = ['', '.exe', '.cmd', '.bat'];
 
 /**
  * Whether an app's provider whose Binary path or command is `executable` runs an instance's `command`, as T3 Code and
- * Paseo start it: the same name, which the app finds on its PATH, or an absolute path to a file of that name; on Windows
- * also `<command>.exe`, `.cmd` or `.bat`, in any case. A path relative to a folder names no file the runtime can know.
+ * Paseo start it: the same name, which the app finds on its PATH, or a path to a file of that name, absolute or in the
+ * home folder (`~/`, which T3 Code expands); on Windows also `<command>.exe`, `.cmd` or `.bat`, in any case. A path
+ * relative to another folder names no file the runtime can know.
  */
 export function runsCommand({ executable, command, platform = process.platform }: { executable: string | undefined; command: string; platform?: NodeJS.Platform }): boolean {
   if (executable === undefined) return false;
@@ -416,8 +417,9 @@ export function runsCommand({ executable, command, platform = process.platform }
   if (executable === command) return true;
   const paths = platform === 'win32' ? path.win32 : path.posix;
   const name = paths.basename(executable);
+  const isInHome = executable.startsWith('~/') || (platform === 'win32' && executable.startsWith('~\\'));
 
-  if (paths.isAbsolute(command) || (!paths.isAbsolute(executable) && name !== executable)) return false;
+  if (paths.isAbsolute(command) || (!paths.isAbsolute(executable) && !isInHome && name !== executable)) return false;
 
   if (platform !== 'win32') return name === command;
 

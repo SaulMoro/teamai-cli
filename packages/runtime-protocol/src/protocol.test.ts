@@ -26,6 +26,10 @@ describe('whether an app\'s provider runs an instance\'s command', () => {
     { executable: '/opt/acme/bin/acme-claude-old', command: 'acme-claude', platform: 'darwin', runs: false },
     { executable: '/opt/acme/bin/Acme-Claude', command: 'acme-claude', platform: 'darwin', runs: false },
     { executable: 'bin/acme-claude', command: 'acme-claude', platform: 'linux', runs: false },
+    // T3 Code expands a Binary path in the home folder, such as Claude's own local install.
+    { executable: '~/.claude/local/claude', command: 'claude', platform: 'darwin', runs: true },
+    { executable: '~\\bin\\acme-claude.exe', command: 'acme-claude', platform: 'win32', runs: true },
+    { executable: '~acme/bin/acme-claude', command: 'acme-claude', platform: 'linux', runs: false },
     { executable: '/opt/acme/bin/acme-claude', command: '/usr/local/bin/acme-claude', platform: 'linux', runs: false },
     { executable: 'C:\\Acme\\bin\\Acme-Claude.EXE', command: 'acme-claude', platform: 'win32', runs: true },
     { executable: 'C:\\Acme\\bin\\acme-claude.cmd', command: 'acme-claude', platform: 'win32', runs: true },

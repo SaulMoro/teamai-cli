@@ -213,7 +213,7 @@ Started from a T3 thread, such as by the thread's agent, a step that names no to
 
 ### Team tools
 
-A [team tool](reference.md#team-tools-tools) such as `acme-claude` (`extends: claude`, `command: acme-claude`) runs on the T3 provider instance whose Binary path, in T3 Code under Settings → Providers, is `acme-claude` or an absolute path to it, or on the one `instances: { acme-claude: <its id> }` maps. A tool with a home of its own and no command, such as `claude-work` (`extends: claude`, `home: { dir: .claude-work, env: CLAUDE_CONFIG_DIR }`), runs on the instance that runs Claude's own binary with that Home path. Its session is read in that instance's Home path.
+A [team tool](reference.md#team-tools-tools) such as `acme-claude` (`extends: claude`, `command: acme-claude`) runs on the T3 provider instance whose Binary path, in T3 Code under Settings → Providers, is `acme-claude` or a path to it, or on the one `instances: { acme-claude: <its id> }` maps. A tool with a home of its own and no command, such as `claude-work` (`extends: claude`, `home: { dir: .claude-work, env: CLAUDE_CONFIG_DIR }`), runs on the instance that runs Claude's own binary with that Home path. Its session is read in that instance's Home path.
 
 When no instance runs it, teamai adds one the first time a step runs on it, and says so:
 
