@@ -479,6 +479,18 @@ interface PromptSubject {
    * then names. Absent: it offers no `exec`, and its places get no tool home.
    */
   execsOnToolHome?: true;
+  /**
+   * An app's runtime through a sandbox (`use: <app>, through: sandbox`): the sandbox runs commands, and a place names the
+   * step's tool and the attempt's tool home, where the app's tool runs as teamai's wrapper, which starts it in the
+   * sandbox, so a finished prompt's session is there. Absent: the runtime on its own.
+   */
+  through?: true;
+  /**
+   * Through a sandbox: whether the app started the step's tool there for the suite's prompt, which it may do after it
+   * shows the agent. Until it has, a teamai stopped meanwhile stops that start, and the prompt has more than its end left
+   * to journal.
+   */
+  toolStarted?(state: string): boolean;
 }
 
 const T3 = await t3OnFakeServer();
@@ -507,6 +519,46 @@ function fakeClaudeAgent(bin: string, agent: JsonValue): void {
     process.exit(0);
   ` });
 }
+
+/** The T3 runtime over `state`, which finds on its PATH the folder `wrappers` holds first, when given. */
+const t3Runtime = (state: string, wrappers?: string): StepRuntime<DriverCan> => stdioStepRuntime({
+  name: 't3', command: T3.command, args: [...(wrappers === undefined ? [] : [`PATH=${wrappers}${path.delimiter}${process.env['PATH'] ?? ''}`]), ...T3.args(state)],
+});
+
+/** `runtime`, which reaches T3 over `state` once the fake T3 Code server for it is up and the member signed in. */
+const t3Started = (state: string, runtime: StepRuntime<DriverCan>): StepRuntime<DriverCan> => ({ ...runtime, init: async (input) => { await T3.ready(state); return runtime.init(input); } });
+
+/** The Paseo runtime over `state`, which finds on its PATH the folder `wrappers` holds first, when given. */
+const paseoRuntime = (state: string, wrappers?: string): StepRuntime<DriverCan> => stdioStepRuntime({
+  name: 'paseo', command: '/usr/bin/env', args: [...(wrappers === undefined ? [] : [`PATH=${wrappers}${path.delimiter}${process.env['PATH'] ?? ''}`]), ...paseo.args(state)],
+});
+
+/** The Paseo runtime's options, with the toy's agent as the fake daemon's: a model it cannot run is one the daemon does not offer. */
+function paseoOptions(agent: JsonValue): RuntimeOptions {
+  const { fail, usage: _usage, ...behaviour } = typeof agent === 'object' && agent !== null && !Array.isArray(agent) ? agent : {};
+  paseo.behave({ ...behaviour, ...(fail !== undefined && { models: { claude: ['claude-sonnet-5-5'] } }) });
+
+  return { url: paseo.url };
+}
+
+/**
+ * `inner` through the sandbox on the fake docker over `state`, as a definition entry `use: <app>, through: sandbox` runs
+ * it. The sandbox serves its attempt socket under TMPDIR when the result's folder is too deep for one, as the test's is.
+ */
+const throughDocker = (state: string, inner: StepRuntime<DriverCan>): StepRuntime<DriverCan> => composedStepRuntime({
+  outer: stdioStepRuntime({ name: 'sandbox', command: docker.command, args: ['TMPDIR=/tmp', ...docker.args(state)] }), inner, innerCredentials: {},
+});
+
+/**
+ * Claude in the fake docker's image, as teamai's wrapper starts it there for an app's agent over `state`: it marks that
+ * it started, and exits, since the app's fake plays the agent itself.
+ */
+function claudeInImage(state: string): void {
+  fs.writeFileSync(path.join(docker.bin, 'claude'), `#!/bin/sh\n: > '${claudeStarted(state)}'\n`, { mode: 0o755 });
+}
+
+/** Where Claude in the fake docker's image marks that it started for an app's agent over `state`. */
+const claudeStarted = (state: string): string => path.join(state, 'claude-started');
 
 const PROMPT_SUBJECTS: PromptSubject[] = [
   {
@@ -551,11 +603,7 @@ const PROMPT_SUBJECTS: PromptSubject[] = [
   },
   {
     name: 't3 over stdio, on a fake T3 Code server',
-    start: (state) => {
-      const runtime = stdioStepRuntime({ name: 't3', command: T3.command, args: T3.args(state) });
-
-      return { ...runtime, init: async (input) => { await T3.ready(state); return runtime.init(input); } };
-    },
+    start: (state) => t3Started(state, t3Runtime(state)),
     options: (state, agent) => T3.options(state, agent),
     display: {
       label: 'review · teamai r0123abcd', url: expect.stringMatching(/^t3code:\/\/threads\/env-fake-1\/mcp%3Alaunch%3A[0-9a-f]+$/),
@@ -571,19 +619,49 @@ const PROMPT_SUBJECTS: PromptSubject[] = [
   },
   {
     name: 'paseo over stdio, on a fake Paseo daemon',
-    start: (state) => stdioStepRuntime({ name: 'paseo', command: '/usr/bin/env', args: paseo.args(state) }),
-    // The toy's agent, as the fake daemon's: a model it cannot run is one the daemon does not offer.
-    options: (_, agent) => {
-      const { fail, usage: _usage, ...behaviour } = typeof agent === 'object' && agent !== null && !Array.isArray(agent) ? agent : {};
-      paseo.behave({ ...behaviour, ...(fail !== undefined && { models: { claude: ['claude-sonnet-5-5'] } }) });
-
-      return { url: paseo.url };
-    },
+    start: (state) => paseoRuntime(state),
+    options: (_, agent) => paseoOptions(agent),
     display: expect.objectContaining({ label: 'teamai review · r0123abcd', url: expect.stringMatching(/^paseo:\/\/h\/srv_fake0001\/agent\//) }),
     reportsUsage: false,
     failure: (failure) => ({ ...failure, message: `The Paseo daemon at ${paseo.url} has no claude model claude-opus-5-5. It offers: claude-sonnet-5-5.` }),
     journal: (state) => [path.join(state, 'home', '.teamai', 'runtime-state', 'paseo')],
     forget: (_, op) => paseo.forget(op),
+  },
+  // An app through the sandbox: its runtime adds teamai's wrapper, from its PATH, as the provider that runs Claude, and
+  // the app's fake starts it in place of Claude: it asks the sandbox's attempt socket, and runs Claude in the sandbox.
+  {
+    name: 't3 through a sandbox on a fake docker',
+    start: (state) => t3Started(state, throughDocker(state, t3Runtime(state, docker.wrappers(state)))),
+    options: (state, agent) => {
+      claudeInImage(state);
+
+      return { sandbox: docker.options, t3: T3.options(state, agent, { toolHome: path.join(path.dirname(state), 'tool-home') }) };
+    },
+    display: {
+      label: 'review · teamai r0123abcd', url: expect.stringMatching(/^t3code:\/\/threads\/env-fake-1\/mcp%3Alaunch%3A[0-9a-f]+$/),
+      fields: { thread: expect.stringMatching(/^mcp:launch:[0-9a-f]+$/), model: 'claude-opus-5-5', environment: 'fake-laptop' },
+    },
+    reportsUsage: false,
+    failure: () => ({ code: 'tool_failed', message: expect.stringContaining('ended failed before the step was done.') }),
+    journal: (state) => [path.join(state, 'home', '.teamai', 'runtime-state', 'sandbox'), path.join(state, 'home', '.teamai', 'runtime-state', 't3')],
+    stop: (state) => T3.stop(state),
+    through: true,
+    toolStarted: (state) => fs.existsSync(claudeStarted(state)),
+  },
+  {
+    name: 'paseo through a sandbox on a fake docker',
+    start: (state) => throughDocker(state, paseoRuntime(state, docker.wrappers(state))),
+    options: (state, agent) => {
+      claudeInImage(state);
+
+      return { sandbox: docker.options, paseo: paseoOptions(agent) };
+    },
+    display: expect.objectContaining({ label: 'teamai review · r0123abcd', url: expect.stringMatching(/^paseo:\/\/h\/srv_fake0001\/agent\//) }),
+    reportsUsage: false,
+    failure: (failure) => ({ ...failure, message: `The Paseo daemon at ${paseo.url} has no claude model claude-opus-5-5. It offers: claude-sonnet-5-5.` }),
+    journal: (state) => [path.join(state, 'home', '.teamai', 'runtime-state', 'sandbox'), path.join(state, 'home', '.teamai', 'runtime-state', 'paseo')],
+    through: true,
+    toolStarted: (state) => fs.existsSync(claudeStarted(state)),
   },
 ];
 
@@ -598,20 +676,40 @@ describe.each(PROMPT_SUBJECTS)('StepRuntime prompt scenarios: $name', (subject) 
     const runtime = subject.start(state);
     started.push(runtime);
     const ready = await runtime.init({ options: subject.options(state, agent), mode: 'unattended' });
-    expect(ready).toMatchObject({ ok: true, launchesAgents: true, ...(subject.execsOnToolHome ? { runsOnToolHome: true } : { can: { exec: false } }) });
+    // Through a sandbox, the sandbox runs commands, which it offers by leaving `exec` unset.
+    expect(ready).toMatchObject({ ok: true, launchesAgents: true, ...(subject.execsOnToolHome ? { runsOnToolHome: true } : { can: subject.through ? { isolation: 'sandbox' } : { exec: false } }) });
+    expect(ready.ok && ready.can.exec).toBe(subject.through ? undefined : ready.ok && ready.can.exec);
 
     return runtime;
   };
 
+  const toolHome = (): string => path.join(dir, 'tool-home');
+  // The open of the test's place, which a restarted teamai sends again before it reattaches the place.
+  let placeOpen: OpenRequest | undefined;
+
   const opened = async (runtime: StepRuntime<DriverCan>): Promise<string> => {
-    const place = await runtime.open({
-      op: newOpId(), run: 'r0123abcd', attempt: 'a0123abcd', credentials: {},
-      view: { worktree, readonly: [], result: path.join(dir, 'out'), runDir: path.join(dir, 'scratch'), toolHome: subject.execsOnToolHome ? { CLAUDE_CONFIG_DIR: path.join(dir, 'tool-home') } : {} },
-    }, async () => {});
+    placeOpen = {
+      op: newOpId(), run: 'r0123abcd', attempt: 'a0123abcd', credentials: {}, ...(subject.through && { tool: 'claude' }),
+      view: { worktree, readonly: [], result: path.join(dir, 'out'), runDir: path.join(dir, 'scratch'), toolHome: subject.execsOnToolHome || subject.through ? { CLAUDE_CONFIG_DIR: toolHome() } : {} },
+    };
+    const place = await runtime.open(placeOpen, async () => {});
 
     if (place.kind !== 'ready') throw new Error(`not opened: ${JSON.stringify(place)}`);
 
     return place.handle;
+  };
+
+  /**
+   * A runtime started again, as a restarted teamai starts it: through a sandbox, it opens the test's place again first,
+   * whose repeated id answers the same place, and gives the sandbox the prompt's credentials again, which it keeps only
+   * in memory.
+   */
+  const restarted = async (agent: JsonValue, handle: string): Promise<StepRuntime<DriverCan>> => {
+    const runtime = await start(agent);
+
+    if (subject.through && placeOpen) expect(await runtime.open(placeOpen, async () => {})).toMatchObject({ kind: 'ready', handle });
+
+    return runtime;
   };
 
   const promptRequest = (handle: string, op = newOpId()): PromptRequest => ({
@@ -652,7 +750,7 @@ describe.each(PROMPT_SUBJECTS)('StepRuntime prompt scenarios: $name', (subject) 
     const end = await runtime.prompt(request, { onAccepted: () => { accepted = true; } });
 
     expect(accepted).toBe(true);
-    expect(end).toEqual({ kind: 'finished', session: { tool: 'claude', id: expect.any(String) }, result: { output: { verdict: 'approve' } }, ...(subject.reportsUsage !== false && { usage: { input: 1200, output: 300 } }) });
+    expect(end).toEqual({ kind: 'finished', session: { tool: 'claude', id: expect.any(String), ...(subject.through && { home: toolHome() }) }, result: { output: { verdict: 'approve' } }, ...(subject.reportsUsage !== false && { usage: { input: 1200, output: 300 } }) });
     expect(JSON.parse(fs.readFileSync(request.lease.result, 'utf8'))).toEqual({ output: { verdict: 'approve' } });
   });
 
@@ -723,7 +821,7 @@ describe.each(PROMPT_SUBJECTS)('StepRuntime prompt scenarios: $name', (subject) 
     expect(await runtime.reattach(handle)).toEqual(alive([{ op: request.op, state: 'cancelled' }]));
   });
 
-  it.runIf(subject.execsOnToolHome !== true)('runs no command: an exec fails, naming the runtime\'s offer', async () => {
+  it.runIf(subject.execsOnToolHome !== true && subject.through !== true)('runs no command: an exec fails, naming the runtime\'s offer', async () => {
     const runtime = await start();
     const end = await runtime.exec({ op: newOpId(), handle: await opened(runtime), argv: ['/bin/sh', '-c', 'touch ran'], env: {}, unset: [], credentials: {}, cwd: worktree }, {}, 'command');
 
@@ -740,8 +838,9 @@ describe.each(PROMPT_SUBJECTS)('StepRuntime prompt scenarios: $name', (subject) 
     let accepted = false;
     let shown = false;
     const ended = runtime.prompt(request, { onAccepted: ({ display }) => { accepted = true; shown ||= display !== undefined; }, onDisplay: () => { shown = true; } });
-    // A runtime that shows its agent has journaled that agent by then: only the end is left to journal.
-    expect(await until(() => accepted && (subject.display === undefined || subject.displays === 'place' || shown))).toBe(true);
+    // A runtime that shows its agent has journaled that agent by then, and through a sandbox, once the tool started there,
+    // its prompt too: only the end is left to journal.
+    expect(await until(() => accepted && (subject.display === undefined || subject.displays === 'place' || shown) && (subject.toolStarted?.(state) ?? true))).toBe(true);
     const journal = subject.journal?.(state) ?? [];
 
     try {
@@ -799,7 +898,7 @@ describe.each(PROMPT_SUBJECTS)('StepRuntime prompt scenarios: $name', (subject) 
     expect(finished.kind).toBe('finished');
     if (finished.kind !== 'finished') return;
     await first.dispose();
-    const second = await start({ output: { verdict: 'approve' }, usage: { input: 10 } });
+    const second = await restarted({ output: { verdict: 'approve' }, usage: { input: 10 } }, handle);
 
     expect(await second.reattach(handle)).toEqual(alive([{ op: request.op, state: 'finished', session: finished.session, result: finished.result, usage: finished.usage }]));
     expect(await second.prompt(request, {})).toEqual(finished);
@@ -815,10 +914,11 @@ describe.each(PROMPT_SUBJECTS)('StepRuntime prompt scenarios: $name', (subject) 
     let accepted = false;
     let shown = false;
     void first.prompt(request, { onAccepted: ({ display }) => { accepted = true; shown ||= display !== undefined; }, onDisplay: () => { shown = true; } });
-    // A runtime that shows its agent has journaled that agent by then, so the restart reattaches to it.
-    expect(await until(() => accepted && (subject.display === undefined || subject.displays === 'place' || shown))).toBe(true);
+    // A runtime that shows its agent has journaled that agent by then, so the restart reattaches to it; through a sandbox,
+    // once the tool started there, a restart no longer stops that start.
+    expect(await until(() => accepted && (subject.display === undefined || subject.displays === 'place' || shown) && (subject.toolStarted?.(state) ?? true))).toBe(true);
     await first.dispose();
-    const second = await start(agent);
+    const second = await restarted(agent, handle);
 
     expect(await second.reattach(handle)).toEqual(alive([{ op: request.op, state: 'running' }]));
     const reconnected = second.prompt(request, {});
