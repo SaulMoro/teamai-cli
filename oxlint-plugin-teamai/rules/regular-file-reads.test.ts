@@ -73,14 +73,14 @@ export const open = async (file: string) => [await fs.promises.open(file), fs.op
 valid('allows an open for writing, which the write rule guards where a step writes', `import fs from 'node:fs';
 export const open = (file: string) => fs.openSync(file, 'w');`);
 
-invalid('rejects a read under computed access, destructured from a file module, or off one imported at run time', `import fs from 'node:fs';
-const { readFileSync: readNow } = fs;
+invalid('rejects a read under computed access, destructured from a file module or its promises, or off one imported at run time', `import fs from 'node:fs';
+const { readFileSync: readNow, promises: later } = fs;
 export const all = async (file: string) => {
   const fsp = await import('node:fs/promises');
   const { readFile } = await import('node:fs/promises');
-  return [fs['readFileSync'](file), readNow(file), await fsp.readFile(file), await readFile(file), await (await import('node:fs/promises')).readFile(file)];
+  return [fs['readFileSync'](file), readNow(file), await fsp.readFile(file), await readFile(file), await (await import('node:fs/promises')).readFile(file), await later.readFile(file)];
 };`, (output) => {
-  expect(output.match(/Read a file with readRegularFile/g)).toHaveLength(5);
+  expect(output.match(/Read a file with readRegularFile/g)).toHaveLength(6);
 });
 
 invalid('rejects a read passed on as a value, which a later call makes', `import { readFile } from 'node:fs/promises';

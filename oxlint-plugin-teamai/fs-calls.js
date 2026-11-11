@@ -78,7 +78,24 @@ export function isFsModule(sourceCode, node) {
   if (imported !== undefined) return FS.has(imported.from) && (imported.name === 'default' || imported.name === '*' || imported.name === 'promises');
   const declared = declaredBy(variable);
 
-  return declared !== undefined && declared.declarator.id.type === 'Identifier' && declared.declarator.init !== null && isFsModule(sourceCode, declared.declarator.init);
+  if (declared === undefined || declared.declarator.init === null || !isFsModule(sourceCode, declared.declarator.init)) return false;
+
+  return declared.declarator.id.type === 'Identifier' || destructuredKey(declared) === 'promises';
+}
+
+/**
+ * The key `declared.name` is destructured from in its declarator's object pattern: `promises` for
+ * `const { promises: fsp } = fs`. Undefined for a computed key or a name the pattern does not bind.
+ * @param {NonNullable<ReturnType<typeof declaredBy>>} declared
+ * @returns {string | undefined}
+ */
+function destructuredKey(declared) {
+  if (declared.declarator.id.type !== 'ObjectPattern') return undefined;
+
+  const property = declared.declarator.id.properties.find((entry) => entry.type === 'Property'
+    && (entry.value === declared.name || (entry.value.type === 'AssignmentPattern' && entry.value.left === declared.name)));
+
+  return property?.type === 'Property' && !property.computed && property.key.type === 'Identifier' ? property.key.name : undefined;
 }
 
 /**
@@ -98,12 +115,9 @@ export function fsFunctionOf(sourceCode, callee) {
   if (imported !== undefined) return FS.has(imported.from) && imported.name !== 'default' && imported.name !== '*' ? imported.name : undefined;
   const declared = declaredBy(variable);
 
-  if (declared === undefined || declared.declarator.id.type !== 'ObjectPattern' || declared.declarator.init === null || !isFsModule(sourceCode, declared.declarator.init)) return undefined;
+  if (declared === undefined || declared.declarator.init === null || !isFsModule(sourceCode, declared.declarator.init)) return undefined;
 
-  const property = declared.declarator.id.properties.find((entry) => entry.type === 'Property'
-    && (entry.value === declared.name || (entry.value.type === 'AssignmentPattern' && entry.value.left === declared.name)));
-
-  return property?.type === 'Property' && !property.computed && property.key.type === 'Identifier' ? property.key.name : undefined;
+  return destructuredKey(declared);
 }
 
 /** The `fs.constants` an open only reads with; any other constant, such as `O_WRONLY` or `O_CREAT`, counts as a write. */
