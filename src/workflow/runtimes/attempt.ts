@@ -563,23 +563,105 @@ function isStopRefused(failure: RuntimeFailure): boolean {
  * which bounds what runs in the place; undefined when the attempt has no such limit, or only stops what a teamai before
  * it left.
  */
-export function attemptRun({ config, run, attempt, runtime, driver, deadline }: { config: LocalConfig; run: RunId; attempt: AttemptId; runtime: StepRuntime<DriverCan>; driver: string; deadline?: string }): AttemptRun {
-  const file = attemptRuntimePath(config, run, attempt);
-  let record: AttemptRuntimeRecord | undefined;
+export function attemptRun({ runtime, ...input }: { config: LocalConfig; run: RunId; attempt: AttemptId; runtime: StepRuntime<DriverCan>; driver: string; deadline?: string }): AttemptRun {
+  return attemptThrough({ ...input, sends: attemptSends(runtime) });
+}
+
+/** A step runtime with what sends an operation taken out: an attempt sends only through `AttemptSends`. */
+type RuntimeWithoutSends = Omit<StepRuntime<DriverCan>, 'exec' | 'prompt'>;
+
+/** How a send reads a stop that found nothing running: whether the operation may already run on the runtime. */
+interface SendAfterStop {
+  /**
+   * The op is one a teamai before this one sent and the runtime may run now: sending it again reconnects to it, so it
+   * is sent, and gets the stop once it is. An op that cannot be running there is not sent after a stop.
+   */
+  reconnects: boolean;
+  /** Settles once what the operation's events show is recorded; the send waits for it before it ends. */
+  kept: () => Promise<void>;
+}
+
+export type AttemptSends = ReturnType<typeof attemptSends>;
+
+/**
+ * The one way an attempt sends an operation to its runtime. It owns how the step was stopped and what runs now, so a
+ * stop that found nothing running is read by every send: one sent after it is not sent, or, when it reconnects to one
+ * already running there, is passed the stop once it is sent. `runtime` is the rest of the step runtime, with no send.
+ */
+function attemptSends(full: StepRuntime<DriverCan>) {
+  // How the step was stopped while nothing it sent was running.
+  let stopped: 'stop' | 'cancel' | undefined;
   let running: { op: OpId } | undefined;
-  // Ends the exec running now as `left`, while one runs.
+  // Ends the exec running now as `left`, while one that its runtime goes on with runs.
   let leave: (() => void) | undefined;
   // The cancel the run asked of the operation running now: a stop after it waits for it, since leaving would drop it.
   let cancelling: { op: OpId; landed: Promise<void> } | undefined;
+
+  /**
+   * Sends `op` through `send`, unless a stop came first and it cannot already run there. An exec its runtime goes on
+   * with (`isLeavable`) is left on a stop, `send` racing what it sends against `leaving`; anything else is cancelled.
+   */
+  const through = async <TEnd extends AttemptExecEnd | PromptEnd>(op: OpId, send: (leaving: Promise<{ kind: 'left' }>) => Promise<TEnd>, { reconnects, kept }: SendAfterStop, isLeavable: boolean): Promise<TEnd | { kind: 'cancelled' }> => {
+    if (stopped && !reconnects) return { kind: 'cancelled' };
+
+    running = { op };
+
+    const leaving = isLeavable && stopped === 'stop' ? Promise.resolve({ kind: 'left' } as const)
+      : new Promise<{ kind: 'left' }>((resolve) => { leave = isLeavable ? () => resolve({ kind: 'left' }) : undefined; });
+
+    const sent = send(leaving);
+    const passedOn = stopped === 'cancel' || (stopped === 'stop' && !isLeavable) ? full.cancel(op) : undefined;
+
+    if (passedOn) cancelling = { op, landed: passedOn };
+    const [end] = await Promise.all([sent, passedOn]);
+    leave = undefined;
+    await kept();
+    running = undefined;
+
+    return end;
+  };
+
+  const runtime: RuntimeWithoutSends = full;
+
+  return {
+    runtime,
+    exec: (request: ExecRequest, events: ExecEvents, kind: ExecKind, after: SendAfterStop) => through(request.op, (leaving) => Promise.race([full.exec(request, events, kind), leaving]), after, kind !== 'setup' && full.isExecReconnected === true),
+    prompt: (request: PromptRequest, events: { onAccepted?: (accepted: Accepted) => void; onDisplay?: (display: RuntimeDisplay) => void }, after: SendAfterStop) => through(request.op, () => full.prompt(request, events), after, false),
+
+    async stop(): Promise<void> {
+      stopped ??= 'stop';
+
+      if (running && cancelling?.op === running.op) return cancelling.landed;
+
+      if (leave) {
+        leave();
+
+        return;
+      }
+
+      if (running) await full.cancel(running.op);
+    },
+
+    async cancel(): Promise<void> {
+      stopped = 'cancel';
+
+      if (!running) return;
+      cancelling = { op: running.op, landed: full.cancel(running.op) };
+      await cancelling.landed;
+    },
+  };
+}
+
+function attemptThrough({ config, run, attempt, sends, driver, deadline }: { config: LocalConfig; run: RunId; attempt: AttemptId; sends: AttemptSends; driver: string; deadline?: string }): AttemptRun {
+  const { runtime } = sends;
+  const file = attemptRuntimePath(config, run, attempt);
+  let record: AttemptRuntimeRecord | undefined;
   // An exec ended `left` goes on on its runtime: its place stays open, for a later teamai to reconnect to or cancel.
   let isLeft = false;
   // Why an exec or prompt of this attempt may still run, once one ended `lost`: its place is not closed under it.
   let mayRun: RuntimeFailure | undefined;
   // The credentials the place was opened with, in memory only, so what the runtime says of the place is kept masked.
   let openedWith: Record<string, string> = {};
-  // How the step was stopped while nothing it sent was running: an exec, setup or prompt never sent is not sent, and an
-  // exec or prompt a restart sends again under its recorded id gets the stop once it is sent.
-  let stopped: 'stop' | 'cancel' | undefined;
 
   const save = async (next: AttemptRuntimeRecord): Promise<void> => {
     record = next;
@@ -798,20 +880,8 @@ export function attemptRun({ config, run, attempt, runtime, driver, deadline }: 
 
       const exec = before.exec ?? { op: newOpId() };
       await save({ ...before, exec, phase: 'running' });
-
-      if (stopped && !(before.exec && runtime.isExecReconnected)) return { kind: 'cancelled' };
-      running = exec;
       const acceptance = accepting(events);
-      const leaving = new Promise<{ kind: 'left' }>((resolve) => { leave = () => resolve({ kind: 'left' }); });
-      const sent = runtime.exec({ op: exec.op, handle, ...request }, { ...events, onAccepted: acceptance.onAccepted, onDisplay: acceptance.onDisplay }, kind);
-
-      const passedOn = stopped === 'cancel' ? runtime.cancel(exec.op) : undefined;
-
-      if (passedOn) cancelling = { op: exec.op, landed: passedOn };
-      const [end] = await Promise.all([Promise.race([sent, stopped === 'stop' ? { kind: 'left' } as const : leaving]), passedOn]);
-      leave = undefined;
-      await acceptance.kept();
-      running = undefined;
+      const end = await sends.exec({ op: exec.op, handle, ...request }, { ...events, onAccepted: acceptance.onAccepted, onDisplay: acceptance.onDisplay }, kind, { reconnects: before.exec !== undefined && runtime.isExecReconnected === true, kept: acceptance.kept });
       isLeft = end.kind === 'left';
 
       return end.kind === 'left' ? end : ended(end);
@@ -832,15 +902,10 @@ export function attemptRun({ config, run, attempt, runtime, driver, deadline }: 
 
       const setup = { op: newOpId() };
       await save({ ...before, setup, phase: 'running' });
-
-      if (stopped) return { kind: 'cancelled' };
-      running = setup;
       const acceptance = accepting(events);
-      const end = await runtime.exec({ op: setup.op, handle, ...request }, { ...events, onAccepted: acceptance.onAccepted, onDisplay: acceptance.onDisplay }, 'setup');
-      await acceptance.kept();
-      running = undefined;
+      const end = await sends.exec({ op: setup.op, handle, ...request }, { ...events, onAccepted: acceptance.onAccepted, onDisplay: acceptance.onDisplay }, 'setup', { reconnects: false, kept: acceptance.kept });
 
-      return ended(end);
+      return end.kind === 'left' ? end : ended(end);
     },
 
     async prompt(request, events) {
@@ -904,42 +969,14 @@ export function attemptRun({ config, run, attempt, runtime, driver, deadline }: 
 
       if (before.prompt === undefined) await save({ ...before, prompt: sent, phase: 'running' });
 
-      if (stopped && before.prompt === undefined) return { kind: 'cancelled' };
-      running = sent;
       const acceptance = accepting(events);
-      const asked = runtime.prompt({ op: sent.op, handle, ...request }, { onAccepted: acceptance.onAccepted, onDisplay: acceptance.onDisplay });
-      // A prompt is never left: a stop of either kind cancels the one this resends.
-      const passedOn = stopped ? runtime.cancel(sent.op) : undefined;
-
-      if (passedOn) cancelling = { op: sent.op, landed: passedOn };
-      const [end] = await Promise.all([asked, passedOn]);
-      await acceptance.kept();
-      running = undefined;
+      const end = await sends.prompt({ op: sent.op, handle, ...request }, { onAccepted: acceptance.onAccepted, onDisplay: acceptance.onDisplay }, { reconnects: before.prompt !== undefined, kept: acceptance.kept });
 
       return ended(await keptIn(end));
     },
 
-    async stop() {
-      stopped ??= 'stop';
-
-      if (running && cancelling?.op === running.op) return cancelling.landed;
-
-      if (leave && runtime.isExecReconnected) {
-        leave();
-
-        return;
-      }
-
-      if (running) await runtime.cancel(running.op);
-    },
-
-    async cancel() {
-      stopped = 'cancel';
-
-      if (!running) return;
-      cancelling = { op: running.op, landed: runtime.cancel(running.op) };
-      await cancelling.landed;
-    },
+    stop: sends.stop,
+    cancel: sends.cancel,
 
     async collect() {
       const before = await current();
