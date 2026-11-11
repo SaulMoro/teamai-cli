@@ -119,6 +119,17 @@ export interface ProviderToAdd {
   entry: { extends: PaseoTool; label: string; command?: [string]; env?: Record<string, string> };
 }
 
+/**
+ * Whether a provider whose command on the daemon is `executable` runs `command`, as Paseo starts it: Paseo does not
+ * expand `~/`. Paseo's protocol does not say which platform the daemon's host runs, which may be another machine's, so
+ * the command tells: a drive letter, a backslash or a Windows extension (`.exe`, `.cmd`, `.bat`) is a Windows host's.
+ */
+export function daemonRuns({ executable, command }: { executable: string | undefined; command: string }): boolean {
+  const isWindows = executable !== undefined && /^[a-z]:[\\/]|\\|\.(?:exe|cmd|bat)$/i.test(executable);
+
+  return runsCommand({ executable, command, expandsHome: false, platform: isWindows ? 'win32' : 'linux' });
+}
+
 /** How Paseo names a custom provider: lowercase letters, digits and dashes, starting with a letter. */
 const PROVIDER_ID = /^[a-z][a-z0-9-]*$/;
 
@@ -143,15 +154,15 @@ export function providerOf(instance: InitInstance, tool: PaseoTool, { custom, na
 
     if (problem !== undefined) return { cannot: problem };
 
-    return command === undefined || runsCommand({ executable: runs, command, expandsHome: false })
+    return command === undefined || daemonRuns({ executable: runs, command })
       ? { provider: named }
       : { cannot: `the runtime's providers option names ${named}, which runs ${runs ?? 'its tool\'s own command'} rather than its command ${command}; name a provider whose command is ${command}` };
   }
 
   // A provider with no command of its own runs the tool's.
   const runsOwn = (entry: CustomProviders[string]): boolean => (command === undefined
-    ? (entry.command?.[0] === undefined || runsCommand({ executable: entry.command[0], command: tool, expandsHome: false })) && home !== undefined && entry.env?.[variable] === home
-    : runsCommand({ executable: entry.command?.[0], command, expandsHome: false }));
+    ? (entry.command?.[0] === undefined || daemonRuns({ executable: entry.command[0], command: tool })) && home !== undefined && entry.env?.[variable] === home
+    : daemonRuns({ executable: entry.command?.[0], command }));
 
   if (command === undefined && home === undefined) {
     return { cannot: `the team instance names neither a command nor a home for Paseo to run ${tool} with; add a Paseo provider on the daemon's host that extends ${tool}, then name it in the runtime's providers option` };

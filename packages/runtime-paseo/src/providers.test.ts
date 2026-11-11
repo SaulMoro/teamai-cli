@@ -43,6 +43,16 @@ describe('teamai-runtime-paseo', () => {
       });
     });
 
+    it.each([
+      ['a Windows path with its extension', 'C:\\Tools\\acme\\acme-claude.EXE'],
+      ['a Windows path written with forward slashes', 'D:/acme/acme-claude.cmd'],
+      ['a bare Windows name', 'acme-claude.exe'],
+    ])('offers an instance whose Paseo provider runs its command as a daemon on a Windows host writes it: %s', async (_case, command) => {
+      behave({ custom_providers: { 'claude-acme': { extends: 'claude', command: [command] } } });
+
+      expect(await ready(start(), { options: { url: daemon.url }, instances: [ACME] })).toMatchObject({ type: 'init', ok: true, can: { tools: ['claude', 'opencode', 'acme-claude'] } });
+    });
+
     /** `name` as an executable on the runtime's PATH, as a member installs a team tool, and the env a runtime finds it with. */
     const installed = (name: string): { file: string; env: Record<string, string> } => {
       const bin = path.join(dir, 'bin');
