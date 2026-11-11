@@ -5,6 +5,7 @@ export const tools = {
   // hermes_constants.py and hermes_cli/main.py at 68134629 (the same rules at 7e9eb8d9). Hermes reads its home in either scope.
   // Out of teamai's sight: another process's -p/--profile flag, and the supervised, desktop SSH and s6 gateway starts that skip active_profile.
   hermes: {
+    receivesDeliveredModels: true,
     home: { dir: '.hermes', moves: { by: [{ kind: 'hermes-home', evidence: 'source' }] } },
     skillLoad: 'unknown',
     skills: {
@@ -19,7 +20,12 @@ export const tools = {
       retired: { user: ['AGENTS.md'], project: ['AGENTS.md'] },
     },
     agents: NONE,
-    mcp: NONE,
+    // MCP servers live in `mcp_servers` of the profile's config.yaml. The home
+    // move resolves the active profile; no project channel is proven.
+    mcp: {
+      user: { format: 'hermes', reads: [{ base: 'home', path: '.hermes/config.yaml', evidence: 'docs' }] },
+      project: 'none',
+    },
     hooks: { user: { channel: 'adapter', adapter: 'hermes-plugin', evidence: 'verified' }, self: 'user', subagentStop: false, stopReply: false, shell: 'system', teamHooks: 'home', needsBundle: false },
     sessions: ['hermes'],
     launch: 'hermes',

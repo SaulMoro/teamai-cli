@@ -14,7 +14,7 @@ import { normalizeToolName } from './utils/tool-names.js';
 import { redactWithEnv } from '@teamai/shared/redact';
 import { openRegularFile, readRegularFile } from '@teamai/shared/regular-file';
 import { acquireLock, releaseLock } from './update.js';
-import { DASHBOARD_COMPACTION_THRESHOLD, DASHBOARD_IDLE_TIMEOUT_MS, DASHBOARD_STALE_TIMEOUT_MS, DASHBOARD_STOPPED_DISPLAY_MS, CORRECTION_WINDOW_MS, CORRECTION_KEYWORDS, TRANSCRIPT_INTERRUPT_PREFIX, TRANSCRIPT_SYSTEM_PREFIXES, stripInjectedPrompt, TRANSCRIPT_REJECT_MARKERS, COPILOT_TOOL_ID, getDataHome, type DashboardEvent, type DashboardEventType, type DashboardSession, type SessionMetrics, type RequestCostMetrics, type LocalConfig } from './types.js';
+import { DASHBOARD_COMPACTION_THRESHOLD, DASHBOARD_IDLE_TIMEOUT_MS, DASHBOARD_STALE_TIMEOUT_MS, DASHBOARD_STOPPED_DISPLAY_MS, CORRECTION_WINDOW_MS, CORRECTION_KEYWORDS, TRANSCRIPT_INTERRUPT_PREFIX, TRANSCRIPT_SYSTEM_PREFIXES, stripInjectedPrompt, TRANSCRIPT_REJECT_MARKERS, TRANSCRIPT_HOST_BLOCK_MARKERS, COPILOT_TOOL_ID, getDataHome, type DashboardEvent, type DashboardEventType, type DashboardSession, type SessionMetrics, type RequestCostMetrics, type LocalConfig } from './types.js';
 import type { JsonValue } from '@teamai/shared/json';
 import { INTERVENTION_SCAN_MAX_BYTES, emptyTokenUsage, addTokenUsage, totalTokens, type TokenUsage } from '@teamai/tool-core/tokens';
 import { getUserHome } from '@teamai/shared/home';
@@ -435,6 +435,12 @@ async function scanJsonlTranscriptOnce(transcriptPath: string): Promise<Transcri
             : Array.isArray(item.content)
               ? item.content.map((c) => c.text ?? '').join(' ')
               : item.content;
+
+          // A call the host blocked before it ran is neither the member
+          // rejecting it nor the AI failing at it, so it counts as neither:
+          // Claude Code's auto-mode classifier timing out is the host's
+          // problem, not friction the member can document (#1821).
+          if (TRANSCRIPT_HOST_BLOCK_MARKERS.some((m) => text.includes(m))) continue;
 
           if (TRANSCRIPT_REJECT_MARKERS.some((m) => text.includes(m))) {
             toolReject++;
@@ -2699,14 +2705,57 @@ export async function addGitStateAtStart(event: DashboardEvent, known?: HeadStat
 }
 
 /**
+ * The hook payload field in which a Stop's background pass hands its readers, the session's end record and this event,
+ * the one git status it ran: a state with its branch (null on a detached HEAD), or null when it found none.
+ */
+export const GIT_AT_STOP_PAYLOAD_KEY = 'teamai_git_at_stop';
+
+const GitAtStopPayloadSchema = z.object({ head: z.string(), dirty: z.boolean(), branch: z.string().nullable() });
+
+/** The git state a Stop's background pass read once for its readers. */
+export type GitStateAtStop = z.infer<typeof GitAtStopPayloadSchema>;
+
+/** The git state `payload` carries from its Stop's one read: a state, null for none, undefined when it carries none. */
+export function gitStateAtStopIn(payload: HookStdin): GitStateAtStop | null | undefined {
+  if (!(GIT_AT_STOP_PAYLOAD_KEY in payload)) return undefined;
+  const state = GitAtStopPayloadSchema.safeParse(payload[GIT_AT_STOP_PAYLOAD_KEY]);
+
+  return state.success ? state.data : null;
+}
+
+/**
+ * The commit `cwd` has checked out at a Stop, whether tracked files have changes, and the branch, from one `git status`,
+ * or null when it has no commit, git fails (a bare repository), or it takes longer than its time cap.
+ */
+export async function readGitStateAtStop(cwd: string): Promise<GitStateAtStop | null> {
+  const { getHeadAndBranch } = await import('./utils/git.js');
+  const abort = AbortSignal.timeout(GIT_STATE_TIMEOUT_MS);
+  // A git killed at the cap is still waited for while a child of it holds the pipe, so the cap ends the wait itself.
+  const capped = new Promise<null>((resolve) => abort.addEventListener('abort', () => resolve(null), { once: true }));
+  const read = await Promise.race([getHeadAndBranch(cwd, abort).catch(() => null), capped]);
+
+  return read && { ...read.state, branch: read.branch };
+}
+
+/**
  * Add to a `stop` event the commit its `cwd` has checked out, and the branch, so the commits a session made are the
  * range from its start's `gitAtStart` to its last Stop's `gitHead`, and its pull request that of the last branch a Stop
  * recorded, known without reading the checkout as it is when the session is folded (#1387). Other events, events with
  * no cwd, and a cwd with no commit or whose git fails or times out are left as they are; a detached HEAD records no
  * branch.
  */
-export async function addGitHeadAtStop(event: DashboardEvent): Promise<void> {
+export async function addGitHeadAtStop(event: DashboardEvent, known?: GitStateAtStop | null): Promise<void> {
   if (event.type !== 'stop' || !event.cwd) return;
+
+  if (known) {
+    event.gitHead = known.head;
+
+    if (known.branch) event.gitBranch = known.branch;
+
+    return;
+  }
+
+  // Nothing handed over, or a status that failed (a bare repository) or passed its cap (a very large checkout).
   const { getCurrentBranch, getHeadCommit } = await import('./utils/git.js');
   const abort = AbortSignal.timeout(GIT_STATE_TIMEOUT_MS);
   // A git killed at the cap is still waited for while a child of it holds the pipe (a wrapper's), so the cap ends the
@@ -2770,7 +2819,7 @@ export async function dashboardReport(toolArg?: string): Promise<void> {
   const [repoAnchor] = await Promise.all([
     eventRepoAnchor(event.cwd, event.sessionId),
     addGitStateAtStart(event, gitStateIn(hookData)),
-    addGitHeadAtStop(event),
+    addGitHeadAtStop(event, gitStateAtStopIn(hookData)),
   ]);
 
   event.projectAnchor = repoAnchor;

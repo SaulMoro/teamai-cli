@@ -12,6 +12,9 @@ vi.mock('../utils/fs.js', () => ({
     mockFiles[filePath] = JSON.parse(JSON.stringify(data));
   }),
   ensureDir: vi.fn(),
+  // The tool homes (tool-home.ts) look for files through it.
+  pathExists: vi.fn(async () => false),
+  readFileSafe: vi.fn(async () => null),
 }));
 
 vi.mock('@teamai/shared/log', () => ({

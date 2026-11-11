@@ -138,6 +138,9 @@ _Avoid_: primary repo
 The directory teamai delivers files into.
 _Avoid_: project root, cwd
 
+**Installation**:
+One copy of teamai this machine has run, as `~/.teamai/installations.json` records it. `teamai update` and `teamai doctor` list them. Machine-local: it never enters a team report.
+
 ## Workflows
 
 **Driver**:
@@ -235,3 +238,21 @@ _Avoid_: spawn, ping
 **Handoff**:
 A run passing to another **driver** or install. `teamai workflow publish` offers it on `teamai-reports`, and `resume --claim` or `--next` takes it. The local driver hands off a run whose steps left only a person can take, and the skill driver hands the person a run whose steps left it cannot run.
 _Avoid_: transfer, migration
+
+## Budgets
+
+**Agent wait**:
+The time an **agent** is blocked on teamai: the foreground pass of a hook, or a pull it runs. Work teamai does after the hook returns is not agent wait.
+_Avoid_: latency, performance, overhead
+
+**Agent wait budget**:
+What a hook or a pull costs in **agent wait**, counted as the processes it starts and the files it writes, on its first run and on its second. The budget is those counts, never elapsed time; the time of each run is recorded beside them for reference only.
+_Avoid_: benchmark (that is `teamai benchmark`), perf test
+
+**Hook form**:
+How teamai writes its built-in hooks into one hook file: waited, through a login shell, as a project file a repository may commit always keeps them; unwaited, where the **tool** starts the hook and does not wait for it; or login-deferred, where the hook starts teamai without a login shell and the background pass gets the login environment. A **tool**'s facts and its installed version decide the form of the member's own file on macOS and Linux; on Windows it stays waited.
+_Avoid_: hook mode, hook style
+
+**Agent context budget**:
+The bytes of text teamai's defaults put in an **agent**'s context, split by when they enter: always, through **progressive disclosure**, or on a hook event.
+_Avoid_: token budget, prompt size

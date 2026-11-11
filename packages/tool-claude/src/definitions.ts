@@ -47,6 +47,11 @@ export const tools = {
       teamHooks: 'main-checkout',
       projectDirVariable: 'CLAUDE_PROJECT_DIR',
       needsBundle: false,
+      // `async` on a command hook since 2.1.23; before 2.1.119 an async PostToolUse hook that prints nothing wrote an
+      // empty transcript entry (changelog 2.1.119). Run on 2.1.322, macOS.
+      unwaitedSince: '2.1.119',
+      // `/bin/sh -c`, not a login shell: run on 2.1.322, macOS; Linux `sh -c` as documented.
+      loginDeferrable: true,
     },
     sessions: ['claude-code'],
     launch: 'claude',
@@ -76,7 +81,17 @@ export const tools = {
     blocks: { user: { channel: 'file', file: { in: 'claudemd' }, reads: 'unknown' }, project: { channel: 'file', file: { in: 'claudemd' }, reads: 'unknown' } },
     agents: { user: { reads: 'unknown' }, project: { reads: 'unknown' } },
     mcp: UNKNOWN,
-    hooks: { user: { channel: 'settings', format: 'claude', reads: [{ base: 'home', path: '.claude-internal/settings.json', evidence: 'assumed' }] }, self: { channel: 'settings', format: 'claude', reads: 'unknown' }, subagentStop: true, stopReply: true, shell: 'system', teamHooks: 'home', needsBundle: false },
+    hooks: {
+      user: { channel: 'settings', format: 'claude', reads: [{ base: 'home', path: '.claude-internal/settings.json', evidence: 'assumed' }] },
+      self: { channel: 'settings', format: 'claude', reads: 'unknown' },
+      subagentStop: true,
+      stopReply: true,
+      shell: 'system',
+      teamHooks: 'home',
+      needsBundle: false,
+      // Assumed to run a hook as Claude Code (`claude`) does: not run, no public source.
+      loginDeferrable: true,
+    },
     sessions: ['claude-internal'],
     launch: 'claude',
     autoCompact: 'claude',
@@ -108,7 +123,17 @@ export const tools = {
       user: { format: 'claude', reads: 'unknown' },
       project: { judgedTeamaiOnly: false, format: 'claude', writtenBy: 'claude', reads: [{ base: 'project', path: '.mcp.json', when: 'workspaceUnder', evidence: 'assumed' }] },
     },
-    hooks: { user: { channel: 'settings', format: 'claude', reads: [{ base: 'home', path: '.tclaude/settings.json', evidence: 'assumed' }] }, self: { channel: 'settings', format: 'claude', reads: 'unknown' }, subagentStop: true, stopReply: true, shell: 'system', teamHooks: 'home', needsBundle: false },
+    hooks: {
+      user: { channel: 'settings', format: 'claude', reads: [{ base: 'home', path: '.tclaude/settings.json', evidence: 'assumed' }] },
+      self: { channel: 'settings', format: 'claude', reads: 'unknown' },
+      subagentStop: true,
+      stopReply: true,
+      shell: 'system',
+      teamHooks: 'home',
+      needsBundle: false,
+      // Assumed to run a hook as Claude Code (`claude`) does: not run, no public source.
+      loginDeferrable: true,
+    },
     sessions: ['tclaude'],
     launch: 'claude',
     autoCompact: 'claude',

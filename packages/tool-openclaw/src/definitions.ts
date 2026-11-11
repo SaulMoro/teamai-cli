@@ -5,6 +5,7 @@ export const tools = {
   // Hermes (`skill_view`) and OpenClaw (`skills_read`) have skill tools, but teamai installs no post-tool-use hook for them yet.
   // OpenClaw's skills sit in its workspace.
   openclaw: {
+    receivesDeliveredModels: true,
     home: {
       dir: '.openclaw',
       // docs.openclaw.ai/help/environment; OPENCLAW_STATE_DIR and OPENCLAW_PROFILE also in src/config/paths.ts at 884a96d1.
@@ -21,7 +22,12 @@ export const tools = {
       retired: { project: ['.openclaw/workspace/AGENTS.md'] },
     },
     agents: NONE,
-    mcp: NONE,
+    // MCP servers are `mcp.servers` entries of openclaw.json (JSON5). Only its
+    // user config is proven; OpenClaw reads no project openclaw.json.
+    mcp: {
+      user: { format: 'openclaw', key: ['mcp', 'servers'], syntax: 'json5', reads: [{ base: 'home', path: '.openclaw/openclaw.json', evidence: 'docs' }] },
+      project: 'none',
+    },
     hooks: { user: { channel: 'adapter', adapter: 'openclaw-hook', evidence: 'verified', readGates: ['openclaw-hooks-enabled', 'openclaw-plugins-enabled'] }, self: 'user', subagentStop: false, stopReply: false, shell: 'system', teamHooks: 'home', needsBundle: false },
     // OpenClaw 2026.10: rows in ~/.openclaw/agents/<id>/agent/openclaw-agent.sqlite, moved by OPENCLAW_STATE_DIR.
     sessions: 'none',

@@ -27,7 +27,24 @@ export const tools = {
       user: { format: 'codex', reads: [{ base: 'home', path: '.codex/config.toml', evidence: 'verified' }] },
       project: { judgedTeamaiOnly: true, format: 'codex', reads: [{ base: 'project', path: '.codex/config.toml', when: 'workspaceUnder', evidence: 'verified' }], readGates: ['codex-project-trust'] },
     },
-    hooks: { user: { channel: 'settings', format: 'codex', reads: [{ base: 'home', path: '.codex/hooks.json', evidence: 'verified' }] }, self: { channel: 'settings', format: 'codex', reads: [{ base: 'project', path: '.codex/hooks.json', when: 'workspaceUnder', evidence: 'verified' }] }, subagentStop: true, stopReply: false, shell: 'system', teamHooks: 'main-checkout', needsBundle: false },
+    hooks: {
+      user: { channel: 'settings', format: 'codex', reads: [{ base: 'home', path: '.codex/hooks.json', evidence: 'verified' }] },
+      self: { channel: 'settings', format: 'codex', reads: [{ base: 'project', path: '.codex/hooks.json', when: 'workspaceUnder', evidence: 'verified' }] },
+      subagentStop: true,
+      stopReply: false,
+      shell: 'system',
+      teamHooks: 'main-checkout',
+      needsBundle: false,
+      // `async` on a command handler is documented; the source at 0.148.0 to 0.167.0 runs it in the background
+      // (codex-rs/hooks/src/engine/discovery.rs), and 0.134.0 to 0.147.0 skip such a handler. Run on 0.167.0 for
+      // UserPromptSubmit and SessionStart; PostToolUse not run.
+      unwaitedSince: '0.148.0',
+      unwaitedVersionOf: 'codex-builds',
+      // The account's zsh, bash or sh with `-c`, never `-lc`, and one of those three for any other account shell:
+      // source at 0.134.0 to 0.167.0 (shell_detect.rs, derive_exec_args). Run on 0.167.0, macOS: `/bin/zsh -c`, no
+      // login flag, parent the codex binary. teamai's own entry in this form not run.
+      loginDeferrable: true,
+    },
     sessions: ['codex'],
     launch: 'codex',
     autoCompact: 'codex',
@@ -60,7 +77,17 @@ export const tools = {
     },
     agents: { user: { reads: 'unknown' }, project: { reads: 'unknown' } },
     mcp: UNKNOWN,
-    hooks: { user: { channel: 'settings', format: 'codex', reads: [{ base: 'home', path: '.codex-internal/hooks.json', evidence: 'assumed' }] }, self: { channel: 'settings', format: 'codex', reads: 'unknown' }, subagentStop: true, stopReply: false, shell: 'system', teamHooks: 'home', needsBundle: false },
+    hooks: {
+      user: { channel: 'settings', format: 'codex', reads: [{ base: 'home', path: '.codex-internal/hooks.json', evidence: 'assumed' }] },
+      self: { channel: 'settings', format: 'codex', reads: 'unknown' },
+      subagentStop: true,
+      stopReply: false,
+      shell: 'system',
+      teamHooks: 'home',
+      needsBundle: false,
+      // Assumed to run a hook as Codex (`codex`) does: not run, no public source.
+      loginDeferrable: true,
+    },
     sessions: ['codex-internal'],
     launch: 'codex',
     autoCompact: 'codex',
@@ -93,7 +120,17 @@ export const tools = {
     },
     agents: { user: { reads: 'unknown' }, project: { reads: 'unknown' } },
     mcp: UNKNOWN,
-    hooks: { user: { channel: 'settings', format: 'codex', reads: [{ base: 'home', path: '.tcodex/hooks.json', evidence: 'assumed' }] }, self: { channel: 'settings', format: 'codex', reads: 'unknown' }, subagentStop: true, stopReply: false, shell: 'system', teamHooks: 'home', needsBundle: false },
+    hooks: {
+      user: { channel: 'settings', format: 'codex', reads: [{ base: 'home', path: '.tcodex/hooks.json', evidence: 'assumed' }] },
+      self: { channel: 'settings', format: 'codex', reads: 'unknown' },
+      subagentStop: true,
+      stopReply: false,
+      shell: 'system',
+      teamHooks: 'home',
+      needsBundle: false,
+      // Assumed to run a hook as Codex (`codex`) does: not run, no public source.
+      loginDeferrable: true,
+    },
     sessions: ['tcodex'],
     launch: 'codex',
     autoCompact: 'codex',
