@@ -1,9 +1,10 @@
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { ruleHarness } from '../test/harness.ts';
-import { FACTS_FILES, STARTUP_ENTRIES, isFactsModule } from './family-facts.js';
+import { FACTS_FILES, isFactsModule, startupEntries } from './family-facts.js';
 import { FAMILY } from '../utils.js';
 
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
@@ -14,7 +15,12 @@ const manifest = (name: string, exports: Record<string, string>) => JSON.stringi
 
 /** A workspace with one family, `tool-acme`, whose facts entry holds data and whose index holds its adapters. */
 const workspace = {
-  'package.json': JSON.stringify({ name: 'teamai-cli', workspaces: ['packages/*'] }),
+  'package.json': JSON.stringify({ name: 'teamai-cli', workspaces: ['packages/*'], bin: { teamai: 'dist/index.js', 'teamai-runtime-acme': 'dist/runtime-acme.js' } }),
+  'tsup.config.ts': `export default defineConfig({\n  entry: {\n    index: 'src/bin.ts',\n    cli: 'src/index.ts',\n    'runtime-acme': 'packages/runtime-acme/src/main.ts',\n  },\n});\n`,
+  'src/bin.ts': `await import(new URL('./cli.js', import.meta.url).href);\n`,
+  'src/index.ts': `program\n  .command('hook-dispatch <event>')\n  .action(async () => { const { hookDispatchCli } = await import('./hook-dispatch-cli.js'); await hookDispatchCli(); });\nprogram\n  .command('doctor')\n  .action(async () => { await import('./doctor.js'); });\n`,
+  'src/doctor.ts': 'export {};\n',
+  'packages/runtime-acme/src/main.ts': `import { LAUNCH } from '../../../src/launch-registry.js';\nexport const main = LAUNCH;\n`,
   'packages/tool-definitions/package.json': manifest('@teamai/tool-definitions', { '.': './src/registry.ts', './facts': './src/facts.ts' }),
   'packages/tool-definitions/src/registry.ts': `import { family as acme } from '@teamai/tool-acme';\nexport const BUILT_IN_TOOLS = { acme };\n`,
   'packages/tool-definitions/src/facts.ts': `import { facts as acme } from '@teamai/tool-acme/facts';\nexport const BUILT_IN_FACTS = { acme };\n`,
@@ -32,7 +38,8 @@ const workspace = {
   'src/hooks.ts': `import { TOOLS } from './tools.js';\nexport const hooks = TOOLS;\n`,
   'src/stale-hooks.ts': `import { TOOLS } from './tools-from-registry.js';\nexport const hooks = TOOLS;\n`,
   'src/launch-registry.ts': `import { BUILT_IN_TOOLS } from '@teamai/tool-definitions';\nexport const LAUNCH = BUILT_IN_TOOLS;\n`,
-  'src/hook-dispatch-cli.ts': 'export {};\n',
+  'src/hook-dispatch-cli.ts': `export async function hookDispatchCli() { await import('./session-flow/captures.js'); }\n`,
+  'src/session-flow/captures.ts': 'export {};\n',
 };
 /** The workspace around a fixture at `filename`, without the workspace's own copy of that file. */
 const inWorkspace = (filename: string) => ({ filename, files: Object.fromEntries(Object.entries(workspace).filter(([file]) => file !== filename)) });
@@ -51,6 +58,37 @@ describe('teamai/family-facts', () => {
     rule.valid('allows a dynamic import, which loads the behaviour on first use', `const { LAUNCH } = await import('./launch-registry.js');`, inWorkspace('src/index.ts'));
     rule.valid('allows a type-only import, which the build erases', `import type { LAUNCH } from './launch-registry.js';`, inWorkspace('src/index.ts'));
     rule.valid('leaves a module that is not a startup entry alone', `import { LAUNCH } from './launch-registry.js';`, inWorkspace('src/doctor.ts'));
+    rule.invalid('refuses the executable, which loads the CLI by URL', `import { LAUNCH } from './launch-registry.js';\nawait import(new URL('./cli.js', import.meta.url).href);`, (output) => {
+      expect(output).toContain('src/bin.ts -> src/launch-registry.ts -> packages/tool-definitions/src/registry.ts');
+    }, inWorkspace('src/bin.ts'));
+    rule.invalid('refuses a module the hook dispatch loads with import() before its hook answers', `import { LAUNCH } from '../launch-registry.js';`, undefined, inWorkspace('src/session-flow/captures.ts'));
+    rule.invalid('holds a new step of the hook dispatch, with no rule edit', `import { LAUNCH } from './launch-registry.js';`, (output) => {
+      expect(output).toContain('src/new-hook-step.ts -> src/launch-registry.ts');
+    }, { filename: 'src/new-hook-step.ts', files: { ...workspace, 'src/hook-dispatch-cli.ts': `export async function hookDispatchCli() { await import('./new-hook-step.js'); }\n` } });
+    rule.invalid('holds a new executable package.json names, with no rule edit', `import { LAUNCH } from './launch-registry.js';`, (output) => {
+      expect(output).toContain('src/acme.ts -> src/launch-registry.ts');
+    }, {
+      filename: 'src/acme.ts',
+      files: {
+        ...workspace,
+        'package.json': JSON.stringify({ name: 'teamai-cli', workspaces: ['packages/*'], bin: { teamai: 'dist/index.js', 'teamai-acme': 'dist/acme.js' } }),
+        'tsup.config.ts': `export default defineConfig({\n  entry: {\n    index: 'src/bin.ts',\n    cli: 'src/index.ts',\n    acme: 'src/acme.ts',\n  },\n});\n`,
+      },
+    });
+    rule.valid('leaves a step runtime\'s executable to load the tools it launches', `import { LAUNCH } from '../../../src/launch-registry.js';\nexport const main = LAUNCH;`, inWorkspace('packages/runtime-acme/src/main.ts'));
+
+    it('refuses an executable whose bundle tsup.config.ts does not name, rather than leaving it unchecked', () => {
+      const root = fs.mkdtempSync(path.join(os.tmpdir(), 'family-facts-bin-'));
+
+      try {
+        fs.writeFileSync(path.join(root, 'package.json'), JSON.stringify({ bin: { teamai: 'dist/index.js', 'teamai-new': 'dist/new.js' } }));
+        fs.writeFileSync(path.join(root, 'tsup.config.ts'), `export default defineConfig({\n  entry: {\n    index: 'src/bin.ts',\n  },\n});\n`);
+
+        expect(() => startupEntries(root)).toThrow('package.json bin dist/new.js names no entry of tsup.config.ts');
+      } finally {
+        fs.rmSync(root, { recursive: true, force: true });
+      }
+    });
   });
 
   describe('the facts modules', () => {
@@ -82,8 +120,15 @@ describe('teamai/family-facts', () => {
       expect(matched.every(isFactsModule)).toBe(true);
     });
 
-    it('names only files that exist in FACTS_FILES and STARTUP_ENTRIES', () => {
-      expect([...FACTS_FILES, ...STARTUP_ENTRIES].filter((file) => !fs.existsSync(path.join(REPO, file)))).toEqual([]);
+    it('names only files that exist in FACTS_FILES', () => {
+      expect([...FACTS_FILES].filter((file) => !fs.existsSync(path.join(REPO, file)))).toEqual([]);
+    });
+
+    it('finds the startup entries from the executables, the CLI and its hook command, the ones a list named before among them', () => {
+      const entries = [...startupEntries(REPO)];
+
+      expect(entries).toEqual(expect.arrayContaining(['src/bin.ts', 'src/index.ts', 'src/hook-dispatch-cli.ts', 'src/dashboard-collector.ts', 'src/session-flow/captures.ts']));
+      expect(entries.filter((file) => !fs.existsSync(path.join(REPO, file)))).toEqual([]);
     });
   });
 });
