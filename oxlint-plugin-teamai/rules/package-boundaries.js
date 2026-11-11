@@ -192,6 +192,10 @@ export default defineRule({
             context.report({ node, message: `@teamai/tool-launch imports no runtime package: the host and every runtime that launches a tool use it, so it stays below them all. ${from} -> ${specifier}.` });
           }
 
+          if (own === LAUNCH_LIBRARY && folder === DEFINITIONS && !isTestSupport) {
+            context.report({ node, message: `@teamai/tool-launch runs the tool its caller resolved, so it reads no tool registry: a runtime that bundles it would carry every family. Take the tool from the caller; tests may read @teamai/tool-definitions. ${from} -> ${specifier}.` });
+          }
+
           if (own === RUNTIME_KIT && !KIT_IMPORTS.has(folder)) {
             context.report({ node, message: `@teamai/runtime-kit imports only @teamai/runtime-protocol and @teamai/shared: it is bundled into every runtime, so it stays below them all. ${from} -> ${specifier}.` });
           }

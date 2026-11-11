@@ -279,3 +279,12 @@ export const found = runtime;`, (output) => {
 rule.valid('reads a namespace alias as no import', `namespace Paths { export const root = '/'; }
 import root = Paths.root;
 export const found = root;`, inWorkspace('packages/tool-core/src/sessions.ts'));
+
+rule.invalid('rejects the launch library reading the tool registry, which its caller resolves', `import { BUILT_IN_TOOLS } from '@teamai/tool-definitions';
+export const tools = BUILT_IN_TOOLS;`, (output) => {
+  expect(output).toContain('@teamai/tool-launch runs the tool its caller resolved');
+  expect(output).toContain('packages/tool-launch/src/hosts/pick.ts -> @teamai/tool-definitions');
+}, inWorkspace('packages/tool-launch/src/hosts/pick.ts', launchLibrary));
+
+rule.valid('allows the launch library\'s tests and test support the tool registry', `import { BUILT_IN_TOOLS } from '@teamai/tool-definitions';
+export const tools = BUILT_IN_TOOLS;`, inWorkspace('packages/tool-launch/src/testing/launcher-conformance.ts', launchLibrary));
