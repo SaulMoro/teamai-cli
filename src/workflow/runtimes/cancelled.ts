@@ -99,7 +99,6 @@ export async function stopCancelledAttempts(config: LocalConfig, lock: RunLock, 
 
     // An attempt no longer open holds a login only because nothing ended it, as one whose record cannot be read.
     await endLeftLogin(config, tool, { run, attempt: holder.attempt });
-    log.info(`Released the ${tool} login teamai keeps, which attempt ${holder.attempt} of run ${run} held.`);
   }
 
   return stopped;
@@ -155,7 +154,7 @@ export async function stopLeftInProcess(config: LocalConfig, run: RunId, attempt
 
 /**
  * Ends each login attempt `attempt` of run `run` holds, nothing of which runs any more (`endLogin`): writes it back,
- * then releases it; warns of one not written back. `toolHome` is the tool home its step runtime recorded and
+ * then releases it, and says so; warns of one not written back. `toolHome` is the tool home its step runtime recorded and
  * `isCollected` whether that runtime brought it back; one in teamai's process had its tool keep the login in the
  * attempt's own tool home.
  */
@@ -166,7 +165,9 @@ export async function endLeftLogins(config: LocalConfig, run: RunId, attempt: At
 async function endLeftLogin(config: LocalConfig, tool: LoginTool, { run, attempt, toolHome, isCollected = true }: { run: RunId; attempt: AttemptId; toolHome?: AttemptRuntimeRecord['toolHome']; isCollected?: boolean }): Promise<void> {
   const ended = await endLogin(tool, { run, attempt, toolHome: toolHome?.tool === tool ? toolHome.dir : attemptToolHome(config, run, attempt, tool), isCollected });
 
-  if (ended.wasHeld && ended.notBack) log.warn(ended.notBack.message);
+  if (!ended.wasHeld) return;
+  if (ended.notBack) log.warn(ended.notBack.message);
+  log.info(`Released the ${tool} login teamai keeps, which attempt ${attempt} of run ${run} held.`);
 }
 
 /**
