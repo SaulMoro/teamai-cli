@@ -330,8 +330,10 @@ export function fleetStepRuntime({ config, masks, openWake }: { config: LocalCon
       const parsed = parseFleetOptions(options);
 
       if (!parsed.ok) return { ok: false, failure: { code: 'bad_option', ...parsed.failure } };
-      // No person sits at a member's tool, whatever the entry promises, so no interactive step goes to the fleet.
-      const { pool, stale_after: staleAfterMs, can: { hitl: _hitl, ...can } = {}, labels, wake } = parsed.value;
+      // No person sits at a member's tool, whatever the entry promises, so no interactive step goes to the fleet. Nor does
+      // a confined one: its directory lives under this machine's $TEAMAI_RUN_DIR, which no commit a member fetches
+      // carries, so the fleet answers no confined prompt and, like a runtime that says so, offers no `confined`.
+      const { pool, stale_after: staleAfterMs, can: { hitl: _hitl, confined: _unreachable, ...can } = {}, labels, wake } = parsed.value;
       // Opened only to stop and close what it ran, it offers nothing, so it wakes no one.
       const waking = wake === undefined || mode === 'recover' ? undefined : await openWaker(wake, openWake);
 

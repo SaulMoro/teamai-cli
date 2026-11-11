@@ -1271,6 +1271,18 @@ describe('fleet entries of one driver definition', () => {
     await runtime.dispose();
   });
 
+  it('declares no confined offer, whatever its entry promises, so a confined step runs on the driver\'s next runtime', async () => {
+    const acme = team();
+    const alice = await acme.member('alice');
+    const runtime = fleetStepRuntime({ config: alice.config, masks: {} });
+    // The confined directory lives under this machine's $TEAMAI_RUN_DIR, which no commit a member fetches carries.
+    const ready = await runtime.init({ options: { pool: 'e2e', can: { network: true, confined: [{ level: 'best-effort', tools: ['codex'] }] } }, mode: 'unattended', checkout: alice.checkout });
+
+    expect(ready).toMatchObject({ ok: true, can: { network: true } });
+    expect(ready.ok && ready.can).not.toHaveProperty('confined');
+    await runtime.dispose();
+  });
+
   it('names a specific fleet entry a general one before it covers', () => {
     expect(shadowedFleetEntries([fleet({ pool: 'any', can: { network: true, isolation: 'sandbox' } }), fleet({ pool: 'box', can: { isolation: 'worktree' } })])).toEqual([
       'The fleet entry for pool "box" never gets a step: the fleet entry for pool "any" before it offers everything it does, and takes each step first. Put the fleet entry for pool "box", which offers less, before the one for pool "any".',
