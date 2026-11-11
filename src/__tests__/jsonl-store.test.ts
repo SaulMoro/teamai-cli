@@ -33,6 +33,12 @@ describe('jsonl store', () => {
     expect(await readJsonl(file())).toStrictEqual([{ kind: 'run', n: 1 }, { kind: 'claim', n: 2 }]);
   });
 
+  posixIt('refuses to append where a FIFO sits, rather than report a record it wrote into the pipe as landed', async () => {
+    spawnSync('mkfifo', [file()]);
+
+    await expect(appendJsonl(file(), { kind: 'run', n: 1 })).rejects.toThrow('is a pipe, not a regular file');
+  });
+
   it('reads nothing where nothing was recorded', async () => {
     expect(await readJsonl(file())).toEqual([]);
   });

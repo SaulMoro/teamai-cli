@@ -170,6 +170,24 @@ describe.skipIf(process.platform === 'win32')('writing to a file a step may have
 
     await expect(openRegularFileForWrite(at, { append: true })).rejects.toMatchObject({ kind: 'a pipe' });
   });
+
+  it('opens a regular file to read as well as append with read, and refuses a FIFO no process holds open', async () => {
+    const file = path.join(scratch(), 'events.jsonl');
+    fs.writeFileSync(file, 'a\n');
+    const handle = await openRegularFileForWrite(file, { append: true, read: true });
+
+    try {
+      const last = Buffer.alloc(1);
+      await handle.read(last, 0, 1, 1);
+      await handle.appendFile('b\n');
+      expect(last.toString()).toBe('\n');
+    } finally {
+      await handle.close();
+    }
+
+    expect(fs.readFileSync(file, 'utf8')).toBe('a\nb\n');
+    await expect(openRegularFileForWrite(fifo(), { append: true, read: true })).rejects.toMatchObject({ kind: 'a pipe' });
+  });
 });
 
 describe('copying a folder a step may have planted something in', () => {

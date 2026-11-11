@@ -149,19 +149,20 @@ export function readRegularFileSync(file: string, encoding?: BufferEncoding): st
 //  reads fails at once (ENXIO), and one a reader holds is caught by the handle's own type, as for a read.
 //
 
-/** Opening for writing without waiting, creating a missing file. Windows has no flag, and no FIFO a path opens. */
-const NONBLOCKING_WRITE = (process.platform === 'win32' ? fs.constants.O_WRONLY : fs.constants.O_WRONLY | fs.constants.O_NONBLOCK) | fs.constants.O_CREAT;
+/** Opening without waiting, creating a missing file. Windows has no flag, and no FIFO a path opens. */
+const NONBLOCKING_CREATE = (process.platform === 'win32' ? 0 : fs.constants.O_NONBLOCK) | fs.constants.O_CREAT;
 
 /**
  * The open handle of `file` for writing, created when missing, with `mode` when given: at its end when `append`, else
- * emptied. Anything but a regular file there rejects with `NotRegularFileError`, and is left as it was.
+ * emptied; with `read`, it reads as well, as an append that looks at the file's last byte first does. Anything but a
+ * regular file there rejects with `NotRegularFileError`, and is left as it was.
  */
-export async function openRegularFileForWrite(file: string, { append, mode }: { append: boolean; mode?: number }): Promise<FileHandle> {
+export async function openRegularFileForWrite(file: string, { append, mode, read = false }: { append: boolean; mode?: number; read?: boolean }): Promise<FileHandle> {
   let handle: FileHandle;
 
   try {
-    // oxlint-disable-next-line teamai/regular-file-reads -- opens for writing, with flags the rule cannot see as a write
-    handle = await fs.promises.open(file, NONBLOCKING_WRITE | (append ? fs.constants.O_APPEND : fs.constants.O_TRUNC), mode);
+    // oxlint-disable-next-line teamai/regular-file-reads -- the helper's own open: nonblocking, and its handle is checked before a byte is read or written
+    handle = await fs.promises.open(file, NONBLOCKING_CREATE | (read ? fs.constants.O_RDWR : fs.constants.O_WRONLY) | (append ? fs.constants.O_APPEND : fs.constants.O_TRUNC), mode);
   } catch (error) {
     // A FIFO no process reads, or a device with nothing behind it.
     if (error instanceof Error && 'code' in error && error.code === 'ENXIO') throw new NotRegularFileError(file, await fs.promises.stat(file), 'write');
