@@ -159,3 +159,35 @@ it('matches the production source of src/ and of every package in this checkout'
   expect(matched.filter((file) => file.startsWith('packages/')).length).toBeGreaterThan(150);
   expect(matched.filter((file) => /\.test\.|\/__tests__\/|\/testing\//.test(file))).toEqual([]);
 });
+
+invalid('rejects a module re-exporting a read, so no wrapper module carries plain reads out of sight', `export { readFile } from 'node:fs/promises';
+export { readFileSync as readNow } from 'node:fs';`, (output) => {
+  expect(output.match(/re-exports or passes on a file module/g)).toHaveLength(2);
+}, { filename: 'src/utils/files.ts' });
+
+invalid('rejects a module re-exporting a file module whole', `export * from 'fs-extra';
+export { default as fs } from 'node:fs';
+export * as fsp from 'node:fs/promises';`, (output) => {
+  expect(output.match(/re-exports or passes on a file module/g)).toHaveLength(3);
+}, { filename: 'src/utils/files.ts' });
+
+invalid('rejects a file module passed on as a value: an argument, an export, a property, a return', `import fs from 'node:fs';
+import fse from 'fs-extra';
+declare function readWith(files: object, file: string): string;
+export const viaArgument = (file: string) => readWith(fs, file);
+export const files = fse;
+export const deps = { fs: fs.promises };
+export function module() { return fs; }`, (output) => {
+  expect(output.match(/re-exports or passes on a file module/g)).toHaveLength(4);
+}, { filename: 'src/workflow/steps/result.ts' });
+
+valid('allows a file module used where it stands, aliased or destructured', `import fs from 'node:fs';
+const fsp = fs.promises;
+const local = fs;
+const { stat } = fs;
+export const all = async (dir: string) => [await fsp.readdir(dir), local.existsSync(dir), await stat(dir)];`);
+
+invalid('rejects an open that may read as well as write, whose handle reads elsewhere', `import fs from 'node:fs';
+export const open = async (file: string) => [await fs.promises.open(file, 'r+'), fs.openSync(file, 'w+'), fs.openSync(file, 'a+'), fs.openSync(file, fs.constants.O_RDWR)];`, (output) => {
+  expect(output.match(/Read a file with readRegularFile/g)).toHaveLength(4);
+});

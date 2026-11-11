@@ -128,20 +128,85 @@ function constantNames(node) {
 
 /**
  * What an open with `flags`, its second argument, does: `read` with no flags, a string with no `w`, `a` or `+`, or only
- * read constants; `write` with any other string or constant; `unknown` for flags no source text says, which each rule
- * counts as what it guards, so both fail closed.
+ * read constants; `write` with a string with `w` or `a` and no `+`, or write constants without `O_RDWR`; `readwrite` with
+ * a `+` or `O_RDWR`, whose handle reads as well; `unknown` for flags no source text says, which each rule counts as what
+ * it guards, so both fail closed.
  * @param {ESTree.Node | undefined} flags
- * @returns {'read' | 'write' | 'unknown'}
+ * @returns {'read' | 'write' | 'readwrite' | 'unknown'}
  */
 export function openKindOf(flags) {
   if (flags === undefined) return 'read';
   const text = flags.type === 'Literal' ? flags.value : undefined;
 
   // oxlint-disable-next-line teamai/no-runtime-typeof -- an ESTree Literal's value is a string, number, boolean, null, bigint or RegExp, and typeof is how ESTree tells them apart
-  if (typeof text === 'string') return /[wa+]/.test(text) ? 'write' : 'read';
+  if (typeof text === 'string') return text.includes('+') ? 'readwrite' : /[wa]/.test(text) ? 'write' : 'read';
   const names = constantNames(flags);
 
   if (names === undefined) return 'unknown';
 
+  if (names.includes('O_RDWR')) return 'readwrite';
+
   return names.every((name) => READ_FLAGS.has(name)) ? 'read' : 'write';
 }
+
+/**
+ * Whether `node` is used as a value where it stands, rather than naming something: not an import, a declared name, a
+ * property key, the object or property of a longer member access, or a type query.
+ * @param {ESTree.Node} node
+ * @returns {boolean}
+ */
+export function refersToValue(node) {
+  const { parent } = node;
+
+  switch (parent?.type) {
+    case 'ImportSpecifier': case 'ImportDefaultSpecifier': case 'ImportNamespaceSpecifier': case 'TSTypeQuery': case 'TSQualifiedName':
+      return false;
+    case 'MemberExpression':
+      return parent.object !== node && parent.computed;
+    case 'Property':
+      return parent.value === node && parent.parent?.type !== 'ObjectPattern';
+    case 'VariableDeclarator':
+      return parent.init === node;
+    default:
+      return true;
+  }
+}
+
+/**
+ * Whether `node`, a reference to a file module function, is that call's callee rather than the function passed on.
+ * @param {ESTree.Node} node
+ * @returns {boolean}
+ */
+export function isCalled(node) {
+  return node.parent?.type === 'CallExpression' && node.parent.callee === node;
+}
+
+/**
+ * Whether `node`, a reference, passes a file module on as a value: as an argument, a property, a return, an export or
+ * anything else but a member access or a local alias, which `isFsModule` follows. A rule cannot see the reads and writes
+ * made through it where it lands.
+ * @param {import('@oxlint/plugins').Context['sourceCode']} sourceCode
+ * @param {ESTree.Node} node
+ * @returns {boolean}
+ */
+export function passesOnFsModule(sourceCode, node) {
+  if (!refersToValue(node) || !isFsModule(sourceCode, node)) return false;
+  const { parent } = node;
+
+  // `fs.promises` is followed as an alias of its own; only what is done with the whole access counts.
+  if (parent?.type === 'MemberExpression' && parent.object === node) return false;
+
+  return !(parent?.type === 'VariableDeclarator' && parent.init === node && parent.parent?.parent?.type !== 'ExportNamedDeclaration');
+}
+
+/**
+ * Whether `node`, an export declaration, re-exports from a file module: any of its functions, or the module itself.
+ * @param {ESTree.ExportNamedDeclaration | ESTree.ExportAllDeclaration} node
+ * @returns {boolean}
+ */
+export function reExportsFsModule(node) {
+  return node.source !== null && node.source !== undefined && FS.has(String(node.source.value));
+}
+
+/** What a rule says of a file module passed on or re-exported. */
+export const PASSED_ON_MESSAGE = 'This re-exports or passes on a file module, so the reads and writes made through it are out of this rule\'s sight: a wrapper module or a function given the module would read a FIFO a step left without the rule seeing it. Use the module where it stands, or pass on a helper of @teamai/shared/regular-file.';

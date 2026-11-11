@@ -1,7 +1,7 @@
 /** @import { ESTree } from '@oxlint/plugins' */
 import { defineRule } from '@oxlint/plugins';
 
-import { fsFunctionOf, openKindOf } from '../fs-calls.js';
+import { fsFunctionOf, isCalled, openKindOf, passesOnFsModule, PASSED_ON_MESSAGE, refersToValue, reExportsFsModule } from '../fs-calls.js';
 import { repositoryPath } from '../utils.js';
 
 /**
@@ -16,38 +16,6 @@ const READS = new Set([
 
 /** The calls that open a path, reading when their flags say so. */
 const OPENS = new Set(['open', 'openSync']);
-
-/**
- * Whether `node` is used as a value where it stands, rather than naming something: not an import, a declared name, a
- * property key, the object or property of a longer member access.
- * @param {ESTree.Node} node
- * @returns {boolean}
- */
-function refersToValue(node) {
-  const { parent } = node;
-
-  switch (parent?.type) {
-    case 'ImportSpecifier': case 'ImportDefaultSpecifier': case 'ImportNamespaceSpecifier':
-      return false;
-    case 'MemberExpression':
-      return parent.object !== node && parent.computed;
-    case 'Property':
-      return parent.value === node && parent.parent?.type !== 'ObjectPattern';
-    case 'VariableDeclarator':
-      return parent.init === node;
-    default:
-      return true;
-  }
-}
-
-/**
- * Whether `node`, a reference to a file module function, is that call's callee rather than the function passed on.
- * @param {ESTree.Node} node
- * @returns {boolean}
- */
-function isCalled(node) {
-  return node.parent?.type === 'CallExpression' && node.parent.callee === node;
-}
 
 const MESSAGE = 'Read a file with readRegularFile or openRegularFile, and copy a file or a folder with copyRegularFile or copyRegularTree, and move one with moveRegularTree, from @teamai/shared/regular-file: a step writes the paths the engine reads, and a FIFO it leaves there blocks a plain read until a writer comes, past every deadline. The helper opens without blocking and refuses anything but a regular file.';
 
@@ -85,6 +53,10 @@ export default defineRule({
         const used = fsFunctionOf(sourceCode, node);
 
         if (used !== undefined && READS.has(used)) context.report({ node, message: MESSAGE });
+        else if (passesOnFsModule(sourceCode, node)) context.report({ node, message: PASSED_ON_MESSAGE });
+      },
+      'ExportNamedDeclaration, ExportAllDeclaration'(/** @type {ESTree.ExportNamedDeclaration | ESTree.ExportAllDeclaration} */ node) {
+        if (reExportsFsModule(node)) context.report({ node, message: PASSED_ON_MESSAGE });
       },
     };
   },

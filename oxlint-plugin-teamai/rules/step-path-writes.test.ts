@@ -99,3 +99,20 @@ it('is an error in this checkout, with no file let off', () => {
 
   expect(rules['teamai/step-path-writes']).toBe('error');
 });
+
+rule.invalid('rejects a write passed on as a value, which a later call makes', `import { writeFile } from 'node:fs/promises';
+export const writer = writeFile;`, (output) => {
+  expect(output).toContain(MESSAGE);
+});
+
+rule.invalid('rejects a file module passed on as a value, so no wrapper carries plain writes out of sight', `import fs from 'node:fs';
+declare function writeWith(files: object, file: string): void;
+export const write = (file: string) => writeWith(fs, file);
+export { appendFile } from 'node:fs/promises';`, (output) => {
+  expect(output.match(/re-exports or passes on a file module/g)).toHaveLength(2);
+});
+
+rule.invalid('rejects an open for reading and writing', `import fs from 'node:fs';
+export const open = (file: string) => fs.openSync(file, 'r+');`, (output) => {
+  expect(output).toContain(MESSAGE);
+});

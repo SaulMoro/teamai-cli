@@ -1,7 +1,7 @@
 /** @import { ESTree } from '@oxlint/plugins' */
 import { defineRule } from '@oxlint/plugins';
 
-import { fsFunctionOf, openKindOf } from '../fs-calls.js';
+import { fsFunctionOf, isCalled, openKindOf, passesOnFsModule, PASSED_ON_MESSAGE, refersToValue, reExportsFsModule } from '../fs-calls.js';
 import { repositoryPath, stringLiteralValue } from '../utils.js';
 
 /**
@@ -66,6 +66,17 @@ export default defineRule({
 
         if (called === undefined || !(WRITES.has(called) || (WHOLE_WRITES.has(called) && replacesWith(options)) || (OPENS.has(called) && openKindOf(flags) !== 'read'))) return;
         context.report({ node, message: MESSAGE });
+      },
+      // A write passed on as a value, such as `.then(writeFile)`, is made by a later call whose flags the rule cannot read.
+      'Identifier, MemberExpression'(/** @type {ESTree.Node} */ node) {
+        if (isCalled(node) || !refersToValue(node)) return;
+        const used = fsFunctionOf(sourceCode, node);
+
+        if (used !== undefined && (WRITES.has(used) || WHOLE_WRITES.has(used) || OPENS.has(used))) context.report({ node, message: MESSAGE });
+        else if (passesOnFsModule(sourceCode, node)) context.report({ node, message: PASSED_ON_MESSAGE });
+      },
+      'ExportNamedDeclaration, ExportAllDeclaration'(/** @type {ESTree.ExportNamedDeclaration | ESTree.ExportAllDeclaration} */ node) {
+        if (reExportsFsModule(node)) context.report({ node, message: PASSED_ON_MESSAGE });
       },
     };
   },
