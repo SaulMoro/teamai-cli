@@ -25,8 +25,8 @@ import { failedCommand, placeView, runtimeCommand, runtimeSetup, runtimeStepEnv,
 import { attemptRun, credentialSecrets, HeldPlace, isExecRuntimeTool, readAttemptPlacement, recordInProcessAttempt, attemptRuntimePath, maskAttemptResults, type AttemptRun } from '../../runtimes/attempt.js';
 import { answerCallTool, hostStepRuntime } from '../../runtimes/host.js';
 import { writeHeldSteps, type HeldSteps } from '../../runtimes/held.js';
-import { closeAfterSweep, releaseLeftLogins, stopLeftInProcess, stopOnRecordedDriver } from '../../runtimes/cancelled.js';
-import { loginHolder, loginLockFile, releaseLogin } from '../../runtimes/login.js';
+import { closeAfterSweep, endLeftLogins, stopLeftInProcess, stopOnRecordedDriver } from '../../runtimes/cancelled.js';
+import { loginHolder, loginLockFile } from '../../runtimes/login.js';
 import { toolsLaunchDeps, type EngineOptions, type OpenedDriver } from '../../runtimes/sources.js';
 import { newOpId, type ExecAnswer, type ExecQuestion, type StepRuntime } from '@teamai/runtime-protocol/step-runtime';
 import { resumeOrPublish, retryCommand } from '../../runtimes/retry-command.js';
@@ -796,14 +796,11 @@ async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, given: 
     if (notClosed) log.warn(notClosed.message);
 
     // One in teamai's process left its tool home under the attempt, which a killed judge refreshed its login in.
-    if (slot?.kind !== 'external') return releaseLeftLogins(config, runId, attempt);
+    if (slot?.kind !== 'external') return endLeftLogins(config, runId, attempt);
+
+    if (!notClosed) return endLeftLogins(config, runId, attempt, placement?.kind === 'external' ? { toolHome: placement.record.toolHome, isCollected: placement.record.phase === 'collected' } : {});
 
     for (const tool of slot.engine.logins) {
-      if (!notClosed) {
-        await releaseLogin(tool, { run: runId, attempt });
-        continue;
-      }
-
       const holder = await loginHolder(tool);
 
       if (holder?.run === runId && holder.attempt === attempt) {

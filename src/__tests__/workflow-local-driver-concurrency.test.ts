@@ -10,8 +10,10 @@ import { cancelRun, respondProvenance, respondToHitl, retryStep } from '../workf
 import { type StepLauncher } from '@teamai/runtime-tools';
 import { _setDriverPollMs, runLocalDriver } from '../workflow/drivers/local/local-driver.js';
 import { driverIdentity } from '../driver-identity.js';
-import { attemptDir, readRun, RunIdSchema } from '../workflow/store.js';
-import { attemptToolHome } from '../workflow/runtimes/attempt.js';
+import { attemptDir, readRun, RunIdSchema, takeRunLock, type AttemptId, type RunId } from '../workflow/store.js';
+import { attemptRuntimePath, attemptToolHome } from '../workflow/runtimes/attempt.js';
+import { stopCancelledAttempts } from '../workflow/runtimes/cancelled.js';
+import { log } from '@teamai/shared/log';
 import { holdLogin, holdLoginFrom, loginHolder, loginHome } from '../workflow/runtimes/login.js';
 import { knownSecrets } from '../env-resolution.js';
 import { alive, dirs, exitsWithin, LOG, parallelFixture, toolPaths, TWO_BARRIERS, workflowFixture } from './helpers/workflow-local-driver-fixture.js';
@@ -649,6 +651,64 @@ ${timeoutLine}`);
 
     expect({ daily: JSON.parse(fs.readFileSync(path.join(daily, 'auth.json'), 'utf8')).tokens.refresh_token, holder: await loginHolder('codex') })
       .toEqual({ daily: 'refresh-2', holder: undefined });
+  });
+
+  describe('a cancel of a run whose killed driver\'s Codex judge held the member\'s login', () => {
+    const login = (refresh: string): string => JSON.stringify({ auth_mode: 'chatgpt', tokens: { account_id: 'acct-1', refresh_token: refresh } });
+
+    /** A run whose driver was killed while its judge held the login of `daily`, which the judge's Codex refreshed. */
+    const killedJudge = async (): Promise<{ config: LocalConfig; runId: string; run: RunId; attempt: AttemptId; daily: string }> => {
+      const { config, workspace, runId } = await workflowFixture(`schemaVersion: v1alpha1
+name: build
+description: A step whose earlier driver was killed while its Codex judge held the member's login.
+steps:
+  - id: check
+    command: "true"
+`);
+      const leased = await leaseNext(config, runId, driverIdentity('local', workspace));
+      if (!('data' in leased)) throw new Error(leased.error.message);
+      const run = RunIdSchema.parse(runId);
+      const { attempt } = LeaseIdSchema.parse(leased.data.lease);
+      const daily = path.join(path.dirname(workspace), 'codex');
+      fs.mkdirSync(daily);
+      fs.writeFileSync(path.join(daily, 'auth.json'), login('refresh-1'), { mode: 0o600 });
+      const toolHome = attemptToolHome(config, run, attempt, 'codex');
+      expect((await holdLoginFrom({ tool: 'codex', executable: 'codex', from: daily, toolHome, run, attempt, signal: new AbortController().signal })).ok).toBe(true);
+      fs.writeFileSync(path.join(toolHome, 'auth.json'), login('refresh-2'));
+      return { config, runId, run, attempt, daily };
+    };
+
+    /** `teamai workflow cancel` of the run, which stops what its cancelled attempts left while it holds the run's lock. */
+    const cancelHere = async (config: LocalConfig, runId: string, run: RunId): Promise<void> => {
+      expect(await cancelRun(config, runId, await knownSecrets(config))).not.toHaveProperty('error');
+      expect(await takeRunLock(config, run, (lock) => stopCancelledAttempts(config, lock), { waitMs: 0 })).toMatchObject({ kind: 'held' });
+    };
+
+    const refreshOf = (daily: string): unknown => JSON.parse(fs.readFileSync(path.join(daily, 'auth.json'), 'utf8')).tokens.refresh_token;
+
+    it('writes the login back before it releases it, though the attempt\'s runtime record cannot be read', async () => {
+      const { config, runId, run, attempt, daily } = await killedJudge();
+      fs.writeFileSync(attemptRuntimePath(config, run, attempt), '{"runtime":');
+
+      await cancelHere(config, runId, run);
+
+      expect({ daily: refreshOf(daily), holder: await loginHolder('codex') }).toEqual({ daily: 'refresh-2', holder: undefined });
+    });
+
+    it.skipIf(process.platform === 'win32')('releases the login and says why it was not written back when the member\'s Codex home refuses the write', async () => {
+      const { config, runId, run, daily } = await killedJudge();
+      const warn = vi.spyOn(log, 'warn').mockImplementation(() => undefined);
+      fs.chmodSync(daily, 0o555);
+
+      try {
+        await cancelHere(config, runId, run);
+      } finally {
+        fs.chmodSync(daily, 0o755);
+      }
+
+      expect({ daily: refreshOf(daily), holder: await loginHolder('codex') }).toEqual({ daily: 'refresh-1', holder: undefined });
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining(`The codex login the step used was not written back to ${path.join(daily, 'auth.json')}: writing it failed (EACCES`));
+    });
   });
 
   it('runs a prompt an earlier driver leased alone, between the commands leased before and after it', async () => {
