@@ -240,7 +240,7 @@ export async function holdLogin({ tool, run, attempt, toolHome, from = dedicated
       await onWait({ tool, holder: { run: holder.run, attempt: holder.attempt } });
     }
 
-    if (signal.aborted) return { ok: false, failure: { code: 'login_held', message: `Stopped while waiting for the ${tool} login teamai keeps, which run ${holder.run} holds.` } };
+    if (signal.aborted) return { ok: false, failure: { code: 'login_held', message: `Stopped while waiting for the ${tool} login, which attempt ${holder.attempt} of run ${holder.run} holds. If that run no longer runs, teamai workflow cancel ${holder.run} releases it; if it is gone, delete ${loginLockFile(tool)}. Then retry.` } };
     await new Promise((resolve) => setTimeout(resolve, WAIT_POLL_MS));
   }
 }
@@ -396,8 +396,9 @@ export async function holdLoginFrom({ tool, executable, from, toolHome, run, att
   signal: AbortSignal;
 }): Promise<{ ok: true; release(): Promise<WorkflowFailure | undefined> } | { ok: false; failure: WorkflowFailure }> {
   if (!await holdsLogin(path.join(from, LOGIN_FILES[tool]))) return { ok: true, release: async () => undefined };
-  // A lock this attempt holds is from a run that died with its process, and with the home it copied into.
-  await releaseLogin(tool, { run, attempt });
+
+  // A lock this attempt holds is a killed run's: its home keeps what the tool refreshed, unless the home went with it.
+  if (!await holdsLogin(path.join(toolHome, LOGIN_FILES[tool]))) await releaseLogin(tool, { run, attempt });
   const source: LoginSource = { home: from, signIn: `${HOME_VARIABLES[tool]}=${from} ${executable} login` };
 
   const held = await holdLogin({

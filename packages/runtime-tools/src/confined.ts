@@ -67,7 +67,10 @@ export interface ConfinedRequest {
   /** The least level the run must reach; a tool that cannot reach it does not run. */
   level: ConfinedLevel;
   timeoutMs: number;
-  /** The directory the tool's process group is recorded in, where `stopRecordedGroup` finds it if its caller dies. */
+  /**
+   * The attempt's directory, which outlives the caller: the tool's process group is recorded there, where
+   * `stopRecordedGroup` finds it if its caller dies, and a Codex run keeps its home there while it holds the login.
+   */
   group?: string;
   /** The attempt the run belongs to. */
   attempt: ConfinedAttempt;
@@ -309,9 +312,10 @@ const LAUNCHES = {
     const { request, deps, env, tmp, dir } = context;
     const settings = await codexSettings(request, env, deps);
     const from = env.CODEX_HOME || request.home;
-    const toolHome = path.join(tmp, 'codex');
+    // In the attempt's directory when it has one, so a run killed while it held the login leaves what Codex refreshed.
+    const toolHome = request.group === undefined ? path.join(tmp, 'codex') : path.join(request.group, 'tool-home', 'codex');
     env.CODEX_HOME = toolHome;
-    await fs.mkdir(toolHome);
+    await fs.mkdir(toolHome, { recursive: true });
     await writeRegularFile(path.join(toolHome, 'config.toml'), codexProfile(dir));
     const schema = path.join(tmp, 'schema.json');
 
@@ -320,13 +324,21 @@ const LAUNCHES = {
     const waitEnds = AbortSignal.any([AbortSignal.timeout(request.timeoutMs), ...(request.signal ? [request.signal] : [])]);
     const login = await deps.holdCodexLogin({ executable: request.executable, from, toolHome, attempt: request.attempt, signal: waitEnds });
 
-    if (!login.ok) return { ok: false, code: login.code, message: login.message };
+    if (!login.ok) {
+      await fs.rm(toolHome, { recursive: true, force: true });
+
+      return { ok: false, code: login.code, message: login.message };
+    }
 
     return {
       async release() {
-        const kept = await login.release();
+        try {
+          const kept = await login.release();
 
-        return kept && { ok: false, ...kept };
+          return kept && { ok: false, ...kept };
+        } finally {
+          await fs.rm(toolHome, { recursive: true, force: true });
+        }
       },
       stdin: confinedStdin('codex', request.prompt),
       configuredModel: settings.model,
