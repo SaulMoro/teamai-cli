@@ -234,6 +234,13 @@ export function describeFamily(name: string, family: ToolFamily, recordings: Fam
       else describePlatform(id, platform, transcript);
     }
 
+    // A version recorded with no detector to read it means teamai records that tool with no version.
+    for (const id of Object.keys(recordings.versions)) {
+      it(`has a detector for the recorded version of ${id}`, () => {
+        expect(Object.keys(family.detect)).toContain(id);
+      });
+    }
+
     for (const [id, detector] of Object.entries(family.detect)) {
       const recording = recorded(recordings.versions, id, 'version');
 
