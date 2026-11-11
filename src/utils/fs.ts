@@ -6,7 +6,7 @@ import path from 'node:path';
 import { z } from 'zod';
 import { log } from '@teamai/shared/log';
 import { expandHome } from '@teamai/shared/home';
-import { isSameProcess } from '@teamai/shared/process-group';
+import { identityOf, isSameProcess, ProcessIdentitySchema } from '@teamai/shared/process-group';
 import { parseJson, type JsonSyntax, isJsonObject } from '@teamai/shared/json';
 import { editJsonText, isPlainJson, parseJsonAs } from './json.js';
 
@@ -383,7 +383,7 @@ export async function copyDir(
   const copy = path.join(staging, 'copy');
 
   try {
-    await fse.outputFile(path.join(staging, STAGING_OWNER), JSON.stringify({ pid: process.pid, host: os.hostname() }));
+    await fse.outputFile(path.join(staging, STAGING_OWNER), JSON.stringify({ ...(await identityOf(process.pid)), startedAt: new Date().toISOString(), host: os.hostname() }));
     await copyRegularTree(srcExpanded, copy, {
       filter: async (srcPath: string) => {
         if (isIgnored(path.basename(srcPath)) || isDraft(srcPath)) return false;
@@ -408,17 +408,17 @@ export async function copyDir(
   }
 }
 
-/** The file in a staging folder naming the process that copies into it, and its host. */
+/** The file in a staging folder naming the process that copies into it, as a lock names its holder, and its host. */
 const STAGING_OWNER = 'owner.json';
 
-const StagingOwnerSchema = z.object({ pid: z.number().int().positive(), host: z.string() });
+const StagingOwnerSchema = ProcessIdentitySchema.extend({ host: z.string().min(1) });
 
-/** How old a staging folder is before it counts as one a crash left, when nothing tells its copy is gone: a copy takes seconds. */
+/** How old a staging folder is before it counts as one a crash left, when nothing tells whether its copy runs: a copy takes seconds. */
 const STALE_STAGING_MS = 60 * 60 * 1000;
 
 /**
  * Removes the staging folders beside `dest` that copies cut short left, whichever folder they copied: at once when the
- * process copying is gone from this host, else an hour on.
+ * process copying is gone from this host, never while it runs, else an hour on.
  */
 async function removeLeftStaging(dest: string): Promise<void> {
   const parent = path.dirname(dest);
@@ -432,13 +432,19 @@ async function isLeftBehind(staging: string): Promise<boolean> {
   const left = await fse.lstat(staging).catch(() => undefined);
 
   if (left === undefined) return false;
-
-  if (left.mtimeMs + STALE_STAGING_MS < Date.now()) return true;
   // None yet, while a copy starts, or none at all, from a teamai that wrote none: the age alone tells then.
   const owner = StagingOwnerSchema.safeParse(await readRegularFile(path.join(staging, STAGING_OWNER), 'utf8').then(parseJson).catch(() => undefined));
 
   // A pid another host recorded, as a container sharing the home does, names nothing here.
-  return owner.success && owner.data.host === os.hostname() && await isSameProcess({ pid: owner.data.pid }) === 'other';
+  if (owner.success && owner.data.host === os.hostname()) {
+    const verdict = await isSameProcess(owner.data);
+
+    if (verdict === 'other') return true;
+
+    if (verdict === 'same') return false;
+  }
+
+  return left.mtimeMs + STALE_STAGING_MS < Date.now();
 }
 
 /**
