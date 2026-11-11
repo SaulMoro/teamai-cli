@@ -31,7 +31,7 @@ import { readRegularFile } from '@teamai/shared/regular-file';
 import type { SimpleGit, StatusResult } from 'simple-git';
 import { createGitWithBlockTimeout, isGitRepo, commitSkippingHooks, isDedicatedRepoRoot, gitCommonDir, checkoutLocation } from './git.js';
 import { acquireLock, releaseLock } from '../update.js';
-import { ensureDir, writeFile, pathExists } from './fs.js';
+import { ensureDir, writeFile, pathExists, refusedWrite, refusedWriteAdvice, type RefusedWrite } from './fs.js';
 import { isSilent, log } from '@teamai/shared/log';
 import { projectsRootDir } from './partition.js';
 import {
@@ -1311,7 +1311,7 @@ async function restageSnapshotIndex(spec: BranchWorktreeSpec, git: SimpleGit, sh
  * What a sync learned of origin's branch: fetched; absent, as origin answered, so it has nothing to sync from; or
  * unreachable, with why.
  */
-type OriginSync = { origin: 'fetched' } | { origin: 'absent' } | { origin: 'unreachable'; reason: string };
+type OriginSync = { origin: 'fetched' } | { origin: 'absent' } | { origin: 'unreachable'; reason: string } | { origin: 'refused'; refused: RefusedWrite };
 
 const FETCHED: OriginSync = { origin: 'fetched' };
 
@@ -1344,6 +1344,10 @@ async function syncWorktree(spec: BranchWorktreeSpec, wt: string): Promise<Origi
     // below sees fresh commits even in a --single-branch clone (#706).
     await fetchTrackingRef(git, spec.branch);
   } catch (e) {
+    // A fetch the filesystem refuses, as a sandbox refuses FETCH_HEAD, fails again on every retry: not the connection.
+    const refused = refusedWrite(e, { gitCwd: wt });
+
+    if (refused) return { origin: 'refused', refused };
     log.debug(`[${spec.logTag}] fetch failed, using the local copy: ${e instanceof Error ? e.message : String(e)}`);
 
     return await remoteBranchExists(spec, wt) === false ? { origin: 'absent' } : { origin: 'unreachable', reason: failureReason(e) };
@@ -1478,7 +1482,19 @@ async function refreshImpl(
     }
   }
 
-  return synced.origin === 'unreachable' ? { status: 'unfetched', reason: synced.reason } : { status: 'done' };
+  switch (synced.origin) {
+    case 'fetched':
+    case 'absent':
+      return { status: 'done' };
+    case 'unreachable':
+      return { status: 'unfetched', reason: synced.reason };
+    case 'refused':
+      return { status: 'failed', reason: refusedWriteAdvice(synced.refused), cause: synced.refused };
+    default: {
+      const unhandled: never = synced;
+      throw new Error(`Unhandled origin sync: ${JSON.stringify(unhandled)}`);
+    }
+  }
 }
 
 /**
