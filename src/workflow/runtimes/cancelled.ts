@@ -4,7 +4,7 @@ import type { LocalConfig } from '../../types.js';
 import { log } from '@teamai/shared/log';
 import type { RunStatus, WorkflowFailure } from '../types.js';
 import { existingCheckout } from '../run-location.js';
-import { attemptDir, AttemptIdSchema, attemptsDir, readRun, runnerAlive, type AttemptId, type RunId, type RunLock } from '../store.js';
+import { attemptDir, AttemptIdSchema, attemptsDir, readRun, type AttemptId, type RunId, type RunLock } from '../store.js';
 import { knownSecrets } from '../../env-resolution.js';
 import { attemptRun, attemptRuntimePath, attemptToolHome, maskAttemptResults, readAttemptPlacement, releaseAttemptRuntime, type AttemptRuntimeRecord } from './attempt.js';
 import { endLogin, LOGIN_TOOLS, loginHolder, type LoginTool } from './login.js';
@@ -28,6 +28,12 @@ import { stopRecordedGroup } from '@teamai/shared/process-group';
 //
 
 /**
+ * Whether a skill runner on this machine holds an attempt, running or just spawned (`isSkillRunnerHolding` of the skill
+ * driver, which imports this module and so is passed in).
+ */
+export type RunnerHolding = (config: LocalConfig, run: RunId, attempt: AttemptId) => Promise<boolean>;
+
+/**
  * Stops what each cancelled attempt of the locked run left open on its step runtime, and each other attempt whose place
  * a runtime still holds, such as one whose stop or close failed before, then releases the logins of the attempts that
  * no longer run. A cancelled attempt whose skill runner still runs is left to that runner, which stops it itself. Says what it released, and which login stays held and how to free it. Attempt `release` goes through
@@ -35,7 +41,7 @@ import { stopRecordedGroup } from '@teamai/shared/process-group';
  * checked that nothing of it still runs, so teamai writes its login back and lets it go. Answers the run's status and
  * the attempts whose place it closed or let go.
  */
-export async function stopCancelledAttempts(config: LocalConfig, lock: RunLock, release?: AttemptId): Promise<StoppedAttempts | undefined> {
+export async function stopCancelledAttempts(config: LocalConfig, lock: RunLock, { isRunnerHolding, release }: { isRunnerHolding: RunnerHolding; release?: AttemptId | undefined }): Promise<StoppedAttempts | undefined> {
   const { run } = lock;
   const state = await readRun(config, run);
 
@@ -56,7 +62,7 @@ export async function stopCancelledAttempts(config: LocalConfig, lock: RunLock, 
   // in teamai's process held, written back; what one runs on a step runtime, the fleet's member included, its runtime
   // stops below.
   for (const attempt of cancelled) {
-    if (!await runnerAlive(config, run, attempt)) {
+    if (!await isRunnerHolding(config, run, attempt)) {
       if (await stopLeftInProcess(config, run, attempt) === 'kept') keptLogins.add(attempt);
       continue;
     }

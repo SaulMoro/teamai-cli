@@ -8,9 +8,9 @@ import type { RunMode } from '../launch-context.js';
 import { acquireLock, releaseLock } from '../update.js';
 import { getDataHome } from '../types.js';
 import type { ToolId } from '../tools.js';
-import { skillContext } from '../workflow/drivers/skill/skill-driver.js';
+import { isSkillRunnerHolding, skillContext } from '../workflow/drivers/skill/skill-driver.js';
 import { inProcessClient, type WorkflowClient } from '../workflow/protocol.js';
-import { AttemptIdSchema, deliveryLockPath, readRun, RunIdSchema, skillStatePath, takeRunLock, type RunId } from '../workflow/store.js';
+import { AttemptIdSchema, deliveryLockPath, readRun, RunIdSchema, runnerAlive, skillStatePath, takeRunLock, type RunId } from '../workflow/store.js';
 import { attemptToolHome } from '../workflow/runtimes/attempt.js';
 import { holdLoginFrom, loginHolder } from '../workflow/runtimes/login.js';
 import { stopCancelledAttempts } from '../workflow/runtimes/cancelled.js';
@@ -1301,7 +1301,7 @@ steps:
     const info = vi.spyOn(log, 'info').mockImplementation(() => undefined);
     onTestFinished(() => { info.mockRestore(); });
     const cancelHere = async (): Promise<void> => {
-      expect(await takeRunLock(harness.config, run, (lock) => stopCancelledAttempts(harness.config, lock), { waitMs: 0 })).toMatchObject({ kind: 'held' });
+      expect(await takeRunLock(harness.config, run, (lock) => stopCancelledAttempts(harness.config, lock, { isRunnerHolding: isSkillRunnerHolding }), { waitMs: 0 })).toMatchObject({ kind: 'held' });
     };
 
     expect(await cancelRun(harness.config, run, await knownSecrets(harness.config))).not.toHaveProperty('error');
@@ -1315,6 +1315,38 @@ steps:
     await cancelHere();
     expect({ daily: JSON.parse(fs.readFileSync(path.join(daily, 'auth.json'), 'utf8')).tokens.refresh_token, holder: await loginHolder('codex') })
       .toEqual({ daily: 'refresh-2', holder: undefined });
+  });
+
+  it('leaves an attempt whose runner was just spawned, and holds no runner.lock yet, to that runner when the person cancels the run', async () => {
+    const spawned: string[] = [];
+    const harness = await skillHarness({ serve: `schemaVersion: v1alpha1
+name: serve
+description: Serve the app
+invoke: allow
+steps:
+  - id: serve
+    command: sleep 300
+` }, { runners: (runners) => ({ ...runners, spawn: async (job) => { spawned.push(job.attempt); } }) });
+    roots.push(harness.root);
+    const started = await harness.call({ kind: 'start', name: 'serve', answers: { parallel: 1, confirmed: false }, inputs: undefined });
+    if (!('data' in started) || !('turn' in started.data)) throw new Error(JSON.stringify(started));
+    const run = RunIdSchema.parse(started.data.turn.run);
+    const attempt = AttemptIdSchema.parse(spawned[0]);
+    // The runner process is on its way, not yet running: it takes runner.lock first thing, and a judge's login after.
+    expect(await runnerAlive(harness.config, run, attempt)).toBe(false);
+    const daily = path.join(harness.root, 'codex');
+    fs.mkdirSync(daily);
+    fs.writeFileSync(path.join(daily, 'auth.json'), JSON.stringify({ tokens: { account_id: 'acct-1', refresh_token: 'refresh-1' } }), { mode: 0o600 });
+    const toolHome = attemptToolHome(harness.config, run, attempt, 'codex');
+    expect((await holdLoginFrom({ tool: 'codex', executable: 'codex', from: daily, toolHome, run, attempt, signal: new AbortController().signal })).ok).toBe(true);
+    const info = vi.spyOn(log, 'info').mockImplementation(() => undefined);
+    onTestFinished(() => { info.mockRestore(); });
+
+    expect(await cancelRun(harness.config, run, await knownSecrets(harness.config))).not.toHaveProperty('error');
+    expect(await takeRunLock(harness.config, run, (lock) => stopCancelledAttempts(harness.config, lock, { isRunnerHolding: isSkillRunnerHolding }), { waitMs: 0 })).toMatchObject({ kind: 'held' });
+
+    expect(await loginHolder('codex')).toMatchObject({ run, attempt });
+    expect(info).toHaveBeenCalledWith(expect.stringContaining(`Attempt ${attempt} of run ${run} runs in the skill driver's runner on this machine`));
   });
 
   it('masks the run\'s secrets in the result a child wrote once it reports', async () => {

@@ -38,7 +38,7 @@ import type { JsonValue } from '@teamai/shared/json';
 import { AttemptIdSchema, installOwner, readRun, RunIdSchema, type RunId, takeRunLock } from './workflow/store.js';
 import { startAsCli } from './workflow/cli-start.js';
 import { commandExitMessage, inProcessClient, isRefusal, resumeRefusal, workflowNotFound, type InvokeCaller, type NextPrepare, type StartedRun, invokeRefusal } from './workflow/protocol.js';
-import { parseInputsFlag, parseSkillCall, parseSkillResume, runSkillCall, sessionDrivesRun, skillContext, whileNoDriverHere } from './workflow/drivers/skill/skill-driver.js';
+import { isSkillRunnerHolding, parseInputsFlag, parseSkillCall, parseSkillResume, runSkillCall, sessionDrivesRun, skillContext, whileNoDriverHere } from './workflow/drivers/skill/skill-driver.js';
 import { loadCachedWorkflow, namespaceConflictOf, resolveStart } from './workflow/cache.js';
 import { durationMs } from './workflow/parse.js';
 import { findRunConfig } from './workflow/run-location.js';
@@ -1348,7 +1348,7 @@ export async function workflowCancel(runId: string, step?: string, options: { re
     const taken = await takeRunLock(config, run.data, async (lock): Promise<WorkflowEnvelope> => {
       const cancelled = await cancelRun(config, runId, secrets, step);
       const isSettled = 'error' in cancelled && cancelled.error.code === 'run_settled';
-      const stopped = !('error' in cancelled) || isSettled ? await stopCancelledAttempts(config, lock, release?.data) : undefined;
+      const stopped = !('error' in cancelled) || isSettled ? await stopCancelledAttempts(config, lock, { isRunnerHolding: isSkillRunnerHolding, release: release?.data }) : undefined;
 
       // Of a run that had settled, what this cancel did is the places it closed or let go, which it answers with.
       if (!isSettled || stopped === undefined || stopped.closed.length + stopped.released.length === 0) return cancelled;

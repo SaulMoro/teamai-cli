@@ -14,6 +14,7 @@ import { log } from '@teamai/shared/log';
 import { shellArgv, startGroupedCommand, STOPPED_EXIT_CODE, type GroupedCommand, type GroupedCommandExit } from '../shell-command.js';
 import { attemptHoldingSession, attemptRun, attemptRuntimePath } from '../runtimes/attempt.js';
 import { stopCancelledAttempts, stopLeftAttempt, stopLeftInProcess } from '../runtimes/cancelled.js';
+import { isSkillRunnerHolding } from '../drivers/skill/skill-driver.js';
 import type { OpenedDriver } from '../runtimes/sources.js';
 import type { StepRuntime } from '@teamai/runtime-protocol/step-runtime';
 import type { DriverCan } from '../requirements.js';
@@ -828,7 +829,7 @@ async function endNestedRun(config: LocalConfig, nested: RunId, message: string)
 
     // A run that already ended may still have left what a cancelled attempt of it started.
     if ('error' in cancelled && cancelled.error.code !== 'run_settled') return cancelled.error.message;
-    await stopCancelledAttempts(config, lock);
+    await stopCancelledAttempts(config, lock, { isRunnerHolding: isSkillRunnerHolding });
 
     return undefined;
   }, { waitMs: 0 });

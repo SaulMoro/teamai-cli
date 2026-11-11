@@ -24,7 +24,7 @@ import { journalCall } from './journal.js';
 import { describeLiteral, invocationOf, type Invocation } from './literals.js';
 import { askFor, attendedReason, ceilingOf, checkStartAnswers, localPromptTool, localReason, neededAnswers, needsTool, type HitlMode } from './preflight.js';
 import { needsAiTool } from '../../describe.js';
-import { drivesRun, readSkillState, writeSkillState } from './skill-state.js';
+import { drivesRun, readSkillState, writeSkillState, type AttemptState } from './skill-state.js';
 import { detachedRunners, runRunner } from './skill-runner.js';
 import { agentReport, foreground, plannedState, poll, WAIT_GRACE_MS } from './tick.js';
 import { APP_CHECKED_ROWS, describeRow, judgedBy, startRow, type DescribeInput, type ResumeAnswers, type RowId } from './transitions.js';
@@ -161,6 +161,22 @@ export async function sessionDrivesRun(config: LocalConfig, run: RunId): Promise
   return drivesRun(read.kind === 'found' ? read.state : undefined, (await agentSessionFromEnv()).id);
 }
 
+/** Whether the runner of `open` was spawned within `WAIT_GRACE_MS`, so it may not hold its runner.lock yet (C10). */
+function isRunnerStarting(open: AttemptState): boolean {
+  return (open.phase === 'preparing' || open.phase === 'running') && Date.now() - Date.parse(open.spawnedAt) <= WAIT_GRACE_MS;
+}
+
+/**
+ * Whether a skill runner holds `attempt` of run `run` on this machine: it runs (its runner.lock), or a start or C10
+ * spawned it within `WAIT_GRACE_MS` and it may not have taken that lock yet. Such an attempt is that runner's to stop.
+ */
+export async function isSkillRunnerHolding(config: LocalConfig, run: RunId, attempt: AttemptId): Promise<boolean> {
+  const read = await readSkillState(config, run);
+  const open = read.kind === 'found' ? read.state.attempts.find((held) => held.attempt === attempt) : undefined;
+
+  return (open !== undefined && isRunnerStarting(open)) || runnerAlive(config, run, attempt);
+}
+
 /**
  * Runs `body` while no driver of run `run` runs a step on this machine, or answers `busy` with `driver_running`: it holds
  * the run's driver.lock, which a local driver holds for its whole drive and every skill driver tick takes, and finds no
@@ -172,9 +188,7 @@ export async function whileNoDriverHere<T>(config: LocalConfig, run: RunId, body
     const read = await readSkillState(config, run);
 
     for (const open of read.kind === 'found' ? read.state.attempts : []) {
-      const starting = (open.phase === 'preparing' || open.phase === 'running') && Date.now() - Date.parse(open.spawnedAt) <= WAIT_GRACE_MS;
-
-      if (starting || await runnerAlive(config, run, open.attempt)) return { kind: 'runner', step: open.step, attempt: open.attempt };
+      if (isRunnerStarting(open) || await runnerAlive(config, run, open.attempt)) return { kind: 'runner', step: open.step, attempt: open.attempt };
     }
 
     return { kind: 'ran', value: await body(lock) };

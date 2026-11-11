@@ -13,6 +13,7 @@ import { driverIdentity } from '../driver-identity.js';
 import { attemptDir, readRun, RunIdSchema, takeRunLock, type AttemptId, type RunId } from '../workflow/store.js';
 import { attemptRuntimePath, attemptToolHome } from '../workflow/runtimes/attempt.js';
 import { stopCancelledAttempts } from '../workflow/runtimes/cancelled.js';
+import { isSkillRunnerHolding } from '../workflow/drivers/skill/skill-driver.js';
 import { log } from '@teamai/shared/log';
 import { holdLogin, holdLoginFrom, loginHolder, loginHome } from '../workflow/runtimes/login.js';
 import { knownSecrets } from '../env-resolution.js';
@@ -681,7 +682,7 @@ steps:
     /** `teamai workflow cancel` of the run, which stops what its cancelled attempts left while it holds the run's lock. */
     const cancelHere = async (config: LocalConfig, runId: string, run: RunId): Promise<void> => {
       expect(await cancelRun(config, runId, await knownSecrets(config))).not.toHaveProperty('error');
-      expect(await takeRunLock(config, run, (lock) => stopCancelledAttempts(config, lock), { waitMs: 0 })).toMatchObject({ kind: 'held' });
+      expect(await takeRunLock(config, run, (lock) => stopCancelledAttempts(config, lock, { isRunnerHolding: isSkillRunnerHolding }), { waitMs: 0 })).toMatchObject({ kind: 'held' });
     };
 
     const refreshOf = (daily: string): unknown => JSON.parse(fs.readFileSync(path.join(daily, 'auth.json'), 'utf8')).tokens.refresh_token;
@@ -709,7 +710,7 @@ steps:
       fs.rmSync(left);
 
       // A cancel again of the settled run stops what its cancelled attempts left, as the first did.
-      expect(await takeRunLock(config, run, (lock) => stopCancelledAttempts(config, lock), { waitMs: 0 })).toMatchObject({ kind: 'held' });
+      expect(await takeRunLock(config, run, (lock) => stopCancelledAttempts(config, lock, { isRunnerHolding: isSkillRunnerHolding }), { waitMs: 0 })).toMatchObject({ kind: 'held' });
 
       expect({ daily: refreshOf(daily), holder: await loginHolder('codex') }).toEqual({ daily: 'refresh-2', holder: undefined });
     });
