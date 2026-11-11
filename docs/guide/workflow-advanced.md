@@ -1844,7 +1844,7 @@ The login is also kept when the runtime itself stops while Codex runs, or cannot
 
 ```text
 ⚠ Step runtime "sandbox" could not close the place of attempt a339da600, so what ran there may still run (runtime_exited): Step runtime "sandbox" stopped: it exited with status 70.
-⚠ The codex login teamai keeps stays held by attempt a339da600 of run r9a395746ec65dbd7, whose tool may still run. Stop that tool on its step runtime, then run teamai workflow cancel r9a395746ec65dbd7 --release a339da600, which lets the attempt go and ends its login.
+⚠ The codex login teamai keeps stays held by attempt a339da600 of run r9a395746ec65dbd7, whose tool may still run. Stop that tool on its step runtime; once run r9a395746ec65dbd7 has ended, run teamai workflow cancel r9a395746ec65dbd7 --release a339da600, which lets the attempt go and ends its login.
 ```
 
 ### Credentials from your environment

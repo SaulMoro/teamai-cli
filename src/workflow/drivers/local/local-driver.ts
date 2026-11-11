@@ -808,7 +808,7 @@ async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, given: 
       const holder = await loginHolder(tool);
 
       if (holder?.run === runId && holder.attempt === attempt) {
-        log.warn(`The ${tool} login teamai keeps stays held by attempt ${attempt} of run ${runId}, whose tool may still run. Stop that tool on its step runtime, then run teamai workflow cancel ${runId} --release ${attempt}, which lets the attempt go and ends its login.`);
+        log.warn(`The ${tool} login teamai keeps stays held by attempt ${attempt} of run ${runId}, whose tool may still run. Stop that tool on its step runtime; once run ${runId} has ended, run teamai workflow cancel ${runId} --release ${attempt}, which lets the attempt go and ends its login.`);
       }
     }
   };

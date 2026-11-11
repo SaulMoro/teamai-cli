@@ -66,7 +66,7 @@ export async function stopCancelledAttempts(config: LocalConfig, lock: RunLock, 
 
   const left = new Set([...cancelled, ...await placesLeftOpen(config, run, leased)].filter((attempt) => !runnerOwned.has(attempt)));
 
-  if (release !== undefined && !left.has(release)) log.warn(`Attempt ${release} of run ${run} holds no place on a step runtime, so there is nothing to release.`);
+  if (release !== undefined && !left.has(release) && !runnerOwned.has(release)) log.warn(`Attempt ${release} of run ${run} holds no place on a step runtime, so there is nothing to release.`);
 
   const stopped: StoppedAttempts = { status: state.status, closed: [], released: [] };
   // Each runtime starts in the run's checkout, or, once that folder is gone, where this cancel runs.

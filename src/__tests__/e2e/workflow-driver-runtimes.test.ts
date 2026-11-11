@@ -3092,7 +3092,7 @@ span('end');
         // The tool outlived its runtime, so the login stays with its attempt.
         expect(pidAlive(Number(fs.readFileSync(pidFile, 'utf8')))).toBe(true);
         expect(JSON.parse(fs.readFileSync(lockFile(), 'utf8'))).toMatchObject({ run, attempt });
-        expect(ran.stderr).toContain(`The codex login teamai keeps stays held by attempt ${attempt} of run ${run}, whose tool may still run. Stop that tool on its step runtime, then run teamai workflow cancel ${run} --release ${attempt}, which lets the attempt go and ends its login.`);
+        expect(ran.stderr).toContain(`The codex login teamai keeps stays held by attempt ${attempt} of run ${run}, whose tool may still run. Stop that tool on its step runtime; once run ${run} has ended, run teamai workflow cancel ${run} --release ${attempt}, which lets the attempt go and ends its login.`);
         expect(runtimeRecord(run, attempt)).toMatchObject({ phase: 'running', closeFailed: { code: 'runtime_exited' } });
       } finally {
         if (fs.existsSync(pidFile)) process.kill(Number(fs.readFileSync(pidFile, 'utf8')), 'SIGKILL');
