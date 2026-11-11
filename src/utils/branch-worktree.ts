@@ -1041,13 +1041,17 @@ async function updateImpl(
   try {
     const { wt, current, isFetched } = await openWorktree(spec, localConfig, options);
 
-    let isOriginFresh = isFetched;
+    let synced: OriginSync | undefined;
 
     try {
-      if (!current) isOriginFresh = (await syncWorktree(spec, wt)).origin === 'fetched';
+      if (!current) synced = await syncWorktree(spec, wt);
     } catch (e) {
       log.debug(`[${spec.logTag}] sync before write failed, writing onto the local copy: ${e instanceof Error ? e.message : String(e)}`);
     }
+
+    // Every write meets the refusal again, in its fetch and its commit alike: say where, and write nothing.
+    if (synced?.origin === 'refused') return { status: 'failed', reason: synced.error.message };
+    const isOriginFresh = synced === undefined ? isFetched : synced.origin === 'fetched';
 
     let delivered: (() => Promise<void>) | undefined;
 

@@ -461,6 +461,35 @@ describe('git-kind reports: a team clone that refuses writes', () => {
     }
   });
 
+  it.skipIf(process.platform === 'win32' || process.getuid?.() === 0)('refuses a reports write whose sync may not write FETCH_HEAD before it writes, naming the folder', async () => {
+    const { origin, clone } = await seedBareOrigin();
+    const alice = gitConfig(clone, origin);
+    expect(await publish(alice, 'members/alice.yaml', 'username: alice\n')).toBe(true);
+    const bob = await cloneCheckout(origin, 'bob', 'bob');
+    const wt = await ensureReportsWorktree(bob, READ_ONLY);
+    expect(await publish(alice, 'members/carol.yaml', 'username: carol\n')).toBe(true);
+    const gitDir = /^gitdir: (.+)$/m.exec(fs.readFileSync(path.join(wt, '.git'), 'utf8'))?.[1] ?? '';
+    fs.rmSync(path.join(gitDir, 'FETCH_HEAD'), { force: true });
+    fs.chmodSync(gitDir, 0o555);
+    let wrote = false;
+
+    try {
+      const result = await updateReports(bob, async (worktree) => {
+        wrote = true;
+        fs.writeFileSync(path.join(worktree, 'members', 'bob.yaml'), 'username: bob\n');
+
+        return { files: ['members/bob.yaml'], message: '[teamai] Register member: bob' };
+      });
+
+      expect({ result, wrote }).toEqual({
+        result: { status: 'failed', reason: `teamai may not write in ${gitDir} (EACCES). Give this process write access to that folder, or run the command outside its sandbox.` },
+        wrote: false,
+      });
+    } finally {
+      fs.chmodSync(gitDir, 0o755);
+    }
+  });
+
   it.skipIf(process.platform === 'win32')('reads origin as unreachable when a sandbox refuses the ssh connection, which no folder access mends', async () => {
     const { origin, clone } = await seedBareOrigin();
     const alice = gitConfig(clone, origin);
