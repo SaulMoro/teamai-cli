@@ -235,13 +235,21 @@ export function sbxProvider({ agent, owner, env, warm }: { agent: string | undef
     }
   };
 
-  /** The `-t` an attempt in `checkout` from `template` is created with: the warm template, saved first when it is not there. */
-  const warmFrom = async (template: string, checkout: string): Promise<{ ok: true; args: string[] } | { ok: false; failure: RuntimeFailure }> => {
+  /**
+   * The `-t` an attempt in `checkout` from `template` is created with: the warm template. `warm` saves it first when it is
+   * not there; the creation of a sandbox, which a close waits for, only names the one `warm` saved, so a close never
+   * waits on a build.
+   */
+  const warmFrom = async (template: string, checkout: string, { creating = false }: { creating?: boolean } = {}): Promise<{ ok: true; args: string[] } | { ok: false; failure: RuntimeFailure }> => {
     if (warm === undefined) return { ok: true, args: [] };
     const planned = planWarm({ base: `${template}@${await sbxVersion()}`, recipe: warm, checkout });
 
     if (!planned.ok) return planned;
     const { plan } = planned;
+
+    // sbx itself refuses a template removed since, which the creation's failure then names.
+    if (creating) return { ok: true, args: ['-t', plan.tag] };
+
     const made = await once(plan.key, async () => ((await isSaved(plan)) ? { ok: true } : makeWarm(plan, template, warm.prepare)));
 
     return made.ok ? { ok: true, args: ['-t', plan.tag] } : made;
@@ -366,7 +374,7 @@ export function sbxProvider({ agent, owner, env, warm }: { agent: string | undef
       const mounted = mountsOf('sbx', view);
 
       if (!mounted.ok) return mounted;
-      const from = await warmFrom(template, view.worktree);
+      const from = await warmFrom(template, view.worktree, { creating: true });
 
       if (!from.ok) return from;
       const name = nameOf(key);

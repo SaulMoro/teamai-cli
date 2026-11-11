@@ -2906,6 +2906,30 @@ describe('a warm image', () => {
     await vi.waitFor(() => { expect(engine.containers()).toEqual([]); }, { timeout: 10_000 });
   }, 40_000);
 
+  it.each([
+    { options: { provider: 'docker', image: IMAGE }, says: (tag: string) => `The warm image ${tag} was removed after it was made for attempt ${ATTEMPT}, so no sandbox was made for it. Start the step again, and teamai makes the image again.` },
+    { options: { provider: 'sbx', agent: 'claude' }, says: (tag: string) => expect.stringContaining(`template ${tag} not found`) },
+  ])('fails the open on $options.provider of an attempt whose warm image was removed once made, rather than making it again while creating the sandbox, which a close waits for', async ({ options, says }) => {
+    // The sandbox's lookup outlasts the removal, which lands between the warm image and the sandbox's creation.
+    engine.delay('ps', 3_000);
+    const connection = start();
+    await init(connection, { ...options, warm: WARM });
+    const at = checkout();
+    const op = newOp();
+    connection.send({ type: 'open', op, run: RUN, attempt: ATTEMPT, credentials: { CLAUDE_CODE_OAUTH_TOKEN: 'oauth-secret-1' }, view: { worktree: at.worktree, readonly: [at.git], result: path.join(dir, 'attempts', ATTEMPT, 'out'), runDir: at.runDir, toolHome: { CLAUDE_CONFIG_DIR: path.join(dir, 'attempts', ATTEMPT, 'tool-home', 'claude') } } });
+    await connection.next((message) => message.op === op && message.event === 'accepted', 5_000);
+    await vi.waitFor(() => { expect(engine.savedImages()).toHaveLength(1); }, { timeout: 10_000 });
+    const [tag = ''] = engine.savedImages();
+    // Removed meanwhile, as `docker image rm` or a prune of the member's would.
+    for (const record of ['pulled', 'saved']) fs.rmSync(path.join(engine.state, record, encodeURIComponent(tag)), { recursive: true, force: true });
+
+    expect(await connection.next((message) => message.op === op && (message.event === 'ready' || message.event === 'failed'), 20_000)).toMatchObject({
+      event: 'failed', failure: { code: 'sandbox_failed', message: says(tag) },
+    });
+    expect(builds().prepares).toHaveLength(1);
+    engine.delay('ps', 0);
+  }, 40_000);
+
   it.each(PROVIDERS)('removes, at the next open on $options.provider, the scratch sandbox and directory of a warm image whose runtime was killed, and keeps those of one that runs', async ({ options }) => {
     const tmp = path.join(dir, 'tmp');
     fs.mkdirSync(tmp);

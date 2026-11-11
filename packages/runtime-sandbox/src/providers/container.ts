@@ -179,18 +179,29 @@ export function containerProvider({ engine, image, owner, host, warm }: { engine
     return found.kind === 'ran' && found.code === 0 ? `${image}@${found.stdout.trim()}` : image;
   };
 
-  const imageFor = async (checkout: string): Promise<{ ok: true; image: string } | { ok: false; failure: RuntimeFailure }> => {
+  /**
+   * The image an attempt in `checkout` starts from: the warm image, else `image`. `warm` makes it first when it is not
+   * there yet; the creation of attempt `creating`'s sandbox, which a close waits for, only finds the one `warm` made, so a
+   * close never waits on a build.
+   */
+  const imageFor = async (checkout: string, creating?: { attempt: string }): Promise<{ ok: true; image: string } | { ok: false; failure: RuntimeFailure }> => {
     if (warm === undefined) return { ok: true, image };
     const planned = planWarm({ base: await baseOf(), recipe: warm, checkout });
 
     if (!planned.ok) return planned;
     const { plan } = planned;
 
-    const made = await once(plan.key, async () => {
+    const isPresent = async (): Promise<boolean> => {
       const present = await cli(['image', 'inspect', '--format', '{{.Id}}', plan.tag]);
 
-      return present.kind === 'ran' && present.code === 0 ? { ok: true } : makeWarm(plan);
-    });
+      return present.kind === 'ran' && present.code === 0;
+    };
+
+    if (creating !== undefined) {
+      return await isPresent() ? { ok: true, image: plan.tag } : sandboxFailed(`The warm image ${plan.tag} was removed after it was made for attempt ${creating.attempt}, so no sandbox was made for it. Start the step again, and teamai makes the image again.`);
+    }
+
+    const made = await once(plan.key, async () => (await isPresent() ? { ok: true } : makeWarm(plan)));
 
     return made.ok ? { ok: true, image: plan.tag } : made;
   };
@@ -292,7 +303,7 @@ export function containerProvider({ engine, image, owner, host, warm }: { engine
       const mounted = mountsOf(engine, view);
 
       if (!mounted.ok) return mounted;
-      const from = await imageFor(view.worktree);
+      const from = await imageFor(view.worktree, { attempt: key.attempt });
 
       if (!from.ok) return from;
       const label = host.selinux ? ',z' : '';
