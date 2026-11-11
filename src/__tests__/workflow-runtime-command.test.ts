@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { describe, expect, it, onTestFinished } from 'vitest';
+import { describe, expect, it, onTestFinished, vi } from 'vitest';
 import { runtimeCommand, runtimeLauncher } from '../workflow/steps/runtime-steps.js';
 import { stepLauncher } from '@teamai/runtime-tools';
 import { toolsLaunchDeps } from '../workflow/runtimes/sources.js';
@@ -231,5 +231,50 @@ describe('an attempt\'s operations on a step runtime', () => {
 
     await expect(started.exit).resolves.toMatchObject({ exitCode: 130 });
     expect(execs()).toBe(0);
+  });
+
+  it.each([
+    { how: 'cancel', ends: { kind: 'cancelled' }, cancels: 1 },
+    { how: 'stop', ends: { kind: 'left' }, cancels: 0 },
+  ] as const)('passes a $how that lands while a restarted teamai records the exec it sends again on to that exec', async ({ how, ends, cancels }) => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-attempt-ops-'));
+    onTestFinished(() => fs.rmSync(root, { recursive: true, force: true }));
+    const config: LocalConfig = { repo: { localPath: root, remote: 'local', kind: 'self' }, username: 'tester', scope: 'project', additionalRoles: [], projectRoot: root, dataHome: path.join(root, 'data') };
+    const cancelled: string[] = [];
+    const running = new Map<string, () => void>();
+    // Its execs go on without teamai, as a fleet's do: the same id sent again reconnects to the one still running.
+    const runtime: StepRuntime<DriverCan> = {
+      name: 'reconnected',
+      isExecReconnected: true,
+      init: async () => ({ ok: true, can: {}, launchesAgents: false }),
+      open: async (_request, onAccepted) => {
+        await onAccepted('h-1');
+
+        return { kind: 'ready', handle: 'h-1' };
+      },
+      exec: async ({ op }) => new Promise((resolve) => { running.set(op, () => resolve({ kind: 'cancelled' })); }),
+      prompt: async () => ({ kind: 'cancelled' }),
+      cancel: async (op) => {
+        cancelled.push(op);
+        running.get(op)?.();
+      },
+      collect: async () => ({ ok: true }),
+      reattach: async () => ({ kind: 'gone' }),
+      close: async () => ({ ok: true }),
+      dispose: async () => {},
+    };
+    const ids = { config, run: RunIdSchema.parse('r0123abcd'), attempt: AttemptIdSchema.parse('a00000001'), runtime, driver: 'reconnected' };
+    const request = { argv: ['node', 'build.js'], env: {}, unset: [], credentials: {}, cwd: '/work' };
+    const first = attemptRun(ids);
+    await first.open({ worktree: '/work', readonly: [], result: '/work/out', runDir: '/work/scratch', toolHome: {} });
+    void first.exec(request, {}, 'command');
+    await vi.waitFor(() => { expect(running.size).toBe(1); });
+
+    const again = attemptRun(ids);
+    // The stop lands while the restarted attempt reads and writes its record, before it sends the exec again.
+    setImmediate(() => { void (how === 'cancel' ? again.cancel() : again.stop()); });
+
+    expect(await again.exec(request, {}, 'command')).toMatchObject(ends);
+    expect(cancelled).toHaveLength(cancels);
   });
 });

@@ -577,9 +577,9 @@ export function attemptRun({ config, run, attempt, runtime, driver, deadline }: 
   let mayRun: RuntimeFailure | undefined;
   // The credentials the place was opened with, in memory only, so what the runtime says of the place is kept masked.
   let openedWith: Record<string, string> = {};
-  // The step was stopped: an exec, setup or prompt never sent is not sent, since a stop while the attempt recorded it
-  // found nothing running to cancel. One a restart sends again may run, and goes, for its stop to reach it.
-  let isStopped = false;
+  // How the step was stopped while the attempt recorded what it sends, which found nothing running to stop: an exec,
+  // setup or prompt never sent is not sent, and an exec a restart reconnects to gets the stop once it is sent again.
+  let stopped: 'stop' | 'cancel' | undefined;
 
   const save = async (next: AttemptRuntimeRecord): Promise<void> => {
     record = next;
@@ -799,11 +799,16 @@ export function attemptRun({ config, run, attempt, runtime, driver, deadline }: 
       const exec = before.exec ?? { op: newOpId() };
       await save({ ...before, exec, phase: 'running' });
 
-      if (isStopped && !(before.exec && runtime.isExecReconnected)) return { kind: 'cancelled' };
+      if (stopped && !(before.exec && runtime.isExecReconnected)) return { kind: 'cancelled' };
       running = exec;
       const acceptance = accepting(events);
       const leaving = new Promise<{ kind: 'left' }>((resolve) => { leave = () => resolve({ kind: 'left' }); });
-      const end = await Promise.race([runtime.exec({ op: exec.op, handle, ...request }, { ...events, onAccepted: acceptance.onAccepted, onDisplay: acceptance.onDisplay }, kind), leaving]);
+      const sent = runtime.exec({ op: exec.op, handle, ...request }, { ...events, onAccepted: acceptance.onAccepted, onDisplay: acceptance.onDisplay }, kind);
+
+      const passedOn = stopped === 'cancel' ? runtime.cancel(exec.op) : undefined;
+
+      if (passedOn) cancelling = { op: exec.op, landed: passedOn };
+      const [end] = await Promise.all([Promise.race([sent, stopped === 'stop' ? { kind: 'left' } as const : leaving]), passedOn]);
       leave = undefined;
       await acceptance.kept();
       running = undefined;
@@ -828,7 +833,7 @@ export function attemptRun({ config, run, attempt, runtime, driver, deadline }: 
       const setup = { op: newOpId() };
       await save({ ...before, setup, phase: 'running' });
 
-      if (isStopped) return { kind: 'cancelled' };
+      if (stopped) return { kind: 'cancelled' };
       running = setup;
       const acceptance = accepting(events);
       const end = await runtime.exec({ op: setup.op, handle, ...request }, { ...events, onAccepted: acceptance.onAccepted, onDisplay: acceptance.onDisplay }, 'setup');
@@ -899,7 +904,7 @@ export function attemptRun({ config, run, attempt, runtime, driver, deadline }: 
 
       if (before.prompt === undefined) await save({ ...before, prompt: sent, phase: 'running' });
 
-      if (isStopped && before.prompt === undefined) return { kind: 'cancelled' };
+      if (stopped && before.prompt === undefined) return { kind: 'cancelled' };
       running = sent;
       const acceptance = accepting(events);
       const end = await runtime.prompt({ op: sent.op, handle, ...request }, { onAccepted: acceptance.onAccepted, onDisplay: acceptance.onDisplay });
@@ -910,7 +915,7 @@ export function attemptRun({ config, run, attempt, runtime, driver, deadline }: 
     },
 
     async stop() {
-      isStopped = true;
+      stopped ??= 'stop';
 
       if (running && cancelling?.op === running.op) return cancelling.landed;
 
@@ -924,7 +929,7 @@ export function attemptRun({ config, run, attempt, runtime, driver, deadline }: 
     },
 
     async cancel() {
-      isStopped = true;
+      stopped = 'cancel';
 
       if (!running) return;
       cancelling = { op: running.op, landed: runtime.cancel(running.op) };
