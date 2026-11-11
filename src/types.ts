@@ -985,9 +985,13 @@ export const MemberSettingsSchema = z.object({
 
 export type MemberSettings = z.infer<typeof MemberSettingsSchema>;
 
-/** Runtime bookkeeping for restoring local values before a save. */
+/**
+ * Runtime bookkeeping for restoring local values before a save: the config's own (`local`), and every member setting it
+ * held once the overlay was applied or a setting marked written (`applied`), so a save refuses a change made otherwise.
+ */
 export interface MemberSettingsOverlay {
   local: MemberSettings;
+  applied: MemberSettings;
 }
 
 // ─── Local config (~/.teamai/config.yaml) ──────────────────

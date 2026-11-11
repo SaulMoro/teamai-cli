@@ -126,6 +126,26 @@ describe('member settings overlay', () => {
     expect((saved.workflows as Record<string, unknown>).max_parallel).toBeUndefined();
   });
 
+  it('refuses to save a workspace config whose member setting changed without being marked written, naming it', async () => {
+    writeConfig(machineConfig, { recallEnabled: false });
+    writeConfig(projectConfig, {
+      repo: { localPath: path.join(home, 'team-repo'), remote: 'https://example.test/team.git' },
+      username: 'member',
+      scope: 'project',
+      projectRoot,
+      workflows: { tools: { review: 'claude' } },
+    });
+    const loaded = await loadLocalConfigForScope('project', projectRoot);
+    if (!loaded?.workflows) throw new Error('the workspace config did not load');
+    const before = fs.readFileSync(projectConfig, 'utf8');
+
+    loaded.ai = { tool: 'codex' };
+    loaded.workflows.tools.review = 'codex';
+
+    await expect(saveLocalConfigForScope(loaded, 'project', projectRoot)).rejects.toThrow(/member settings ai, workflows /);
+    expect(fs.readFileSync(projectConfig, 'utf8')).toBe(before);
+  });
+
   it('fails closed when a workflow policy value has the wrong type', async () => {
     writeConfig(machineConfig, {
       workflows: { allow: { network: 'false', env: 'not-a-list' } },

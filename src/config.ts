@@ -3,6 +3,7 @@ import { parseYaml } from '@teamai/shared/yaml';
 import { ZodError, z } from 'zod';
 import fs from 'node:fs';
 import path from 'node:path';
+import { isDeepStrictEqual } from 'node:util';
 import {
   TeamaiConfigSchema,
   LocalConfigSchema,
@@ -559,7 +560,14 @@ function applyMachineSettings(config: LocalConfig, machine: MemberSettings): Loc
     ...(modelAliases ? { modelAliases } : { modelAliases: undefined }),
   };
 
-  return { ...config, ...effective, memberSettingsOverlay: { local } };
+  const overlaid: LocalConfig = { ...config, ...effective };
+
+  return { ...overlaid, memberSettingsOverlay: { local, applied: appliedSettings(overlaid) } };
+}
+
+/** A copy of each member setting `config` holds, which a save compares with what it holds then. */
+function appliedSettings(config: LocalConfig): MemberSettings {
+  return structuredClone(Object.fromEntries(MEMBER_SETTING_KEYS.flatMap((key) => (config[key] === undefined ? [] : [[key, config[key]]]))));
 }
 
 /** Apply the machine settings after the role overlay, at every existing config-load seam. */
@@ -593,14 +601,14 @@ export function markMemberSettingsWritten(config: LocalConfig, written: MemberSe
     : undefined;
 
   const overlaid: MemberSettings = { ...local, ...written };
-  const marked: LocalConfig = { ...config, ...written, memberSettingsOverlay: { local: overlaid } };
+  const marked: LocalConfig = { ...config, ...written };
 
   if (workflows) {
     marked.workflows = { ...workflows, tools: workflows.tools ?? {} };
     overlaid.workflows = workflows;
   }
 
-  return marked;
+  return { ...marked, memberSettingsOverlay: { local: overlaid, applied: appliedSettings(marked) } };
 }
 
 /** Whether `configPath` holds an install. A file that cannot be read or parsed counts as one, so its install is kept. */
@@ -689,6 +697,13 @@ function serializeLocalConfig(config: LocalConfig, carriedSettings?: MemberSetti
   // would leave a stale copy behind once the assignment changes or the file
   // goes, and a stale copy is exactly what a member must not be able to keep.
   const { dataHome: _dataHome, branchHome: _branchHome, roleUnresolved: _roleUnresolved, children: _children, roleAssignment: _assignment, memberSettingsOverlay: overlay, stepRole: _stepRole, ephemeralConfig: _ephemeralConfig, ...persisted } = withLocalRoles(config);
+  // A setting changed on the config itself, not through markMemberSettingsWritten, is not in `local`: refused, never dropped.
+  const unmarked = overlay ? MEMBER_SETTING_KEYS.filter((key) => !isDeepStrictEqual(persisted[key], overlay.applied[key])) : [];
+
+  if (unmarked.length > 0) {
+    throw new Error(`teamai changed the member settings ${unmarked.join(', ')} of this config without marking them written (markMemberSettingsWritten), so saving it would drop them. The config file is unchanged. This is a bug in teamai: please report it with the command you ran.`);
+  }
+
   const localSettings = overlay?.local ?? MemberSettingsSchema.parse(persisted);
 
   const settings = { ...localSettings };
@@ -722,14 +737,19 @@ async function readSettingsOnlyConfig(configPath: string): Promise<MemberSetting
 export async function saveLocalConfig(config: LocalConfig): Promise<void> {
   const configPath = expandHome(getUserConfigPath());
   const carriedSettings = await readSettingsOnlyConfig(configPath);
-  const ai = config.ai ?? await readAiSetting(configPath);
-  await writeFileAtomic(configPath, serializeLocalConfig(ai ? { ...config, ai } : config, carriedSettings));
+  await writeFileAtomic(configPath, serializeLocalConfig(await keptAiSetting(config, configPath), carriedSettings));
 }
 
 /** Writes a project/local config; its own file remains an install record. */
 async function writeLocalConfig(configPath: string, config: LocalConfig): Promise<void> {
+  await writeFileAtomic(configPath, serializeLocalConfig(await keptAiSetting(config, configPath)));
+}
+
+/** `config`, keeping the `ai` its file `configPath` sets when it holds none itself. */
+async function keptAiSetting(config: LocalConfig, configPath: string): Promise<LocalConfig> {
   const ai = config.ai ?? await readAiSetting(configPath);
-  await writeFileAtomic(configPath, serializeLocalConfig(ai ? { ...config, ai } : config));
+
+  return ai && !config.ai ? markMemberSettingsWritten(config, { ai }) : config;
 }
 
 /**
