@@ -1,5 +1,7 @@
 import { spawn } from 'node:child_process';
+import diagnostics from 'node:diagnostics_channel';
 import { once } from 'node:events';
+import { PROCESS_READ_CHANNEL } from '@teamai/shared/process-group';
 import { describe, expect, it, vi } from 'vitest';
 
 import { endProcessTree } from '../utils/git.js';
@@ -32,8 +34,19 @@ setInterval(() => {}, 1000);`], { stdio: ['ignore', 'pipe', 'ignore'] });
     expect(tree.filter(alive)).toEqual(tree);
 
     const exited = once(parent, 'exit');
-    endProcessTree(parent.pid!);
+    // The wait budget counts the processes a stop waits on from the reads told here.
+    const reads: unknown[] = [];
+    const told = (read: unknown): void => { reads.push(read); };
+    diagnostics.subscribe(PROCESS_READ_CHANNEL, told);
+
+    try {
+      await endProcessTree(parent.pid!);
+    } finally {
+      diagnostics.unsubscribe(PROCESS_READ_CHANNEL, told);
+    }
+
     await exited;
     await vi.waitFor(() => expect(tree.filter(alive)).toEqual([]), { timeout: 5_000, interval: 50 });
+    expect(reads).toHaveLength(1);
   }, 15_000);
 });

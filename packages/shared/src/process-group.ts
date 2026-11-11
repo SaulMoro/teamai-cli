@@ -584,7 +584,7 @@ function isStillRunning(now: Map<number, RunningProcess>, found: FoundProcess): 
  * Each descendant of process `pid`, deepest first, with when it started, as they run now; none when that cannot be
  * read. A process that daemonized away from the tree is not among them.
  */
-async function descendantsOf(pid: number): Promise<FoundProcess[]> {
+export async function descendantsOf(pid: number): Promise<FoundProcess[]> {
   const children = new Map<number, FoundProcess[]>();
 
   for (const [child, { ppid, start }] of await runningProcesses() ?? []) {

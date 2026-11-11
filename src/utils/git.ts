@@ -10,6 +10,7 @@ import { copyRegularTree, openRegularFileSync, readRegularFile } from '@teamai/s
 import { GitError, simpleGit, type SimpleGit, type SimpleGitOptions, type outputHandler } from 'simple-git';
 import { z } from 'zod';
 import { execCommand } from '@teamai/shared/exec';
+import { descendantsOf } from '@teamai/shared/process-group';
 import { errnoCode } from './fs.js';
 import { GitAnswers } from './git-answers.js';
 import { gitFindsNoRepository, linkedWorktreesStamp, repositoryStamp } from './git-discovery.js';
@@ -334,9 +335,11 @@ export function createGitWithBlockTimeout(basePath?: string, abort?: AbortSignal
     child.kill = (signal) => {
       if (!abort?.aborted) stalled = gitCommandLine(args);
 
-      if (child.pid !== undefined && child.exitCode === null && child.signalCode === null) endProcessTree(child.pid);
+      if (child.pid === undefined || child.exitCode !== null || child.signalCode !== null) return kill(signal);
+      // git is signalled once its tree is listed: the processes under a git that ended move to init, out of its tree.
+      void endProcessTree(child.pid).then(() => kill(signal), () => kill(signal));
 
-      return kill(signal);
+      return true;
     };
   });
 }
@@ -389,27 +392,14 @@ function watchChildProcesses(): void {
  * parent's children move to init and can no longer be found from `pid`.
  * When `ps` cannot list the tree, only `pid` is signalled.
  */
-export function endProcessTree(pid: number): void {
+export async function endProcessTree(pid: number): Promise<void> {
   if (process.platform === 'win32') {
-    spawnSync('taskkill', ['/PID', String(pid), '/T', '/F'], { stdio: 'ignore', windowsHide: true });
+    await new Promise((resolve) => { execFile('taskkill', ['/PID', String(pid), '/T', '/F'], { windowsHide: true }, resolve); });
 
     return;
   }
 
-  const listed = spawnSync('ps', ['-A', '-o', 'pid=,ppid='], { encoding: 'utf8' });
-  const children = new Map<number, number[]>();
-
-  for (const line of (listed.stdout ?? '').split('\n')) {
-    const [child, parent] = line.trim().split(/\s+/).map(Number);
-
-    if (child > 0 && parent > 0) children.set(parent, [...(children.get(parent) ?? []), child]);
-  }
-
-  const tree = [pid];
-
-  for (let at = 0; at < tree.length; at++) tree.push(...(children.get(tree[at]) ?? []));
-
-  for (const member of tree) {
+  for (const member of [pid, ...(await descendantsOf(pid)).map((found) => found.pid)]) {
     try {
       process.kill(member, 'SIGTERM');
     } catch {
