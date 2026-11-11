@@ -33,11 +33,30 @@ function attemptDirsUnder(dir: string): string[] {
   return fs.readdirSync(dir, { recursive: true, withFileTypes: true }).filter((entry) => entry.isDirectory() && ATTEMPT_DIR.test(entry.name) && entry.parentPath.includes(`${path.sep}runtime-state${path.sep}`)).map((entry) => path.join(entry.parentPath, entry.name));
 }
 
-/** What the test left of sandboxes, as `<kind> <name>`: containers, attempts' state directories, hosted sandboxes. */
+/** When this module loaded: a file a fake sandbox wrote on the host since then is the suite's. */
+const LOADED_AT = Date.now();
+
+/**
+ * The pid files a process the fake engine runs wrote into the host's /tmp since the suite started: its processes run on
+ * the host, so a write a container would keep in its own /tmp lands there unless the fake maps it.
+ */
+function hostTmpFilesWritten(): string[] {
+  if (!fs.existsSync('/tmp')) return [];
+
+  return fs.readdirSync('/tmp').filter((name) => /^teamai-tool-[0-9a-f]+\.pid$/.test(name)).flatMap((name) => {
+    const file = path.join('/tmp', name);
+    const written = fs.statSync(file, { throwIfNoEntry: false });
+
+    return written !== undefined && written.mtimeMs >= LOADED_AT ? [file] : [];
+  });
+}
+
+/** What the test left of sandboxes, as `<kind> <name>`: containers, attempts' state directories, hosted sandboxes, and host files a fake container wrote. */
 function sandboxesLeft({ dir, containers, vercelState, planted = [] }: Scope): string[] {
   const sandboxes = vercelState === undefined ? undefined : path.join(vercelState, 'sandboxes');
 
   return [
+    ...hostTmpFilesWritten().map((file) => `host file ${file}`),
     ...(containers?.() ?? []).filter((name) => !planted.includes(name)).map((name) => `container ${name}`),
     ...(fs.existsSync(dir) ? attemptDirsUnder(dir).filter((at) => !planted.includes(path.basename(at))).map((at) => `attempt ${at}`) : []),
     ...(sandboxes !== undefined && fs.existsSync(sandboxes) ? fs.readdirSync(sandboxes).map((name) => `vercel ${name}`) : []),

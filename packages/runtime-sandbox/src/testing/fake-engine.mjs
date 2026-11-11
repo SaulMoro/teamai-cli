@@ -93,7 +93,7 @@ function readContainer(ref) {
 
 /** Records a new container, with its home and the list of its processes. */
 function createContainer(container) {
-  for (const part of ['home', 'execs']) fs.mkdirSync(path.join(containers, container.id, part), { recursive: true });
+  for (const part of ['home', 'execs', 'tmp']) fs.mkdirSync(path.join(containers, container.id, part), { recursive: true });
   writeContainer(container);
 }
 
@@ -230,9 +230,15 @@ function pulled(image) {
   return fs.existsSync(path.join(state, 'pulled', encodeURIComponent(image)));
 }
 
-/** Runs `argv` in `cwd` with `env` as one of the container's processes, and exits as it does. */
+/**
+ * Runs `argv` in `cwd` with `env` as one of the container's processes, and exits as it does. The pid file a provider
+ * keeps in the container's /tmp (providers/cli.ts `signalled`) goes into the container's own folder, as a container's
+ * /tmp is its own, not the host's.
+ */
 function runProcess(container, argv, cwd, env, stdin) {
-  const child = spawn(argv[0], argv.slice(1), { cwd, env, detached: true, stdio: [stdin ? 'inherit' : 'ignore', 'inherit', 'inherit'] });
+  const tmp = path.join(containers, container.id, 'tmp');
+  const inContainer = argv.map((arg) => arg.replaceAll(/\/tmp\/(teamai-tool-[0-9a-f]+\.pid)/g, (_, name) => path.join(tmp, name)));
+  const child = spawn(inContainer[0], inContainer.slice(1), { cwd, env, detached: true, stdio: [stdin ? 'inherit' : 'ignore', 'inherit', 'inherit'] });
   const execs = path.join(containers, container.id, 'execs');
   child.on('spawn', () => {
     // A process cannot outlive its container: one that starts as the container is removed cannot be written down, so
