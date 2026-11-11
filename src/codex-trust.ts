@@ -12,7 +12,6 @@ import { lenientList, type JsonValue, JsonValueSchema, JsonObjectSchema } from '
 import { log } from '@teamai/shared/log';
 import { findOnPath } from '@teamai/shared/lookpath';
 import { isBareCommandName } from '@teamai/shared/cli-path';
-import { executablesOf } from './launch-registry.js';
 
 /**
  * Trusting what teamai writes into Codex (#955).
@@ -97,7 +96,10 @@ interface CodexCandidate {
 }
 
 /** `codex` on PATH first (it wins a version tie), then the desktop builds. Stat only, no spawn. */
-function codexBuildCandidates(): CodexCandidate[] {
+async function codexBuildCandidates(): Promise<CodexCandidate[]> {
+  // The launch registry loads every family's launch profiles: here, where first used, not in every command that imports this module.
+  const { executablesOf } = await import('./launch-registry.js');
+
   const found = executablesOf('codex').flatMap((command) => {
     if (!isBareCommandName(command)) return [{ command, path: command }];
     const onPath = findOnPath(command);
@@ -127,8 +129,8 @@ function codexBuildCandidates(): CodexCandidate[] {
  * fingerprint: an added, removed, or updated build can change which one
  * answers and how it hashes a hook. Stat only, so a cached pull runs no binary.
  */
-export function codexBuildsIdentity(): string {
-  return codexBuildCandidates().map((c) => c.identity).join('\0\0');
+export async function codexBuildsIdentity(): Promise<string> {
+  return (await codexBuildCandidates()).map((c) => c.identity).join('\0\0');
 }
 
 async function probeCodexVersion(command: string): Promise<string | null> {
@@ -164,7 +166,7 @@ function codexVersionOf(candidate: CodexCandidate): Promise<string | null> {
  * gating on a floor never guesses for an unknown build.
  */
 export async function oldestCodexBuildVersion(): Promise<string | null> {
-  const builds = await Promise.all(codexBuildCandidates().map(async (c) => ({ path: c.path, version: await codexVersionOf(c) })));
+  const builds = await Promise.all((await codexBuildCandidates()).map(async (c) => ({ path: c.path, version: await codexVersionOf(c) })));
 
   log.debug(`Codex builds for the hook form: ${builds.map((b) => `${b.path} → "${b.version ?? ''}"`).join(', ') || 'none'}`);
   const known = builds.flatMap((b) => (b.version === null ? [] : [b.version]));
@@ -186,8 +188,8 @@ let resolved: { identity: string; build: Promise<ResolvedCodexBuild | null> } | 
  * unparseable version ranking lowest and a tie keeping candidate order. A lone
  * candidate is used without a probe. Memoized while the candidates are unchanged.
  */
-function resolveCodexBuild(): Promise<ResolvedCodexBuild | null> {
-  const candidates = codexBuildCandidates();
+async function resolveCodexBuild(): Promise<ResolvedCodexBuild | null> {
+  const candidates = await codexBuildCandidates();
   const identity = candidates.map((c) => c.identity).join('\0\0');
 
   if (resolved?.identity !== identity) resolved = { identity, build: pickCodexBuild(candidates) };

@@ -3,8 +3,8 @@ import type { ResolvedToolInstance } from './tool-instances.js';
 import { makeToolRegistry, type ResolvedTool } from '@teamai/tool-core/registry';
 import type { McpFormat } from '@teamai/tool-core/definition';
 import type { RuleFormatId } from '@teamai/tool-core/definition';
-import { locatesOwnStore, type SessionPlatformDefinition } from '@teamai/tool-core/sessions/platform';
-import { SESSION_PLATFORM_FACTS, type SessionPlatform } from './session-flow/adapters/platform-facts.js';
+import type { SessionPlatformFacts } from '@teamai/tool-core/sessions/platform';
+import { isSessionPlatform, SESSION_PLATFORM_FACTS, sessionPlatformFacts, type SessionPlatform } from './session-flow/adapters/platform-facts.js';
 import type { JsonSyntax } from '@teamai/shared/json';
 import { TOOLS, type AgentToolId, type ToolId, type ShippedDescriptor } from './tools.js';
 import { type HookFormat, type InstallGate, type RuleFolderReach, type RunTimeVia } from '@teamai/tool-core/definition';
@@ -21,11 +21,11 @@ const REGISTRY = makeToolRegistry(TOOLS, () => instanceTable, hostsInstances);
  * otherwise the instance writes the tool's own store, and its sessions are credited to the tool it extends.
  */
 function hostsInstances(platform: SessionPlatform, instance: ResolvedToolInstance): boolean {
-  const definition: SessionPlatformDefinition = SESSION_PLATFORM_FACTS[platform];
+  const facts: SessionPlatformFacts = SESSION_PLATFORM_FACTS[platform];
 
-  if (locatesOwnStore(definition) || definition.adapterAs === undefined) return false;
+  if (!facts.instanceSessions) return false;
 
-  return definition.store.in === 'tool-home' || instance.home?.env === 'XDG_DATA_HOME';
+  return facts.store.in === 'tool-home' || instance.home?.env === 'XDG_DATA_HOME';
 }
 
 /** The instances of every team repo and member's directory loaded in this process, by name. */
@@ -125,6 +125,23 @@ export const sessionPlatformsOf: (tool: string) => readonly (SessionPlatform | I
 
 /** The tool whose `sessions` lists `platform`, or the instance whose own platform it is, if one does. */
 export const sessionPlatformOwner: (platform: string) => string | undefined = REGISTRY.sessionPlatformOwner;
+
+/** The session platform that holds `tool`'s sessions: the first its `sessions` lists, else `tool` when it names one; undefined for a tool teamai reads no sessions of. */
+export function platformForTool(tool: string): string | undefined {
+  return sessionPlatformsOf(tool)[0] ?? (isSessionPlatform(tool) ? tool : undefined);
+}
+
+/** The facts of `platform`: a shipped platform's, or for an instance's own, those of the platform whose format it keeps. */
+export function platformFactsOf(platform: string): SessionPlatformFacts | undefined {
+  const hosted = instancePlatform(platform);
+
+  return sessionPlatformFacts(platform) ?? (hosted ? sessionPlatformFacts(hosted.platform) : undefined);
+}
+
+/** The tool whose sessions `platform` holds, the reverse of `platformForTool`. */
+export function toolForPlatform(platform: string): string {
+  return sessionPlatformOwner(platform) ?? platformFactsOf(platform)?.tool ?? platform;
+}
 
 const CUSTOM_TOOL = {
   rules: { user: { channel: 'dir', format: 'verbatim', reads: 'unknown' }, project: { channel: 'dir', format: 'verbatim', reads: 'unknown' } },

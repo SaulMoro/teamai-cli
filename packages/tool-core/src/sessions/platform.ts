@@ -33,6 +33,11 @@ export interface SessionPlatformFacts<TTool extends string = string> {
   idFormat: SessionIdFormat;
   /** The tool resumes only from a store TeamAI cannot write, so its sessions are read and never written. */
   readOnly?: true;
+  /**
+   * Whether this format's sessions can carry another platform id, so an instance of the tool keeps its own sessions in
+   * it, read through the definition's `adapterAs`. False when an instance of the tool keeps no sessions teamai reads.
+   */
+  instanceSessions: boolean;
 }
 
 /**
@@ -48,16 +53,19 @@ export interface SessionHost {
 export type StoredPlatformDefinition<TTool extends string = string> = SessionPlatformFacts<TTool> & {
   readonly store: Exclude<SessionStore<TTool>, { readonly in: 'ide-history' }>;
   adapter(storeDir: string, host: SessionHost): AgentAdapter;
-  /**
-   * The adapter of an instance's own platform `platform`, in this platform's format, on the instance's store. Absent
-   * when this format's sessions cannot carry another platform id: an instance of the tool then keeps no sessions teamai reads.
-   */
-  adapterAs?(platform: string, storeDir: string, host: SessionHost): AgentAdapter;
-};
+} & (
+  | {
+    readonly instanceSessions: true;
+    /** The adapter of an instance's own platform `platform`, in this platform's format, on the instance's store. */
+    adapterAs(platform: string, storeDir: string, host: SessionHost): AgentAdapter;
+  }
+  | { readonly instanceSessions: false; readonly adapterAs?: never }
+);
 
 /** A platform whose adapter finds its own store: the CodeBuddy IDE's history. */
 export type SelfLocatingPlatformDefinition<TTool extends string = string> = SessionPlatformFacts<TTool> & {
   readonly store: Extract<SessionStore<TTool>, { readonly in: 'ide-history' }>;
+  readonly instanceSessions: false;
   adapter(): AgentAdapter;
 };
 

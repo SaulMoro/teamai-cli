@@ -19,10 +19,10 @@ function inFamilyPackage(relative) {
 }
 
 /** The contract tables a family declares its tools in: their descriptors, session platforms, launch profiles and version detectors. */
-const FAMILY_TABLE = /^(?:Readonly<)?Record<\s*string\s*,\s*(?:ToolDescriptor|SessionPlatformDefinition|LaunchAdapter|VersionDetector)\s*>>?$/;
+const FAMILY_TABLE = /^(?:Readonly<)?Record<\s*string\s*,\s*(?:ToolDescriptor|SessionPlatformDefinition|SessionPlatformFacts|LaunchAdapter|VersionDetector)\s*>>?$/;
 
-/** The one list of every family (`BUILT_IN_TOOLS`), whose keys are family names that share tool names. */
-const FAMILY_LIST = /^(?:Readonly<)?Record<\s*string\s*,\s*ToolFamily\s*>>?$/;
+/** The lists of every family (`BUILT_IN_TOOLS`) and of every family's facts (`BUILT_IN_FACTS`), whose keys are family names that share tool names. */
+const FAMILY_LIST = /^(?:Readonly<)?Record<\s*(?:string|keyof typeof BUILT_IN_FACTS)\s*,\s*ToolFamily(?:Facts)?\s*>>?$/;
 
 const DEFINITIONS_PACKAGE = 'packages/tool-definitions/src/';
 

@@ -26,6 +26,16 @@ export const ids = Object.keys(tools.TOOLS);`);
 
 rule.invalid('rejects a dynamic import of a table\'s module', `export const load = () => import('./tools.js');`);
 
+rule.invalid('rejects a table taken from a dynamic import', `export async function confined() {
+  const { LAUNCH_ADAPTERS } = await import('../launch-registry.js');
+  return LAUNCH_ADAPTERS.claude.confined;
+}`, undefined, { filename: 'src/scorers/new-judge.ts' });
+
+rule.invalid('rejects a dynamic import whose rest element may take a table', `export async function all() {
+  const { executablesOf, ...rest } = await import('./launch-registry.js');
+  return [executablesOf, rest];
+}`);
+
 rule.invalid('rejects a script reading TOOLS', `import { TOOLS } from '../src/tools.js';
 export const ids = Object.keys(TOOLS);`, undefined, { filename: 'scripts/new-page.ts' });
 
@@ -56,6 +66,11 @@ import { descriptorOf, isToolId } from './tool-registry.js';
 import { opencodeModelArgs } from './launch-registry.js';
 export const shell = (tool: ToolId): ToolDescriptor['hooks']['shell'] | undefined => isToolId(tool) ? descriptorOf(tool).hooks.shell : undefined;
 export const args = opencodeModelArgs(undefined, 2);`);
+
+rule.valid('allows a lookup taken from a dynamic import of a table\'s module', `export async function codexCommands() {
+  const { executablesOf } = await import('./launch-registry.js');
+  return executablesOf('codex');
+}`);
 
 rule.valid('allows a test to read TOOLS', `import { TOOLS } from '../tools.js';
 export const ids = Object.keys(TOOLS);`, { filename: 'src/__tests__/tools.test.ts' });

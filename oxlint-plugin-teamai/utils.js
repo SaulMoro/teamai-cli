@@ -100,6 +100,48 @@ export function workspaceRoot(dir) {
   return root;
 }
 
+const ExportsSchema = z.object({ name: z.string(), exports: z.record(z.string(), z.unknown()).optional() });
+
+/**
+ * The file a workspace package specifier names through its package's exports map, from the repository root
+ * (`@teamai/shared/home` -> `packages/shared/src/home.ts`, `@teamai/tool-core/formats/codex` through `./formats/*`);
+ * undefined for any other specifier, and for a subpath the exports map does not name.
+ * @param {string} root
+ * @param {string} specifier
+ * @returns {string | undefined}
+ */
+export function workspaceFile(root, specifier) {
+  const dir = `${root}/packages`;
+
+  for (const folder of fs.existsSync(dir) ? fs.readdirSync(dir) : []) {
+    const file = `${dir}/${folder}/package.json`;
+
+    if (!fs.existsSync(file)) continue;
+    const parsed = ExportsSchema.safeParse(JSON.parse(fs.readFileSync(file, 'utf8')));
+
+    if (!parsed.success || (specifier !== parsed.data.name && !specifier.startsWith(`${parsed.data.name}/`))) continue;
+    const subpath = `.${specifier.slice(parsed.data.name.length)}`;
+
+    for (const [key, value] of Object.entries(parsed.data.exports ?? {})) {
+      const target = z.string().safeParse(value);
+
+      if (!target.success) continue;
+      const [prefix = '', suffix] = key.split('*');
+
+      const matched = suffix === undefined
+        ? (key === subpath ? target.data : undefined)
+        : (subpath.startsWith(prefix) && subpath.endsWith(suffix) && subpath.length >= prefix.length + suffix.length
+          ? target.data.replace('*', subpath.slice(prefix.length, subpath.length - suffix.length)) : undefined);
+
+      if (matched !== undefined) return path.posix.join('packages', folder, matched);
+    }
+
+    return undefined;
+  }
+
+  return undefined;
+}
+
 /**
  * The linted file's path from its package root, so a checkout cloned under some `src/` directory keeps `scripts/` out.
  * @param {Context} context

@@ -1,5 +1,5 @@
 import type { DescriptorIds, ToolDescriptor } from '@teamai/tool-core/definition';
-import { BUILT_IN_TOOLS } from '@teamai/tool-definitions';
+import { BUILT_IN_FACTS } from '@teamai/tool-definitions/facts';
 import type { StoredSessionPlatform } from './session-flow/adapters/platform-facts.js';
 import type { TokenFormatId } from './token-usage/index.js';
 import type { LaunchAdapterId } from './launch-registry.js';
@@ -12,7 +12,7 @@ export type ShippedDescriptor = ToolDescriptor<ShippedIds>;
 
 /**
  * Every built-in tool. Adding a tool starts here and in its family package (`packages/tool-<family>/`): `TOOLS` then
- * needs its `BUILT_IN_TOOLS` reference, and the type check lists every other table that must decide it. Custom tools in a team's `toolPaths` stay plain strings.
+ * needs its `BUILT_IN_FACTS` reference (its family's `./facts` entry), and the type check lists every other table that must decide it. Custom tools in a team's `toolPaths` stay plain strings.
  */
 export const TOOL_IDS = [
   'claude',
@@ -59,31 +59,31 @@ export type ToolId = (typeof TOOL_IDS)[number];
  * - assumed: teamai's own code or the issue matrix only
  */
 export const TOOLS = {
-  claude: BUILT_IN_TOOLS.claude.tools.claude,
-  codex: BUILT_IN_TOOLS.codex.tools.codex,
-  'codex-internal': BUILT_IN_TOOLS.codex.tools['codex-internal'],
-  'claude-internal': BUILT_IN_TOOLS.claude.tools['claude-internal'],
-  tclaude: BUILT_IN_TOOLS.claude.tools.tclaude,
-  tcodex: BUILT_IN_TOOLS.codex.tools.tcodex,
-  cursor: BUILT_IN_TOOLS.cursor.tools.cursor,
-  copilot: BUILT_IN_TOOLS.copilot.tools.copilot,
-  joycode: BUILT_IN_TOOLS.joycode.tools.joycode,
-  qoder: BUILT_IN_TOOLS.qoder.tools.qoder,
-  'qoder-cn': BUILT_IN_TOOLS.qoder.tools['qoder-cn'],
-  kiro: BUILT_IN_TOOLS.kiro.tools.kiro,
-  trae: BUILT_IN_TOOLS.trae.tools.trae,
-  'trae-cn': BUILT_IN_TOOLS.trae.tools['trae-cn'],
-  zcode: BUILT_IN_TOOLS.zcode.tools.zcode,
-  omp: BUILT_IN_TOOLS.pi.tools.omp,
-  pi: BUILT_IN_TOOLS.pi.tools.pi,
-  codebuddy: BUILT_IN_TOOLS.codebuddy.tools.codebuddy,
-  openclaw: BUILT_IN_TOOLS.openclaw.tools.openclaw,
-  hermes: BUILT_IN_TOOLS.hermes.tools.hermes,
-  dsh: BUILT_IN_TOOLS.dsh.tools.dsh,
-  workbuddy: BUILT_IN_TOOLS.codebuddy.tools.workbuddy,
-  opencode: BUILT_IN_TOOLS.opencode.tools.opencode,
-  muse: BUILT_IN_TOOLS.muse.tools.muse,
-  agy: BUILT_IN_TOOLS.agy.tools.agy,
+  claude: BUILT_IN_FACTS.claude.tools.claude,
+  codex: BUILT_IN_FACTS.codex.tools.codex,
+  'codex-internal': BUILT_IN_FACTS.codex.tools['codex-internal'],
+  'claude-internal': BUILT_IN_FACTS.claude.tools['claude-internal'],
+  tclaude: BUILT_IN_FACTS.claude.tools.tclaude,
+  tcodex: BUILT_IN_FACTS.codex.tools.tcodex,
+  cursor: BUILT_IN_FACTS.cursor.tools.cursor,
+  copilot: BUILT_IN_FACTS.copilot.tools.copilot,
+  joycode: BUILT_IN_FACTS.joycode.tools.joycode,
+  qoder: BUILT_IN_FACTS.qoder.tools.qoder,
+  'qoder-cn': BUILT_IN_FACTS.qoder.tools['qoder-cn'],
+  kiro: BUILT_IN_FACTS.kiro.tools.kiro,
+  trae: BUILT_IN_FACTS.trae.tools.trae,
+  'trae-cn': BUILT_IN_FACTS.trae.tools['trae-cn'],
+  zcode: BUILT_IN_FACTS.zcode.tools.zcode,
+  omp: BUILT_IN_FACTS.pi.tools.omp,
+  pi: BUILT_IN_FACTS.pi.tools.pi,
+  codebuddy: BUILT_IN_FACTS.codebuddy.tools.codebuddy,
+  openclaw: BUILT_IN_FACTS.openclaw.tools.openclaw,
+  hermes: BUILT_IN_FACTS.hermes.tools.hermes,
+  dsh: BUILT_IN_FACTS.dsh.tools.dsh,
+  workbuddy: BUILT_IN_FACTS.codebuddy.tools.workbuddy,
+  opencode: BUILT_IN_FACTS.opencode.tools.opencode,
+  muse: BUILT_IN_FACTS.muse.tools.muse,
+  agy: BUILT_IN_FACTS.agy.tools.agy,
 } as const satisfies Record<ToolId, ShippedDescriptor>;
 
 type Entry<T extends ToolId> = (typeof TOOLS)[T];

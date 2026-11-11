@@ -1,20 +1,13 @@
 import type { AgentAdapter } from '@teamai/tool-core/sessions/base';
-import type { SessionPlatformDefinition } from '@teamai/tool-core/sessions/platform';
 import { OpencodeAdapter } from './session-adapter.js';
+import type { SessionPlatformDefinition } from '@teamai/tool-core/sessions/platform';
+import { facts } from './facts.js';
 
-/** OpenCode keeps its sessions behind its CLI, which teamai runs against its data directory. */
+/** Each session platform's adapter on its store, over the facts the family declares (`facts.ts`). */
 export const platforms = {
   'opencode': {
-    store: { in: 'xdg-data', child: 'opencode' },
-    resume: (id) => `opencode --session ${id}`,
-    thinking: true, images: true,
-    nativeTools: new Set([
-      'read_file', 'write_file', 'edit_file', 'bash', 'glob', 'grep', 'task', 'todo_write', 'web_fetch', 'web_search',
-    ]),
-    legacyIdWithoutWorkspace: false,
-    sqliteRegistrationOnWindows: false,
-    idFormat: 'opencode',
+    ...facts.platforms.opencode,
     adapter: (storeDir, { processes }): AgentAdapter => new OpencodeAdapter(storeDir, processes),
     adapterAs: (platform, storeDir, { processes }): AgentAdapter => new OpencodeAdapter(storeDir, processes, platform),
   },
-} as const satisfies Record<string, SessionPlatformDefinition>;
+} as const satisfies Record<keyof typeof facts.platforms, SessionPlatformDefinition>;

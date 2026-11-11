@@ -1,21 +1,12 @@
 import type { AgentAdapter } from '@teamai/tool-core/sessions/base';
-import type { SessionPlatformDefinition } from '@teamai/tool-core/sessions/platform';
 import { CopilotAdapter } from './session-adapter.js';
+import type { SessionPlatformDefinition } from '@teamai/tool-core/sessions/platform';
+import { facts } from './facts.js';
 
-/** Copilot CLI keeps one append-only event log per session in its home; teamai reads them and writes none. */
+/** Each session platform's adapter on its store, over the facts the family declares (`facts.ts`). */
 export const platforms = {
   copilot: {
-    // Copilot CLI stores one append-only events.jsonl under <Copilot home>/session-state/<id>/.
-    store: { in: 'tool-home', home: 'copilot', dir: 'session-state' },
-    resume: (id) => `copilot --resume ${id}`,
-    thinking: false, images: false,
-    nativeTools: new Set([
-      'powershell', 'bash', 'view', 'edit', 'grep', 'glob', 'web_fetch', 'task',
-    ]),
-    legacyIdWithoutWorkspace: false,
-    sqliteRegistrationOnWindows: false,
-    idFormat: 'uuid',
-    readOnly: true,
+    ...facts.platforms.copilot,
     adapter: (storeDir): AgentAdapter => new CopilotAdapter(storeDir),
   },
-} as const satisfies Record<string, SessionPlatformDefinition>;
+} as const satisfies Record<keyof typeof facts.platforms, SessionPlatformDefinition>;

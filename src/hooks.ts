@@ -4807,7 +4807,7 @@ async function codexTrustFingerprint(targets: CodexTrustTargets): Promise<string
   const hash = createHash('sha256').update(JSON.stringify({ ...targets, inputs: undefined }));
 
   for (const file of targets.inputs) hash.update(`\0${file}\0${await readFileSafe(file) ?? ''}`);
-  hash.update(`\0${codexBuildsIdentity()}`);
+  hash.update(`\0${await codexBuildsIdentity()}`);
 
   return hash.digest('hex');
 }

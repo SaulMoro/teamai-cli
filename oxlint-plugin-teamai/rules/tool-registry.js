@@ -12,10 +12,10 @@ const TABLES = new Map([
 ]);
 
 /** The families every built-in tool comes from, by the package that lists them. */
-const FAMILIES = new Map([['@teamai/tool-definitions', 'BUILT_IN_TOOLS']]);
+const FAMILIES = new Map([['@teamai/tool-definitions', 'BUILT_IN_TOOLS'], ['@teamai/tool-definitions/facts', 'BUILT_IN_FACTS']]);
 
 /**
- * The tables that list every tool in its user-visible order, each row a BUILT_IN_TOOLS reference. They stay in src/
+ * The tables that list every tool in its user-visible order, each row a BUILT_IN_TOOLS or BUILT_IN_FACTS reference. They stay in src/
  * while sessionStoreDir (src/locate.ts) and the readers in NOT_YET_MOVED do.
  */
 const FAMILY_MERGES = new Set(scopedFiles(['src/agent-version.ts', 'src/session-flow/adapters/platform-facts.ts', 'src/token-usage/index.ts']));

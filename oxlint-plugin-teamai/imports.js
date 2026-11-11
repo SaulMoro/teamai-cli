@@ -45,6 +45,28 @@ function moduleName(node) {
 }
 
 /**
+ * The names `const { a, b: c } = await import(...)` takes from the module; undefined for any other use of the
+ * module, a rest element or a computed key included, which may read any of its names.
+ * @param {ESTree.ImportExpression} node
+ * @returns {string[] | undefined}
+ */
+function destructuredNames(node) {
+  const awaited = node.parent;
+  const declarator = awaited?.type === 'AwaitExpression' ? awaited.parent : undefined;
+
+  if (declarator?.type !== 'VariableDeclarator' || declarator.init !== awaited || declarator.id.type !== 'ObjectPattern') return undefined;
+  /** @type {string[]} */
+  const names = [];
+
+  for (const property of declarator.id.properties) {
+    if (property.type !== 'Property' || property.computed || property.key.type !== 'Identifier') return undefined;
+    names.push(property.key.name);
+  }
+
+  return names;
+}
+
+/**
  * Every import syntax the workflow policy owns: static imports and re-exports, `import()`, `require()` and vi.mock.
  * `computed` gets an `import()` or `require()` whose module name is computed, which `visit` cannot be given.
  */
@@ -71,7 +93,7 @@ export function importVisitors(
       const specifier = moduleName(node.source);
 
       if (specifier === undefined) computed(node);
-      else visit({ node, specifier, typeOnly: false, names: ['*'] });
+      else visit({ node, specifier, typeOnly: false, names: destructuredNames(node) ?? ['*'] });
     },
     /** @param {ESTree.CallExpression} node */
     CallExpression(node) {

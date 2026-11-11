@@ -17,7 +17,7 @@ import { getDataHome, type DeliverySelection, type LocalConfig } from '../types.
 import { acquireLock, releaseLock } from '../update.js';
 import { getHeadState, type HeadState } from '../utils/git.js';
 import { log } from '@teamai/shared/log';
-import { AgentSession } from './agent-session.js';
+import { platformForTool, toolForPlatform } from '../tool-registry.js';
 import { OptionalString } from '@teamai/tool-core/sessions/fs';
 import type { Session } from '@teamai/tool-core/sessions/ir';
 import type { SessionSyncMeta } from './sync.js';
@@ -103,7 +103,7 @@ async function writeCapture(config: LocalConfig, capture: SessionCapture): Promi
  * that fails is logged at debug level, so it never fails the hook.
  */
 async function atStart(config: LocalConfig, tool: string, payload: HookStdin, env: NodeJS.ProcessEnv): Promise<string | undefined> {
-  const platform = AgentSession.platformForTool(tool);
+  const platform = platformForTool(tool);
 
   if (launchedBy(env) || payload.source === 'compact') return undefined;
   const fields = StartPayloadSchema.safeParse(payload);
@@ -169,7 +169,7 @@ async function headWithin(cwd: string, ms: number): Promise<HeadState | null> {
  * as it was. Written to a file of its own, then renamed, so a reader never sees half of it.
  */
 async function atStop(config: LocalConfig, tool: string, payload: HookStdin): Promise<void> {
-  const platform = AgentSession.platformForTool(tool);
+  const platform = platformForTool(tool);
   const fields = StopPayloadSchema.safeParse(payload);
 
   if (!platform || !fields.success) return;
@@ -254,7 +254,7 @@ async function rewrite(config: LocalConfig, platform: string, sessionId: string,
 
 /** In the hook's background pass: adds the tool's version, which the start leaves out so it never waits on it. */
 async function addToolVersion(config: LocalConfig, tool: string, payload: HookStdin): Promise<void> {
-  const platform = AgentSession.platformForTool(tool);
+  const platform = platformForTool(tool);
   const fields = ToolVersionPayloadSchema.safeParse(payload);
 
   if (!platform || !fields.success) return;
@@ -314,7 +314,7 @@ function withTeamSkillInfo(capture: SessionCapture, pulled: Record<string, Deliv
  * held `before` it.
  */
 async function markTeamChanged(config: LocalConfig, tool: string, payload: HookStdin, before: CheckoutDelivery): Promise<void> {
-  const platform = AgentSession.platformForTool(tool);
+  const platform = platformForTool(tool);
   const fields = PulledPayloadSchema.safeParse(payload);
 
   if (!platform || !fields.success) return;
@@ -483,7 +483,7 @@ function reportedModelOf(session: Session): string | undefined {
  */
 async function archivedFacts(platform: string, session: Session, fallback: LocalConfig | undefined): Promise<Pick<SessionSyncMeta, 'agent' | 'commits'>> {
   const { resolveHookConfig } = await import('../dashboard-collector.js');
-  const scope = session.cwd ? await resolveHookConfig({ cwd: session.cwd, session_id: session.sessionId }, AgentSession.toolForPlatform(platform)) : null;
+  const scope = session.cwd ? await resolveHookConfig({ cwd: session.cwd, session_id: session.sessionId }, toolForPlatform(platform)) : null;
   const config = scope ?? fallback;
 
   if (!config) return {};

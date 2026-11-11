@@ -22,7 +22,6 @@ import type { HeadState } from './utils/git.js';
 import type { SessionRun } from './launch-context.js';
 import { SessionOutcomeEventSchema, uniqueOutcomes, type SessionOutcomeEvent, type WorkOutcome } from './outcomes.js';
 import { readCopilotShutdown } from './token-usage/formats/copilot-shutdown.js';
-import { isTokenFormatId, readTokenUsage } from './token-usage/index.js';
 import { type TokenRequest } from '@teamai/tool-core/tokens';
 import { priceTokens } from './token-usage/pricing.js';
 import { isToolId, descriptorOf } from './tool-registry.js';
@@ -1215,8 +1214,11 @@ export async function parseHookEvent(
   // Token usage, in the format the tool's TOOLS entry names.
   const tokenSource = tokenSourceOf(tool);
 
-  if (eventType === 'stop' && options?.readUsage !== false && isTokenFormatId(tokenSource)) {
-    const reading = await readTokenUsage(tokenSource, { transcriptPath: stopTranscript, sessionId });
+  // The token readers load every tool family, so they load here, at a Stop, not in each hook that loads this module.
+  const tokenReaders = eventType === 'stop' && options?.readUsage !== false ? await import('./token-usage/index.js') : undefined;
+
+  if (tokenReaders?.isTokenFormatId(tokenSource)) {
+    const reading = await tokenReaders.readTokenUsage(tokenSource, { transcriptPath: stopTranscript, sessionId });
 
     if (totalTokens(reading.tokens) > 0) {
       event.tokens = reading.tokens;

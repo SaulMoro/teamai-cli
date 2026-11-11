@@ -4,6 +4,7 @@
   "type": "module",
   "description": "OpenClaw: its descriptor, launch profile and version detector; bundled into teamai-cli.",
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./src/index.ts",
+    "./facts": "./src/facts.ts"
   }
 }

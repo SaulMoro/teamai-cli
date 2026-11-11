@@ -17,9 +17,13 @@ import { family as copilot } from '@teamai/tool-copilot';
 import { family as opencode } from '@teamai/tool-opencode';
 import { family as agy } from '@teamai/tool-agy';
 import { family as cursor } from '@teamai/tool-cursor';
+import type { BUILT_IN_FACTS } from './facts.js';
 
-/** Every built-in tool family. The app reads tools only through these, never by importing a family. */
-export const BUILT_IN_TOOLS = { claude, codex, qoder, joycode, pi, codebuddy, kiro, trae, zcode, openclaw, hermes, dsh, muse, copilot, opencode, agy, cursor } as const satisfies Readonly<Record<string, ToolFamily>>;
+/**
+ * Every built-in tool family, the one with each list of facts (`BUILT_IN_FACTS`). The app reads tools only through these,
+ * never by importing a family.
+ */
+export const BUILT_IN_TOOLS = { claude, codex, qoder, joycode, pi, codebuddy, kiro, trae, zcode, openclaw, hermes, dsh, muse, copilot, opencode, agy, cursor } as const satisfies Readonly<Record<keyof typeof BUILT_IN_FACTS, ToolFamily>>;
 
 /** The sign-in variables of each built-in tool a step runtime launches on the member's own sign-in, by launch adapter id. */
 // oxlint-disable-next-line teamai/tool-facts -- read from each launch adapter's own signIn, keyed by launch adapter id as LAUNCH_ADAPTERS is

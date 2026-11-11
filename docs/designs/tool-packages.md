@@ -50,6 +50,7 @@ packages/
 │   ├── package.json
 │   └── src/
 │       ├── index.ts               # export const family = { definitions } as const satisfies ToolFamily
+│       ├── facts.ts               # the `./facts` entry: definitions, session platform facts, version detectors; data only
 │       ├── definitions.ts         # the three definitions (data + the formats they select)
 │       ├── launch.ts  launch.test.ts   # the claude launch profile
 │       ├── sync.ts    sync.test.ts     # writers only Claude uses (agents)
@@ -63,6 +64,7 @@ packages/
 ├── tool-openclaw/  tool-hermes/  tool-dsh/  tool-joycode/  tool-zcode/
 ├── tool-definitions/
 │   └── src/registry.ts            # BUILT_IN_TOOLS: the ordered, literal list of every family
+│       facts.ts                   # BUILT_IN_FACTS: every family's `./facts`, the part startup loads
 └── tool-testing/
     └── src/
         ├── fake-cli.ts            # a fake tool executable that records argv, env and stdin and prints recorded stdout
@@ -75,6 +77,7 @@ packages/
   - A family package depends on `tool-core` and on no other family.
   - `tool-definitions` is the only package that imports the families.
   - The app imports `tool-definitions` and `tool-core`, never a family directly.
+  - Startup (the CLI entry, the hook dispatch) reads a family only through `@teamai/tool-definitions/facts`; adapters, launch profiles, token readers and schemas load where first used (`teamai/family-facts`).
   - `shared` holds helpers that belong to no domain, such as `@teamai/shared/redact`. Any package and the app may import it, and it imports no other package.
 - **Files:** one file per concept, tests beside the file they test (`*.test.ts`), fixtures in the package.
 - **Enforcement:** a `teamai/*` lint rule enforces the import direction.

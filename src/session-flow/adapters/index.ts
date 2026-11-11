@@ -9,9 +9,10 @@ import type { LocalConfig } from '../../types.js';
 import path from 'node:path';
 import type { AgentAdapter } from '@teamai/tool-core/sessions/base';
 import { HOST_PROCESSES } from '@teamai/shared/exec';
-import type { SessionHost, StoredPlatformDefinition } from '@teamai/tool-core/sessions/platform';
+import type { ToolFamily } from '@teamai/tool-core/family';
+import { locatesOwnStore, type SessionHost, type StoredPlatformDefinition } from '@teamai/tool-core/sessions/platform';
 import { executablesOf } from '../../launch-registry.js';
-import { isSessionPlatform, isStoredSessionPlatform, SESSION_PLATFORM_FACTS, type SessionPlatform } from './platform-facts.js';
+import { isSessionPlatform, isStoredSessionPlatform, type SessionPlatform, type StoredSessionPlatform } from './platform-facts.js';
 import { sessionStoreDir, type SessionStoreRoot } from '../../locate.js';
 import { instanceHomeDir } from '../../tool-instances.js';
 import { instanceNames, instancePlatform } from '../../tool-registry.js';
@@ -62,6 +63,17 @@ export const ADAPTER_REGISTRY: AdapterRegistry = {
   joycode: stored(BUILT_IN_TOOLS.joycode.platforms.joycode),
 } satisfies Record<SessionPlatform, AdapterFactory>;
 
+/** The definition, adapters included, of the shipped platform `platform`, from the family that declares it. */
+function storedDefinitionOf(platform: StoredSessionPlatform): StoredPlatformDefinition | undefined {
+  for (const family of Object.values<ToolFamily>(BUILT_IN_TOOLS)) {
+    const definition = Object.hasOwn(family.platforms, platform) ? family.platforms[platform] : undefined;
+
+    if (definition !== undefined && !locatesOwnStore(definition)) return definition;
+  }
+
+  return undefined;
+}
+
 /**
  * An instance's own platform: the definition of the shipped platform whose format its sessions keep, and the
  * instance's home. Absent when the instance keeps no sessions teamai reads.
@@ -70,10 +82,10 @@ function instanceStore(platform: string) {
   const hosted = instancePlatform(platform);
 
   if (!hosted || !isStoredSessionPlatform(hosted.platform)) return undefined;
-  const definition: StoredPlatformDefinition = SESSION_PLATFORM_FACTS[hosted.platform];
+  const definition = storedDefinitionOf(hosted.platform);
   const { home } = hosted.instance;
 
-  if (definition.adapterAs === undefined || home === undefined) return undefined;
+  if (definition?.adapterAs === undefined || home === undefined) return undefined;
 
   return { store: definition.store, adapterAs: definition.adapterAs, home, base: hosted.instance.extends };
 }
