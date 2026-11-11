@@ -213,7 +213,7 @@ workflows:
 
 ### 团队工具
 
-`acme-claude`（`extends: claude`，`command: acme-claude`）这样的[团队工具](reference.md#团队工具tools)，在 Binary path（T3 Code 的 Settings → Providers）是 `acme-claude` 绝对路径的 T3 提供方实例上运行，或者在 `instances: { acme-claude: <its id> }` 映射的实例上运行。有自己的 home 而没有命令的工具，比如 `claude-work`（`extends: claude`，`home: { dir: .claude-work, env: CLAUDE_CONFIG_DIR }`），在运行 Claude 自己的二进制文件、Home path 为该 home 的实例上运行。它的会话在该实例的 Home path 中读取。
+`acme-claude`（`extends: claude`，`command: acme-claude`）这样的[团队工具](reference.md#团队工具tools)，在 Binary path（T3 Code 的 Settings → Providers）是 `acme-claude` 或其绝对路径的 T3 提供方实例上运行，或者在 `instances: { acme-claude: <its id> }` 映射的实例上运行。有自己的 home 而没有命令的工具，比如 `claude-work`（`extends: claude`，`home: { dir: .claude-work, env: CLAUDE_CONFIG_DIR }`），在运行 Claude 自己的二进制文件、Home path 为该 home 的实例上运行。它的会话在该实例的 Home path 中读取。
 
 没有实例运行它时，teamai 会在第一次有步骤用它时添加一个，并说明：
 

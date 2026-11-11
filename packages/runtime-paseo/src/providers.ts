@@ -1,8 +1,7 @@
 import path from 'node:path';
-import type { OpId, RuntimeFailure } from '@teamai/runtime-protocol';
 import { getUserHome } from '@teamai/shared/home';
 import { findOnPath } from '@teamai/shared/lookpath';
-import type { InitInstance } from '@teamai/runtime-protocol';
+import { runsCommand, type InitInstance, type OpId, type RuntimeFailure } from '@teamai/runtime-protocol';
 import { paseoHome } from './daemon/address.js';
 import type { Daemon } from './daemon/connect.js';
 import type { ProcessState } from './process-state.js';
@@ -104,10 +103,6 @@ export function keptOf(providers: CustomProviders, variables: readonly string[])
   }]));
 }
 
-/** Whether a provider whose command starts with `executable` runs `command`: the same name, or an absolute path to it. */
-export const runsCommand = (executable: string | undefined, command: string): boolean => executable !== undefined
-  && (executable === command || (path.isAbsolute(executable) && !path.isAbsolute(command) && path.basename(executable) === command));
-
 /** Why the custom provider the runtime's providers option names cannot run `tool`, or undefined when it extends it. */
 export const namedProblem = (named: string, tool: PaseoTool, custom: CustomProviders): string | undefined => (custom[named]?.extends === tool
   ? undefined
@@ -148,15 +143,15 @@ export function providerOf(instance: InitInstance, tool: PaseoTool, { custom, na
 
     if (problem !== undefined) return { cannot: problem };
 
-    return command === undefined || runsCommand(runs, command)
+    return command === undefined || runsCommand({ executable: runs, command })
       ? { provider: named }
       : { cannot: `the runtime's providers option names ${named}, which runs ${runs ?? 'its tool\'s own command'} rather than its command ${command}; name a provider whose command is ${command}` };
   }
 
   // A provider with no command of its own runs the tool's.
   const runsOwn = (entry: CustomProviders[string]): boolean => (command === undefined
-    ? (entry.command?.[0] === undefined || runsCommand(entry.command[0], tool)) && home !== undefined && entry.env?.[variable] === home
-    : runsCommand(entry.command?.[0], command));
+    ? (entry.command?.[0] === undefined || runsCommand({ executable: entry.command[0], command: tool })) && home !== undefined && entry.env?.[variable] === home
+    : runsCommand({ executable: entry.command?.[0], command }));
 
   if (command === undefined && home === undefined) {
     return { cannot: `the team instance names neither a command nor a home for Paseo to run ${tool} with; add a Paseo provider on the daemon's host that extends ${tool}, then name it in the runtime's providers option` };

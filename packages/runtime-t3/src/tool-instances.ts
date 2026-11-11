@@ -1,5 +1,5 @@
 import path from 'node:path';
-import { fitReason, type InitInstance } from '@teamai/runtime-protocol';
+import { fitReason, runsCommand, type InitInstance } from '@teamai/runtime-protocol';
 import { DRIVER_NAMES, DRIVERS, driverOf, type Driver } from './sessions.js';
 import type { Provider } from './t3.js';
 
@@ -7,34 +7,20 @@ import type { Provider } from './t3.js';
 //
 //  A team or personal tool instance (`extends: claude`, `command: acme-claude`) runs in T3 on a provider instance whose
 //  Binary path is the instance's command. `instances` in the definition's options maps a name to a provider instance
-//  by id; with no entry, the runtime finds the one whose Binary path in the member's T3 settings is absolute and names
-//  the command, so a team definition needs no machine's ids.
+//  by id; with no entry, the runtime finds the one whose Binary path in the member's T3 settings runs the command
+//  (`runsCommand`), so a team definition needs no machine's ids.
 //
 //    init instances: [{ name: acme-claude, tool: claude, command: acme-claude }]
 //    settings.json   providerInstances.acme-claude-t3.config.binaryPath = /opt/acme/bin/acme-claude
 //    →               acme-claude runs on acme-claude-t3
 //
 
-/** Whether the file name of `binaryPath` is `command`: on Windows, also `<command>.exe` or `.cmd`, in any case. */
-function namesCommand(binaryPath: string, command: string): boolean {
-  const name = path.basename(binaryPath);
-
-  if (process.platform !== 'win32') return name === command;
-
-  return [command, `${command}.exe`, `${command}.cmd`].some((candidate) => candidate.toLowerCase() === name.toLowerCase());
-}
-
-/** Whether `binaryPath` is an absolute path to `command`. */
-export function runsCommand(binaryPath: string, command: string): boolean {
-  return path.isAbsolute(binaryPath) && namesCommand(binaryPath, command);
-}
-
 /**
  * Whether a provider instance of `driver` with `binaryPath` runs the provider's own tool, such as `claude`: none set, or
- * a path to that command by name. Any other is a wrapper or a team tool's command, which a base tool never runs on.
+ * that command by name or path. Any other is a wrapper or a team tool's command, which a base tool never runs on.
  */
 export function runsOwnBinary(binaryPath: string | undefined, driver: Driver): boolean {
-  return binaryPath === undefined || namesCommand(binaryPath, DRIVERS[driver].tool);
+  return binaryPath === undefined || runsCommand({ executable: binaryPath, command: DRIVERS[driver].tool });
 }
 
 /** What finds the provider instance of each tool instance: T3's instances, which of them can run now, and each one's Binary path. */
@@ -110,7 +96,7 @@ export function servedInstances({ instances, mapped, lookup }: { instances: Init
 
       const binaryPath = lookup.binaryPathOf(id);
 
-      if (command !== undefined && binaryPath !== undefined && !runsCommand(binaryPath, command)) {
+      if (command !== undefined && binaryPath !== undefined && !runsCommand({ executable: binaryPath, command })) {
         unavailable[name] = fitReason(`T3 Code provider instance "${id}" has the Binary path ${binaryPath}, which is not ${command}, the command ${name} runs. Set its Binary path in T3 Code under Settings → Providers to the absolute path of ${command} (command -v ${command}), or change instances.${name}`);
         continue;
       }
@@ -130,7 +116,7 @@ export function servedInstances({ instances, mapped, lookup }: { instances: Init
 
       if (provider.driverKind !== driver) return false;
 
-      return home === undefined ? binaryPath !== undefined && runsCommand(binaryPath, runs) : runsOwnBinary(binaryPath, driver) && lookup.homeOf(provider, driver) === home;
+      return home === undefined ? runsCommand({ executable: binaryPath, command: runs }) : runsOwnBinary(binaryPath, driver) && lookup.homeOf(provider, driver) === home;
     });
 
     const what = home === undefined ? runs : `${runs} in ${lookup.shown(home)}`;

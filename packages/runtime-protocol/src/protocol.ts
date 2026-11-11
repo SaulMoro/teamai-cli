@@ -1,3 +1,4 @@
+import path from 'node:path';
 import { getUserHome } from '@teamai/shared/home';
 import { ACCESS_LEVELS, CONFINED_LEVELS } from '@teamai/tool-core/launch';
 import type { TokenUsage, ToolReport } from '@teamai/tool-core/stdout';
@@ -400,6 +401,28 @@ export const InitInstanceSchema = z.object({
 });
 
 export type InitInstance = z.infer<typeof InitInstanceSchema>;
+
+/** The extensions Windows starts a command by name with, as npm's shims for it are named. */
+const WINDOWS_COMMAND_EXTENSIONS = ['', '.exe', '.cmd', '.bat'];
+
+/**
+ * Whether an app's provider whose Binary path or command is `executable` runs an instance's `command`, as T3 Code and
+ * Paseo start it: the same name, which the app finds on its PATH, or an absolute path to a file of that name; on Windows
+ * also `<command>.exe`, `.cmd` or `.bat`, in any case. A path relative to a folder names no file the runtime can know.
+ */
+export function runsCommand({ executable, command, platform = process.platform }: { executable: string | undefined; command: string; platform?: NodeJS.Platform }): boolean {
+  if (executable === undefined) return false;
+
+  if (executable === command) return true;
+  const paths = platform === 'win32' ? path.win32 : path.posix;
+  const name = paths.basename(executable);
+
+  if (paths.isAbsolute(command) || (!paths.isAbsolute(executable) && name !== executable)) return false;
+
+  if (platform !== 'win32') return name === command;
+
+  return WINDOWS_COMMAND_EXTENSIONS.some((extension) => `${command}${extension}`.toLowerCase() === name.toLowerCase());
+}
 
 const InitRequestSchema = z.object({
   type: z.literal('init'), protocol: z.literal(RUNTIME_PROTOCOL), mode: z.enum(RUNTIME_MODES), options: RuntimeOptionsSchema,

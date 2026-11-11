@@ -1,11 +1,11 @@
 import { randomUUID } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
+import { runsCommand } from '@teamai/runtime-protocol';
 import { isJsonObject, parseJson, type JsonValue } from '@teamai/shared/json';
 import { z } from 'zod';
 import { DRIVERS, type Driver } from './sessions.js';
 import { instanceToolHome, SettingsSchema } from './settings.js';
-import { runsCommand } from './tool-instances.js';
 import { readRegularFileSync } from '@teamai/shared/regular-file';
 
 // ─── Adding a T3 provider instance to the member's T3 settings ───
@@ -76,7 +76,7 @@ function isSame({ settings, id, instance, userHome }: { settings: z.infer<typeof
 
   if (kept?.driver !== instance.driver) return false;
 
-  if (!(binaryPath === undefined ? instance.command === DRIVERS[instance.driver].tool : runsCommand(binaryPath, instance.command))) return false;
+  if (!(binaryPath === undefined ? instance.command === DRIVERS[instance.driver].tool : runsCommand({ executable: binaryPath, command: instance.command }))) return false;
 
   return instance.homePath === undefined || instanceToolHome(settings, { instanceId: id, driver: instance.driver, userHome }) === instance.homePath;
 }
