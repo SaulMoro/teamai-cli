@@ -30,7 +30,7 @@ import { AttemptIdSchema, installOwner, isRunId, readRun, RunIdSchema, updateRun
 import { workflowRunBy, type RunPublication, type RunState, type RunStatus, type WorkflowDefinition, type WorkflowFailure, type WorkflowSource, type WorkflowStep } from './types.js';
 import { attemptHoldingSession } from './runtimes/attempt.js';
 import { basePinBranch, branchName, isIsolated, runBranchPrefix, stepMode, worksInTeam, type LeaseSession, type SessionRef } from './workspace.js';
-import { fetchMissingCommits, git, reconcileCopy } from './worktree.js';
+import { fetchMissingCommits, git, gitAnswer, reconcileCopy, saidYes } from './worktree.js';
 
 /**
  * Hands a run from one teamai install to another through `teamai-reports`. The install that owns a run is the only one
@@ -487,7 +487,7 @@ function receipt(runId: string, publication: PublishReceipt['publication'], snap
 
 /** Whether a branch on origin at one of `heads` contains `commit`, as far as `checkout` has both. */
 async function heldOnOrigin({ checkout, commit, heads }: { checkout: string; commit: string; heads: Iterable<string> }): Promise<boolean> {
-  for (const head of heads) if ((await git(checkout, ['merge-base', '--is-ancestor', commit, head])).code === 0) return true;
+  for (const head of heads) if (saidYes(gitAnswer(await git(checkout, ['merge-base', '--is-ancestor', commit, head])), `whether ${head} in ${checkout} holds ${commit}`)) return true;
 
   return false;
 }
@@ -526,7 +526,7 @@ async function checkOrigin(
     if (actual === commit) continue;
 
     // Only the publishing checkout has the recorded commit, and so can tell a push that did not land from other work.
-    if (actual !== undefined && by.side === 'publish' && (await git(checkout, ['merge-base', '--is-ancestor', actual, commit])).code === 0) {
+    if (actual !== undefined && by.side === 'publish' && saidYes(gitAnswer(await git(checkout, ['merge-base', '--is-ancestor', actual, commit])), `whether ${commit} in ${checkout} holds ${actual}`)) {
       return refused({
         code: 'commit_missing',
         branch,
@@ -562,7 +562,8 @@ async function checkOrigin(
 
     if (pushed.code === 0) continue;
 
-    if ((await git(checkout, ['cat-file', '-e', `${commit}^{commit}`])).code !== 0) {
+    // A git that did not start is no sign the commit is missing: the refusal below quotes why the push failed.
+    if (gitAnswer(await git(checkout, ['cat-file', '-e', `${commit}^{commit}`])).said === 'no') {
       return refused({
         code: 'commit_missing',
         branch,

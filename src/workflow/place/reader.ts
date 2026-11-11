@@ -4,7 +4,7 @@ import { z } from 'zod';
 import { writeJsonAtomic } from '../../utils/fs.js';
 import type { StepRead } from '../step-state.js';
 import type { WorkflowFailure } from '../types.js';
-import { keptSentence, putBackCopy, type Git, type KeptChanges } from '../worktree.js';
+import { gitAnswer, keptSentence, putBackCopy, saidYes, type Git, type KeptChanges } from '../worktree.js';
 import { restoreOverlay } from './overlay.js';
 import { changedPaths, snapshotWorktree, type WorktreeSnapshot } from './worktree-snapshot.js';
 import { Writes } from '../writes.js';
@@ -78,7 +78,7 @@ export async function finishReader(input: {
 async function isCommitUnder(writes: string[], dir: string, before: WorktreeSnapshot, after: WorktreeSnapshot, git: Git): Promise<boolean> {
   if (!before.head || !after.head || before.head === after.head || before.branch === '' || before.branch !== after.branch) return false;
 
-  if ((await git(dir, ['merge-base', '--is-ancestor', before.head, after.head])).code !== 0) return false;
+  if (!saidYes(gitAnswer(await git(dir, ['merge-base', '--is-ancestor', before.head, after.head])), `whether ${after.head} in ${dir} holds ${before.head}`)) return false;
   const diff = await git(dir, ['diff', '--name-only', '--no-renames', '-z', before.head, after.head]);
   const committed = diff.stdout.split('\0').filter((changed) => changed !== '');
 

@@ -29,7 +29,7 @@ import { WORKFLOW_DIR_ENV } from '../launch-context.js';
 import { assertSafePath, assertWithinRoot } from '../utils/path-safety.js';
 import { createGit, getDefaultBranch } from '../utils/git.js';
 import { failureReason } from '../utils/branch-worktree.js';
-import { git as gitAt } from './worktree.js';
+import { gitAnswer, git as gitAt, saidYes, unansweredGit, type GitAnswer } from './worktree.js';
 import {
   remotelyReachableRevision, revisionHoldsSources, withoutStaleTeamRevision, type ReachableRevision,
 } from '../utils/team-revision.js';
@@ -960,7 +960,7 @@ export type TeamCommitReach =
 export async function teamCommitReach(config: LocalConfig, revision: string): Promise<TeamCommitReach> {
   const selfMode = isSelfMode(config);
   const checkout = selfMode ? getBusinessRoot(config) : config.repo.localPath;
-  const present = async (): Promise<boolean> => (await gitAt(checkout, ['cat-file', '-e', `${revision}^{commit}`])).code === 0;
+  const present = async (): Promise<boolean> => saidYes(gitAnswer(await gitAt(checkout, ['cat-file', '-e', `${revision}^{commit}`])), `whether ${checkout} has commit ${revision}`);
 
   if (!await present()) {
     const fetched = await gitAt(checkout, ['fetch', '--quiet', 'origin']);
@@ -970,7 +970,7 @@ export async function teamCommitReach(config: LocalConfig, revision: string): Pr
     if (!await present()) return { kind: 'missing', checkout, fetchError: undefined };
   }
 
-  const reaches = async (tip: string): Promise<boolean> => (await gitAt(checkout, ['merge-base', '--is-ancestor', revision, tip])).code === 0;
+  const reaches = async (tip: string): Promise<boolean> => saidYes(gitAnswer(await gitAt(checkout, ['merge-base', '--is-ancestor', revision, tip])), `whether ${tip} in ${checkout} holds ${revision}`);
 
   return await reaches('HEAD') || await reaches(`refs/remotes/origin/${await getDefaultBranch(checkout)}`) ? { kind: 'member' } : { kind: 'elsewhere', checkout, selfMode };
 }
@@ -987,15 +987,19 @@ export async function withTeamRevision<T>(
 ): Promise<T | { failed: string }> {
   const repoRoot = isSelfMode(config) ? getBusinessRoot(config) : config.repo.localPath;
   const git = createGit(repoRoot);
-  const present = (): Promise<boolean> => gitAt(repoRoot, ['cat-file', '-e', `${revision}^{commit}`]).then(({ code }) => code === 0, () => false);
+  const present = async (): Promise<GitAnswer> => gitAnswer(await gitAt(repoRoot, ['cat-file', '-e', `${revision}^{commit}`]));
+  let found = await present();
 
-  if (!await present()) {
+  if (found.said === 'no') {
     const fetched = await git.fetch(['origin']).then(() => '', (cause: unknown) => (cause instanceof Error ? cause.message.trim() : String(cause)));
+    found = await present();
 
-    if (!await present()) {
+    if (found.said === 'no') {
       return { failed: `the team repo at ${repoRoot} does not have it, even after fetching origin${fetched ? ` (${fetched})` : ''}` };
     }
   }
+
+  if (found.said === 'nothing') return { failed: unansweredGit(`whether the team repo at ${repoRoot} has it`, found.result).message };
 
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'teamai-revision-'));
 

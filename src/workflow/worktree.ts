@@ -68,6 +68,46 @@ export interface GitResult {
   stderr: string;
 }
 
+/**
+ * The exit code of a git that did not start (not installed, not executable), as a shell reports a command it cannot run.
+ * No git command exits with it, so it is never read as the 0 or the 1 a git question answers with.
+ */
+export const GIT_NOT_STARTED = 127;
+
+/**
+ * What git said to a question it answers with its exit code (`merge-base --is-ancestor`, `cat-file -e`, `diff --quiet`,
+ * `show-ref --quiet`, `check-ignore -q`, `rev-parse --verify --quiet`, `symbolic-ref --quiet`): yes at exit 0, with what
+ * it printed; no at any other exit of a git that ran, whose code tells a plain no (1) from a git that failed (128); and
+ * nothing when git did not start, which is no answer, never a no.
+ */
+export type GitAnswer = { readonly said: 'yes' | 'no' | 'nothing'; readonly result: GitResult };
+
+/** Reads `result`, git's exit to a question it answers with its exit code, as its answer (`GitAnswer`). */
+export function gitAnswer(result: GitResult): GitAnswer {
+  if (result.code === 0) return { said: 'yes', result };
+
+  return { said: result.code === GIT_NOT_STARTED ? 'nothing' : 'no', result };
+}
+
+/** The error a caller raises when git did not answer `question`, with the cause git gave. */
+export function unansweredGit(question: string, result: GitResult): Error {
+  return new Error(`git could not tell ${question}: ${result.stderr.trim() || `it exited with code ${result.code}`}. Check that git is installed and on PATH, then try again.`);
+}
+
+/** Whether git said yes to `question`. Throws when git did not start, which is neither a yes nor a no. */
+export function saidYes(answer: GitAnswer, question: string): boolean {
+  if (answer.said === 'nothing') throw unansweredGit(question, answer.result);
+
+  return answer.said === 'yes';
+}
+
+/** What git printed with its yes to `question`, trimmed; '' for a no. Throws when git did not start. */
+export function yesOutput(answer: GitAnswer, question: string): string {
+  if (answer.said === 'nothing') throw unansweredGit(question, answer.result);
+
+  return answer.said === 'yes' ? answer.result.stdout.trim() : '';
+}
+
 type GitOptions = { input: string; timeoutMs?: number } | { timeoutMs: number; env?: NodeJS.ProcessEnv };
 
 export type Git = (cwd: string, args: string[], options?: GitOptions) => Promise<GitResult>;
@@ -461,6 +501,14 @@ function spawnGit(cwd: string, args: string[], options: GitOptions | undefined, 
     return new Promise((resolve) => {
       execFile('git', args, { cwd, env: base, windowsHide: true }, (error, stdout, stderr) => {
         const exit = z.number().safeParse(error?.code);
+
+        // Only the spawn's own error names the spawn syscall (ENOENT, EACCES): git never started, so it answered nothing.
+        if (error && 'syscall' in error && String(error.syscall).startsWith('spawn')) {
+          resolve({ code: GIT_NOT_STARTED, stdout: '', stderr: `git did not start: ${error.message}` });
+
+          return;
+        }
+
         const code = exit.success ? exit.data : error ? 1 : 0;
         resolve({ code, stdout: String(stdout), stderr: String(stderr) });
       });
@@ -471,13 +519,18 @@ function spawnGit(cwd: string, args: string[], options: GitOptions | undefined, 
   settleOnSignal(child);
   let stdout = '';
   let stderr = '';
+  let notStarted: Error | undefined;
   child.stdout.setEncoding('utf8');
   child.stderr.setEncoding('utf8');
   child.stdout.on('data', (chunk: string) => { stdout += chunk; });
   child.stderr.on('data', (chunk: string) => { stderr += chunk; });
 
   const exited = new Promise<number>((resolve) => {
-    child.on('error', () => resolve(1));
+    child.on('error', (error) => {
+      // An error before git spawned (ENOENT, EACCES) is the only one with no pid: git never ran.
+      if (child.pid === undefined) notStarted = error;
+      resolve(notStarted === undefined ? 1 : GIT_NOT_STARTED);
+    });
     child.on('close', (code) => resolve(code ?? 1));
   });
 
@@ -490,7 +543,7 @@ function spawnGit(cwd: string, args: string[], options: GitOptions | undefined, 
   return exited.then((code) => {
     clearTimeout(timer);
 
-    return { code, stdout, stderr };
+    return notStarted === undefined ? { code, stdout, stderr } : { code, stdout: '', stderr: `git did not start: ${notStarted.message}` };
   });
 }
 
@@ -639,7 +692,11 @@ export async function reconcileCopy(main: string, branch: string, expected: stri
   if (local.code !== 0) return undefined;
   const tip = local.stdout.trim();
 
-  if (tip !== expected && (await git(main, ['merge-base', '--is-ancestor', tip, expected])).code !== 0) {
+  const behind = tip === expected ? undefined : gitAnswer(await git(main, ['merge-base', '--is-ancestor', tip, expected]));
+
+  if (behind?.said === 'nothing') return { error: unansweredGit(`whether branch ${branch} here at ${tip} is behind ${expected}`, behind.result).message };
+
+  if (behind?.said === 'no') {
     return { error: `Branch ${branch} here is at ${tip}, which is not behind ${expected}, the commit the run recorded for it, so it holds work the run does not know about. teamai moves neither: keep that work elsewhere, delete or reset ${branch}, then resume the run.` };
   }
 
@@ -725,7 +782,7 @@ async function lackedCommits(dir: string, commits: string[]): Promise<string[]> 
   const lacking: string[] = [];
 
   for (const commit of new Set(commits)) {
-    if ((await git(dir, ['cat-file', '-e', `${commit}^{commit}`])).code !== 0) lacking.push(commit);
+    if (!saidYes(gitAnswer(await git(dir, ['cat-file', '-e', `${commit}^{commit}`])), `whether ${dir} has commit ${commit}`)) lacking.push(commit);
   }
 
   return lacking;
@@ -739,9 +796,11 @@ async function lackedCommits(dir: string, commits: string[]): Promise<string[]> 
 export async function mergeBranch(dir: string, commit: string, runGit: Git): Promise<
   { state: 'merged' } | { state: 'conflict'; files: string[] } | { state: 'failed'; error: string }
 > {
-  const contained = await runGit(dir, ['merge-base', '--is-ancestor', commit, 'HEAD']);
+  const contained = gitAnswer(await runGit(dir, ['merge-base', '--is-ancestor', commit, 'HEAD']));
 
-  if (contained.code === 0) return { state: 'merged' };
+  if (contained.said === 'yes') return { state: 'merged' };
+
+  if (contained.said === 'nothing') return { state: 'failed', error: unansweredGit(`whether ${dir} already holds ${commit}`, contained.result).message };
 
   const merged = await runGit(dir, [
     '-c', 'user.name=TeamAI', '-c', 'user.email=teamai@localhost',
@@ -1274,9 +1333,11 @@ export async function commitWork(
   const added = paths === undefined ? await stageAll(dir, runGit) : await stagePaths(dir, paths, runGit);
 
   if (added.code !== 0) return { error: added.stderr.trim() || 'git add failed' };
-  const staged = await runGit(dir, ['diff', '--cached', '--quiet', '--ignore-submodules=none', '--no-ext-diff']);
+  const staged = gitAnswer(await runGit(dir, ['diff', '--cached', '--quiet', '--ignore-submodules=none', '--no-ext-diff']));
 
-  if (staged.code !== 0 || merging) {
+  if (staged.said === 'nothing') return { error: unansweredGit(`whether anything is staged in ${dir}`, staged.result).message };
+
+  if (staged.said === 'no' || merging) {
     // Older Git also applies diff.ignoreSubmodules to commit's staged-change check.
     // We deliberately staged these gitlinks, so do not hide them again here.
     const committed = await runGit(dir, ['-c', 'user.name=TeamAI', '-c', 'user.email=teamai@localhost', '-c', 'diff.ignoreSubmodules=none', 'commit', '-m', message]);
@@ -1344,9 +1405,7 @@ async function branchNeedsPush(dir: string, branch: string, runGit: Git): Promis
   const known = await runGit(dir, ['rev-parse', '--verify', '--quiet', remote]);
 
   if (known.code === 0) {
-    const contained = await runGit(dir, ['merge-base', '--is-ancestor', tip, remote]);
-
-    return contained.code !== 0;
+    return !saidYes(gitAnswer(await runGit(dir, ['merge-base', '--is-ancestor', tip, remote])), `whether ${remote} holds ${branch} at ${tip}`);
   }
 
   const listed = await runGit(dir, ['for-each-ref', '--format=%(refname)', 'refs/remotes/origin']);

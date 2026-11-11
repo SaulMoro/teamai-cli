@@ -24,7 +24,7 @@ import { stepDefinitions } from '../workflow/scope.js';
 import { agentPassOf, type StepPass } from '../workflow/step-state.js';
 import type { RunState } from '../workflow/types.js';
 import { branchName, cloneBranchOf } from '../workflow/workspace.js';
-import { stepCheckout, UNTRUSTED_CONFIG } from '../workflow/worktree.js';
+import { gitAnswer, git as gitAt, saidYes, stepCheckout, UNTRUSTED_CONFIG } from '../workflow/worktree.js';
 
 const exec = promisify(execFile);
 
@@ -123,8 +123,7 @@ export async function missingEvidence(config: LocalConfig, run: RunState, subjec
   const plan = evidencePlan(run, subject);
   const ranges = plan.diff ? [plan.diff] : plan.ranges;
   const commits = [...new Set(ranges.flatMap((range) => [range.from, range.to]))];
-  const gitIn: GitIn = { env: process.env, config: [] };
-  const has = async (commit: string) => plan.checkout !== undefined && await git(plan.checkout, ['cat-file', '-e', `${commit}^{commit}`], gitIn).then(() => true, () => false);
+  const has = async (commit: string) => plan.checkout !== undefined && saidYes(gitAnswer(await gitAt(plan.checkout, ['cat-file', '-e', `${commit}^{commit}`])), `whether ${plan.checkout} has commit ${commit}`);
   const missing: string[] = [];
 
   for (const commit of commits) if (!await has(commit)) missing.push(`commit ${commit} of branch ${ranges.find((range) => range.from === commit || range.to === commit)?.branch ?? 'unknown'}`);

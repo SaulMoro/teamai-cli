@@ -50,7 +50,7 @@ import { cloneRoleProblem, copyKnowledgePaths, launchedTools, roleCopyRefusal, r
 import { commitWithout } from './team-without.js';
 import { teamClonesOf } from './team.js';
 import { dataCheckoutsOf, removeDataCheckout } from './data.js';
-import { AGENT_PATHS, boundedGit, commitWork, git as memberGit, recordConfigOverlay, replaceConfig, restoreUneditedConfig, saveConfig, savedConfigPaths, untrustedGit, type UntrustedGit } from '../worktree.js';
+import { AGENT_PATHS, boundedGit, commitWork, git as memberGit, gitAnswer, recordConfigOverlay, replaceConfig, restoreUneditedConfig, saidYes, saveConfig, savedConfigPaths, untrustedGit, type UntrustedGit } from '../worktree.js';
 
 /**
  * The commit a clone's install pulled for a treatment without some paths, which teamai made of `revision` without them.
@@ -137,7 +137,7 @@ export function commitCacheOf(config: LocalConfig, repo: string): string {
  */
 export async function firstUnreachable(input: { cache: string; repo: string; commits: readonly string[]; checkout?: string }): Promise<string | undefined> {
   const { cache, repo, commits, checkout } = input;
-  const has = async (dir: string, commit: string): Promise<boolean> => (await memberGit(dir, ['cat-file', '-e', `${commit}^{commit}`])).code === 0;
+  const has = async (dir: string, commit: string): Promise<boolean> => saidYes(gitAnswer(await memberGit(dir, ['cat-file', '-e', `${commit}^{commit}`])), `whether ${dir} has commit ${commit}`);
 
   for (const commit of commits) {
     if ((checkout !== undefined && await has(checkout, commit)) || await has(cache, commit)) continue;

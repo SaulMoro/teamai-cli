@@ -31,11 +31,12 @@ import * as fs from 'node:fs';
 import { readRegularFileSync } from '@teamai/shared/regular-file';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { getTeamaiHomeDir } from '../types.js';
 import { acquireLock, releaseLock } from '../update.js';
 import { resolveAnchors } from '../utils/git.js';
+import { GIT_NOT_STARTED, gitAnswer, unansweredGit, type GitResult } from '../workflow/worktree.js';
 import { z } from 'zod';
 import { AgentObservationSchema, CommitStateSchema, type AgentObservation } from '../agent-observation.js';
 import type { Session } from '@teamai/tool-core/sessions/ir';
@@ -1827,13 +1828,21 @@ export class SyncManager {
       return false;
     }
 
-    try {
-      this.runGit(['merge-base', '--is-ancestor', 'FETCH_HEAD', 'HEAD']);
+    const holds = gitAnswer(this.askGit(['merge-base', '--is-ancestor', 'FETCH_HEAD', 'HEAD']));
 
-      return false;
-    } catch {
-      return true;
-    }
+    if (holds.said === 'nothing') throw unansweredGit(`whether ${ref} on ${remote} is ahead of this checkout`, holds.result);
+
+    return holds.said === 'no';
+  }
+
+  /** git's exit to `args`, as `git()` returns it, GIT_NOT_STARTED when git did not start: for a question its exit code answers. */
+  private askGit(args: string[]): GitResult {
+    const ran = spawnSync('git', args, { cwd: this.repoRoot, encoding: 'utf-8', timeout: 30_000, env: { ...process.env, LANGUAGE: 'en' } });
+
+    // Only a git that never started has no pid; one stopped at its timeout has one, and no exit code.
+    if (ran.error && !ran.pid) return { code: GIT_NOT_STARTED, stdout: '', stderr: `git did not start: ${ran.error.message}` };
+
+    return { code: ran.status ?? 1, stdout: ran.stdout, stderr: ran.stderr };
   }
 
   /**

@@ -51,7 +51,7 @@ import { resolveRunMode, WORKFLOW_DIR_ENV } from '../../launch-context.js';
 import { archiveSessions, openSessionArchive } from '../../session-flow/archive.js';
 import { AgentSession } from '../../session-flow/agent-session.js';
 import { JsonValueSchema, type JsonValue, isJsonObject } from '@teamai/shared/json';
-import { git, hostGitEnv, keptOriginUrl, pushTargets, readMemberConfig, remoteGit, untrustedGit, type MemberConfig } from '../worktree.js';
+import { git, gitAnswer, hostGitEnv, keptOriginUrl, pushTargets, readMemberConfig, remoteGit, untrustedGit, type MemberConfig } from '../worktree.js';
 import { readRegularFile, writeRegularFile } from '@teamai/shared/regular-file';
 
 /** How often a member reads its claim's record for a cancel, when its beats come less often than that. */
@@ -362,9 +362,9 @@ async function finishLeftClaims(config: LocalConfig, { repository, root, member,
       const listed = await git(root, ['ls-remote', '--quiet', 'origin', ref]);
       const saved = listed.stdout.split('\t')[0]?.trim() ?? '';
       const fetched = listed.code === 0 && saved !== '' ? await git(root, ['fetch', '--quiet', 'origin', ref]) : listed;
-      const isFetched = fetched.code === 0 && (await git(root, ['cat-file', '-e', `${saved}^{commit}`])).code === 0;
+      const savedHere = fetched.code === 0 ? gitAnswer(await git(root, ['cat-file', '-e', `${saved}^{commit}`])) : undefined;
 
-      if (!isFetched) return { error: { code: 'fetch_failed', message: `The member could not fetch ${ref}, where the claim it holds keeps its work: ${fetched.stderr.trim() || 'origin does not hold it'}` } };
+      if (savedHere?.said !== 'yes') return { error: { code: 'fetch_failed', message: `The member could not fetch ${ref}, where the claim it holds keeps its work: ${(savedHere?.result ?? fetched).stderr.trim() || 'origin does not hold it'}` } };
 
       if (record.state === 'cancelling') return answered(config, record, saved, nestedRun.spent);
       log.info(`Finishing attempt ${record.attempt} of run ${record.run}, which this member claimed and left: step "${record.lease.step}" runs again from the work it pushed.`);
@@ -1185,9 +1185,11 @@ async function pushWork({ work, ref, message, memberConfig, parent, index }: { w
   const tree = added.code === 0 ? await snapshotGit(work, ['write-tree']) : added;
 
   if (tree.code !== 0) return { error: `The member could not commit the step's work: ${tree.stderr.trim()}` };
-  const unchanged = await snapshotGit(work, ['diff-tree', '--quiet', parent, tree.stdout.trim()]);
+  const unchanged = gitAnswer(await snapshotGit(work, ['diff-tree', '--quiet', parent, tree.stdout.trim()]));
 
-  if (unchanged.code === 0) return { to: parent };
+  if (unchanged.said === 'yes') return { to: parent };
+
+  if (unchanged.said === 'nothing') return { error: `The member could not commit the step's work: ${unchanged.result.stderr.trim()}` };
   const committed = await snapshotGit(work, ['-c', 'user.name=TeamAI', '-c', 'user.email=teamai@localhost', 'commit-tree', tree.stdout.trim(), '-p', parent, '-m', message]);
 
   if (committed.code !== 0) return { error: `The member could not commit the step's work: ${committed.stderr.trim()}` };

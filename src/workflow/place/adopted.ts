@@ -6,7 +6,7 @@ import fs from 'node:fs/promises';
 import { gitCommonDir } from '../../utils/git.js';
 import type { WorkflowFailure } from '../types.js';
 import type { CopyContract, WorkspaceContract } from '../workspace.js';
-import { fetchMissingCommits, git, hooksPath, offBranch, setupUnfinished, worktreeHooks } from '../worktree.js';
+import { fetchMissingCommits, git, gitAnswer, hooksPath, offBranch, saidYes, setupUnfinished, worktreeHooks } from '../worktree.js';
 import { leaseCommits } from './created.js';
 import type { PlaceRecord } from './record.js';
 
@@ -98,7 +98,7 @@ async function adoptedMismatch({ root, dir, run, attempt, workspace }: Adoption)
     return `${dir} is detached at the start of branch ${branch}, which already exists, so attempt ${attempt} was not prepared there. Check out ${branch} in ${dir}, then adopt it again.`;
   }
 
-  if ((await git(dir, ['merge-base', '--is-ancestor', start.commit, 'HEAD'])).code !== 0) {
+  if (!saidYes(gitAnswer(await git(dir, ['merge-base', '--is-ancestor', start.commit, 'HEAD'])), `whether branch ${branch} in ${dir} holds ${start.commit}`)) {
     return `Branch ${branch} in ${dir} does not contain ${start.commit}, the commit the step starts from, so attempt ${attempt} was not prepared there. Adopt a worktree whose ${branch} contains it.`;
   }
 

@@ -22,6 +22,7 @@ import { SyncManager } from '../session-flow/sync.js';
 import { getReportsDir, isSelfMode, usesBranchWorktree, type DashboardEvent, type LocalConfig } from '../types.js';
 import { execCommand } from '@teamai/shared/exec';
 import { buildEndRecord, RECORDS_DIR } from '../workflow/records.js';
+import { gitAnswer, saidYes } from '../workflow/worktree.js';
 import { isRunId, readRun, runsDir } from '../workflow/store.js';
 import { HttpError } from './http.js';
 import { readRegularFile } from '@teamai/shared/regular-file';
@@ -302,10 +303,10 @@ export async function sidesOf(config: LocalConfig, commit: string, revisions: Re
 
   for (let start = 0; start < pending.length; start += SPLIT_GIT_BATCH) {
     await Promise.all(pending.slice(start, start + SPLIT_GIT_BATCH).map(async (revision) => {
-      const { code } = await teamGit(config, ['merge-base', '--is-ancestor', commit, revision]);
+      const contained = gitAnswer(await teamGit(config, ['merge-base', '--is-ancestor', commit, revision]));
 
-      if (code === 0) sides.set(revision, 'after');
-      else if (code === 1) sides.set(revision, 'before');
+      if (saidYes(contained, `whether ${revision} holds ${commit}`)) sides.set(revision, 'after');
+      else if (contained.result.code === 1) sides.set(revision, 'before');
     }));
   }
 

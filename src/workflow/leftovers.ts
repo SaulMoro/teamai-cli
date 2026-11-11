@@ -24,7 +24,7 @@ import { parseSnapshot, snapshotPath } from './snapshot.js';
 import { AttemptIdSchema, attemptsDir, installOwner, readRun, readRuns, RunIdSchema, updateRun, withCleanupLock } from './store.js';
 import type { KeptBranchReason, RunLeftovers, RunState } from './types.js';
 import { runBranchPrefix, runCopyToMerge } from './workspace.js';
-import { fetchMissingCommits, git, removeWorktree, worktreeCheckout } from './worktree.js';
+import { fetchMissingCommits, git, gitAnswer, removeWorktree, saidYes, worktreeCheckout } from './worktree.js';
 import { readRegularFile } from '@teamai/shared/regular-file';
 
 /** Where each branch of a run points: in the checkout, and on `origin`, which is absent when the checkout has none. */
@@ -98,7 +98,7 @@ function finalCopy(run: RunState): string | undefined {
 
 async function contains({ checkout, tip, holders }: { checkout: string; tip: string; holders: string[] }): Promise<boolean> {
   for (const holder of holders) {
-    if ((await git(checkout, ['merge-base', '--is-ancestor', tip, holder])).code === 0) return true;
+    if (saidYes(gitAnswer(await git(checkout, ['merge-base', '--is-ancestor', tip, holder])), `whether ${holder} in ${checkout} holds ${tip}`)) return true;
   }
 
   return false;

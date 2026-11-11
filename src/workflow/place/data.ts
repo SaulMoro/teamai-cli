@@ -19,7 +19,7 @@ import { commitSkippingHooks, createGit } from '../../utils/git.js';
 import { runsDir, type AttemptId, type RunId } from '../store.js';
 import type { WorkflowFailure } from '../types.js';
 import type { DataAt } from './record.js';
-import { git } from '../worktree.js';
+import { git, gitAnswer, saidYes } from '../worktree.js';
 
 const said = (result: { stderr: string; stdout: string }): string => (result.stderr || result.stdout).trim();
 
@@ -87,7 +87,7 @@ async function startOf(repo: string, branch: DataBranch): Promise<string> {
   };
 
   const [origin, local] = await Promise.all([tipOf(`refs/remotes/origin/${branch}`), tipOf(`refs/heads/${branch}`)]);
-  const holdsOrigin = local !== '' && (origin === '' || (await git(repo, ['merge-base', '--is-ancestor', origin, local])).code === 0);
+  const holdsOrigin = local !== '' && (origin === '' || saidYes(gitAnswer(await git(repo, ['merge-base', '--is-ancestor', origin, local])), `whether ${branch} here holds origin's ${origin}`));
 
   return holdsOrigin ? local : origin;
 }
