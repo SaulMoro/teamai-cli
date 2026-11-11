@@ -854,7 +854,8 @@ describe('for_each', () => {
   });
 
   it.each([
-    ['a list', '[a, b]', 'steps[0].for_each', 'step "build" for_each must be an expression, or a map of items and max_parallel'],
+    ['a list', '[a, b]', 'steps[0].for_each', 'step "build" for_each is a YAML list, and it takes an expression that gives the list, or a map of items and max_parallel. Declare the list as an input, give it its value in defaults.inputs, and write for_each: inputs.<name>'],
+    ['a map whose items is a list', '{ items: [a, b], max_parallel: 2 }', 'steps[0].for_each.items', 'step "build" for_each.items is a YAML list, and it takes an expression that gives the list. Declare the list as an input, give it its value in defaults.inputs, and write items: inputs.<name>'],
     ['a map without items', '{ max_parallel: 2 }', 'steps[0].for_each.items', 'step "build" for_each.items must be an expression'],
     ['max_parallel 0', '{ items: inputs.targets, max_parallel: 0 }', 'steps[0].for_each.max_parallel', 'step "build" for_each.max_parallel must be a whole number from 1'],
   ])('rejects a for_each that is %s, so a kept copy cannot run the step once', (_what, value, field, message) => {
