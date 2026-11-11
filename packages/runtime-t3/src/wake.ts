@@ -1,9 +1,10 @@
 import { WAKE_COMMAND, type OpId, type RuntimeFailure, type RuntimeMessage, type WakeRequest } from '@teamai/runtime-protocol';
 import { threadLink } from './conversation.js';
 import type { Serving, Session } from './runtime.js';
-import { DRIVER_NAMES } from './sessions.js';
+import { DRIVER_NAMES, toolOf } from './sessions.js';
 import { T3Error, type EnvironmentLink, type Launch, type Project, type StepMode, type T3 } from './t3.js';
 import { repositoryKey } from '@teamai/runtime-kit/repository';
+import { codexWakeLine } from '@teamai/runtime-kit/wake';
 
 // ─── Waking a fleet member ───
 //
@@ -31,18 +32,21 @@ type MemberMode = { runtimeMode: StepMode; firstLine: string | undefined };
 
 /**
  * How a woken member runs, and the line its message starts with. Never full access: nobody chose it for that machine.
- * In Auto, T3 runs teamai's command without asking; a stricter mode asks first, so the line says what to approve.
+ * In Auto, T3 runs teamai's command without asking; a stricter mode asks first, so the line says what to approve. Codex
+ * runs it in its sandbox in every mode, which teamai's command cannot work in, so its line says to run it outside.
  */
-function memberMode(mode: StepMode | undefined): MemberMode {
+function memberMode(mode: StepMode | undefined, { tool, pool }: { tool: string | undefined; pool: string }): MemberMode {
+  const codex = tool === 'codex' ? codexWakeLine(pool) : undefined;
+
   switch (mode) {
     case undefined:
     case 'auto':
     case 'full-access':
-      return { runtimeMode: 'auto', firstLine: undefined };
+      return { runtimeMode: 'auto', firstLine: codex };
     case 'approval-required':
-      return { runtimeMode: mode, firstLine: asksFirst('Supervised') };
+      return { runtimeMode: mode, firstLine: codex ?? asksFirst('Supervised') };
     case 'auto-accept-edits':
-      return { runtimeMode: mode, firstLine: asksFirst('Auto-accept edits') };
+      return { runtimeMode: mode, firstLine: codex ?? asksFirst('Auto-accept edits') };
     default: {
       const unhandled: never = mode;
 
@@ -74,16 +78,26 @@ export async function canWake(t3: T3): Promise<boolean> {
   }
 }
 
-/** The model a member starts on in `project` of `link`: the project's default, else the first model of a tool this runtime runs. */
-async function memberModel(t3: T3, link: EnvironmentLink, project: Project): Promise<Launch['modelSelection'] | undefined> {
-  if (project.defaultModelSelection) return project.defaultModelSelection;
-  const providers = await t3.providers(link.environmentId);
+/**
+ * The model a member starts on in `project` of `link`: the project's default, else the first model of a tool this
+ * runtime runs; and the teamai tool its provider instance is, when T3 lists it.
+ */
+async function memberModel(t3: T3, link: EnvironmentLink, project: Project): Promise<{ modelSelection: Launch['modelSelection']; tool: string | undefined } | undefined> {
+  // With the project's default, the providers only say which tool it is: a machine that cannot list them still wakes.
+  const providers = project.defaultModelSelection ? await t3.providers(link.environmentId).catch(() => []) : await t3.providers(link.environmentId);
+  const toolOfInstance = (instanceId: string): string | undefined => {
+    const driver = providers.find((one) => one.providerInstanceId === instanceId)?.driverKind;
+
+    return driver === undefined ? undefined : toolOf(driver);
+  };
+
+  if (project.defaultModelSelection) return { modelSelection: project.defaultModelSelection, tool: toolOfInstance(project.defaultModelSelection.instanceId) };
 
   for (const driver of DRIVER_NAMES) {
     const provider = providers.find((one) => one.driverKind === driver && (one.constraints ?? []).length === 0);
     const model = provider?.models[0]?.id;
 
-    if (provider && model) return { instanceId: provider.providerInstanceId, model };
+    if (provider && model) return { modelSelection: { instanceId: provider.providerInstanceId, model }, tool: toolOf(driver) };
   }
 
   return undefined;
@@ -158,15 +172,16 @@ export function wakes({ serving }: { serving: Serving }) {
     if (!found.ok) return { kind: 'failed', failure: found.failure };
     const { link, project } = found;
     // Either fails the wake as a whole.
-    const [modelSelection, from] = await Promise.all([memberModel(s.t3, link, project), delegatedFrom(s)]);
+    const [member, from] = await Promise.all([memberModel(s.t3, link, project), delegatedFrom(s)]);
 
-    if (!modelSelection) return { kind: 'failed', failure: unavailable(`${link.label} runs no Claude or Codex provider instance a member can start on. Enable one in T3 Code there, under Settings → Providers.`) };
+    if (!member) return { kind: 'failed', failure: unavailable(`${link.label} runs no Claude or Codex provider instance a member can start on. Enable one in T3 Code there, under Settings → Providers.`) };
     const title = request.title.includes(request.pool) ? request.title : `${request.title} · ${request.pool}`;
 
     if (isCancelled(waking)) return { kind: 'cancelled' };
     waking.state = 'launched';
 
-    const { runtimeMode, firstLine } = memberMode(s.runtimeMode);
+    const { modelSelection } = member;
+    const { runtimeMode, firstLine } = memberMode(s.runtimeMode, { tool: member.tool, pool: request.pool });
     const message = [firstLine, request.message, END_OF_WAKE].filter((line) => line !== undefined).join('\n\n');
 
     let launched: Awaited<ReturnType<T3['launch']>>;

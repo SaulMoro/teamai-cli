@@ -114,7 +114,9 @@ describe('waking a fleet member through another Paseo daemon', () => {
     expect(create?.initialPrompt).toBe(`teamai workflow resume --next --pool gpu\n\n${END_OF_WAKE}`);
   });
 
-  it('tells the person what to approve first when a woken Codex agent has no rule that allows the command', async () => {
+  // Paseo's Codex modes ask for no single command: in its default, auto, Codex runs teamai's command in its sandbox, with
+  // no network and no write to ~/.teamai, unless it asks to run it outside (codex-cli 0.167.0, Paseo 0.14.0 and 0.15.4).
+  it('tells a woken Codex agent to run the command outside its sandbox, and the person to approve it when Codex asks', async () => {
     const gpu = await otherDaemon('gpu', { server_id: 'srv_gpu', models: { codex: ['gpt-6.1-sol'] }, ...checkout('gpu') });
     behave({ hosts: [{ label: 'gpu-box', server_id: 'srv_gpu', url: gpu.url }] });
     const runtime = start();
@@ -126,8 +128,8 @@ describe('waking a fleet member through another Paseo daemon', () => {
     const [create] = gpu.creates();
     expect(create?.config).toMatchObject({ provider: 'codex' });
     expect(create?.config.providerOptions).toBeUndefined();
-    expect(create?.initialPrompt).toBe(`teamai woke this agent to take one attempt of the fleet pool gpu: approve \`teamai workflow resume\` when Codex asks, or the attempt waits here.\n\nteamai workflow resume --next --pool gpu\n\n${END_OF_WAKE}`);
-    expect(create?.initialPrompt).toContain(`approve \`${WAKE_COMMAND}\` when Codex asks`);
+    expect(create?.initialPrompt).toBe(`teamai woke this agent to take one attempt of the fleet pool gpu. Run \`teamai workflow resume\` below with escalated permissions, outside the sandbox: it needs the network and writes ~/.teamai, which the sandbox blocks. Whoever watches this agent: approve that command when Codex asks, or the attempt waits here.\n\nteamai workflow resume --next --pool gpu\n\n${END_OF_WAKE}`);
+    expect(create?.initialPrompt).toContain(`Run \`${WAKE_COMMAND}\` below with escalated permissions`);
   });
 
   it('wakes once for a repeated op, answering it as it ended', async () => {
