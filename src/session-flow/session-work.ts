@@ -30,7 +30,7 @@ import { mapStrings, isJsonObject, JsonValueSchema, type JsonValue } from '@team
 import { redact } from '@teamai/shared/redact';
 import { AgentSession, sessionKey } from './agent-session.js';
 import type { SubagentsRead } from '@teamai/tool-core/sessions/base';
-import { SessionCaptures, type CapturedSession, type SessionCapture } from './captures.js';
+import { FINISHED_AFTER_MS, SessionCaptures, type CapturedSession, type SessionCapture } from './captures.js';
 import type { ArchivedEvidence, EvidenceFile } from './session-evidence.js';
 import type { Session } from '@teamai/tool-core/sessions/ir';
 import { pushedSession, type TeamSession } from './scoring.js';
@@ -325,9 +325,6 @@ export function sessionLabel(verdict: Omit<SessionLabel, 'source' | 'subject' | 
 
   return sessionLabeled;
 }
-
-/** Nothing happened in an attended session for this long: it is finished, and judge work. */
-export const FINISHED_AFTER_MS = 6 * 60 * 60 * 1000;
 
 function sameSessionKey(label: ScoreLabel, scorer: string, sourceHash: string, subject: SessionSubject): boolean {
   return label.source === 'session' && label.scorer === scorer && label.rubric.sourceHash === sourceHash

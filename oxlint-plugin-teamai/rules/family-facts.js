@@ -17,8 +17,11 @@ export const FACTS_FILES = new Set(scopedFiles([
   'src/session-flow/adapters/platform-facts.ts',
 ]));
 
-/** The command every hook a tool runs starts with (`teamai hook-dispatch <event>`, builtin-hooks.ts). */
-const HOOK_COMMAND = 'hook-dispatch';
+/**
+ * The CLI commands an agent waits on, as it waits on startup: the one every hook a tool runs starts with
+ * (`teamai hook-dispatch <event>`, builtin-hooks.ts), and `teamai pull`, which an agent runs in its session.
+ */
+const WAITED_COMMANDS = ['hook-dispatch', 'pull'];
 
 /**
  * A step runtime's own executable, which exists to launch tools and so loads their behaviour: it is no command or hook
@@ -35,9 +38,9 @@ const startups = new Map();
 /**
  * The modules that load before a command or a hook does anything, read from what the tree records, from the root
  * `root`: each executable's source (package.json `bin`, through tsup.config.ts `entry`) but a step runtime's, each
- * bundle such an executable loads by URL (the CLI), each module the CLI's hook command loads, and each module one of
- * those loads with `import()` before its hook answers. A new executable, bundle or hook step is one of them with no
- * edit here. Paths are from the root.
+ * bundle such an executable loads by URL (the CLI), each module the CLI's hook and pull commands load, and each module
+ * one of those loads with `import()` before it answers. A new executable, bundle, hook step or pull step is one of them
+ * with no edit here. Paths are from the root.
  * @param {string} root
  * @returns {Set<string>}
  */
@@ -67,23 +70,24 @@ export function startupEntries(root) {
   const clis = executables.flatMap((source) => [...read(source).matchAll(/new URL\('\.\/([\w-]+)\.js'/g)].flatMap(([, name = '']) => bundles.get(name) ?? []));
   const entries = new Set([...executables, ...clis]);
 
-  for (const cli of clis) {
+  for (const [cli, command] of clis.flatMap((source) => WAITED_COMMANDS.map((name) => /** @type {const} */ ([source, name])))) {
     const text = read(cli);
-    const at = text.search(new RegExp(`\\.command\\('${HOOK_COMMAND}\\b`));
+    // The name ends at its arguments or its quote, so `pull` is not `pull-requests`.
+    const at = text.search(new RegExp(`\\.command\\('${command}[ ']`));
 
     if (at === -1) continue;
-    // The hook command's own block: up to the next command the CLI declares.
+    // The command's own block: up to the next command the CLI declares.
     const next = text.indexOf('.command(', at + 1);
 
     for (const [, specifier = ''] of text.slice(at, next === -1 ? undefined : next).matchAll(/import\('(\.[^']+)'\)/g)) {
-      const hook = sourceImport(path.posix.join(root, cli), specifier);
+      const waited = sourceImport(path.posix.join(root, cli), specifier);
 
-      if (hook === undefined) continue;
-      entries.add(path.posix.relative(root, hook));
+      if (waited === undefined) continue;
+      entries.add(path.posix.relative(root, waited));
 
-      // What that module loads before its hook answers, such as the session captures of a SessionStart.
-      for (const step of dynamicImports(hook)) {
-        const file = sourceImport(hook, step);
+      // What that module loads before it answers, such as the session captures of a SessionStart.
+      for (const step of dynamicImports(waited)) {
+        const file = sourceImport(waited, step);
 
         if (file !== undefined) entries.add(path.posix.relative(root, file));
       }
@@ -176,7 +180,7 @@ function chainToBehaviour(root, start, seen) {
 const FIX = 'Read a family at startup only through its facts (@teamai/tool-definitions/facts), and load its behaviour with a dynamic import() where it is first needed.';
 
 export default defineRule({
-  meta: { type: 'problem', docs: { description: 'Startup and the facts modules load a tool family\'s facts only, never its session adapters, launch profiles, token readers or schemas.' } },
+  meta: { type: 'problem', docs: { description: 'Startup, the hook dispatch, pull and the facts modules load a tool family\'s facts only, never its session adapters, launch profiles, token readers or schemas.' } },
   create(context) {
     const file = lintedPath(context);
     const root = workspaceRoot(path.posix.dirname(file));
@@ -207,7 +211,7 @@ export default defineRule({
       if (chain === undefined) return;
       context.report({
         node,
-        message: `${from} starts every command and hook, and through ${specifier} it loads a tool family's behaviour at startup: ${[from, ...chain].join(' -> ')}. ${FIX}`,
+        message: `${from} loads at startup or before a hook or pull an agent waits on ends, and through ${specifier} it loads a tool family's behaviour there: ${[from, ...chain].join(' -> ')}. ${FIX}`,
       });
     });
   },

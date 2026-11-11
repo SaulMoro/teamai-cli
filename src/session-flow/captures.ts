@@ -49,6 +49,9 @@ export type SessionCapture = z.infer<typeof SessionCaptureSchema>;
 /** The hook payload field the foreground dispatcher hands the background pass the capture it wrote in. */
 export const CAPTURE_PAYLOAD_KEY = 'teamai_capture';
 
+/** Nothing happened in an attended session for this long: it is finished, and judge work. */
+export const FINISHED_AFTER_MS = 6 * 60 * 60 * 1000;
+
 const SEGMENT = /^(?!\.{1,2}$)[A-Za-z0-9._-]{1,200}$/;
 
 /** The session-start hook payload fields a capture reads: a session id safe as a path segment, and the session's cwd. */

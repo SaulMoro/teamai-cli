@@ -11,7 +11,6 @@ import type { LocalConfig, TeamaiConfig } from './types.js';
 import { HOST_DRIVER, LOCAL_DRIVER, parseDriver, type Driver, type DriverName } from './workflow/driver-name.js';
 import { resolveKeptSetting, type KeptValue } from './workflow/kept-setting.js';
 import { resolveDriver } from './workflow/runtimes/definitions.js';
-import { acceptRuntime, locateRuntime } from './workflow/runtimes/sources.js';
 import type { RunState } from './workflow/types.js';
 
 /** What a start decides by default: drive the run here, leave it awaiting a driver this machine does not run, or leave it to any driver. */
@@ -53,6 +52,7 @@ async function driverHere(config: LocalConfig, name: DriverName): Promise<Driver
   const resolved = await resolveDriver(config, name, { personal: true });
 
   if (!resolved.ok) return absent;
+  const { acceptRuntime, locateRuntime } = await import('./workflow/runtimes/sources.js');
   let here: DriverHere = 'drives';
 
   for (const { use } of resolved.driver.definition.runtimes) {

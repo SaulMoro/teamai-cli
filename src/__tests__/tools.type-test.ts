@@ -1,7 +1,8 @@
 /** Checked by `tsc` only: Vitest runs `*.test.ts`. */
-import type { AgentToolId, InlineRulesWithoutBlocksFile, ToolsWithTwoMcpFormats, ShippedDescriptor } from '../tools.js';
+import type { AgentToolId, InlineRulesWithoutBlocksFile, ToolsWithTwoMcpFormats, ShippedDescriptor, STEP_LAUNCH_ADAPTERS } from '../tools.js';
 import type { BlocksTarget, HomeRead, RunTime } from '@teamai/tool-core/definition';
-import type { LaunchedToolId, LaunchOrderTool } from '../launch-registry.js';
+import type { LAUNCH_ADAPTERS, LaunchAdapterId, LaunchedToolId, LaunchOrderTool } from '../launch-registry.js';
+import type { StepLaunch } from '@teamai/tool-core/launch';
 
 declare const full: ShippedDescriptor;
 declare const withoutMcp: Omit<ShippedDescriptor, 'mcp'>;
@@ -94,3 +95,9 @@ export const unknownAdapter: ShippedDescriptor = { ...full, launch: 'gemini' };
 
 /** LAUNCH_ORDER lists every tool whose `launch` names an adapter, so none is left out of the call order. */
 export const launchOrderCoversLaunchedTools: [Exclude<LaunchedToolId, LaunchOrderTool>] extends [never] ? true : false = true;
+
+type StepAdapter = { [K in LaunchAdapterId]: (typeof LAUNCH_ADAPTERS)[K] extends { readonly step: StepLaunch } ? K : never }[LaunchAdapterId];
+type ListedStepAdapter = (typeof STEP_LAUNCH_ADAPTERS)[number];
+
+/** STEP_LAUNCH_ADAPTERS names exactly the adapters that build a step, so a record's tool is one a step runs. */
+export const stepAdaptersListed: [Exclude<StepAdapter, ListedStepAdapter>, Exclude<ListedStepAdapter, StepAdapter>] extends [never, never] ? true : false = true;

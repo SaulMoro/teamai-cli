@@ -77,7 +77,7 @@ packages/
   - A family package depends on `tool-core` and on no other family.
   - `tool-definitions` is the only package that imports the families.
   - The app imports `tool-definitions` and `tool-core`, never a family directly.
-  - Startup (the CLI entry, the hook dispatch) reads a family only through `@teamai/tool-definitions/facts`; adapters, launch profiles, token readers and schemas load where first used (`teamai/family-facts`).
+  - Startup (the CLI entry, the hook dispatch, `teamai pull`) reads a family only through `@teamai/tool-definitions/facts`; adapters, launch profiles, token readers and schemas load where first used (`teamai/family-facts`).
   - `shared` holds helpers that belong to no domain, such as `@teamai/shared/redact`. Any package and the app may import it, and it imports no other package.
 - **Files:** one file per concept, tests beside the file they test (`*.test.ts`), fixtures in the package.
 - **Enforcement:** a `teamai/*` lint rule enforces the import direction.

@@ -18,7 +18,7 @@ import { RunModeSchema } from './launch-context.js';
 import { appendEvent, dataHomeKey, readSessionOutcomes, SESSION_OUTCOME_RETENTION_MS, sessionRuns } from './dashboard-collector.js';
 import { addCounts, uniqueOutcomes, type SessionOutcomeEvent, type SessionUsage, type WorkOutcome } from './outcomes.js';
 import { interventionsEntry, promptTokensEntry, snapshotPathIn, type ReportedInterventions, type ReportedPromptTokens } from './session-owners.js';
-import { FINISHED_AFTER_MS } from './session-flow/session-work.js';
+import { FINISHED_AFTER_MS } from './session-flow/captures.js';
 import { getDataHome, type DashboardEvent, type LocalConfig, type UserOutcomeStats } from './types.js';
 import { pathExists, readJson, writeJson } from './utils/fs.js';
 import { checkoutForRepoAnchor, getCurrentBranch, getDefaultBranch, getHeadCommit } from './utils/git.js';
