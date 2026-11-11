@@ -153,6 +153,17 @@ describe('teamai-runtime-t3', () => {
       expect(member?.message).toContain(`Run \`${WAKE_COMMAND}\` below with escalated permissions`);
     });
 
+    it('tells a Codex member to run the command outside its sandbox when the machine lists no provider for the project\'s default', async () => {
+      signIn(t3);
+      t3.config({ ...LINKED, environments: { ...LINKED.environments, 'env-sam': { projects: [{ ...acmeApp, defaultModelSelection: { instanceId: 'codex', model: 'gpt-6.1-sol' } }], providers: [] } } });
+      const { runtime } = await initialized({}, { runtime_mode: 'approval-required' });
+
+      runtime.send(wake('op-000000ea'));
+
+      expect(await woke(runtime, 'op-000000ea')).toMatchObject({ event: 'woken' });
+      expect(t3.threads().find((thread) => thread.environmentId !== undefined)?.message).toMatch(/^teamai woke this agent to take one attempt of the fleet pool gpu\. Run `teamai workflow resume` below with escalated permissions, outside the sandbox/);
+    });
+
     it('fails wake_unavailable, naming each machine it looked at and what to add, when no linked machine has the repository', async () => {
       signIn(t3);
       t3.config({ ...LINKED, environments: { 'env-other': LINKED.environments?.['env-other'] ?? { projects: [], providers: [] } } });

@@ -80,16 +80,17 @@ export async function canWake(t3: T3): Promise<boolean> {
 
 /**
  * The model a member starts on in `project` of `link`: the project's default, else the first model of a tool this
- * runtime runs; and the teamai tool its provider instance is, when T3 lists it.
+ * runtime runs; and the teamai tool its provider instance is, when teamai can tell.
  */
 async function memberModel(t3: T3, link: EnvironmentLink, project: Project): Promise<{ modelSelection: Launch['modelSelection']; tool: string | undefined } | undefined> {
   // With the project's default, the providers only say which tool it is: a machine that cannot list them still wakes.
   const providers = project.defaultModelSelection ? await t3.providers(link.environmentId).catch(() => []) : await t3.providers(link.environmentId);
 
   const toolOfInstance = (instanceId: string): string | undefined => {
-    const driver = providers.find((one) => one.providerInstanceId === instanceId)?.driverKind;
+    // T3 names each provider instance it ships after its driver, so an unlisted one is still known by its id.
+    const driver = providers.find((one) => one.providerInstanceId === instanceId)?.driverKind ?? instanceId;
 
-    return driver === undefined ? undefined : toolOf(driver);
+    return toolOf(driver);
   };
 
   if (project.defaultModelSelection) return { modelSelection: project.defaultModelSelection, tool: toolOfInstance(project.defaultModelSelection.instanceId) };
