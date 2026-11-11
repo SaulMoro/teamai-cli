@@ -67,8 +67,9 @@ describe('the dedicated Codex login lock', () => {
     let secondHolds = (): void => {};
     const taken = new Promise<void>((resolve) => { secondHolds = resolve; });
     let removals = 0;
+    let second: ReturnType<typeof hold> | undefined;
     // The first end removes the lock once the second read it too, or after half a second; attempt SECOND then takes the
-    // free lock, and only then does the second end remove what it read.
+    // free lock, and only then does the second end remove what it read. SECOND records its copy once the first end is done.
     vi.spyOn(fsp, 'rm').mockImplementation(async (target, options) => {
       if (target !== lock) return remove(target, options);
       removals += 1;
@@ -82,13 +83,37 @@ describe('the dedicated Codex login lock', () => {
 
       await Promise.race([bothRead, new Promise((resolve) => setTimeout(resolve, 500))]);
       await remove(target, options);
-      expect(await hold(SECOND, new AbortController().signal)).toEqual({ ok: true });
+      second = hold(SECOND, new AbortController().signal);
+      while ((await loginHolder('codex'))?.attempt !== SECOND) await new Promise((resolve) => setTimeout(resolve, 10));
       secondHolds();
     });
 
     await Promise.all([FIRST, FIRST].map((attempt) => endLogin('codex', { run: RUN, attempt, toolHome, isCollected: true })));
 
-    expect(await loginHolder('codex')).toMatchObject({ run: RUN, attempt: SECOND });
+    expect({ second: await second, holder: await loginHolder('codex') }).toMatchObject({ second: { ok: true }, holder: { run: RUN, attempt: SECOND } });
+  });
+
+  it('never replaces the lock another attempt took after an end of the holding attempt freed it, while that attempt copied the login', async () => {
+    plantDedicated('r1');
+    const lock = loginLockFile('codex');
+    const link = fsp.link.bind(fsp);
+    let raced = false;
+    // Once attempt FIRST took the lock, and before it records the copy it makes, a second end of FIRST frees the lock and
+    // attempt SECOND takes it.
+    vi.spyOn(fsp, 'link').mockImplementation(async (existing, target) => {
+      await link(existing, target);
+
+      if (target !== lock || raced) return;
+      raced = true;
+      await endLogin('codex', { run: RUN, attempt: FIRST, toolHome: path.join(root, FIRST), isCollected: true });
+      expect(await hold(SECOND, new AbortController().signal)).toEqual({ ok: true });
+    });
+    const stop = new AbortController();
+    setTimeout(() => stop.abort(), 1000);
+
+    const first = await hold(FIRST, stop.signal);
+
+    expect({ first, holder: await loginHolder('codex') }).toMatchObject({ first: { ok: false, failure: { code: 'login_held' } }, holder: { run: RUN, attempt: SECOND } });
   });
 
   it('takes a login already written back, by a driver killed before it released the lock, as written back', async () => {
