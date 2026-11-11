@@ -77,15 +77,27 @@ const GIT_REFUSALS = [
 const GIT_REFUSAL_LINE = /^(?:error|fatal): .*?(?:'([^']+)'|([^\s':]*\/[^\s':]*)):\s*(Permission denied|Operation not permitted|Read-only file system)\s*$/m;
 
 /** A write the filesystem refused: the folder it was refused in, and its error code. */
-export interface RefusedWrite { folder: string; code: (typeof WRITE_REFUSALS)[number] }
+export interface RefusedWrite {
+  folder: string;
+  code: (typeof WRITE_REFUSALS)[number];
+}
+
+/** A refused write, told as an error whose message says where and what to do; every retry fails the same way. */
+export class RefusedWriteError extends Error {
+  override name = 'RefusedWriteError';
+  constructor(readonly refused: RefusedWrite, options?: ErrorOptions) {
+    super(refusedWriteAdvice(refused), options);
+  }
+}
 
 /**
  * The write the filesystem refused that `cause`, or an error it was caused by, reports; undefined for any other
- * failure. With `gitCwd`, a git error counts too when its text names the path git may not write, read from `gitCwd`,
- * where git ran.
+ * failure. A `RefusedWriteError` counts as it is. With `gitCwd`, a git error counts too when its text names the path
+ * git may not write, read from `gitCwd`, where git ran.
  */
 export function refusedWrite(cause: unknown, { gitCwd }: { gitCwd?: string } = {}): RefusedWrite | undefined {
   for (let current = cause, depth = 0; current !== undefined && depth < 8; depth++) {
+    if (current instanceof RefusedWriteError) return current.refused;
     const errno = RefusedWriteErrorSchema.safeParse(current);
 
     if (errno.success && WRITING_CALLS.has(errno.data.syscall)) return { folder: path.dirname(errno.data.path), code: errno.data.code };

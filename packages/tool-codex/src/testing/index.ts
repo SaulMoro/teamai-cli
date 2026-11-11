@@ -8,7 +8,8 @@ const recorded = (name: string): string => fs.readFileSync(new URL(`../fixtures/
  * a fresh thread id, or the same one for `exec resume <id>`. An answer also goes to the `-o` file, as Codex writes its
  * last message there. The step that answered wrote its result file with a command: the fake writes that result to
  * `TEAMAI_WORKFLOW_RESULT` when Codex's sandbox would let it, in the cwd, `/tmp`, `TMPDIR` or a directory `--add-dir`
- * names, as the recorded turn shows; elsewhere it writes nothing, as 0.167.0 did. Unless the call passes `--ephemeral`, the session goes where Codex keeps it:
+ * names, as the recorded turn shows (`-c sandbox_workspace_write.exclude_slash_tmp=true` and `exclude_tmpdir_env_var=true`
+ * take out `/tmp` and `TMPDIR`); elsewhere it writes nothing, as 0.167.0 did. Unless the call passes `--ephemeral`, the session goes where Codex keeps it:
  * `$CODEX_HOME/sessions/YYYY/MM/DD/` (`~/.codex` without the variable), named after the local time it started, and a
  * resumed thread appends to its own. It refuses what 0.167.0 refused, with its words: a cwd outside a git repository
  * without `--skip-git-repo-check`, and a thread to resume that has no session there. Anything but `exec --json` is not
@@ -46,7 +47,9 @@ export const codexFake = {
   const fill = (text) => text.replaceAll('{{cwd}}', inJson(cwd)).replaceAll('{{sessionId}}', threadId)
     .replaceAll('{{resultDir}}', inJson(result === undefined ? '' : path.dirname(result))).replaceAll('{{result}}', inJson(result ?? ''));
   const real = (file) => fs.existsSync(file) ? fs.realpathSync(file) : path.join(real(path.dirname(file)), path.basename(file));
-  const writable = [cwd, '/tmp', process.env.TMPDIR, ...args.flatMap((arg, index) => args[index - 1] === '--add-dir' ? [arg] : [])]
+  // -c sandbox_workspace_write.exclude_slash_tmp=true and exclude_tmpdir_env_var=true take /tmp and TMPDIR out, as 0.167.0 does.
+  const excludes = (key) => args.some((arg, index) => args[index - 1] === '-c' && arg === 'sandbox_workspace_write.' + key + '=true');
+  const writable = [cwd, excludes('exclude_slash_tmp') ? undefined : '/tmp', excludes('exclude_tmpdir_env_var') ? undefined : process.env.TMPDIR, ...args.flatMap((arg, index) => args[index - 1] === '--add-dir' ? [arg] : [])]
     .filter((root) => root !== undefined && root !== '').map(real);
   const isInside = (root, file) => { const relative = path.relative(root, file); return relative !== '..' && !relative.startsWith('..' + path.sep); };
   const mayWrite = (file) => args.includes('--dangerously-bypass-approvals-and-sandbox') || writable.some((root) => isInside(root, real(file)));

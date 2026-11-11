@@ -1,4 +1,5 @@
 import { execFileSync, spawn } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -179,6 +180,37 @@ steps:
     const resumed = await runCLI(['workflow', 'resume', runId, '--driver', 'local', '--tools', 'default=claude'], repo, env());
 
     expect(fs.existsSync(lock), `${resumed.stdout}\n${resumed.stderr}`).toBe(false);
+  });
+
+  it('writes back the Codex login a killed teamai\'s judge refreshed when the person cancels the run', async () => {
+    fs.rmSync(launches, { force: true });
+    const before = runIds();
+    const child = spawn(process.execPath, [CLI, 'workflow', 'start', 'oneprompt', '--driver', 'local', '--tools', 'default=claude'], { cwd: repo, env: { ...process.env, ...env({ FAKE_TOOL_HOLD_MS: '10000' }), FORCE_COLOR: '0' }, stdio: 'ignore' });
+    const deadline = Date.now() + 30_000;
+
+    while (launched().length === 0 && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 50));
+    const ended = new Promise((resolve) => child.on('close', resolve));
+    child.kill('SIGKILL');
+    await ended;
+    const runId = String([...runIds()].find((id) => !before.has(id)));
+    const [killed] = readRunState(runId).steps;
+    const attempt = killed && 'lease' in killed ? killed.lease.attempt : '';
+    // The killed teamai's Codex judge copied the member's login into the attempt's own Codex home, where Codex refreshed it.
+    const daily = path.join(sandbox, 'daily-codex');
+    const login = (refresh: string): string => JSON.stringify({ auth_mode: 'chatgpt', tokens: { account_id: 'acct-1', refresh_token: refresh } });
+    fs.mkdirSync(daily, { recursive: true });
+    fs.writeFileSync(path.join(daily, 'auth.json'), login('refresh-1'), { mode: 0o600 });
+    const toolHome = path.join(runsOf(repo), runId, 'attempts', attempt, 'tool-home', 'codex');
+    fs.mkdirSync(toolHome, { recursive: true });
+    fs.writeFileSync(path.join(toolHome, 'auth.json'), login('refresh-2'));
+    const lock = path.join(os.homedir(), '.teamai', 'logins', 'codex.lock');
+    fs.mkdirSync(path.dirname(lock), { recursive: true });
+    fs.writeFileSync(lock, JSON.stringify({ run: runId, attempt, takenAt: new Date().toISOString(), from: { home: daily, signIn: `CODEX_HOME=${daily} codex login` }, copied: createHash('sha256').update(login('refresh-1')).digest('hex') }));
+
+    const cancelled = await runCLI(['workflow', 'cancel', runId], repo, env());
+
+    expect({ daily: JSON.parse(fs.readFileSync(path.join(daily, 'auth.json'), 'utf8')).tokens.refresh_token, locked: fs.existsSync(lock) }, `${cancelled.stdout}\n${cancelled.stderr}`)
+      .toEqual({ daily: 'refresh-2', locked: false });
   });
 
   it('resumes the earlier step\'s session in a session.from step, with no notice and no place held', async () => {

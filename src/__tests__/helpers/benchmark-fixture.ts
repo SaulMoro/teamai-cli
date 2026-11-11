@@ -443,7 +443,8 @@ export async function benchmarkFixture(options: BenchmarkFixtureOptions): Promis
 const fs = require('node:fs');
 const path = require('node:path');
 const { execFileSync, spawnSync } = require('node:child_process');
-${tool === 'claude' ? judgeMode(judgeLog, path.join(tmp, 'teamai-clones'), options.judge ?? 'first-label') : CODEX_VERSION}
+${tool === 'claude' ? judgeMode(judgeLog, path.join(tmp, 'teamai-clones'), options.judge ?? 'first-label') : ''}
+${tool === 'codex' ? CODEX_VERSION_ANSWER : ''}
 const git = (...args) => execFileSync('git', args, { encoding: 'utf8' }).trim();
 const first = !fs.existsSync(${JSON.stringify(toolLog)});
 const files = (dir) => fs.readdirSync(dir, { withFileTypes: true }).filter((entry) => !(dir === '.' && entry.name === '.git'))
@@ -523,7 +524,11 @@ process.stdout.write(JSON.stringify({ type: 'result', session_id: 'fake-session'
   const configPath = path.join(dataHome(), 'config.yaml');
   const config: unknown = YAML.parse(fs.readFileSync(configPath, 'utf8'));
   const parsed = z.object({ repo: z.object({ localPath: z.string() }).passthrough(), workflows: z.record(z.string(), z.unknown()).optional() }).passthrough().parse(config);
-  fs.writeFileSync(configPath, YAML.stringify({ ...parsed, workflows: { ...parsed.workflows, sandbox: options.sandbox, ...(options.maxParallel !== undefined ? { max_parallel: options.maxParallel } : {}) } }));
+  // init --agent claude names the member's AI tool too, which the driver offers without looking it up: a member whose
+  // machine has no claude names none.
+  const { ai: _named, ...member } = parsed;
+  const kept = (options.tools ?? ['claude']).includes('claude') ? parsed : member;
+  fs.writeFileSync(configPath, YAML.stringify({ ...kept, workflows: { ...parsed.workflows, sandbox: options.sandbox, ...(options.maxParallel !== undefined ? { max_parallel: options.maxParallel } : {}) } }));
 
   return {
     root, home, work, bin, env, teamOrigin, productOrigin, tmp, teamClone: parsed.repo.localPath, startingCommit, teamai, dataHome,
@@ -576,9 +581,9 @@ process.stdout.write(JSON.stringify({ type: 'result', session_id: 'fake-session'
   };
 }
 
-/** The start of the fake `codex`: its version, as Codex prints it, which is no launch and logs nothing. */
-const CODEX_VERSION = `if (process.argv.includes('--version')) {
-  console.log('codex-cli 0.163.0');
+/** The start of the fake `codex`: its version, as codex-cli 0.167.0 prints it, which teamai reads before a launch. */
+const CODEX_VERSION_ANSWER = `if (process.argv.includes('--version')) {
+  console.log('codex-cli 0.167.0');
   process.exit(0);
 }`;
 

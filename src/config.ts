@@ -3,6 +3,7 @@ import { parseYaml } from '@teamai/shared/yaml';
 import { ZodError, z } from 'zod';
 import fs from 'node:fs';
 import path from 'node:path';
+import { isDeepStrictEqual } from 'node:util';
 import {
   TeamaiConfigSchema,
   LocalConfigSchema,
@@ -212,6 +213,7 @@ function withLocalRoles(config: LocalConfig): LocalConfig {
 /** `config` with its own settings restored before a fresh machine overlay is applied. */
 function withLocalMemberSettings(config: LocalConfig): LocalConfig {
   if (!config.memberSettingsOverlay) return config;
+  refuseUnmarkedSettings(config);
   const { memberSettingsOverlay, ...rest } = config;
 
   for (const key of MEMBER_SETTING_KEYS) delete rest[key];
@@ -559,7 +561,14 @@ function applyMachineSettings(config: LocalConfig, machine: MemberSettings): Loc
     ...(modelAliases ? { modelAliases } : { modelAliases: undefined }),
   };
 
-  return { ...config, ...effective, memberSettingsOverlay: { local } };
+  const overlaid: LocalConfig = { ...config, ...effective };
+
+  return { ...overlaid, memberSettingsOverlay: { local, applied: appliedSettings(overlaid) } };
+}
+
+/** A copy of each member setting `config` holds, which a save compares with what it holds then. */
+function appliedSettings(config: LocalConfig): MemberSettings {
+  return structuredClone(Object.fromEntries(MEMBER_SETTING_KEYS.flatMap((key) => (config[key] === undefined ? [] : [[key, config[key]]]))));
 }
 
 /** Apply the machine settings after the role overlay, at every existing config-load seam. */
@@ -579,8 +588,22 @@ export function ownMemberSettings(config: LocalConfig): MemberSettings {
   return config.memberSettingsOverlay?.local ?? config;
 }
 
+/**
+ * Refuses `config` when a member setting changed on it, not through markMemberSettingsWritten: that change is not in its
+ * overlay's own settings, so a save or a later mark would drop it.
+ */
+function refuseUnmarkedSettings(config: LocalConfig): void {
+  const overlay = config.memberSettingsOverlay;
+  const unmarked = overlay ? MEMBER_SETTING_KEYS.filter((key) => !isDeepStrictEqual(config[key], overlay.applied[key])) : [];
+
+  if (unmarked.length > 0) {
+    throw new Error(`teamai changed the member settings ${unmarked.join(', ')} of this config without marking them written (markMemberSettingsWritten), so saving it would drop them. The config file is unchanged. This is a bug in teamai: please report it with the command you ran.`);
+  }
+}
+
 /** Mark settings a command deliberately wrote, so a later save keeps them even when they equal a machine value. */
 export function markMemberSettingsWritten(config: LocalConfig, written: MemberSettings): LocalConfig {
+  refuseUnmarkedSettings(config);
   const local = config.memberSettingsOverlay?.local ?? MemberSettingsSchema.parse(config);
 
   const workflows = local.workflows || written.workflows
@@ -593,14 +616,14 @@ export function markMemberSettingsWritten(config: LocalConfig, written: MemberSe
     : undefined;
 
   const overlaid: MemberSettings = { ...local, ...written };
-  const marked: LocalConfig = { ...config, ...written, memberSettingsOverlay: { local: overlaid } };
+  const marked: LocalConfig = { ...config, ...written };
 
   if (workflows) {
     marked.workflows = { ...workflows, tools: workflows.tools ?? {} };
     overlaid.workflows = workflows;
   }
 
-  return marked;
+  return { ...marked, memberSettingsOverlay: { local: overlaid, applied: appliedSettings(marked) } };
 }
 
 /** Whether `configPath` holds an install. A file that cannot be read or parsed counts as one, so its install is kept. */
@@ -688,6 +711,7 @@ function serializeLocalConfig(config: LocalConfig, carriedSettings?: MemberSetti
   // The overlaid roles are the team's, read fresh on every load. Writing them
   // would leave a stale copy behind once the assignment changes or the file
   // goes, and a stale copy is exactly what a member must not be able to keep.
+  refuseUnmarkedSettings(config);
   const { dataHome: _dataHome, branchHome: _branchHome, roleUnresolved: _roleUnresolved, children: _children, roleAssignment: _assignment, memberSettingsOverlay: overlay, stepRole: _stepRole, ephemeralConfig: _ephemeralConfig, ...persisted } = withLocalRoles(config);
   const localSettings = overlay?.local ?? MemberSettingsSchema.parse(persisted);
 
@@ -722,14 +746,20 @@ async function readSettingsOnlyConfig(configPath: string): Promise<MemberSetting
 export async function saveLocalConfig(config: LocalConfig): Promise<void> {
   const configPath = expandHome(getUserConfigPath());
   const carriedSettings = await readSettingsOnlyConfig(configPath);
-  const ai = config.ai ?? await readAiSetting(configPath);
-  await writeFileAtomic(configPath, serializeLocalConfig(ai ? { ...config, ai } : config, carriedSettings));
+  await writeFileAtomic(configPath, serializeLocalConfig(await withKeptAiSetting(config, configPath), carriedSettings));
 }
 
 /** Writes a project/local config; its own file remains an install record. */
 async function writeLocalConfig(configPath: string, config: LocalConfig): Promise<void> {
-  const ai = config.ai ?? await readAiSetting(configPath);
-  await writeFileAtomic(configPath, serializeLocalConfig(ai ? { ...config, ai } : config));
+  await writeFileAtomic(configPath, serializeLocalConfig(await withKeptAiSetting(config, configPath)));
+}
+
+/** `config`, keeping the `ai` its file `configPath` sets when it holds none itself. */
+async function withKeptAiSetting(config: LocalConfig, configPath: string): Promise<LocalConfig> {
+  if (config.ai) return config;
+  const ai = await readAiSetting(configPath);
+
+  return ai ? markMemberSettingsWritten(config, { ai }) : config;
 }
 
 /**

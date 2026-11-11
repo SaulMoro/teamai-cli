@@ -9,8 +9,8 @@ vi.mock('@teamai/shared/log', () => ({
   setStderrOnly: vi.fn(() => false),
 }));
 
-import { loadLocalConfigForScope, loadMemberSettings, refreshRoleAssignment, saveLocalConfigForScope } from '../config.js';
-import type { MemberWorkflowSettingsSchema } from '../types.js';
+import { loadLocalConfigForScope, loadMemberSettings, markMemberSettingsWritten, refreshRoleAssignment, saveLocalConfigForScope } from '../config.js';
+import type { LocalConfig, MemberWorkflowSettingsSchema } from '../types.js';
 import { log } from '@teamai/shared/log';
 
 function writeConfig(file: string, value: unknown): void {
@@ -124,6 +124,29 @@ describe('member settings overlay', () => {
     expect(saved).toMatchObject({ workflows: { tools: { review: 'claude' } } });
     expect((saved.workflows as Record<string, unknown>).tools).not.toHaveProperty('default');
     expect((saved.workflows as Record<string, unknown>).max_parallel).toBeUndefined();
+  });
+
+  it.each([
+    ['', (config: LocalConfig) => config],
+    [', even once another setting is marked written', (config: LocalConfig) => markMemberSettingsWritten(config, { recallEnabled: true })],
+  ])('refuses to save a workspace config whose member setting changed without being marked written%s, naming it', async (_case, mark) => {
+    writeConfig(machineConfig, { recallEnabled: false });
+    writeConfig(projectConfig, {
+      repo: { localPath: path.join(home, 'team-repo'), remote: 'https://example.test/team.git' },
+      username: 'member',
+      scope: 'project',
+      projectRoot,
+      workflows: { tools: { review: 'claude' } },
+    });
+    const loaded = await loadLocalConfigForScope('project', projectRoot);
+    if (!loaded?.workflows) throw new Error('the workspace config did not load');
+    const before = fs.readFileSync(projectConfig, 'utf8');
+
+    loaded.ai = { tool: 'codex' };
+    loaded.workflows.tools.review = 'codex';
+
+    await expect((async () => saveLocalConfigForScope(mark(loaded), 'project', projectRoot))()).rejects.toThrow(/member settings ai, workflows /);
+    expect(fs.readFileSync(projectConfig, 'utf8')).toBe(before);
   });
 
   it('fails closed when a workflow policy value has the wrong type', async () => {

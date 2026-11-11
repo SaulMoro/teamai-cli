@@ -1830,9 +1830,9 @@ teamai 把这个 `auth.json` 复制到这次尝试的工具主目录，步骤结
 ℹ Step "review" waits for the codex login teamai keeps, which attempt a339da600 of run r9a395746ec65dbd7 holds. It goes on once that attempt ends; teamai workflow cancel r9a395746ec65dbd7 releases it.
 ```
 
-本机上的 Codex 评审（judge）在自己的临时主目录里使用你自己的 Codex 登录，运行期间持有同一把锁：放开之前，它会把 Codex 在那里刷新过的登录写回你的 Codex 主目录，所以一次刷新不会让你日常使用的 Codex 退出登录。
+本机上的 Codex 评审（judge）在它这次尝试下自己的主目录里使用你自己的 Codex 登录，运行期间持有同一把锁：放开之前，它会把 Codex 在那里刷新过的登录写回你的 Codex 主目录，所以一次刷新不会让你日常使用的 Codex 退出登录。
 
-如果持有者的驱动已被杀掉，对它的运行执行 `teamai workflow cancel` 会先在步骤运行时上停止工具并写回登录，再释放它。联系不上运行时，登录就继续被持有，命令会说明工具停止后要删除哪个锁文件。
+如果持有者的驱动已被杀掉，对它的运行执行 `teamai workflow resume` 或 `teamai workflow cancel` 会先停止工具（在步骤运行时上或本机上）并写回登录，再释放它。联系不上运行时，登录就继续被持有，命令会说明工具停止后要删除哪个锁文件。
 
 Codex 运行期间运行时自己停止，或之后无法关闭位置时，登录同样继续被持有，因为 Codex 可能还在那里运行。步骤失败为 `runtime_lost`，teamai 会说明怎么处理：
 

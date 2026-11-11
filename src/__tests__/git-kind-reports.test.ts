@@ -10,7 +10,7 @@ import path from 'node:path';
 import { simpleGit } from 'simple-git';
 
 import { getDataHome, getReportsDir, getVotesDir, REPORTS_WORKTREE_DIRNAME, type LocalConfig } from '../types.js';
-import { commitAndPushReports, ensureReportsWorktree, fetchReportsOriginFile, readReportsOriginFiles, refreshReportsWorktree, updateReports } from '../utils/reports-branch.js';
+import { commitAndPushReports, ensureReportsWorktree, fetchReportsOriginFile, readableReportsWorktree, readReportsOriginFiles, refreshReportsWorktree, reportsRefusedMessage, updateReports } from '../utils/reports-branch.js';
 import { isPublished } from '../utils/branch-worktree.js';
 import { pushRepoDirectly } from '../utils/git.js';
 import { reportUsage } from '../team-push.js';
@@ -434,6 +434,56 @@ describe('git-kind reports: a team clone that refuses writes', () => {
       expect(await fetchReportsOriginFile(bob.repo.localPath, 'members/alice.yaml')).toEqual({
         status: 'refused',
         message: `teamai-reports could not be read on this machine: teamai may not write in ${gitDir} (EACCES). Give this process write access to that folder, or run the command outside its sandbox.`,
+      });
+    } finally {
+      fs.chmodSync(gitDir, 0o755);
+    }
+  });
+
+  it.skipIf(process.platform === 'win32' || process.getuid?.() === 0)('refuses to read the reports checkout whose refresh may not write FETCH_HEAD, naming the folder', async () => {
+    const { origin, clone } = await seedBareOrigin();
+    const alice = gitConfig(clone, origin);
+    expect(await publish(alice, 'members/alice.yaml', 'username: alice\n')).toBe(true);
+    const bob = await cloneCheckout(origin, 'bob', 'bob');
+    const wt = await ensureReportsWorktree(bob, READ_ONLY);
+    expect(await publish(alice, 'members/carol.yaml', 'username: carol\n')).toBe(true);
+    // git keeps a worktree's FETCH_HEAD in that worktree's own git dir.
+    const gitDir = /^gitdir: (.+)$/m.exec(fs.readFileSync(path.join(wt, '.git'), 'utf8'))?.[1] ?? '';
+    fs.rmSync(path.join(gitDir, 'FETCH_HEAD'), { force: true });
+    fs.chmodSync(gitDir, 0o555);
+
+    try {
+      const read = await readableReportsWorktree(bob).then(() => 'read', (error: unknown) => reportsRefusedMessage(error));
+
+      expect(read).toBe(`teamai-reports could not be read on this machine: teamai may not write in ${gitDir} (EACCES). Give this process write access to that folder, or run the command outside its sandbox.`);
+    } finally {
+      fs.chmodSync(gitDir, 0o755);
+    }
+  });
+
+  it.skipIf(process.platform === 'win32' || process.getuid?.() === 0)('refuses a reports write whose sync may not write FETCH_HEAD before it writes, naming the folder', async () => {
+    const { origin, clone } = await seedBareOrigin();
+    const alice = gitConfig(clone, origin);
+    expect(await publish(alice, 'members/alice.yaml', 'username: alice\n')).toBe(true);
+    const bob = await cloneCheckout(origin, 'bob', 'bob');
+    const wt = await ensureReportsWorktree(bob, READ_ONLY);
+    expect(await publish(alice, 'members/carol.yaml', 'username: carol\n')).toBe(true);
+    const gitDir = /^gitdir: (.+)$/m.exec(fs.readFileSync(path.join(wt, '.git'), 'utf8'))?.[1] ?? '';
+    fs.rmSync(path.join(gitDir, 'FETCH_HEAD'), { force: true });
+    fs.chmodSync(gitDir, 0o555);
+    let wrote = false;
+
+    try {
+      const result = await updateReports(bob, async (worktree) => {
+        wrote = true;
+        fs.writeFileSync(path.join(worktree, 'members', 'bob.yaml'), 'username: bob\n');
+
+        return { files: ['members/bob.yaml'], message: '[teamai] Register member: bob' };
+      });
+
+      expect({ result, wrote }).toEqual({
+        result: { status: 'failed', reason: `teamai may not write in ${gitDir} (EACCES). Give this process write access to that folder, or run the command outside its sandbox.` },
+        wrote: false,
       });
     } finally {
       fs.chmodSync(gitDir, 0o755);
