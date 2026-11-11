@@ -847,7 +847,13 @@ export async function finishPlace(input: {
     return { outcome: 'failed', message: failure.message, failure };
   }
 
-  const finished = await finishRole(config, placeFiles(config, run, attempt), recorded, end, input.changed);
+  // Whatever a role's finish throws, the place still ends: recorded finished, failed with why, its hooks cleared.
+  const finished = await finishRole(config, placeFiles(config, run, attempt), recorded, end, input.changed).catch((cause: unknown): PlaceFinished => {
+    const failure = { code: 'workspace_base', message: `Step "${recorded.step}" could not finish its place: ${cause instanceof Error ? cause.message : String(cause)}` };
+
+    return { outcome: 'failed', message: failure.message, failure };
+  });
+
   await writePlaceRecord(config, { ...baseOf(recorded), phase: 'finished', at: new Date().toISOString(), finished: PlaceFinishedSchema.parse(redactJson(finished, secrets)) });
 
   // Once the step's work is committed, the session host's own hooks run again in a place it made.

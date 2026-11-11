@@ -16,6 +16,7 @@ import { pendingRecords } from '../workflow/records.js';
 import { findRunConfig } from '../workflow/run-location.js';
 import { cancelRun } from '../workflow/run-controls.js';
 import { AttemptIdSchema, readRun, RunIdSchema, withRunLock } from '../workflow/store.js';
+import { finishPlace } from '../workflow/place/place.js';
 
 vi.mock('../pull.js', () => ({ pull: vi.fn() }));
 /** The git steps of a prepare to kill the process after, each once. */
@@ -34,6 +35,7 @@ vi.mock('../workflow/worktree.js', async (importOriginal) => {
     markReadCopy: killable('markReadCopy', real.markReadCopy),
     mergeBranch: killable('mergeBranch', real.mergeBranch),
     worktreeHooks: killable('worktreeHooks', real.worktreeHooks),
+    commitWork: killable('commitWork', real.commitWork),
   };
 });
 // Setup's process runs on once the process that started it is killed, as it does when a runner is killed.
@@ -342,6 +344,18 @@ steps:
       expect(fs.readFileSync(path.join(dir, 'AGENTS.md'), 'utf8')).toBe('Branch instructions.\n');
       expect(git(dir, 'status', '--porcelain')).toBe('');
     });
+  });
+
+  it('finishes the place of a step whose finish throws as failed, with why, never leaving it ready', async () => {
+    const f = await fixture(); const lease = await next(f); fs.writeFileSync(path.join(lease.cwd, 'code.txt'), 'work');
+    killAfter.add('commitWork');
+
+    const reported = await f.client.report(f.runId, { attempt: lease.attempt, revision: lease.revision, outcome: 'success', driver: f.driver });
+
+    expect(reported).toMatchObject({ data: { accepted: true, step: { status: 'failed', failure: { code: 'workspace_base', message: `Step "${lease.step}" could not finish its place: killed after commitWork` } } } });
+    // Finished, so a second finish answers what the first recorded rather than finishing a place left ready.
+    expect(await withRunLock(f.config, RunIdSchema.parse(f.runId), (lock) => finishPlace({ config: f.config, lock, attempt: AttemptIdSchema.parse(lease.attempt), end: { outcome: 'success' }, secrets: {} }), { waitMs: 0 }))
+      .toMatchObject({ outcome: 'failed', failure: { code: 'workspace_base', message: `Step "${lease.step}" could not finish its place: killed after commitWork` } });
   });
 
   it('does not commit or push a cancelled attempt', async () => {
