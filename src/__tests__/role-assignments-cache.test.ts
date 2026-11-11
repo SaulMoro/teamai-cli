@@ -133,7 +133,11 @@ describe('role assignments cached by the fetched commit', () => {
     rmSync(sandbox, { recursive: true, force: true });
   });
 
-  it('runs no git for roles in a later process at the same commit', async () => {
+  it.each([
+    ['a clone, which records origin/HEAD', false],
+    ['a repo pushed with -u, which never records origin/HEAD', true],
+  ])('runs no git for roles in a later process at the same commit, in %s', async (_repo, isWithoutOriginHead) => {
+    if (isWithoutOriginHead) git(clone, 'remote', 'set-head', 'origin', '-d');
     expect(await primaryRole()).toBe('frontend');
     cli = await freshProcess();
 
