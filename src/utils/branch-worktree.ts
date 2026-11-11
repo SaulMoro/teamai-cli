@@ -1471,7 +1471,7 @@ async function refreshImpl(
     // checkout it keeps from being created.
     if (e instanceof CheckoutRefusedError) throw e;
 
-    return { status: 'failed', reason: failureReason(e).trim() };
+    return { status: 'failed', reason: failureReason(e).trim(), cause: e };
   } finally {
     if (locked) {
       await releaseLock(lockPath);
@@ -1489,7 +1489,7 @@ export type RefreshResult =
   | { status: 'done' }
   | { status: 'unfetched'; reason: string }
   | { status: 'busy'; lockPath: string }
-  | { status: 'failed'; reason: string };
+  | { status: 'failed'; reason: string; cause?: unknown };
 
 /** One branch's worth of behaviour, behind one interface. */
 export interface BranchWorktree {

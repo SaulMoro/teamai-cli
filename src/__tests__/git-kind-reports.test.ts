@@ -419,6 +419,28 @@ describe('git-kind reports: reading what origin holds', () => {
   });
 });
 
+// A sandbox that lets git reach origin but refuses writes to the team clone fails the fetch on its refs, which no
+// connection check mends.
+describe('git-kind reports: a team clone that refuses writes', () => {
+  it.skipIf(process.platform === 'win32' || process.getuid?.() === 0)('reads origin as refused, naming the folder git may not write in', async () => {
+    const { origin, clone } = await seedBareOrigin();
+    const alice = gitConfig(clone, origin);
+    expect(await publish(alice, 'members/alice.yaml', 'username: alice\n')).toBe(true);
+    const bob = await cloneCheckout(origin, 'bob', 'bob');
+    const gitDir = path.join(bob.repo.localPath, '.git');
+    fs.chmodSync(gitDir, 0o555);
+
+    try {
+      expect(await fetchReportsOriginFile(bob.repo.localPath, 'members/alice.yaml')).toEqual({
+        status: 'refused',
+        message: `teamai-reports could not be read on this machine: teamai may not write in ${gitDir} (EACCES). Give this process write access to that folder, or run the command outside its sandbox.`,
+      });
+    } finally {
+      fs.chmodSync(gitDir, 0o755);
+    }
+  });
+});
+
 describe('git-kind reports: refresh before reading (#557)', () => {
   it('picks up report data another member pushed', async () => {
     const { origin, clone } = await seedBareOrigin();

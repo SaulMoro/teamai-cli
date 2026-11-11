@@ -219,6 +219,8 @@ async function readOrigin(dir: string, runId: string, update?: ReportsWriteConte
       return ok('absent');
     case 'unreachable':
       return refused(unreachable(read.reason));
+    case 'refused':
+      return refused({ code: 'reports_unreachable', message: read.message });
     case 'found':
       return parseSnapshot(read.text, runId);
     default: {

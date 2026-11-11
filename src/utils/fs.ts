@@ -58,6 +58,48 @@ export function errnoCode(cause: unknown): string | undefined {
   return parsed.success ? parsed.data.code : undefined;
 }
 
+/** The error codes of a write the filesystem refused: no permission, a sandbox's or a policy's refusal, a read-only volume. */
+const WRITE_REFUSALS = ['EACCES', 'EPERM', 'EROFS'] as const;
+
+/** The calls that write: an EACCES of `spawn` (a program that may not run) or `scandir` (a read) is not a refused write. */
+const WRITING_CALLS = new Set(['open', 'mkdir', 'mkdtemp', 'rename', 'unlink', 'rmdir', 'rm', 'link', 'symlink', 'copyfile', 'write', 'utime', 'futime', 'chmod', 'chown']);
+
+const RefusedWriteErrorSchema = z.object({ code: z.enum(WRITE_REFUSALS), path: z.string(), syscall: z.string() });
+
+/** The strerror git prints after the path it may not write, by the code it stands for. */
+const GIT_REFUSALS: Record<string, (typeof WRITE_REFUSALS)[number]> = { 'Permission denied': 'EACCES', 'Operation not permitted': 'EPERM', 'Read-only file system': 'EROFS' };
+
+const GIT_REFUSAL_LINE = /(?:'([^']+)'|([^\s':]+)):\s*(Permission denied|Operation not permitted|Read-only file system)\s*$/m;
+
+/** A write the filesystem refused: the folder it was refused in, and its error code. */
+export interface RefusedWrite { folder: string; code: (typeof WRITE_REFUSALS)[number] }
+
+/**
+ * The write the filesystem refused that `cause`, or an error it was caused by, reports; undefined for any other
+ * failure. With `gitCwd`, a git error counts too when its text names the path git may not write, read from `gitCwd`,
+ * where git ran.
+ */
+export function refusedWrite(cause: unknown, { gitCwd }: { gitCwd?: string } = {}): RefusedWrite | undefined {
+  for (let current = cause, depth = 0; current !== undefined && depth < 8; depth++) {
+    const errno = RefusedWriteErrorSchema.safeParse(current);
+
+    if (errno.success && WRITING_CALLS.has(errno.data.syscall)) return { folder: path.dirname(errno.data.path), code: errno.data.code };
+    const line = gitCwd !== undefined && current instanceof Error ? GIT_REFUSAL_LINE.exec(current.message) : null;
+    const written = line?.[1] ?? line?.[2];
+    const code = line?.[3] === undefined ? undefined : GIT_REFUSALS[line[3]];
+
+    if (gitCwd !== undefined && written !== undefined && code !== undefined) return { folder: path.dirname(path.resolve(gitCwd, written)), code };
+    current = current instanceof Error ? current.cause : undefined;
+  }
+
+  return undefined;
+}
+
+/** What to tell the person of a write the filesystem refused: where, why, and what to do. */
+export function refusedWriteAdvice({ folder, code }: RefusedWrite): string {
+  return `teamai may not write in ${folder} (${code}). Give this process write access to that folder, or run the command outside its sandbox.`;
+}
+
 /**
  * Ensure a directory exists
  */

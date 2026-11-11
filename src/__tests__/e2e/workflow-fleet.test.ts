@@ -980,6 +980,24 @@ wait();`;
     }
   }, 60_000);
 
+  // A member in a sandbox that refuses writes under its ~/.teamai (Codex's workspace-write) meets the reports lock first.
+  it.skipIf(process.platform === 'win32' || process.getuid?.() === 0)('tells a member whose teamai-reports folder refuses writes which folder and what to do, not to check the connection', async () => {
+    const localPath = /^\s*localPath:\s*['"]?([^'"\n]+)['"]?\s*$/m.exec(fs.readFileSync(path.join(dataHomeOf('bob'), 'config.yaml'), 'utf8'))?.[1] ?? '';
+    const folder = path.dirname(localPath);
+    expect(fs.existsSync(path.join(folder, 'reports-wt')), `no reports-wt beside ${localPath}`).toBe(true);
+    fs.chmodSync(folder, 0o555);
+
+    try {
+      const refused = await teamai('bob', ['workflow', 'resume', '--next', '--pool', 'build']);
+      const error = refused.envelope().error;
+
+      expect(error?.code, said(refused)).toBe('reports_unreachable');
+      expect(error?.message).toBe(`teamai-reports could not be read on this machine: teamai may not write in ${folder} (EACCES). Give this process write access to that folder, or run the command outside its sandbox.`);
+    } finally {
+      fs.chmodSync(folder, 0o755);
+    }
+  }, 60_000);
+
   // One step at a time, the default, runs the command attached to the driver's terminal; in parallel, in a group of its own.
   it.each([{ parallel: 'workflows.max_parallel: 4', isDefault: false }, { parallel: 'the default max_parallel', isDefault: true }])('stops the command a killed local driver left running when the run is cancelled, with $parallel', async ({ isDefault }) => {
     const config = path.join(dataHomeOf('alice'), 'config.yaml');

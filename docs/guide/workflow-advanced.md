@@ -1455,7 +1455,7 @@ Every refusal is one JSON envelope with `error.code`, `error.message`, and the e
 | `invalid_run` | The id is not `r` followed by 8 or 16 hex digits. | Check the id. |
 | `unsupported_repo` | The team repo is an `http` repo, which has no `teamai-reports`. | Continue the run on the machine that has it. |
 | `busy` | Another teamai process is writing `teamai-reports` or the run, or another open attempt holds the place `next --prepare` would prepare. | Try again; for a held place, once that attempt reports. |
-| `reports_unreachable` | `teamai-reports` could not be read from the team repo's origin. | Check the connection, then try again. |
+| `reports_unreachable` | `teamai-reports` could not be read from the team repo's origin, or this machine may not write the folder that holds it, as in a sandbox. | Check the connection, then try again. When the message names a folder, give teamai write access to it, or run the command outside the sandbox. |
 | `reports_failed` | The write to `teamai-reports` failed. | Try again. |
 | `records_pending` | The run's records did not reach `teamai-reports`: git's push error, a busy writer, or a record queued while the publish ran. | Try again. |
 | `definition_mismatch` | The claim cannot get the workflows the run ran. May carry `teamRevision`. | Follow the message: run `teamai pull` after the other machine pushed its workflows, fetch the team commit, or use the same teamai version on both machines. |
@@ -1507,7 +1507,7 @@ Who may take an offered run follows the workflow's `invoke`, as `resume` does:
 | `invalid_arguments` | `--next` came with a run id, or with `--claim`. | Pass one: a run id, or `--next`. |
 | `unsupported_repo` | The team repo is an `http` repo, which has no `teamai-reports`. | Use a git team repo. |
 | `origin_unavailable` | This checkout has no `origin`, so there is no business repository to match. | Run it in a checkout of the business repository. |
-| `reports_unreachable` | `teamai-reports` could not be fetched. Nothing was claimed. | Check the connection, then try again. |
+| `reports_unreachable` | `teamai-reports` could not be fetched, or this machine may not write the folder that holds it, as in a sandbox. Nothing was claimed. | Check the connection, then try again. When the message names a folder, give teamai write access to it, or run the command outside the sandbox. |
 
 ### Publish from CI
 

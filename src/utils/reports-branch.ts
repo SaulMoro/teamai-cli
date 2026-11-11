@@ -12,7 +12,7 @@ import os from 'node:os';
 import path from 'node:path';
 import fse from 'fs-extra';
 import { assertAttachedTeamRepo, createGit, createGitWithBlockTimeout, getDefaultBranch, getHeadCommit, hasCommits, readBlobs } from './git.js';
-import { pathExists } from './fs.js';
+import { pathExists, refusedWrite, refusedWriteAdvice } from './fs.js';
 import { log } from '@teamai/shared/log';
 import {
   ForeignCheckoutError,
@@ -125,7 +125,7 @@ export async function readableReportsWorktree(
 
       return reportsBranch.dir(localConfig);
     case 'failed':
-      throw new Error(refreshed.reason);
+      throw new Error(refreshed.reason, { cause: refreshed.cause });
     default: {
       const unhandled: never = refreshed;
       throw new Error(`Unhandled refresh result: ${JSON.stringify(unhandled)}`);
@@ -179,11 +179,22 @@ export async function readReportsOriginFiles(worktree: string, relPaths: readonl
   return new Map(relPaths.map((relPath, index) => [relPath, objects[index]?.toString('utf8') ?? null]));
 }
 
-/** A reports file as origin holds it now. */
+/** A reports file as origin holds it now. `refused`: the filesystem refused a write the read needs, as `message` says. */
 export type ReportsOriginRead =
   | { status: 'found'; text: string }
   | { status: 'absent' }
-  | { status: 'unreachable'; reason: string };
+  | { status: 'unreachable'; reason: string }
+  | { status: 'refused'; message: string };
+
+/**
+ * Why teamai-reports could not be read, when the filesystem refused a write the read needs, such as its lock, the
+ * checkout or the team clone's refs: where, and what to do. Not the connection, which retrying does not mend.
+ */
+export function reportsRefusedMessage(cause: unknown, { gitCwd }: { gitCwd?: string } = {}): string | undefined {
+  const refused = refusedWrite(cause, { gitCwd });
+
+  return refused && `teamai-reports could not be read on this machine: ${refusedWriteAdvice(refused)}`;
+}
 
 /**
  * A file on origin's reports branch, fetched first so a failed fetch reads as `unreachable`, never as a missing file the
@@ -202,7 +213,9 @@ export async function fetchReportsOriginFile(dir: string, relPath: string, updat
       if (heads.trim() === '') return { status: 'absent' };
       await fetchTrackingRef(git, REPORTS_BRANCH);
     } catch (e) {
-      return { status: 'unreachable', reason: failureReason(e) };
+      const message = reportsRefusedMessage(e, { gitCwd: dir });
+
+      return message === undefined ? { status: 'unreachable', reason: failureReason(e) } : { status: 'refused', message };
     }
   }
 

@@ -19,7 +19,7 @@ import type { HandoffOwner } from './workflow/snapshot.js';
 import { getRepoIdentity } from './session-flow/sync.js';
 import { memberPlace, takeFleetAttempt } from './workflow/fleet/member.js';
 import { DEFAULT_FLEET_POOL, listOpenAttempts, readOfferedMarker, woken, type OpenAttempt } from './workflow/fleet/record.js';
-import { readableReportsWorktree } from './utils/reports-branch.js';
+import { readableReportsWorktree, reportsRefusedMessage } from './utils/reports-branch.js';
 import { callerProvenance, cancelRun, respondProvenance, respondToHitl, restartCommand, retriedRunsAgain, retryStep } from './workflow/run-controls.js';
 import { isIsolated, runCopyToMerge } from './workflow/workspace.js';
 import { headCommit } from './workflow/worktree.js';
@@ -1805,7 +1805,11 @@ async function refreshedReports(config: LocalConfig): Promise<WorkflowFailure | 
 
     return undefined;
   } catch (error) {
-    return { code: 'reports_unreachable', message: `teamai-reports could not be read from the team repo's origin (${error instanceof Error ? error.message : String(error)}). Check the connection and try again.` };
+    return {
+      code: 'reports_unreachable',
+      message: reportsRefusedMessage(error)
+        ?? `teamai-reports could not be read from the team repo's origin (${error instanceof Error ? error.message : String(error)}). Check the connection and try again.`,
+    };
   }
 }
 

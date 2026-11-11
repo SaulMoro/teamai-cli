@@ -1449,7 +1449,7 @@ teamai workflow resume [--next]
 | `invalid_run` | id 不是 `r` 加 8 或 16 位十六进制数字。 | 检查 id。 |
 | `unsupported_repo` | 团队仓库是 `http` 仓库，没有 `teamai-reports`。 | 在有这个运行的机器上继续。 |
 | `busy` | 另一个 teamai 进程正在写 `teamai-reports` 或该运行，或者 `next --prepare` 要准备的位置被另一个未结束的 attempt 占用。 | 重试；位置被占用时，等那个 attempt 报告后再试。 |
-| `reports_unreachable` | 无法从团队仓库的 origin 读取 `teamai-reports`。 | 检查网络连接后重试。 |
+| `reports_unreachable` | 无法从团队仓库的 origin 读取 `teamai-reports`，或这台机器无权写入存放它的文件夹（例如在沙箱中）。 | 检查网络连接后重试。消息里给出了文件夹时，给 teamai 该文件夹的写权限，或在沙箱外运行该命令。 |
 | `reports_failed` | 写入 `teamai-reports` 失败。 | 重试。 |
 | `records_pending` | 运行记录没有到达 `teamai-reports`：git 推送出错、另一个写入方占用，或发布期间有记录排队。 | 重试。 |
 | `definition_mismatch` | 认领拿不到运行所用的工作流。可能带 `teamRevision`。 | 按消息操作：等另一台机器推送工作流后执行 `teamai pull`，fetch 该团队提交，或两台机器使用相同的 teamai 版本。 |
@@ -1501,7 +1501,7 @@ teamai workflow resume [--next]
 | `invalid_arguments` | `--next` 和运行 id 一起传入，或和 `--claim` 一起传入。 | 只传其中一个：运行 id，或 `--next`。 |
 | `unsupported_repo` | 团队仓库是 `http` 仓库，没有 `teamai-reports`。 | 使用 git 团队仓库。 |
 | `origin_unavailable` | 本检出目录没有 `origin`，因此没有可匹配的业务仓库。 | 在业务仓库的检出目录中执行。 |
-| `reports_unreachable` | 无法 fetch `teamai-reports`。没有认领任何运行。 | 检查网络连接后重试。 |
+| `reports_unreachable` | 无法 fetch `teamai-reports`，或这台机器无权写入存放它的文件夹（例如在沙箱中）。没有认领任何运行。 | 检查网络连接后重试。消息里给出了文件夹时，给 teamai 该文件夹的写权限，或在沙箱外运行该命令。 |
 
 ### 从 CI 发布
 

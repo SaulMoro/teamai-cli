@@ -7,6 +7,7 @@ import type { LocalConfig } from '../types.js';
 import { readWorkspaceChildren } from '../workspace-children.js';
 import type { WorkflowEnvelope } from '../workflow/types.js';
 import { agentSessionFromEnv } from '../utils/session-id.js';
+import { reportsRefusedMessage } from '../utils/reports-branch.js';
 import { AgentSession } from './agent-session.js';
 import { listAvailablePlatforms, listInstalledPlatforms } from './adapters/index.js';
 import type { SubagentsRead } from '@teamai/tool-core/sessions/base';
@@ -128,7 +129,8 @@ export async function pushedSession(config: LocalConfig, { name, author }: TeamS
   try {
     archives = await sessionArchives(config, { dryRun: false, read: true });
   } catch (e) {
-    return failure('reports_unreachable', `teamai-reports, where pushed sessions are kept, could not be read (${e instanceof Error ? e.message : String(e)}). Check the connection and run the command again.`);
+    return failure('reports_unreachable', reportsRefusedMessage(e)
+      ?? `teamai-reports, where pushed sessions are kept, could not be read (${e instanceof Error ? e.message : String(e)}). Check the connection and run the command again.`);
   }
 
   if (!archives) return failure('unsupported_repo', 'This team keeps no session archive here, so it has no pushed session to score. Score a session on this machine with --session <id>.');

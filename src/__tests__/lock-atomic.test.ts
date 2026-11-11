@@ -533,6 +533,19 @@ describe('acquireLock filesystem failures (#999)', () => {
   });
 });
 
+// A sandbox that refuses writes to teamai's data folder (Codex's workspace-write) gave the lock's EPERM to callers that
+// blamed the network. The lock names the folder it may not write in, and what to do.
+describe('acquireLock in a folder that refuses writes', () => {
+  it.skipIf(process.platform === 'win32' || process.getuid?.() === 0)('names the folder it may not write in and what to do', async () => {
+    fs.chmodSync(tmpDir, 0o555);
+    try {
+      await expect(acquireLock(lockPath)).rejects.toThrow(`Cannot acquire lock ${lockPath}: teamai may not write in ${tmpDir} (EACCES). Give this process write access to that folder, or run the command outside its sandbox.`);
+    } finally {
+      fs.chmodSync(tmpDir, 0o755);
+    }
+  });
+});
+
 describe('acquireLock dry-run filesystem errors (#999)', () => {
   it.each(['ENOTDIR', 'EISDIR', 'EIO'])('reports a read failure (%s) without writing a lock', async (code) => {
     const error = Object.assign(new Error(`${code}: cannot read lock`), { code });

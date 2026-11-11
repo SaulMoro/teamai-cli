@@ -12,7 +12,7 @@ import { loadState, saveState, loadLocalConfig, loadTeamConfig, resolveConfigFor
 import { resolveEffectiveUpdatePolicy, VERSION_CHECK_TIMEOUT, INSTALL_TIMEOUT, HOOK_REFRESH_TIMEOUT } from './update-policy.js';
 import { resolveTeamaiEntryScript } from './builtin-hooks.js';
 import { log } from '@teamai/shared/log';
-import { errnoCode, ensureDir } from './utils/fs.js';
+import { errnoCode, ensureDir, refusedWrite, refusedWriteAdvice } from './utils/fs.js';
 import { expandHome } from '@teamai/shared/home';
 import { getTeamaiHomeDir, getUpdateLockPath, type LocalConfig } from './types.js';
 import { JsonValueSchema } from '@teamai/shared/json';
@@ -838,7 +838,9 @@ export async function acquireLock(
       throw new Error(`Cannot acquire lock ${resolved}: ${err.file} is ${err.kind}, not a lock file. Remove it, then run the command again.`, { cause: err });
     }
 
-    throw new Error(`Cannot acquire lock ${resolved}: ${err instanceof Error ? err.message : String(err)}`, { cause: err });
+    const refused = refusedWrite(err);
+
+    throw new Error(`Cannot acquire lock ${resolved}: ${refused ? refusedWriteAdvice(refused) : err instanceof Error ? err.message : String(err)}`, { cause: err });
   }
 }
 
