@@ -1135,6 +1135,30 @@ describe('a prompt that continues an earlier prompt\'s conversation', () => {
     expect(noticesOf(runtime, 'op-0000000d')).toEqual([]);
   });
 
+  // A step of a named child workflow may go on from the step beside its enclosing one, and each has its own workflow folder.
+  it('names this step\'s workflow folder in the turn when the earlier agent\'s shell has another one', async () => {
+    behave({ output: { verdict: 'request-changes' } });
+    const runtime = start();
+    await ready(runtime);
+    const review = await opened(runtime);
+    const [parentFolder, childFolder] = [path.join(dir, 'folders', 'a'.repeat(64)), path.join(dir, 'folders', 'b'.repeat(64))];
+    const first = promptRequest(review, 'op-0000000b');
+    runtime.send({ ...first, env: { ...first.env, TEAMAI_WORKFLOW_DIR: parentFolder } });
+    expect(await runtime.next(isEnd('op-0000000b'))).toMatchObject({ event: 'finished' });
+    const agent = createdAgent('op-0000000b');
+    const fix = await opened(runtime, { attempt: 'a0123abce', op: 'op-0000000c' });
+
+    behave({ output: { fixed: true } });
+    const later = fixing(fix, 'op-0000000d', review, 'op-0000000b');
+    runtime.send({ ...later, env: { ...later.env, TEAMAI_WORKFLOW_DIR: childFolder } });
+
+    expect(await runtime.next(isEnd('op-0000000d'))).toMatchObject({ event: 'finished', result: { output: { fixed: true } }, resumed: true });
+    expect(received().filter((request) => request.type === 'send_agent_message_request')).toEqual([expect.objectContaining({
+      agentId: agent,
+      text: `This agent goes on from an earlier step, so its shell's TEAMAI_WORKFLOW_DIR is that step's: this step's workflow folder is ${childFolder}.\n\n${String(later.lease.prompt)}`,
+    })]);
+  });
+
   it('allows the continued agent to write the later step\'s result file, which its create did not allow, as a new agent would be allowed, and nothing else', async () => {
     // The agent asks before it writes outside what its create allowed, as Claude does in Always Ask (recorded on Paseo 0.14.0).
     behave({ output: { verdict: 'request-changes' }, asks_outside_grant: true });
