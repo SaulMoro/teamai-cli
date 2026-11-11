@@ -2882,7 +2882,7 @@ export async function init(options: GlobalOptions & {
   await ensureDir(teamaiHome);
 
   if (scope !== 'project') await ensureDir(getTeamaiHomeDir());
-  await adoptAgentTool(localConfig, requestedAgents);
+  await adoptAgentTool(localConfig, normalizeAgentList(options.agent));
   await settleModeSwitch(existingLocalConfig ?? sameTeamSalvage, localConfig, () =>
     scope === 'project' ? saveLocalConfigForScope(localConfig, scope, projectRoot) : saveLocalConfig(localConfig));
 

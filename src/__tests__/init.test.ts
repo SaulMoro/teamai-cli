@@ -1135,6 +1135,8 @@ describe('init', () => {
           'project',
           process.cwd(),
         );
+        // A pick names the tools teamai sets up here; only --agent names the AI tool teamai runs.
+        expect(vi.mocked(saveLocalConfigForScope).mock.calls.map(([saved]) => saved.ai)).toEqual([undefined]);
       });
 
       it('skips the picker when --agent is given', async () => {
