@@ -31,7 +31,7 @@ export interface ConfinedDeps {
    * lock, as the attempt the run belongs to. Codex rotates its refresh token when it refreshes, so `release` writes a
    * login refreshed there back to `from` before it frees the lock, and says why when it could not.
    */
-  holdCodexLogin(input: { from: string; toolHome: string; attempt: ConfinedAttempt; signal: AbortSignal }): Promise<ConfinedLoginHold>;
+  holdCodexLogin(input: { executable: string; from: string; toolHome: string; attempt: ConfinedAttempt; signal: AbortSignal }): Promise<ConfinedLoginHold>;
 }
 
 /** The attempt a confined run belongs to, which holds a login the run brings. */
@@ -317,7 +317,8 @@ const LAUNCHES = {
 
     if (request.schema !== undefined) await writeRegularFile(schema, JSON.stringify(request.schema));
     // Last, so nothing after it fails while it holds the login.
-    const login = await deps.holdCodexLogin({ from, toolHome, attempt: request.attempt, signal: request.signal ?? new AbortController().signal });
+    const waitEnds = AbortSignal.any([AbortSignal.timeout(request.timeoutMs), ...(request.signal ? [request.signal] : [])]);
+    const login = await deps.holdCodexLogin({ executable: request.executable, from, toolHome, attempt: request.attempt, signal: waitEnds });
 
     if (!login.ok) return { ok: false, code: login.code, message: login.message };
 

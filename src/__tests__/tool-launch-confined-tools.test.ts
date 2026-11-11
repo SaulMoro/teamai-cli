@@ -11,8 +11,8 @@ let root = '';
 afterEach(async () => { vi.unstubAllEnvs(); if (root) await fs.rm(root, { recursive: true, force: true }); });
 
 /** Runs `tool` confined to `evidence` on the prompt.md there, as a judge step's lease runs it, at best-effort unless `level` asks for more. */
-async function judge({ evidence, level = 'best-effort', ...input }: Omit<ConfinedInput, 'dir' | 'prompt' | 'level' | 'timeoutMs' | 'attempt'> & { evidence: string; level?: ConfinedInput['level'] }, lookup: Parameters<typeof runConfined>[1]): ReturnType<typeof runConfined> {
-  return runConfined({ ...input, dir: evidence, prompt: await fs.readFile(path.join(evidence, 'prompt.md'), 'utf8'), level, timeoutMs: 10 * 60_000, attempt: { run: 'r0123456789abcdef', attempt: 'a01234567' } }, lookup);
+async function judge({ evidence, level = 'best-effort', timeoutMs = 10 * 60_000, ...input }: Omit<ConfinedInput, 'dir' | 'prompt' | 'level' | 'timeoutMs' | 'attempt'> & { evidence: string; level?: ConfinedInput['level']; timeoutMs?: number }, lookup: Parameters<typeof runConfined>[1]): ReturnType<typeof runConfined> {
+  return runConfined({ ...input, dir: evidence, prompt: await fs.readFile(path.join(evidence, 'prompt.md'), 'utf8'), level, timeoutMs, attempt: { run: 'r0123456789abcdef', attempt: 'a01234567' } }, lookup);
 }
 
 it.each(['2.1.308 (Claude Code)', '', '9.9.9 (Claude Code)'])('confines Claude %s, preserves switch settings, and sends the prompt through stdin and a file', async (version) => {
@@ -481,8 +481,7 @@ else { fs.writeFileSync(${JSON.stringify(record)}, JSON.stringify(JSON.parse(fs.
   expect(await fs.readFile(record, 'utf8')).toBe(tool === 'codex-internal' ? content : '{"ANTHROPIC_BASE_URL":"https://variant.test"}');
 });
 
-// Codex rotates its refresh token on a refresh and refuses the old one after (refresh_token_reused), so a judge that
-// refreshed in a copy left the member's daily Codex logged out.
+// Codex rotates its refresh token on a refresh and refuses the old one after (refresh_token_reused).
 it('writes a Codex login the judge refreshed in its own home back to the home it came from, and releases the login', async () => {
   root = await fs.mkdtemp(path.join(os.tmpdir(), 'teamai-judge-'));
   const evidence = path.join(root, 'evidence');
@@ -537,6 +536,23 @@ process.stdin.resume(); process.stdin.on('end',()=>{ const args=process.argv.sli
 
   expect({ startedWhileHeld, result: await judged }).toMatchObject({ startedWhileHeld: false, result: { ok: true } });
 });
+
+it('gives a Codex judge up once its wait for the Codex login another attempt holds outlasts its time limit', async () => {
+  root = await fs.mkdtemp(path.join(os.tmpdir(), 'teamai-judge-'));
+  const evidence = path.join(root, 'evidence');
+  const home = path.join(root, 'codex');
+  await fs.mkdir(evidence); await fs.mkdir(home);
+  await fs.writeFile(path.join(evidence, 'prompt.md'), 'Judge.');
+  await fs.writeFile(path.join(home, 'auth.json'), JSON.stringify({ tokens: { account_id: 'acct-1', refresh_token: 'refresh-1' } }));
+  vi.stubEnv('CODEX_HOME', home);
+  const executable = path.join(root, 'codex-fake');
+  await fs.writeFile(executable, `#!${process.execPath}\nif(process.argv.includes('--version')) console.log('codex-cli 0.167.0');\n`, { mode: 0o755 });
+  const lock = path.join(os.homedir(), '.teamai', 'logins', 'codex.lock');
+  await fs.mkdir(path.dirname(lock), { recursive: true });
+  await fs.writeFile(lock, JSON.stringify({ run: 'rfedcba9876543210', attempt: 'a76543210', takenAt: new Date().toISOString(), copied: 'x' }));
+
+  expect(await judge({ tool: 'codex', evidence, schema: {}, timeoutMs: 1_000 }, { resolveTool: () => executable })).toMatchObject({ ok: false, code: 'login_held' });
+}, 8_000);
 
 it('offers every launch tool on PATH as a judge, the preferred one first', () => {
   const onPath = new Set(['tclaude', 'codex-internal', 'codebuddy']);

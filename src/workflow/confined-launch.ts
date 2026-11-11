@@ -162,8 +162,8 @@ const CONFINED_DEPS: ConfinedDeps = {
   parseOpenCodeConfig: (text) => parseJsonAs(text, mcpSyntaxOf('opencode', 'user')),
   parseCodexConfig: (text) => parseToml(withoutTomlBom(text)),
   judgeKeyVariable: 'TEAMAI_JUDGE_API_KEY',
-  async holdCodexLogin({ from, toolHome: home, attempt, signal }) {
-    const held = await holdLoginFrom({ tool: 'codex', from, toolHome: home, run: RunIdSchema.parse(attempt.run), attempt: AttemptIdSchema.parse(attempt.attempt), signal });
+  async holdCodexLogin({ executable, from, toolHome: home, attempt, signal }) {
+    const held = await holdLoginFrom({ tool: 'codex', executable, from, toolHome: home, run: RunIdSchema.parse(attempt.run), attempt: AttemptIdSchema.parse(attempt.attempt), signal });
 
     if (!held.ok) return { ok: false, code: held.failure.code === 'login_held' ? 'login_held' : 'login_missing', message: held.failure.message };
 
