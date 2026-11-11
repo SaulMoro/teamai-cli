@@ -7,7 +7,8 @@ import os from 'node:os';
 import path from 'node:path';
 import YAML from 'yaml';
 
-import { envExec, exitLike, inTerminalForeground } from '../env-exec.js';
+import * as regularFile from '@teamai/shared/regular-file';
+import { envExec, exitLike, inTerminalForeground, terminalReachesCommand } from '../env-exec.js';
 import { EnvHandler } from '../resources/env.js';
 import { envLoaderPath } from '../resources/env-loader.js';
 import { envShMarker } from '../env-sh-exports.js';
@@ -968,6 +969,25 @@ describe('teamai env exec', () => {
     ['when ps printed something else', 'PGID TPGID\n', false],
   ] as const)('takes teamai to be %s from `ps -o pgid=,tpgid=`', (_name, ps, foreground) => {
     expect(inTerminalForeground(ps)).toBe(foreground);
+  });
+
+  // `/proc/self/stat` as node:22-alpine prints it with a terminal (`docker run -t`) and without one. Its ps takes no -p,
+  // and node:22-slim has no ps.
+  it.each([
+    ['in the foreground group of its terminal', '8 (cat) R 1 1 1 34816 1 4194304 58 0 0 0 0 0 0 0 20 0 1 0 11298 1777664 185', true],
+    ['without a controlling terminal', '1 (cat) R 0 1 1 0 -1 4194560 910 32 0 0 0 0 0 0 20 0 1 0 11317 1777664 191', false],
+  ] as const)('on Linux without a ps that answers, takes teamai to be %s from /proc', async (_name, stat, foreground) => {
+    const platform = Object.getOwnPropertyDescriptor(process, 'platform');
+    Object.defineProperty(process, 'platform', { value: 'linux' });
+    vi.spyOn(regularFile, 'readRegularFile').mockImplementation(async (file) => (String(file) === '/proc/self/stat' ? stat : ''));
+    vi.stubEnv('PATH', '');
+    try {
+      expect(await terminalReachesCommand()).toBe(foreground);
+    } finally {
+      if (platform) Object.defineProperty(process, 'platform', platform);
+      vi.unstubAllEnvs();
+      vi.restoreAllMocks();
+    }
   });
 
   it('reports a command that cannot be started, with exit code 127', async () => {

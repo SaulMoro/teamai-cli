@@ -18,6 +18,7 @@ import path from 'node:path';
 import { promisify } from 'node:util';
 import type { ChildProcess } from 'node:child_process';
 import { spawnCommand } from '@teamai/shared/exec';
+import { readRegularFile } from '@teamai/shared/regular-file';
 import { resolveTeamaiEntryScript } from './builtin-hooks.js';
 import { resolveConfigForDir } from './config.js';
 import { reportMissingSecrets } from './env-advisories.js';
@@ -77,6 +78,16 @@ export function inTerminalForeground(ps: string): boolean {
 }
 
 /**
+ * The process group and its terminal's foreground group, fields 5 and 8 of `/proc/<pid>/stat`, as
+ * `ps -o pgid=,tpgid=` prints them. The command name, field 2, may hold spaces: fields count after its last `)`.
+ */
+function groupsOfStat(stat: string): string {
+  const fields = stat.slice(stat.lastIndexOf(')') + 2).split(' ');
+
+  return `${fields[2] ?? ''} ${fields[5] ?? ''}`;
+}
+
+/**
  * Whether a terminal delivers Ctrl-C to the command as well as to teamai.
  * Windows delivers it to every process on the console. Elsewhere, when `ps`
  * cannot say, teamai takes a SIGINT to be its alone: passing on one the
@@ -85,6 +96,15 @@ export function inTerminalForeground(ps: string): boolean {
  */
 export async function terminalReachesCommand(): Promise<boolean> {
   if (process.platform === 'win32') return true;
+
+  // Linux keeps both groups in /proc, which a container whose ps takes no -p (BusyBox), or that has no ps, still has.
+  if (process.platform === 'linux') {
+    try {
+      return inTerminalForeground(groupsOfStat(await readRegularFile('/proc/self/stat', 'utf8')));
+    } catch {
+      // No /proc: ps may tell.
+    }
+  }
 
   try {
     const { stdout } = await promisify(execFile)('ps', ['-o', 'pgid=,tpgid=', '-p', String(process.pid)]);
