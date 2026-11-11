@@ -564,8 +564,9 @@ export async function runPromptStep({ config, lock, driver, lease, adapter = ste
   if (target.instance?.command) input.command = target.instance.command;
 
   // In teamai's process the tool keeps its session in the home the step's environment names, such as a CODEX_HOME
-  // outside HOME, which teamai does not record as the tool's root: the attempt's record says where, for scoring.
-  const ranHome = !onRuntime && homeVariable !== undefined ? input.env?.[homeVariable] : undefined;
+  // outside HOME, which teamai does not record as the tool's root: the attempt's record says where, for scoring. An
+  // instance's own home is where teamai looks already, and the variable of the tool it extends never moves it.
+  const ranHome = !onRuntime && !target.instance?.home && homeVariable !== undefined ? input.env?.[homeVariable] : undefined;
 
   if (ranHome) await recordInProcessSessionHome(config, lock.run, lease.attempt, { tool: selected, dir: ranHome });
   const sessionHome = toolHome?.dir ?? ranHome;

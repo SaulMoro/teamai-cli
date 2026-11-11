@@ -633,6 +633,33 @@ steps:
     expect(envelope(scored), scored.stderr).toMatchObject({ data: { label: { scorer: 'byclaude', label: 'good' } } });
   });
 
+  // An instance whose home names no variable keeps its sessions in its own directory, whatever CLAUDE_CONFIG_DIR says.
+  it('scores a pass of an instance in its own home, though the step ran with the base tool\'s home variable set elsewhere', async () => {
+    const file = path.join(os.homedir(), '.teamai', 'tools', 'claude-work.yaml');
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, 'schemaVersion: v1alpha1\nname: claude-work\nextends: claude\ncommand: claude-work\nhome: { dir: .claude-work-home }\n');
+    fs.writeFileSync(path.join(bin, 'claude-work'), fakeTool({ tool: 'claude-work-home', version: '2.1.0 (Claude Code)', homeVariable: 'CLAUDE_WORK_UNSET', sessions: CLAUDE_SESSIONS }), { mode: 0o755 });
+    onTestFinished(() => {
+      fs.rmSync(file, { force: true });
+      fs.rmSync(path.join(bin, 'claude-work'), { force: true });
+    });
+    writeFlow('workscored', `  - id: review
+    tool: claude-work
+    prompt: Review the repository without changing it.
+    scorers: [quality]`);
+    expect((await runCLI(['pull'], repo)).code).toBe(0);
+    const elsewhere = path.join(sandbox, 'claude-config-elsewhere');
+    fs.mkdirSync(elsewhere, { recursive: true });
+
+    const ran = await runCLI(['workflow', 'start', 'workscored', '--driver', 'local'], repo, env({ CLAUDE_CONFIG_DIR: elsewhere }));
+    const runId = runOf(ran);
+    expect(readRunState(runId).steps[0], ran.stderr).toMatchObject({ status: 'succeeded' });
+
+    const scored = await runCLI(['score', '--run', runId, '--step', 'review', '--scorer', 'quality'], repo, env({ CLAUDE_CONFIG_DIR: elsewhere }));
+
+    expect(envelope(scored), scored.stderr).toMatchObject({ data: { label: { scorer: 'quality', label: 'good' } } });
+  });
+
   it('judges the pass teamai score names on the definition workflows.driver names, when this machine runs it', async () => {
     const ran = await runCLI(['workflow', 'start', 'scoredpass', '--driver', 'claude'], repo, env());
     const runId = runOf(ran);
