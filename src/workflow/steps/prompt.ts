@@ -27,7 +27,7 @@ import { budgeted } from '@teamai/tool-core/stdout';
 import { stepLauncher, type StepLauncher, type StepRun, type StepRunResult } from '@teamai/runtime-tools';
 import { expectedOutput } from '../output.js';
 import { placeView, runtimeLauncher, runtimePrompter, runtimeSetup, runtimeStepEnv } from './runtime-steps.js';
-import { attemptHoldingSession, attemptToolHome, EXEC_RUNTIME_TOOLS, isExecRuntimeTool, seedMemberModel, seedToolHome, toolHomeVariable, type AttemptRun, type HeldPlace } from '../runtimes/attempt.js';
+import { attemptHoldingSession, attemptToolHome, EXEC_RUNTIME_TOOLS, isExecRuntimeTool, recordInProcessSessionHome, seedMemberModel, seedToolHome, toolHomeVariable, type AttemptRun, type HeldPlace } from '../runtimes/attempt.js';
 import { ensureLogin, holdLogin, loginWaitFile, releaseLogin, writeLoginBack, type LoginTool } from '../runtimes/login.js';
 import { credentialsForTool, toolsLaunchDeps, type OpenedRuntime } from '../runtimes/sources.js';
 import { withRetry } from '../runtimes/retry-command.js';
@@ -564,6 +564,13 @@ export async function runPromptStep({ config, lock, driver, lease, adapter = ste
 
   if (target.instance?.command) input.command = target.instance.command;
 
+  // In teamai's process the tool keeps its session in the home the step's environment names, such as a CODEX_HOME
+  // outside HOME, which teamai does not record as the tool's root: the attempt's record says where, for scoring.
+  const ranHome = !onRuntime && homeVariable !== undefined ? input.env?.[homeVariable] : undefined;
+  const ranStore = ranHome ? storeDirOf(AgentSession.platformForTool(launched) ?? '', { kind: 'tool-home', dir: ranHome }) : undefined;
+
+  if (ranHome) await recordInProcessSessionHome(config, lock.run, lease.attempt, { tool: selected, dir: ranHome });
+
   const { result, durationMs } = await timedLaunch({
     launch: lease.interactive ? launcher.runInteractive.bind(launcher) : launcher.run.bind(launcher),
     tool: selected,
@@ -599,7 +606,7 @@ export async function runPromptStep({ config, lock, driver, lease, adapter = ste
   }
 
   const ran = result.started ? result : undefined;
-  const used = ran?.session && teamSkills ? await usedInSession(launched, ran.session, cwd, teamSkills, launchedAt, storeDir || undefined) : undefined;
+  const used = ran?.session && teamSkills ? await usedInSession(launched, ran.session, cwd, teamSkills, launchedAt, storeDir || ranStore || undefined) : undefined;
   // A tool held to no budget that stated it spent more still ended its turn there: the budget names it.
   const passedBudget = limits?.budget !== undefined && budget === undefined && budgeted(ran?.tokens) > limits.budget.tokens;
   const stoppedBy = ran?.stoppedBy ?? (passedBudget ? 'budget' : undefined);

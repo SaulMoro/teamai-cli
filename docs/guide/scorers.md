@@ -273,6 +273,8 @@ $ teamai score --run r3f9… --scorer delivered
 {"error":{"code":"evidence_missing","message":"Pass 1 of step change in run r3f9… cannot be scored: no longer on this machine: claude-code session 6f1c2a0e-… of change#1. Restore what is missing, or score another pass. No label was written."}}
 ```
 
+A pass's session is read in the home its tool ran with: `CLAUDE_CONFIG_DIR` or `CODEX_HOME` as the step had it, also outside your home directory, else the tool's root that `teamai init` recorded.
+
 ## Score what a run delivered
 
 A step with `deliver: pr` hands its work to review as a pull request. A scorer on that step judges the pull request, and three stages can decide its label before any judge runs.

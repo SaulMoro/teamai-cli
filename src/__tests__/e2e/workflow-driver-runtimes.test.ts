@@ -608,6 +608,31 @@ steps:
     expect(published).toMatch(/^scores\/[^/\n]+\/\d{4}-\d{2}\.jsonl$/m);
   });
 
+  // A member whose Codex login lives in a CODEX_HOME outside HOME, which teamai does not record as Codex's root.
+  it('scores a Codex pass whose session is in the CODEX_HOME the step ran with, outside HOME', async () => {
+    writeFlow('codexscored', `  - id: review
+    tool: codex
+    prompt: Review the repository without changing it.
+    scorers: [byclaude]`);
+    // Judged by the fake Claude, which answers a judge; the recorded Codex answers only its step.
+    fs.writeFileSync(path.join(repo, '.teamai', 'scorers', 'byclaude.md'), fs.readFileSync(path.join(repo, '.teamai', 'scorers', 'quality.md'), 'utf8').replace('---\nlabels:', '---\ntool: claude\nlabels:'));
+    expect((await runCLI(['pull'], repo)).code).toBe(0);
+    codexOnPath(bin);
+    const codexHome = path.join(sandbox, 'codex-home-outside');
+    fs.mkdirSync(codexHome, { recursive: true });
+    expect(path.relative(os.homedir(), codexHome).startsWith('..')).toBe(true);
+
+    const ran = await runCLI(['workflow', 'start', 'codexscored', '--driver', 'local'], repo, env({ CODEX_HOME: codexHome }));
+    const runId = runOf(ran);
+    const [review] = readRunState(runId).steps;
+    expect(review, ran.stderr).toMatchObject({ status: 'succeeded', tool: 'codex' });
+    expect(fs.readdirSync(path.join(codexHome, 'sessions'), { recursive: true, encoding: 'utf8' }).some((name) => name.endsWith('.jsonl'))).toBe(true);
+
+    const scored = await runCLI(['score', '--run', runId, '--step', 'review', '--scorer', 'byclaude'], repo, env({ CODEX_HOME: codexHome }));
+
+    expect(envelope(scored), scored.stderr).toMatchObject({ data: { label: { scorer: 'byclaude', label: 'good' } } });
+  });
+
   it('judges the pass teamai score names on the definition workflows.driver names, when this machine runs it', async () => {
     const ran = await runCLI(['workflow', 'start', 'scoredpass', '--driver', 'claude'], repo, env());
     const runId = runOf(ran);

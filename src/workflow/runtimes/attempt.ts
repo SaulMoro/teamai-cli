@@ -123,6 +123,11 @@ const InProcessAttemptRecordSchema = z.object({
   runtime: z.string(),
   driver: z.string(),
   inProcess: z.literal(true),
+  /**
+   * The tool home a prompt's tool ran with when the step's environment named one, as a member's `CODEX_HOME` outside
+   * HOME does, which teamai does not record as the tool's root: its session is read there.
+   */
+  sessionHome: ToolHomeSchema.optional(),
 }).strict();
 
 /** What `runtime.json` holds: an attempt in teamai's process, or one on an external step runtime. */
@@ -134,13 +139,28 @@ const AttemptRecordSchema = z.union([InProcessAttemptRecordSchema, AttemptRuntim
  */
 export type AttemptPlacement =
   | { kind: 'external'; record: AttemptRuntimeRecord }
-  | { kind: 'in_process'; runtime: string }
+  | { kind: 'in_process'; runtime: string; sessionHome?: z.infer<typeof ToolHomeSchema> }
   | { kind: 'unrecorded' }
   | { kind: 'unreadable'; why: string };
 
 /** Records that attempt `attempt` of run `run` runs in teamai's process, on `runtime` of driver `driver`. */
 export async function recordInProcessAttempt(config: LocalConfig, run: RunId, attempt: AttemptId, { runtime, driver }: { runtime: string; driver: string }): Promise<void> {
   await writeJsonAtomic(attemptRuntimePath(config, run, attempt), { runtime, driver, inProcess: true } satisfies z.infer<typeof InProcessAttemptRecordSchema>);
+}
+
+/**
+ * Records `home`, the tool home the prompt of in-process attempt `attempt` of run `run` runs its tool with, in the
+ * attempt's record, before the tool starts, so its session is read there. Nothing when the attempt has no in-process record.
+ */
+export async function recordInProcessSessionHome(config: LocalConfig, run: string, attempt: string, home: { tool: string; dir: string }): Promise<void> {
+  const runId = RunIdSchema.safeParse(run);
+  const attemptId = AttemptIdSchema.safeParse(attempt);
+
+  if (!runId.success || !attemptId.success) return;
+  const file = attemptRuntimePath(config, runId.data, attemptId.data);
+  const record = InProcessAttemptRecordSchema.safeParse(await readRegularFile(file, 'utf8').then((text) => JSON.parse(text) as unknown, () => undefined));
+
+  if (record.success) await writeJsonAtomic(file, { ...record.data, sessionHome: home } satisfies z.infer<typeof InProcessAttemptRecordSchema>);
 }
 
 /** Where attempt `attempt` of run `run` ran, by its record: the one reader of `runtime.json`. */
@@ -157,7 +177,13 @@ export async function readAttemptPlacement(config: LocalConfig, run: RunId, atte
 
   if (!record.success) return { kind: 'unreadable', why: 'it is not a runtime record this teamai knows' };
 
-  return 'inProcess' in record.data ? { kind: 'in_process', runtime: record.data.runtime } : { kind: 'external', record: record.data };
+  if ('inProcess' in record.data) {
+    const { runtime, sessionHome } = record.data;
+
+    return { kind: 'in_process', runtime, ...(sessionHome && { sessionHome }) };
+  }
+
+  return { kind: 'external', record: record.data };
 }
 
 /** The record of attempt `attempt` of run `run` when it holds a place on an external step runtime; undefined for any other placement. */
@@ -215,8 +241,8 @@ export async function attemptSessionStore(config: LocalConfig, run: string, atte
   const attemptId = AttemptIdSchema.safeParse(attempt);
 
   if (!runId.success || !attemptId.success) return undefined;
-  const record = await externalRecord(config, runId.data, attemptId.data);
-  const home = record?.toolHome ?? record?.sessionHome;
+  const placement = await readAttemptPlacement(config, runId.data, attemptId.data);
+  const home = placement.kind === 'external' ? placement.record.toolHome ?? placement.record.sessionHome : placement.kind === 'in_process' ? placement.sessionHome : undefined;
   // An instance, as a runtime that launches agents its own way records it, is read as the tool it extends.
   const platform = home && (isExecRuntimeTool(baseToolOf(home.tool)) || keepsSessionsInXdgData(home.tool)) ? AgentSession.platformForTool(home.tool) : undefined;
   const store = home && platform ? storeDirOf(platform, { kind: 'tool-home', dir: home.dir }) : '';

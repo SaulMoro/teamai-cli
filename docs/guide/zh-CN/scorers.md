@@ -273,6 +273,8 @@ $ teamai score --run r3f9… --scorer delivered
 {"error":{"code":"evidence_missing","message":"Pass 1 of step change in run r3f9… cannot be scored: no longer on this machine: claude-code session 6f1c2a0e-… of change#1. Restore what is missing, or score another pass. No label was written."}}
 ```
 
+一次 pass 的会话从它的工具运行时所用的目录读取：步骤运行时的 `CLAUDE_CONFIG_DIR` 或 `CODEX_HOME`（即使在你的 home 目录之外），否则是 `teamai init` 记录的工具根目录。
+
 ## 为交付的工作评分
 
 带 `deliver: pr` 的步骤以合并请求的形式把工作交给评审。该步骤上的评分器评判这个合并请求，并且在任何评审者运行之前，有三个阶段可以直接判定标签。
