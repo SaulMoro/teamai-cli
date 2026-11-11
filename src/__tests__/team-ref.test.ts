@@ -513,6 +513,7 @@ describe('pushRepoBranch explicit destination', () => {
       .resolves.toContain('1 commit(s) not on origin');
     await expect(explicitBranchRefusal(localPath, 'feature/mine', false)).resolves.toBeNull();
     await expect(explicitBranchRefusal(localPath, 'main', true)).resolves.toContain('default branch');
+    await expect(explicitBranchRefusal(localPath, 'feature/new', true)).resolves.toBeNull();
   });
 
   it('publishes a destination commit an earlier push could not send', async () => {

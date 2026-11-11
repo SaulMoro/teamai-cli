@@ -38,6 +38,7 @@ import {
 } from './push-namespaces.js';
 import { askQuestion, askSelection, isInteractive } from './utils/prompt.js';
 import { pathExists, pruneEmptyDirs, readFileSafe, writeFile } from './utils/fs.js';
+import { git as gitAt } from './workflow/worktree.js';
 import { brokenTeamProfileFiles } from './models/profile.js';
 
 /**
@@ -1100,7 +1101,7 @@ export async function explicitBranchRefusal(
   if (!selfMode) return null;
   const git = createGit(localPath);
   const localRef = `refs/heads/${branch}`;
-  const exists = await git.raw(['show-ref', '--verify', '--quiet', localRef]).then(() => true, () => false);
+  const exists = (await gitAt(localPath, ['show-ref', '--verify', '--quiet', localRef])).code === 0;
 
   if (!exists) return null;
 
