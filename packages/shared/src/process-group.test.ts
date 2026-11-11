@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { afterEach, expect, it, vi } from 'vitest';
 import { z } from 'zod';
-import { recordGroup, stopGroup, stopProcess, stopRecordedGroup } from './process-group.js';
+import { identityOf, isSameProcess, recordGroup, stopGroup, stopProcess, stopRecordedGroup } from './process-group.js';
 
 /** Whether this platform tells start times through ps rather than `/proc`, so a fake ps on PATH is what is read. */
 const READS_PS = process.platform !== 'win32' && process.platform !== 'linux';
@@ -445,4 +445,31 @@ it.runIf(process.platform === 'linux')('stops a group an earlier teamai recorded
     try { process.kill(-group.pid, 'SIGKILL'); } catch { /* Already stopped. */ }
     fs.rmSync(records, { recursive: true, force: true });
   }
+});
+
+it.skipIf(process.platform === 'win32')('tells the process a record names from a later one given its pid, by the time the record keeps', async () => {
+  const child = spawn('sleep', ['30'], { stdio: 'ignore' });
+  const spawnedAt = Date.now();
+  try {
+    const { pid } = child;
+    if (pid === undefined) throw new Error('sleep did not start');
+
+    expect(await isSameProcess({ pid, spawnedAt })).toBe('same');
+    expect(await isSameProcess({ pid, spawnedAt: spawnedAt - 3_600_000 })).toBe('other');
+    expect(await isSameProcess({ pid, startedAt: new Date(spawnedAt + 1000).toISOString() })).toBe('same');
+    expect(await isSameProcess({ pid, startedAt: new Date(spawnedAt - 3_600_000).toISOString() })).toBe('other');
+    expect(await isSameProcess({ pid })).toBe('unknown');
+    expect(await isSameProcess({ pid: 2147483646 })).toBe('other');
+  } finally {
+    child.kill('SIGKILL');
+  }
+});
+
+it.runIf(process.platform === 'linux')('tells a process by its start ticks, and leaves one another pid namespace recorded to that namespace', async () => {
+  const own = await identityOf(process.pid);
+
+  expect(own).toEqual({ pid: process.pid, startTicks: kernelStartTicks(process.pid), pidNamespace: fs.readlinkSync('/proc/self/ns/pid') });
+  expect(await isSameProcess(own)).toBe('same');
+  expect(await isSameProcess({ ...own, startTicks: kernelStartTicks(process.pid) + 1 })).toBe('other');
+  expect(await isSameProcess({ ...own, pidNamespace: 'pid:[1]' })).toBe('foreign');
 });

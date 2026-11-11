@@ -161,6 +161,20 @@ describe('acquireLock (real fs)', () => {
     expect(JSON.parse(fs.readFileSync(lockPath, 'utf-8')).owner).toBe('live');
   });
 
+  // Where only ps tells when a process started, as on Windows, a live holder whose start cannot be read is still its holder.
+  it.runIf(process.platform !== 'linux')('keeps a lock held two hours by a live process whose start ps cannot tell', async () => {
+    const pid = unrelatedProcess();
+    fs.writeFileSync(lockPath, JSON.stringify({ pid, owner: 'live', startedAt: new Date(Date.now() - 2 * 3_600_000).toISOString() }));
+    vi.stubEnv('PATH', '');
+    try {
+      expect(await acquireLock(lockPath)).toBe(false);
+    } finally {
+      vi.unstubAllEnvs();
+    }
+
+    expect(JSON.parse(fs.readFileSync(lockPath, 'utf-8')).owner).toBe('live');
+  });
+
   it('reclaims a stale legacy plain-PID lock from an older teamai version', async () => {
     fs.writeFileSync(lockPath, '999999');
     expect(await acquireLock(lockPath)).toBe(true);

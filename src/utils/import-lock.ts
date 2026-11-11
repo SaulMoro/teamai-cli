@@ -5,7 +5,8 @@ import os from 'node:os';
 import { z } from 'zod';
 import { memberHome } from '@teamai/shared/home';
 import { log } from '@teamai/shared/log';
-import { isHolderGone, lockHolder, withFileLock } from '../update.js';
+import { isHolderGone, LockHolderFields, lockHolder, withFileLock } from '../update.js';
+import { ProcessIdentitySchema } from '@teamai/shared/process-group';
 import { readRegularFile } from '@teamai/shared/regular-file';
 
 /** Duration after which a lock file is considered stale and safe to ignore. */
@@ -32,11 +33,9 @@ const ImportLockFieldsSchema = z
   .pipe(
     z
       .object({
-        pid: z.number().optional().catch(undefined),
+        pid: ProcessIdentitySchema.shape.pid.optional().catch(undefined),
         host: z.string().optional().catch(undefined),
-        startedAt: z.string().optional().catch(undefined),
-        startTicks: z.number().int().optional().catch(undefined),
-        pidNamespace: z.string().optional().catch(undefined),
+        ...LockHolderFields,
         teamRepo: z.string().optional().catch(undefined),
         runDir: z.string().optional().catch(undefined),
       })

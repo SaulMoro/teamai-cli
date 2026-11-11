@@ -118,11 +118,11 @@ function processesOf(stdout: string): Map<number, RunningProcess> {
 }
 
 /**
- * What a record says of when process `pid` started, read without holding the event loop: one `/proc` read on Linux,
- * else ps off the event loop. Undefined when no process has the pid or neither can tell.
+ * What a record says of when process `pid` started: its identity on Linux, else ps's start, read off the event loop.
+ * Undefined when no process has the pid or neither can tell.
  */
 async function recordedStartOf(pid: number): Promise<{ startTicks: number; pidNamespace?: string } | { start: string } | undefined> {
-  const [startTicks, pidNamespace] = await Promise.all([processStartTicks(pid), ownPidNamespace()]);
+  const { startTicks, pidNamespace } = await identityOf(pid);
 
   if (startTicks !== undefined) return { startTicks, ...(pidNamespace !== undefined && { pidNamespace }) };
 
@@ -135,46 +135,121 @@ async function recordedStartOf(pid: number): Promise<{ startTicks: number; pidNa
   });
 }
 
-/**
- * What a record names: a detached process group, or with `tree`, an attached command, which shares its starter's group
- * and is reached as the process and its descendants. On Linux `startTicks` is when that process started, in clock ticks
- * since boot, and `pidNamespace` the pid namespace its pid belongs to; elsewhere `start` is when it started, as ps
- * prints it. A record written before either was read has `spawnedAt` instead, the time in milliseconds its starter
- * spawned it.
- */
-const RecordedSchema = z.union([
-  z.object({ pid: z.number().int().positive(), startTicks: z.number().int().nonnegative(), pidNamespace: z.string().min(1).optional(), tree: z.literal(true).optional() }),
-  z.object({ pid: z.number().int().positive(), start: z.string().min(1), tree: z.literal(true).optional() }),
-  z.object({ pid: z.number().int().positive(), spawnedAt: z.number().int().nonnegative(), tree: z.literal(true).optional() }),
-]);
+// ─── Process identity ───────────────────────────────────
 
-type Recorded = z.infer<typeof RecordedSchema>;
+/**
+ * What a record keeps to tell the process its pid named from a later one given that pid, as a container hands pids out
+ * again. On Linux `startTicks` is when it started, in clock ticks since boot, and `pidNamespace` the pid namespace its
+ * pid belongs to. Elsewhere a stop's record keeps `start`, when it started as ps prints it, and a lock keeps
+ * `startedAt`, a time it was running, as an ISO date. A stop's record written before the start was read keeps
+ * `spawnedAt`, the time in milliseconds its starter spawned it, and keeps it beside `startTicks` for a teamai that
+ * reads no `startTicks`. Every record of a process derives its fields from this one.
+ */
+export const ProcessIdentitySchema = z.object({
+  pid: z.number().int().positive(),
+  startTicks: z.number().int().nonnegative().optional(),
+  pidNamespace: z.string().min(1).optional(),
+  start: z.string().min(1).optional(),
+  spawnedAt: z.number().int().nonnegative().optional(),
+  startedAt: z.string().optional(),
+});
+
+export type ProcessIdentity = z.infer<typeof ProcessIdentitySchema>;
+
+/**
+ * Whether the process with a recorded pid now is the one recorded. `other`: none has the pid, or a later one does.
+ * `foreign`: another pid namespace recorded it, so its pid says nothing here. `unknown`: nothing here tells. Each caller
+ * keeps its own policy for `foreign` and `unknown`.
+ */
+export type ProcessVerdict = 'same' | 'other' | 'foreign' | 'unknown';
 
 /** How long before its starter read the clock a spawned process may have started: the spawn, which load slows. */
 const SPAWN_LEEWAY_MS = 10_000;
+
+/** How far a lock's time may trail its holder's start, as a clock step makes it, while still naming that holder. */
+const CLOCK_STEP_MS = 5_000;
 
 /**
  * Whether a pid recorded in pid namespace `recorded` names another process in `own`, this process's: a container and
  * its host sharing a home each read the other's pids as their own. A record that names no namespace is judged by its
  * start alone, which tells one process from another wherever it was read.
  */
-export function isOtherPidNamespace(recorded: string | undefined, own: string | undefined): boolean {
+function isOtherPidNamespace(recorded: string | undefined, own: string | undefined): boolean {
   return recorded !== undefined && recorded !== own;
 }
 
-/** Whether `live`, when the recorded pid's process started, names the process `recorded` names. */
-function isRecordedStart(recorded: Recorded, live: ProcessStart | undefined): boolean {
-  if (live === undefined) return false;
+/** This process's pid namespace, read once: a process never changes its own. */
+let namespaceHere: Promise<string | undefined> | undefined;
 
-  if ('startTicks' in recorded) return 'ticks' in live && live.ticks === recorded.startTicks;
+/** Whether `recorded` keeps a start, or a time, that the start of a live process can be compared with. */
+function keepsStart(recorded: ProcessIdentity): boolean {
+  return recorded.startTicks !== undefined || recorded.start !== undefined || recorded.spawnedAt !== undefined || !Number.isNaN(Date.parse(recorded.startedAt ?? ''));
+}
+
+/** Whether `live`, the start of the process with the recorded pid now, if any, is the start `recorded` names. */
+function verdictOf(recorded: ProcessIdentity, live: ProcessStart | undefined, namespace: string | undefined): ProcessVerdict {
+  if (isOtherPidNamespace(recorded.pidNamespace, namespace)) return 'foreign';
+
+  if (live === undefined) return 'unknown';
+
+  if (recorded.startTicks !== undefined && 'ticks' in live) return live.ticks === recorded.startTicks ? 'same' : 'other';
 
   // A record an earlier teamai wrote where ps tells the start, read here from `/proc`: both count whole seconds from boot.
-  if ('start' in recorded) return 'lstart' in live ? live.lstart === recorded.start : Math.floor(live.at / 1000) * 1000 === Date.parse(recorded.start);
+  if (recorded.start !== undefined) {
+    return ('lstart' in live ? live.lstart === recorded.start : Math.floor(live.at / 1000) * 1000 === Date.parse(recorded.start)) ? 'same' : 'other';
+  }
 
   // ps prints the start to the second, `/proc` counts from a boot time to the second, and the starter read the clock
   // once the spawn returned.
-  return live.at <= recorded.spawnedAt && recorded.spawnedAt - live.at < SPAWN_LEEWAY_MS;
+  if (recorded.spawnedAt !== undefined) return live.at <= recorded.spawnedAt && recorded.spawnedAt - live.at < SPAWN_LEEWAY_MS ? 'same' : 'other';
+
+  const written = Date.parse(recorded.startedAt ?? '');
+
+  if (Number.isNaN(written)) return 'unknown';
+
+  // ps prints the start to the second, rounded down, and on Linux it is counted from a boot time that moves with the
+  // clock, so a start only seconds past the time may be the holder's under a clock that stepped since.
+  return live.at > written + CLOCK_STEP_MS ? 'other' : 'same';
 }
+
+/**
+ * Whether the process with `recorded`'s pid now is the one `recorded` names: by its start ticks on Linux, else by the
+ * start or time the record keeps. A pid another user's process has (EPERM) is live.
+ */
+export async function isSameProcess(recorded: ProcessIdentity): Promise<ProcessVerdict> {
+  const namespace = await (namespaceHere ??= ownPidNamespace());
+
+  // Its pid names another process here, or none, so neither says anything of the recorded one.
+  if (isOtherPidNamespace(recorded.pidNamespace, namespace)) return 'foreign';
+
+  try {
+    process.kill(recorded.pid, 0);
+  } catch (error) {
+    // ESRCH: no process has the pid. EPERM: one does, another user's.
+    if (!(error instanceof Error && 'code' in error && error.code === 'EPERM')) return 'other';
+  }
+
+  if (!keepsStart(recorded)) return 'unknown';
+
+  return verdictOf(recorded, await liveStartOf(recorded.pid), namespace);
+}
+
+/** On Linux, what tells process `pid` from a later one given its pid: when it started, and its pid namespace. Elsewhere only its pid: no ps runs for it. */
+export async function identityOf(pid: number): Promise<ProcessIdentity> {
+  const [startTicks, pidNamespace] = await Promise.all([processStartTicks(pid), namespaceHere ??= ownPidNamespace()]);
+
+  return { pid, ...(startTicks !== undefined && { startTicks }), ...(pidNamespace !== undefined && { pidNamespace }) };
+}
+
+/**
+ * What a record names: a detached process group, or with `tree`, an attached command, which shares its starter's group
+ * and is reached as the process and its descendants. It tells that process by `startTicks`, `start` or `spawnedAt`.
+ */
+const RecordedSchema = ProcessIdentitySchema.omit({ startedAt: true })
+  .extend({ tree: z.literal(true).optional() })
+  .refine(keepsStart);
+
+type Recorded = z.infer<typeof RecordedSchema>;
 
 /** The file a teamai before #1523 wrote in a directory: the last process group started there. */
 const LEGACY_GROUP_FILE = 'group.json';
@@ -249,13 +324,13 @@ function writeGroup(file: string, body: string): void {
 export async function stopRecordedGroup(dir: string): Promise<void> {
   // A record this process is still completing is finished first, so the stop removes it rather than racing its write.
   await pendingStarts.get(path.resolve(dir));
-  const namespace = await ownPidNamespace();
+  const namespace = await (namespaceHere ??= ownPidNamespace());
 
   for (const file of await recordedGroups(dir)) {
     const recorded = await readGroup(file);
 
     // A pid recorded in another pid namespace names another process here: the record is left for a stop there.
-    if (recorded !== undefined && 'pidNamespace' in recorded && isOtherPidNamespace(recorded.pidNamespace, namespace)) continue;
+    if (recorded !== undefined && isOtherPidNamespace(recorded.pidNamespace, namespace)) continue;
 
     if (recorded?.tree) await stopTree(recorded);
     else if (recorded !== undefined) await stopGroup(recorded);
@@ -308,7 +383,7 @@ export async function stopGroup(group: Recorded): Promise<boolean> {
   const leader = running?.get(group.pid);
 
   // Without current identities, a pid reused since cannot be told apart, so the group is left alone.
-  if (!running || (leader !== undefined && !isRecordedStart(group, leader.start))) return false;
+  if (!running || (leader !== undefined && verdictOf(group, leader.start, await (namespaceHere ??= ownPidNamespace())) !== 'same')) return false;
   signalGroup(group.pid, 'SIGTERM');
 
   // Counted rather than timed, so a faked clock cannot stretch the grace period.
@@ -366,7 +441,7 @@ function descendantsOf(pid: number): FoundProcess[] {
 async function stopTree(recorded: Recorded): Promise<void> {
   const rootStart = runningProcesses()?.get(recorded.pid)?.start;
 
-  if (process.platform === 'win32' || rootStart === undefined || !isRecordedStart(recorded, rootStart)) return;
+  if (process.platform === 'win32' || rootStart === undefined || verdictOf(recorded, rootStart, await (namespaceHere ??= ownPidNamespace())) !== 'same') return;
   const tree = [...descendantsOf(recorded.pid), { pid: recorded.pid, start: rootStart }];
 
   /** Signals each process of the tree that is still the one recorded; whether any was reached. */
@@ -466,7 +541,7 @@ export function stopProcess<T>(child: ChildProcess, exit: Promise<T>, detached: 
  * When the process `pid` started, in clock ticks since the machine booted (field 22 of `/proc/<pid>/stat`): a value no
  * change of the wall clock moves. Only Linux has it; undefined elsewhere, or when no process has the pid.
  */
-export async function processStartTicks(pid: number): Promise<number | undefined> {
+async function processStartTicks(pid: number): Promise<number | undefined> {
   if (process.platform !== 'linux') return undefined;
 
   try {
@@ -480,7 +555,7 @@ export async function processStartTicks(pid: number): Promise<number | undefined
  * The pid namespace of this process, as `/proc/self/ns/pid` links it (`pid:[4026531836]`): a pid names a process only
  * inside it, so a container and its host each read the other's pids as their own. Only Linux has it.
  */
-export async function ownPidNamespace(): Promise<string | undefined> {
+async function ownPidNamespace(): Promise<string | undefined> {
   if (process.platform !== 'linux') return undefined;
 
   try {
@@ -491,28 +566,29 @@ export async function ownPidNamespace(): Promise<string | undefined> {
 }
 
 /**
- * When the process `pid` started, in milliseconds since the epoch: on Linux from `/proc`, which a container without a
- * full `ps` still has, elsewhere as `ps -o lstart=` prints it, to the second. Undefined when no process has the pid or
- * neither can tell.
+ * When the process `pid` started: on Linux from `/proc`, which a container without a full `ps` still has, elsewhere as
+ * `ps -o lstart=` prints it, to the second. Undefined when no process has the pid or neither can tell.
  */
-export async function processStartedAt(pid: number): Promise<number | undefined> {
+async function liveStartOf(pid: number): Promise<ProcessStart | undefined> {
   const ticks = await processStartTicks(pid);
 
   if (ticks !== undefined) {
     try {
       const boot = bootTime(await readRegularFile('/proc/stat', 'utf8'));
 
-      if (boot !== undefined) return tickStart(ticks, boot).at;
+      if (boot !== undefined) return tickStart(ticks, boot);
     } catch {
-      // No /proc/stat: ps may still tell.
+      // No /proc/stat: the ticks still tell, and ps may tell the time.
     }
   }
 
   return new Promise((resolve) => {
     execFile('ps', ['-o', 'lstart=', '-p', String(pid)], { encoding: 'utf8', env: { ...process.env, LC_ALL: 'C' }, timeout: 5_000 }, (error, stdout) => {
-      const started = Date.parse(stdout.trim());
+      const lstart = stdout.trim();
+      const at = Date.parse(lstart);
 
-      resolve(error || Number.isNaN(started) ? undefined : started);
+      if (ticks !== undefined) resolve({ ticks, at });
+      else resolve(error || lstart === '' ? undefined : { lstart, at });
     });
   });
 }

@@ -6,7 +6,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import fse from 'fs-extra';
 import { readRegularFile, readRegularFileSync, NotRegularFileError } from '@teamai/shared/regular-file';
-import { isOtherPidNamespace, ownPidNamespace, processStartedAt, processStartTicks } from '@teamai/shared/process-group';
+import { identityOf, isSameProcess, ProcessIdentitySchema, type ProcessIdentity } from '@teamai/shared/process-group';
 import { z } from 'zod';
 import { loadState, saveState, loadLocalConfig, loadTeamConfig, resolveConfigForDir } from './config.js';
 import { resolveEffectiveUpdatePolicy, VERSION_CHECK_TIMEOUT, INSTALL_TIMEOUT, HOOK_REFRESH_TIMEOUT } from './update-policy.js';
@@ -452,36 +452,26 @@ const heldLockOwners = new Map<string, string>();
 /** The `version` of the package.json an update installed, as written. */
 const InstalledPackageSchema = z.object({ version: JsonValueSchema.optional() });
 
-interface LockPayload {
-  pid: number;
-  startedAt: string;
-  owner: string;
-  /** On Linux, when the holder started, in clock ticks since boot (`processStartTicks`): tells it from a later process given its pid. */
-  startTicks?: number;
-  /** On Linux, the pid namespace `pid` and `startTicks` belong to (`ownPidNamespace`). */
-  pidNamespace?: string;
-}
+/** A lock's holder as written: its identity (`identityOf`), the time it took the lock, and its owner token. */
+type LockPayload = Pick<ProcessIdentity, 'pid' | 'startTicks' | 'pidNamespace'> & { startedAt: string; owner: string };
 
-/** This process's `startTicks` and `pidNamespace`, read once: they never change. */
-let ownIdentity: Promise<{ startTicks?: number; pidNamespace?: string }> | undefined;
-
-async function readOwnIdentity(): Promise<{ startTicks?: number; pidNamespace?: string }> {
-  const [startTicks, pidNamespace] = await Promise.all([processStartTicks(process.pid), ownPidNamespace()]);
-
-  return { ...(startTicks !== undefined && { startTicks }), ...(pidNamespace !== undefined && { pidNamespace }) };
-}
+/** This process's identity, read once: it never changes. */
+let ownIdentity: Promise<ProcessIdentity> | undefined;
 
 /**
  * This process as a lock's holder: its pid, the time, and on Linux when it started and its pid namespace, which
  * `isHolderGone` reads back. Every lock that judges its holder by pid writes it.
  */
 export async function lockHolder(): Promise<Omit<LockPayload, 'owner'>> {
+  const { startTicks, pidNamespace } = await (ownIdentity ??= identityOf(process.pid));
+
   return {
     pid: process.pid,
     // By the process's own clock, which neither a faked Date nor a wall-clock step since it started moves, so it compares
     // with when /proc or ps says the process started (isHolderGone).
     startedAt: new Date(performance.timeOrigin + performance.now()).toISOString(),
-    ...await (ownIdentity ??= readOwnIdentity()),
+    ...(startTicks !== undefined && { startTicks }),
+    ...(pidNamespace !== undefined && { pidNamespace }),
   };
 }
 
@@ -493,32 +483,30 @@ async function lockPayload(owner: string): Promise<string> {
 }
 
 /**
+ * The identity fields of a lock's holder, each read as absent when mistyped, as an earlier teamai may have written it.
+ * The import lock reads its holder with them too.
+ */
+export const LockHolderFields = {
+  startedAt: ProcessIdentitySchema.shape.startedAt.catch(undefined),
+  startTicks: ProcessIdentitySchema.shape.startTicks.catch(undefined),
+  pidNamespace: ProcessIdentitySchema.shape.pidNamespace.catch(undefined),
+};
+
+/** A lock file's JSON payload: its holder's identity and owner token. */
+const LockPayloadSchema = z.object({ pid: ProcessIdentitySchema.shape.pid, owner: z.string().optional().catch(undefined), ...LockHolderFields });
+
+/** Who holds a lock: its process, and the owner token and time of a lock written in the JSON payload format. */
+export type LockHolder = z.infer<typeof LockPayloadSchema>;
+
+/** A lock file's JSON: the legacy bare integer PID, or the payload. */
+const LockContentSchema = z.union([ProcessIdentitySchema.shape.pid.transform((pid): LockHolder => ({ pid })), LockPayloadSchema]);
+
+/**
  * Parse a lock file's contents. Understands both the current JSON payload and
  * the legacy plain-integer PID format written by older teamai versions, so an
  * on-disk lock from a previous install is still evaluated for staleness rather
  * than treated as un-owned garbage.
  */
-/** Who holds a lock: its process, and the owner token and time of a lock written in the JSON payload format. */
-export interface LockHolder {
-  pid: number;
-  owner?: string;
-  startedAt?: string;
-  startTicks?: number;
-  pidNamespace?: string;
-}
-
-/** A lock file's JSON: the legacy bare integer PID, or the payload with a numeric pid. */
-const LockContentSchema = z.union([
-  z.number().refine(Number.isInteger).transform((pid): LockHolder => ({ pid })),
-  z.object({
-    pid: z.number(),
-    owner: z.string().optional().catch(undefined),
-    startedAt: z.string().optional().catch(undefined),
-    startTicks: z.number().int().optional().catch(undefined),
-    pidNamespace: z.string().optional().catch(undefined),
-  }).transform(({ pid, owner, startedAt, startTicks, pidNamespace }): LockHolder => ({ pid, owner, startedAt, startTicks, pidNamespace })),
-]);
-
 function parseLockContent(content: string): LockHolder | null {
   const trimmed = content.trim();
 
@@ -594,46 +582,32 @@ async function inspectLock(resolved: string): Promise<LockVerdict> {
   }
 }
 
-/** How far a lock's time may trail its holder's start, as a clock step makes it, while still naming that holder. */
-const CLOCK_STEP_MS = 5_000;
-
 /** How long a lock another pid namespace wrote holds: longer than any pull, push or migration runs. */
 const FOREIGN_HOLD_MS = 3_600_000;
 
 /**
- * Whether the process `holder` names is gone. A live process with its pid is the holder only if it is the process that
- * wrote the lock, not a later one given the pid, as a container hands pids out again: by the start the lock records on
- * Linux, else by a start after the lock was written. Without either to compare, a live pid holds it. A lock another pid
- * namespace wrote, as a container sharing this home does, is held until `FOREIGN_HOLD_MS` after it was written.
+ * Whether the process `holder` names is gone: no process has its pid, or a later one does, as a container hands pids
+ * out again (`isSameProcess`). A live pid whose start nothing tells holds it. A lock another pid namespace wrote, as a
+ * container sharing this home does, is held until `FOREIGN_HOLD_MS` after it was written: its pid says nothing here,
+ * and a container that exited leaves it to a namespace no later process shares, so only its age frees it.
  */
 export async function isHolderGone(holder: LockHolder): Promise<boolean> {
-  // Its pid names another process here, or none, so neither says anything of the holder; a container that exited
-  // leaves its lock to a namespace no later process shares, so only its age frees it.
-  if (isOtherPidNamespace(holder.pidNamespace, (await (ownIdentity ??= readOwnIdentity())).pidNamespace)) {
-    return Date.now() - Date.parse(holder.startedAt ?? '') > FOREIGN_HOLD_MS;
+  const verdict = await isSameProcess(holder);
+
+  switch (verdict) {
+    case 'other':
+      return true;
+    case 'same':
+    case 'unknown':
+      return false;
+    case 'foreign':
+      return Date.now() - Date.parse(holder.startedAt ?? '') > FOREIGN_HOLD_MS;
+    default: {
+      const unhandled: never = verdict;
+
+      return unhandled;
+    }
   }
-
-  try {
-    process.kill(holder.pid, 0);
-  } catch (err) {
-    // EPERM: alive, owned by another user. ESRCH: the owning process is gone.
-    if (errnoCode(err) !== 'EPERM') return true;
-  }
-
-  if (holder.startTicks !== undefined) {
-    const ticks = await processStartTicks(holder.pid);
-
-    if (ticks !== undefined) return ticks !== holder.startTicks;
-  }
-
-  const written = Date.parse(holder.startedAt ?? '');
-
-  if (Number.isNaN(written)) return false;
-  const started = await processStartedAt(holder.pid);
-
-  // ps prints the start to the second, rounded down, and on Linux it is counted from a boot time that moves with the
-  // clock, so a start only seconds past the lock's time may be the holder's under a clock that stepped since.
-  return started !== undefined && started > written + CLOCK_STEP_MS;
 }
 
 /**
