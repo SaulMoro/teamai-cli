@@ -994,8 +994,9 @@ async function startOf(input: { config: LocalConfig; run: RunId; attempt: Attemp
       const placeGit = await copyGit(config, { run, root });
       const added = await placeGit(dir, ['--literal-pathspecs', 'add', '-A', '--', ...edits.paths]);
 
+      // Older Git applies diff.ignoreSubmodules to commit's staged-change check too, which would drop a moved gitlink.
       const committed = added.code === 0
-        ? await placeGit(dir, ['--literal-pathspecs', '-c', 'user.name=TeamAI', '-c', 'user.email=teamai@localhost', 'commit', '--quiet', '--no-verify', '-m', `Work step "${step}" left uncommitted in its place`, '--', ...edits.paths])
+        ? await placeGit(dir, ['--literal-pathspecs', '-c', 'user.name=TeamAI', '-c', 'user.email=teamai@localhost', '-c', 'diff.ignoreSubmodules=none', 'commit', '--quiet', '--no-verify', '-m', `Work step "${step}" left uncommitted in its place`, '--', ...edits.paths])
         : added;
 
       if (committed.code !== 0) return { code: 'workspace_base', message: `Step "${step}" could not commit what its place ${dir} holds uncommitted, so no fleet member can start from it: ${committed.stderr.trim()}` };
