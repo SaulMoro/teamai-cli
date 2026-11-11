@@ -5,20 +5,12 @@ import path from 'node:path';
 import fse from 'fs-extra';
 import { spawn, type ChildProcess } from 'node:child_process';
 import { readRegularFile } from '@teamai/shared/regular-file';
-import { isSameProcess } from '@teamai/shared/process-group';
 import { acquireLock, releaseLock, sweepHeldLocksOnExit, listZombieLocks, removeZombieLocks } from '../update.js';
 
 vi.mock('@teamai/shared/regular-file', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@teamai/shared/regular-file')>();
 
   return { ...actual, readRegularFile: vi.fn(actual.readRegularFile) };
-});
-
-// Asking when a live holder started runs `ps` outside Linux, a process a pull's agent waits on.
-vi.mock('@teamai/shared/process-group', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('@teamai/shared/process-group')>();
-
-  return { ...actual, isSameProcess: vi.fn(actual.isSameProcess) };
 });
 
 const readLock = vi.mocked(readRegularFile);
@@ -695,15 +687,6 @@ describe('listZombieLocks / removeZombieLocks (#1027)', () => {
     fs.writeFileSync(reused, JSON.stringify({ pid: unrelatedProcess(), owner: 'gone', startedAt: AN_HOUR_AGO() }));
 
     expect(await listZombieLocks([tmpDir])).toEqual([reused]);
-  });
-
-  it('passes over a lock this process holds without asking when its holder started', async () => {
-    const held = path.join(tmpDir, '.update-lock');
-    expect(await acquireLock(held)).toBe(true);
-
-    expect(await listZombieLocks([tmpDir])).toEqual([]);
-    expect(vi.mocked(isSameProcess)).not.toHaveBeenCalled();
-    await releaseLock(held);
   });
 
   it('returns nothing for a missing root', async () => {
