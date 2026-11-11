@@ -139,6 +139,27 @@ describe('moving a folder teamai staged, on any platform', () => {
     expect(fs.readFileSync(path.join(dir, 'scripts'), 'utf8')).toBe('a file\n');
   });
 
+  it('merges into a new subfolder that another merge put in place first, rather than failing on it', async () => {
+    const dir = scratch();
+    const [staged, skill] = [path.join(dir, 'staged'), path.join(dir, 'skill')];
+    fs.mkdirSync(path.join(staged, 'scripts'), { recursive: true });
+    fs.writeFileSync(path.join(staged, 'scripts', 'a.md'), 'mine\n');
+    fs.mkdirSync(skill);
+    const rename = fs.promises.rename.bind(fs.promises);
+    // The other merge renames its own copy of the subfolder in just before this one does.
+    vi.spyOn(fs.promises, 'rename').mockImplementationOnce(async (from, to) => {
+      fs.mkdirSync(path.join(skill, 'scripts'));
+      fs.writeFileSync(path.join(skill, 'scripts', 'b.md'), 'theirs\n');
+
+      return rename(from, to);
+    });
+
+    await mergeRegularTree(staged, skill);
+
+    expect(fs.readFileSync(path.join(skill, 'scripts', 'a.md'), 'utf8')).toBe('mine\n');
+    expect(fs.readFileSync(path.join(skill, 'scripts', 'b.md'), 'utf8')).toBe('theirs\n');
+  });
+
   it('leaves the file at the destination as it was when moving the staged one over it fails', async () => {
     const dir = scratch();
     fs.mkdirSync(path.join(dir, 'staged'));

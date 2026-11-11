@@ -409,8 +409,15 @@ export async function mergeRegularTree(from: string, to: string): Promise<void> 
     if (moving.isDirectory() && there !== undefined) throw new Error(`${target} is not a folder, so teamai does not copy the folder ${source} over it`);
 
     if (there?.isDirectory() === true) throw new Error(`${target} is a folder, so teamai does not copy ${source} over it`);
-    // A rename replaces a file or link there in one step, so one that fails leaves it as it was.
-    await renameRetrying(source, target, { isReplacing: there !== undefined });
+
+    try {
+      // A rename replaces a file or link there in one step, so one that fails leaves it as it was.
+      await renameRetrying(source, target, { isReplacing: there !== undefined });
+    } catch (error) {
+      // Another merge put the same new folder in place first: this one merges into it.
+      if (!moving.isDirectory() || (await lstatOrMissing(target))?.isDirectory() !== true) throw error;
+      await mergeRegularTree(source, target);
+    }
   }
 }
 
