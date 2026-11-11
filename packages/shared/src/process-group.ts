@@ -37,14 +37,18 @@ function runningProcesses(): Map<number, RunningProcess> | undefined {
   return procProcesses() ?? psProcesses();
 }
 
-/** The fields of `/proc/<pid>/stat` this module reads: the parent (field 4) and the start in ticks (field 22). */
-function statFields(stat: string): { ppid: number; ticks: number } | undefined {
+/**
+ * The fields of `/proc/<pid>/stat` this module reads: the parent (field 4), the process group (field 5) and the start
+ * in ticks (field 22).
+ */
+function statFields(stat: string): { ppid: number; pgid: number; ticks: number } | undefined {
   // The command name, field 2, is in parentheses and may hold spaces or parentheses itself: fields count after its last `)`.
   const fields = stat.slice(stat.lastIndexOf(')') + 2).split(' ');
   const ppid = Number(fields[1]);
+  const pgid = Number(fields[2]);
   const ticks = Number(fields[19]);
 
-  return Number.isInteger(ppid) && Number.isInteger(ticks) ? { ppid, ticks } : undefined;
+  return Number.isInteger(ppid) && Number.isInteger(pgid) && Number.isInteger(ticks) ? { ppid, pgid, ticks } : undefined;
 }
 
 /** The clock ticks per second `/proc` counts in (USER_HZ), 100 on every architecture Linux exposes to Node. */
@@ -80,7 +84,7 @@ function procProcesses(): Map<number, RunningProcess> | undefined {
 
   for (const name of names) {
     if (!/^\d+$/.test(name)) continue;
-    let fields: { ppid: number; ticks: number } | undefined;
+    let fields: ReturnType<typeof statFields>;
 
     try {
       fields = statFields(readRegularFileSync(`/proc/${name}/stat`, 'utf8'));
@@ -251,9 +255,12 @@ export async function identityOf(pid: number): Promise<ProcessIdentity> {
 /**
  * What a record names: a detached process group, or with `tree`, an attached command, which shares its starter's group
  * and is reached as the process and its descendants. It tells that process by `startTicks`, `start` or `spawnedAt`.
+ * `starterGroup`, kept only beside `tree`, is the group the command shares with its starter when the starter led it, as
+ * a terminal's job does: once that leader is gone, what is left in the group is what the starter left, children the
+ * command's shell left included, which no tree from the command's pid reaches once the shell is gone.
  */
 const RecordedSchema = ProcessIdentitySchema.omit({ startedAt: true })
-  .extend({ tree: z.literal(true).optional() })
+  .extend({ tree: z.literal(true).optional(), starterGroup: z.number().int().positive().optional() })
   .refine(keepsStart);
 
 type Recorded = z.infer<typeof RecordedSchema>;
@@ -292,7 +299,7 @@ export function recordGroup(child: ChildProcess, dir: string, { isAttached = fal
   const recordsDir = path.resolve(dir);
 
   // The start is read at once; it is written after the records begun before it in `dir`, so `group.json` stays the latest.
-  const settled: Promise<void> = Promise.all([recordedStartOf(pid), pendingStarts.get(recordsDir)]).then(([start]) => {
+  const settled: Promise<void> = Promise.all([recordedStartOf(pid), isAttached && leadsOwnGroup(), pendingStarts.get(recordsDir)]).then(([start, leads]) => {
     if (pendingStarts.get(recordsDir) === settled) pendingStarts.delete(recordsDir);
 
     // Once this process reaped the child, its pid may name another process. A stop in another process may have removed
@@ -300,7 +307,7 @@ export function recordGroup(child: ChildProcess, dir: string, { isAttached = fal
     if (start === undefined || child.exitCode !== null || child.signalCode !== null || !fs.existsSync(file)) return;
     // A teamai that reads no `tree` signals a group led by this pid, which an attached command never leads: it stops nothing.
     // One that reads no `startTicks` still stops by `spawnedAt`.
-    const body = JSON.stringify({ pid, ...('startTicks' in start && { spawnedAt }), ...start, ...(isAttached && { tree: true }) });
+    const body = JSON.stringify({ pid, ...('startTicks' in start && { spawnedAt }), ...start, ...(isAttached && { tree: true }), ...(leads && { starterGroup: process.pid }) });
     writeGroup(file, body);
     // A teamai before #1523 reads only `group.json`, so the latest group is written there as well: a release that
     // predates the per-group files then stops one group rather than none. It reads the same group twice here, which
@@ -309,6 +316,37 @@ export function recordGroup(child: ChildProcess, dir: string, { isAttached = fal
   });
 
   pendingStarts.set(recordsDir, settled);
+}
+
+let ownGroupLeader: Promise<boolean> | undefined;
+
+/**
+ * Whether this process leads its process group, as a terminal's job does: read once, since a shell sets a job's group
+ * before the job runs. False when it cannot be read.
+ */
+function leadsOwnGroup(): Promise<boolean> {
+  return ownGroupLeader ??= (async () => (await ownProcessGroup()) === process.pid)();
+}
+
+/** The process group of this process: on Linux from `/proc`, elsewhere from ps. Undefined when neither can tell. */
+async function ownProcessGroup(): Promise<number | undefined> {
+  if (process.platform === 'win32') return undefined;
+
+  if (process.platform === 'linux') {
+    try {
+      return statFields(await readRegularFile('/proc/self/stat', 'utf8'))?.pgid;
+    } catch {
+      // No /proc: ps may tell.
+    }
+  }
+
+  return new Promise((resolve) => {
+    execFile('ps', ['-o', 'pgid=', '-p', String(process.pid)], { encoding: 'utf8', timeout: 5_000 }, (error, stdout) => {
+      const pgid = Number(stdout.trim());
+
+      resolve(error || !Number.isInteger(pgid) || pgid <= 0 ? undefined : pgid);
+    });
+  });
 }
 
 /** Writes the record of one process group, so a reader never sees half of it. */
@@ -391,19 +429,46 @@ export async function stopGroup(group: Recorded): Promise<boolean> {
 
   // Without current identities, a pid reused since cannot be told apart, so the group is left alone.
   if (!running || (leader !== undefined && verdictOf(group, leader.start, await namespaceHere()) !== 'same')) return false;
-  signalGroup(group.pid, 'SIGTERM');
+  await endGroup(group.pid);
+
+  return true;
+}
+
+/** Sends SIGTERM to group `pgid`, then SIGKILL once five seconds pass with any process of it still running. */
+async function endGroup(pgid: number): Promise<void> {
+  signalGroup(pgid, 'SIGTERM');
 
   // Counted rather than timed, so a faked clock cannot stretch the grace period.
-  for (let probe = 0; signalGroup(group.pid, 0); probe += 1) {
+  for (let probe = 0; signalGroup(pgid, 0); probe += 1) {
     if (probe === 100) {
-      signalGroup(group.pid, 'SIGKILL');
+      signalGroup(pgid, 'SIGKILL');
       break;
     }
 
     await new Promise<void>((resolve) => setTimeout(resolve, 50));
   }
+}
 
-  return true;
+/**
+ * Stops group `pgid`, the one an attached command shared with the starter that led it, once that leader is gone. While
+ * any process of a group lives, POSIX reuses no pid equal to its id, so a group whose id no process has is still the
+ * starter's, and what runs in it is what the starter left. A process with the id is the leader still running, or one
+ * leading a later group of the same id: either way the group is left alone, and so is the group of this process.
+ */
+async function stopLeftStarterGroup(pgid: number): Promise<void> {
+  if (!signalGroup(pgid, 0)) return;
+
+  try {
+    process.kill(pgid, 0);
+
+    return;
+  } catch (error) {
+    // EPERM: a process has the id, another user's.
+    if (error instanceof Error && 'code' in error && error.code === 'EPERM') return;
+  }
+
+  if ((await ownProcessGroup()) === pgid) return;
+  await endGroup(pgid);
 }
 
 /** A process found running, and when it started, which tells it from a later process given its pid. */
@@ -443,12 +508,21 @@ function descendantsOf(pid: number): FoundProcess[] {
 /**
  * Stops `recorded`, an attached command no child handle of this process reaches, and each process it started, with a
  * five-second grace period before SIGKILL. A command whose pid now names a process started at another time is left
- * alone, as `stopGroup` leaves a group. POSIX only.
+ * alone, as `stopGroup` leaves a group. Then the group it shared with the starter that led it, once that leader is
+ * gone, which reaches what the command's shell left after it died. POSIX only.
  */
 async function stopTree(recorded: Recorded): Promise<void> {
+  if (process.platform === 'win32') return;
+  await stopRecordedTree(recorded);
+
+  if (recorded.starterGroup !== undefined) await stopLeftStarterGroup(recorded.starterGroup);
+}
+
+/** Stops the attached command `recorded` names and the processes it started that still descend from it. */
+async function stopRecordedTree(recorded: Recorded): Promise<void> {
   const rootStart = runningProcesses()?.get(recorded.pid)?.start;
 
-  if (process.platform === 'win32' || rootStart === undefined || verdictOf(recorded, rootStart, await namespaceHere()) !== 'same') return;
+  if (rootStart === undefined || verdictOf(recorded, rootStart, await namespaceHere()) !== 'same') return;
   const tree = [...descendantsOf(recorded.pid), { pid: recorded.pid, start: rootStart }];
 
   /** Signals each process of the tree that is still the one recorded; whether any was reached. */

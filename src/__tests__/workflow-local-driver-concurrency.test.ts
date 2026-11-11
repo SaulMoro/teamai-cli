@@ -14,6 +14,7 @@ import { attemptDir, readRun, RunIdSchema } from '../workflow/store.js';
 import { knownSecrets } from '../env-resolution.js';
 import { alive, dirs, exitsWithin, LOG, parallelFixture, toolPaths, TWO_BARRIERS, workflowFixture } from './helpers/workflow-local-driver-fixture.js';
 import { recordGroup } from '@teamai/shared/process-group';
+import * as envExec from '../env-exec.js';
 
 _setDriverPollMs(20);
 
@@ -512,9 +513,11 @@ const timer = setInterval(() => { if (fs.existsSync('go')) clearInterval(timer);
   });
 
   it.skipIf(process.platform === 'win32').each([
-    [1, 'the driver\'s process group', true],
-    [2, 'a process group of its own', false],
-  ] as const)('runs a command with max_parallel %i in %s', async (maxParallel, _group, shared) => {
+    [1, 'the terminal reaches', 'the driver\'s process group', true],
+    [1, 'no terminal reaches', 'a process group of its own', false],
+    [2, 'the terminal reaches', 'a process group of its own', false],
+  ] as const)('runs a command with max_parallel %i that %s in %s', async (maxParallel, terminal, _group, shared) => {
+    vi.spyOn(envExec, 'terminalReachesCommand').mockResolvedValue(terminal === 'the terminal reaches');
     const { config, workspace, runId } = await parallelFixture(`schemaVersion: v1alpha1
 name: build
 description: Report the process group a command runs in.

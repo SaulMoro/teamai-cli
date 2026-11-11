@@ -473,3 +473,48 @@ it.runIf(process.platform === 'linux')('tells a process by its start ticks, and 
   expect(await isSameProcess({ ...own, startTicks: kernelStartTicks(process.pid) + 1 })).toBe('other');
   expect(await isSameProcess({ ...own, pidNamespace: 'pid:[1]' })).toBe('foreign');
 });
+
+/** A detached shell that starts `sleep 600` in its group and prints its pid, then exits, or with `stays`, waits for it. */
+async function groupWithMember(stays: boolean): Promise<{ leader: number; member: number }> {
+  const shell = spawn('sh', ['-c', `sleep 600 & echo $!${stays ? '; wait' : ''}`], { detached: true, stdio: ['ignore', 'pipe', 'ignore'] });
+  const member = await new Promise<number>((resolve) => { shell.stdout.once('data', (chunk: Buffer) => resolve(Number(String(chunk).trim()))); });
+
+  // 'exit', not 'close': the sleep holds the shell's stdout open.
+  if (!stays) await new Promise((resolve) => shell.once('exit', resolve));
+
+  return { leader: shell.pid ?? 0, member };
+}
+
+it.skipIf(process.platform === 'win32')('stops the group an attached command shared with its starter once that group\'s leader is gone, members its shell left included', async () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-starter-group-'));
+  const { leader, member } = await groupWithMember(false);
+  try {
+    // The command's shell and its starter, which led the group, are gone; the command's child is left in the group.
+    fs.writeFileSync(path.join(directory, `group-${leader}.json`), JSON.stringify({ pid: leader, spawnedAt: Date.now(), tree: true, starterGroup: leader }));
+    expect(isRunning(member)).toBe(true);
+
+    await stopRecordedGroup(directory);
+
+    expect(isRunning(member)).toBe(false);
+    expect(fs.readdirSync(directory)).toEqual([]);
+  } finally {
+    try { process.kill(-leader, 'SIGKILL'); } catch { /* Already stopped. */ }
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+it.skipIf(process.platform === 'win32')('leaves the group an attached command shared with its starter while that group\'s leader still runs', async () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-starter-group-'));
+  const { leader, member } = await groupWithMember(true);
+  try {
+    fs.writeFileSync(path.join(directory, `group-${member}.json`), JSON.stringify({ pid: 2147483646, spawnedAt: Date.now(), tree: true, starterGroup: leader }));
+
+    await stopRecordedGroup(directory);
+
+    expect(isRunning(leader)).toBe(true);
+    expect(isRunning(member)).toBe(true);
+  } finally {
+    try { process.kill(-leader, 'SIGKILL'); } catch { /* Already stopped. */ }
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});

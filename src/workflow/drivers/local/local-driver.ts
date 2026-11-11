@@ -910,9 +910,6 @@ async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, given: 
   const isOneAtATime = config.workflows?.max_parallel === undefined;
   const maxParallel = config.workflows?.max_parallel ?? (isStarted && mayRunItemsBeside(started) ? Number.POSITIVE_INFINITY : 1);
   const isParallel = maxParallel > 1;
-  // One command at a time keeps the terminal: Ctrl-C reaches it, and it can prompt on /dev/tty. Parallel commands get
-  // process groups of their own, which `stop` and the signal handlers below can end as a whole.
-  const detached = isParallel && process.platform !== 'win32';
   const reported = new Set<string>();
   const inFlight = new Map<string, { lease: StagedLease; command: StagedCommand }>();
   // Leases not started yet, in lease order. Steps that share a checkout run one at a time. Distinct worktrees overlap.
@@ -1380,7 +1377,12 @@ async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, given: 
         // Setup runs in its own process group, out of the terminal's reach, so the driver handles every stop signal until
         // the command starts. An attached command already has the signals its terminal sends to the whole group; a second
         // would force-quit some tools.
-        const forwarded = !isParallel ? commandSignalPolicy(await terminalReachesCommand()).forwarded : undefined;
+        const reachesCommand = !isParallel && await terminalReachesCommand();
+        const forwarded = !isParallel ? commandSignalPolicy(reachesCommand).forwarded : undefined;
+        // One command at a time keeps the terminal teamai has: Ctrl-C reaches it, and it can prompt on /dev/tty. Any other
+        // command gets a process group of its own, which `stop` and the signal handlers below end as a whole, and which a
+        // later driver stops whole once this one is gone, children its shell left included.
+        const detached = !reachesCommand && process.platform !== 'win32';
 
         if (forwarded) handle(STOP_SIGNALS);
         inFlight.set(lease.attempt, { lease, command: stageThenStart(
