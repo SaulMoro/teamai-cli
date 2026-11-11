@@ -2440,10 +2440,14 @@ export async function leaseNext(config: LocalConfig, runId: string, driver: Driv
   const settle: Settle = (run, now) => {
     restartQueued(run, driver, unstarted, now);
     run.takesWhole = options.can?.workflow === true || options.alone?.offers.some((offer) => offer.can.workflow === true) === true;
-    const reconciled = reconcileRun(run, now);
+    let reconciled = reconcileRun(run, now);
 
-    // A workflow a step produced is known only now: refused as a start refuses one it knows, the run settles again.
-    return options.alone !== undefined && refuseProducedWorkflows(run, options.alone, now) ? reconcileRun(run, now) : reconciled;
+    // A workflow a step produced is known only now: refused as a start refuses one it knows, the run settles again, and a
+    // step that settling started, such as the next item of a for_each, is judged before any step of it is offered. Each
+    // pass fails a running step, so it ends.
+    while (options.alone !== undefined && refuseProducedWorkflows(run, options.alone, now)) reconciled = reconcileRun(run, now);
+
+    return reconciled;
   };
 
   await drainDeliveries(config, runId, env.secrets, settle);

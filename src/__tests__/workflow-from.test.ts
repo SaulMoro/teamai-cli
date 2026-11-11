@@ -405,3 +405,30 @@ describe('workflow: { from } on a driver that launches no AI tool, as the built-
     expect(run.steps.filter((step) => step.id.startsWith('trials.')).map(({ id, status }) => ({ id, status }))).toEqual([{ id: 'trials.tidy', status: 'cancelled' }, { id: 'trials.tidy.lint', status: 'skipped' }]);
   });
 });
+
+describe('workflow: { from } per item of a for_each, on a driver that launches no AI tool', () => {
+  const HOST: SoleDriver = { driver: 'host', offers: [{ runtime: 'host', inProcess: true, can: { tools: [], prompt: false, answer: false } }] };
+  const PROMPTED = { ...GENERATED, steps: [{ id: 'hello', command: 'node hello.js' }, { id: 'ask', needs: ['hello'], prompt: 'Review the greeting.' }] };
+  const EACH = PLANNED.replace('    workflow: { from: plan }\n', '    for_each: { items: steps.plan.outputs.plan, max_parallel: 1 }\n    workflow: { from: plan }\n');
+
+  it('leases no step of an item that starts once the item before it is refused, in the same next', async () => {
+    const config = testConfig();
+    fs.mkdirSync(path.join(config.repo.localPath, 'scorers'), { recursive: true });
+    fs.writeFileSync(path.join(config.repo.localPath, 'scorers', 'quality.md'), '---\nlabels:\n  - { value: good, score: 1, description: Did the work }\n  - { value: bad, score: 0, description: Did not }\npassingScore: 1\nsamplingRate: 100\n---\nJudge the work.\n');
+    fs.writeFileSync(path.join(config.repo.localPath, 'workflows', 'planned.yaml'), EACH);
+    await syncScorersThenWorkflows(config);
+    const started = await startRun(config, 'planned', {}, { secrets: await knownSecrets(config), alone: HOST });
+    if ('error' in started) throw new Error(started.error.message);
+    const runId = String(started.data.run);
+    const onHost = { can: HOST.offers[0].can, alone: HOST };
+    const { lease } = LeaseSchema.parse(await leaseNext(config, runId, driver, onHost)).data;
+    await reportAttempt(config, runId, { attempt: lease.attempt, revision: lease.revision, outcome: 'success', driver, outputs: { definition: { definition: PROMPTED }, plan: ['a', 'b'] } });
+
+    const next = await leaseNext(config, runId, driver, onHost);
+    const run = await readRun(config, runId);
+    if (typeof run !== 'object') throw new Error(`run ${run}`);
+
+    expect(run.steps.filter((step) => step.id.startsWith('trials')).map(({ id, status }) => ({ id, status }))).not.toContainEqual(expect.objectContaining({ status: 'leased' }));
+    expect(next).toMatchObject({ data: { done: { outcome: 'failed' } } });
+  });
+});
