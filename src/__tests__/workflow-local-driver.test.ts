@@ -1182,6 +1182,39 @@ steps:
     expect(run.steps[0]).not.toHaveProperty('unenforced');
   }, 30_000);
 
+  it('sends an agent step the definition\'s instructions in its prompt and the definition\'s model, since the runtime starts the tool without --agent', async () => {
+    const { config, workspace, runId } = await workflowFixture(`schemaVersion: v1alpha1
+name: build
+description: One reviewer step.
+steps:
+  - id: review
+    tool: claude
+    agent: reviewer
+    prompt: Review this project.
+    output:
+      ok: boolean
+`);
+    fs.mkdirSync(path.join(workspace, '.claude', 'agents'), { recursive: true });
+    fs.writeFileSync(path.join(workspace, '.claude', 'agents', 'reviewer.md'), '---\nname: reviewer\ndescription: Reviews changes.\nmodel: claude-opus-4-1\n---\nFollow the review checklist.\n');
+    const state = path.join(path.dirname(workspace), 'toy-state');
+    const runtime = stdioStepRuntime({ name: 'toy', command: process.execPath, args: [TOY_RUNTIME] });
+    onTestFinished(() => runtime.dispose());
+    const ready = await runtime.init({ options: { state, agent: { output: { ok: true }, conversations: false }, prompt_tool_home: true }, mode: 'unattended' });
+    if (!ready.ok) throw new Error(ready.failure.message);
+    const runtimes: DriverRuntimes = {
+      driver: 'toy', asked: 'toy',
+      runtimes: [{ kind: 'external', use: 'toy', runtime, can: ready.can, launchesAgents: true, ...(ready.runsOnToolHome && { runsOnToolHome: true }), engine: { logins: [] }, credentials: {}, found: [], masks: {}, optionsFrom: 'test' }],
+    };
+
+    await runLocalDriver(config, runId, workspace, { runtimes, toolPaths });
+    const sent = fs.readFileSync(path.join(state, 'prompts.jsonl'), 'utf8').trim().split('\n')
+      .map((line) => z.object({ sent: z.object({ prompt: z.string(), model: z.unknown() }).partial().optional() }).parse(JSON.parse(line)).sent)
+      .filter((lease) => lease !== undefined);
+
+    expect(sent).toEqual([expect.objectContaining({ prompt: expect.stringContaining('Follow the review checklist.'), model: { name: 'claude-opus-4-1' } })]);
+    expect(await readRun(config, runId)).toMatchObject({ steps: [{ id: 'review', status: 'succeeded' }] });
+  }, 30_000);
+
   it('leases it no step on a tool whose sessions teamai does not read in a tool home, even one it lists', async () => {
     const { config, workspace, runId } = await workflowFixture(`schemaVersion: v1alpha1
 name: build

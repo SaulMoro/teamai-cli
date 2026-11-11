@@ -48,7 +48,10 @@ export interface StepModelRequest {
   defaultModel?: string;
   /** The definition deployed for the tool, when the step names an agent. */
   agent?: AgentSpec;
-  /** False when the tool is not started with `--agent`, as on a runtime that launches agents its own way. */
+  /**
+   * False when the tool is not started with `--agent`: on any runtime a step reaches through `prompt`, the tool-home
+   * ones included, since the lease carries the definition only in its prompt.
+   */
   passesAgentFile?: boolean;
   /** The scope whose aliases resolve the step's `model` or `defaults.model`. */
   config: LocalConfig;
