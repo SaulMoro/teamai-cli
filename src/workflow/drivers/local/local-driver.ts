@@ -26,7 +26,7 @@ import { attemptRun, credentialSecrets, HeldPlace, isExecRuntimeTool, readAttemp
 import { answerCallTool, hostStepRuntime } from '../../runtimes/host.js';
 import { writeHeldSteps, type HeldSteps } from '../../runtimes/held.js';
 import { closeAfterSweep, endLeftLogins, stopLeftInProcess, stopOnRecordedDriver } from '../../runtimes/cancelled.js';
-import { loginHolder, loginLockFile } from '../../runtimes/login.js';
+import { loginHolder } from '../../runtimes/login.js';
 import { toolsLaunchDeps, type EngineOptions, type OpenedDriver } from '../../runtimes/sources.js';
 import { newOpId, type ExecAnswer, type ExecQuestion, type StepRuntime } from '@teamai/runtime-protocol/step-runtime';
 import { resumeOrPublish, retryCommand } from '../../runtimes/retry-command.js';
@@ -798,13 +798,17 @@ async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, given: 
     // One in teamai's process left its tool home under the attempt, which a killed judge refreshed its login in.
     if (slot?.kind !== 'external') return endLeftLogins(config, runId, attempt);
 
-    if (!notClosed) return endLeftLogins(config, runId, attempt, placement?.kind === 'external' ? { toolHome: placement.record.toolHome, isCollected: placement.record.phase === 'collected' } : {});
+    if (!notClosed) {
+      const record = placement?.kind === 'external' ? placement.record : undefined;
+
+      return endLeftLogins(config, runId, attempt, { toolHome: record?.toolHome, isCollected: record?.phase === 'collected' });
+    }
 
     for (const tool of slot.engine.logins) {
       const holder = await loginHolder(tool);
 
       if (holder?.run === runId && holder.attempt === attempt) {
-        log.warn(`The ${tool} login teamai keeps stays held by attempt ${attempt} of run ${runId}, whose tool may still run. Stop that tool on its step runtime, then delete ${loginLockFile(tool)}.`);
+        log.warn(`The ${tool} login teamai keeps stays held by attempt ${attempt} of run ${runId}, whose tool may still run. Stop that tool on its step runtime, then run teamai workflow cancel ${runId} --release ${attempt}, which lets the attempt go and ends its login.`);
       }
     }
   };

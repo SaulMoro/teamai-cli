@@ -2663,7 +2663,7 @@ span('end');
         expect(envelope(cancelled), cancelled.stderr).toMatchObject({ data: { run: { status: 'cancelled' } } });
         const attempt = attemptOf(readRunState(run).steps[0]);
         expect(cancelled.stderr).toContain(`Could not stop attempt ${attempt} of run ${run} on step runtime "toy" of driver "codexunreachable"`);
-        expect(cancelled.stderr).toContain(`The codex login teamai keeps stays held by attempt ${attempt} of run ${run}, whose tool may still run. Stop that tool on its step runtime, then delete ${lockFile()}.`);
+        expect(cancelled.stderr).toContain(`The codex login teamai keeps stays held by attempt ${attempt} of run ${run}, whose tool may still run. Stop that tool on its step runtime, then run teamai workflow cancel ${run} --release ${attempt}, which lets the attempt go and ends its login.`);
         expect(JSON.parse(fs.readFileSync(lockFile(), 'utf8'))).toMatchObject({ run, attempt });
       } finally {
         process.kill(pid, 'SIGKILL');
@@ -3092,7 +3092,7 @@ span('end');
         // The tool outlived its runtime, so the login stays with its attempt.
         expect(pidAlive(Number(fs.readFileSync(pidFile, 'utf8')))).toBe(true);
         expect(JSON.parse(fs.readFileSync(lockFile(), 'utf8'))).toMatchObject({ run, attempt });
-        expect(ran.stderr).toContain(`The codex login teamai keeps stays held by attempt ${attempt} of run ${run}, whose tool may still run. Stop that tool on its step runtime, then delete ${lockFile()}.`);
+        expect(ran.stderr).toContain(`The codex login teamai keeps stays held by attempt ${attempt} of run ${run}, whose tool may still run. Stop that tool on its step runtime, then run teamai workflow cancel ${run} --release ${attempt}, which lets the attempt go and ends its login.`);
         expect(runtimeRecord(run, attempt)).toMatchObject({ phase: 'running', closeFailed: { code: 'runtime_exited' } });
       } finally {
         if (fs.existsSync(pidFile)) process.kill(Number(fs.readFileSync(pidFile, 'utf8')), 'SIGKILL');

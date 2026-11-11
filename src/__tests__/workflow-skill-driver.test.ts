@@ -1290,20 +1290,31 @@ steps:
     if (!('data' in started) || !('turn' in started.data)) throw new Error(JSON.stringify(started));
     const run = RunIdSchema.parse(started.data.turn.run);
     const attempt = AttemptIdSchema.parse(started.data.turn.running.find((entry) => entry.phase === 'running')?.attempt);
-    // What a Codex judge of the runner's attempt holds while it runs.
+    // What a Codex judge of the runner's attempt holds while it runs, and refreshed.
     const daily = path.join(harness.root, 'codex');
+    const login = (refresh: string): string => JSON.stringify({ tokens: { account_id: 'acct-1', refresh_token: refresh } });
     fs.mkdirSync(daily);
-    fs.writeFileSync(path.join(daily, 'auth.json'), JSON.stringify({ tokens: { account_id: 'acct-1', refresh_token: 'refresh-1' } }), { mode: 0o600 });
-    expect((await holdLoginFrom({ tool: 'codex', executable: 'codex', from: daily, toolHome: attemptToolHome(harness.config, run, attempt, 'codex'), run, attempt, signal: new AbortController().signal })).ok).toBe(true);
+    fs.writeFileSync(path.join(daily, 'auth.json'), login('refresh-1'), { mode: 0o600 });
+    const toolHome = attemptToolHome(harness.config, run, attempt, 'codex');
+    expect((await holdLoginFrom({ tool: 'codex', executable: 'codex', from: daily, toolHome, run, attempt, signal: new AbortController().signal })).ok).toBe(true);
+    fs.writeFileSync(path.join(toolHome, 'auth.json'), login('refresh-2'));
     const info = vi.spyOn(log, 'info').mockImplementation(() => undefined);
+    onTestFinished(() => { info.mockRestore(); });
+    const cancelHere = async (): Promise<void> => {
+      expect(await takeRunLock(harness.config, run, (lock) => stopCancelledAttempts(harness.config, lock), { waitMs: 0 })).toMatchObject({ kind: 'held' });
+    };
 
     expect(await cancelRun(harness.config, run, await knownSecrets(harness.config))).not.toHaveProperty('error');
-    expect(await takeRunLock(harness.config, run, (lock) => stopCancelledAttempts(harness.config, lock), { waitMs: 0 })).toMatchObject({ kind: 'held' });
+    await cancelHere();
 
     expect(await loginHolder('codex')).toMatchObject({ run, attempt });
-    expect(info).toHaveBeenCalledWith(`Attempt ${attempt} of run ${run} runs in the skill driver's runner on this machine, which stops it and releases what it holds once it sees the cancel. If that runner (teamai workflow report ${run} --driver skill --attempt ${attempt}) still runs in a minute, stop it, then run teamai workflow cancel ${run} again.`);
+    expect(info).toHaveBeenCalledWith(`Attempt ${attempt} of run ${run} runs in the skill driver's runner on this machine, which stops it and releases what it holds once it sees the cancel. If that runner (teamai workflow report ${run} --driver skill --attempt ${attempt}) still runs in a minute, stop it; once it has ended, teamai workflow cancel ${run} again releases what it left.`);
     await eventsToDone(harness, run);
     expect(stops).toEqual([attempt]);
+    // A runner that ended without releasing the login, as a killed one does, leaves it to the next cancel.
+    await cancelHere();
+    expect({ daily: JSON.parse(fs.readFileSync(path.join(daily, 'auth.json'), 'utf8')).tokens.refresh_token, holder: await loginHolder('codex') })
+      .toEqual({ daily: 'refresh-2', holder: undefined });
   });
 
   it('masks the run\'s secrets in the result a child wrote once it reports', async () => {

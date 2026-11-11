@@ -62,9 +62,9 @@ describe('the dedicated Codex login lock', () => {
     fs.writeFileSync(path.join(toolHome, 'auth.json'), auth('r2'));
     fs.writeFileSync(dedicated(), auth('r2'));
 
-    const ended = await endLogin('codex', { run: RUN, attempt: FIRST, toolHome });
+    const ended = await endLogin('codex', { run: RUN, attempt: FIRST, toolHome, isCollected: true });
 
-    expect(ended).toEqual({ held: true });
+    expect(ended).toEqual({ wasHeld: true });
     expect(createHash('sha256').update(fs.readFileSync(dedicated())).digest('hex')).toBe(createHash('sha256').update(auth('r2')).digest('hex'));
   });
 

@@ -1388,7 +1388,7 @@ A flag on `resume` replaces what the run remembers, a `--tools` name at a time, 
 
 History stays in `passes` and the archive, so `length(steps.x.passes)` counts failed attempts too. Retrying a loop owner resets its iteration count. Retrying another step in its range keeps the owner's count. Retry keeps the top-level workflow's round count, so retry in its exhausted final round can fail `loop_exhausted` again.
 
-A single-step `cancel` stops pending, waiting, leased, running, or delivering work. Its open descendants stop too. Cancelled steps count as stopped, so dependents skip unless an `if` reads their outcome for recovery. The run normally fails. A whole-run cancel ends immediately with run outcome `cancelled`, without starting another loop round. Cancel does not bump the revision. A late report returns `lease_cancelled`; `next.cancelled` tells drivers which tools to stop. Under `--driver skill`, a step's runner still running on this machine stops that step itself, with the tool and the login it holds, within about 10 seconds: `cancel` says so and leaves the step to it. If the runner still runs a minute later, stop it, then run `cancel` again.
+A single-step `cancel` stops pending, waiting, leased, running, or delivering work. Its open descendants stop too. Cancelled steps count as stopped, so dependents skip unless an `if` reads their outcome for recovery. The run normally fails. A whole-run cancel ends immediately with run outcome `cancelled`, without starting another loop round. Cancel does not bump the revision. A late report returns `lease_cancelled`; `next.cancelled` tells drivers which tools to stop. Under `--driver skill`, the skill driver's runner of a step, while it still runs on this machine, stops that step itself, with the tool and the login it holds, within about 10 seconds: `cancel` says so and leaves the step to it. If the runner still runs a minute later, stop it, then run `cancel` again.
 
 `resume` drives the run locally after a retry, response, Ctrl-C, or closed terminal. `workflow start --driver local` prints the run id on stderr when the run starts, with the `resume` command that continues it. It uses this machine's open local lease workspace first, then the workspace of the latest driver that called `next` when that driver was local on this machine, then the current directory. Resuming after a retry from a subdirectory therefore keeps the original local workspace. Only one local driver can drive a run at a time. A second resume returns `driver_running` with the owning process id; stop that driver or wait. Locks from dead processes are reclaimed automatically. A command a killed driver left running is stopped, with what it started, before its step runs again. When teamai ran in your terminal under another program, such as `npm run` or a script, and the command's shell died with it, what that shell started runs on: stop it yourself. A settled run returns `done`. When a local run fails, `start`, `resume` and `resume --next` print on stderr why each step failed and its `retry` and `resume` commands, as in [A required key with no value here](#a-required-key-with-no-value-here). When a limit of the whole run, its `timeout` or `budget`, stopped it, they print why the run failed instead, with the `retry` of each step the limit stopped. Failed and cancelled local runs exit 1; successful control commands exit 0 even when their answer describes a failed or cancelled run.
 
@@ -1838,13 +1838,13 @@ teamai copies that `auth.json` into the attempt's tool home, and once the step e
 
 A Codex judge on this machine reads your own Codex login, in a home of its own under its attempt, and holds the same lock while it runs: it writes a login Codex refreshed there back to your Codex home before it lets go, so a refresh never logs your daily Codex out.
 
-When the holder's driver was killed, `teamai workflow resume` or `teamai workflow cancel` of its run first stops the tool, on the step runtime or on this machine, and writes the login back, then releases it. A runtime it cannot reach keeps the login held, and the command says which lock file to delete once the tool stopped.
+When the holder's driver was killed, `teamai workflow resume` or `teamai workflow cancel` of its run first stops the tool, on the step runtime or on this machine, and writes the login back, then releases it. A runtime it cannot reach keeps the login held, and the command says how to let the attempt go once the tool stopped.
 
 The login is also kept when the runtime itself stops while Codex runs, or cannot close the place afterwards, because Codex may still be running there. The step fails `runtime_lost`, and teamai says what to do:
 
 ```text
 ⚠ Step runtime "sandbox" could not close the place of attempt a339da600, so what ran there may still run (runtime_exited): Step runtime "sandbox" stopped: it exited with status 70.
-⚠ The codex login teamai keeps stays held by attempt a339da600 of run r9a395746ec65dbd7, whose tool may still run. Stop that tool on its step runtime, then delete /home/me/.teamai/logins/codex.lock.
+⚠ The codex login teamai keeps stays held by attempt a339da600 of run r9a395746ec65dbd7, whose tool may still run. Stop that tool on its step runtime, then run teamai workflow cancel r9a395746ec65dbd7 --release a339da600, which lets the attempt go and ends its login.
 ```
 
 ### Credentials from your environment
@@ -1928,7 +1928,7 @@ A runtime that cannot stop the work says why. teamai then keeps the place, its r
 
 ```text
 ⚠ Could not stop attempt a3f0c2b1d of run r48201aa on step runtime "sandbox" of driver "containers": its exec or prompt may still run, since the runtime did not confirm it stopped (cancel_failed): docker could not stop container teamai-r48201aa-a3f0: the daemon is not running. Start Docker, then run teamai workflow cancel r48201aa again.
-⚠ The codex login teamai keeps stays held by attempt a3f0c2b1d of run r48201aa, whose tool may still run. Stop that tool on its step runtime, then delete ~/.teamai/logins/codex.lock.
+⚠ The codex login teamai keeps stays held by attempt a3f0c2b1d of run r48201aa, whose tool may still run. Stop that tool on its step runtime, then run teamai workflow cancel r48201aa --release a3f0c2b1d, which lets the attempt go and ends its login.
 ```
 
 Fix the cause, then run the same `teamai workflow cancel r48201aa` again. The run is already cancelled, so it stops the attempt, closes its place, releases the login, and answers with the run and the attempt it closed. With nothing left to stop, it answers `run_settled`:

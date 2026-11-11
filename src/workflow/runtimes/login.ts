@@ -328,35 +328,36 @@ async function releaseLogin(tool: LoginTool, { run, attempt }: { run: RunId; att
 }
 
 /**
- * How `endLogin` ended a login: `held` says the attempt held it, so it was released; `notBack` says why what its tool
+ * How `endLogin` ended a login: `wasHeld` says the attempt held it, so it was released; `notBack` says why what its tool
  * refreshed was not written back, which an attempt that held none gets too, since nothing of its login came back.
  */
-export type EndedLogin = { held: false; notBack: WorkflowFailure } | { held: true; notBack?: WorkflowFailure };
+export type EndedLogin = { wasHeld: false; notBack: WorkflowFailure } | { wasHeld: true; notBack?: WorkflowFailure };
 
 /**
  * The one way an attempt's hold on `tool`'s login ends, whether the attempt ran to its end or a killed teamai left it:
  * writes back what its tool refreshed, from the tool home its lock names (or `toolHome`) to the home its lock names (or
  * `from`, the dedicated one unless given), then releases the lock, as writeLoginBack's rules allow. A write-back that
- * fails still releases the login and says why: nothing of the attempt runs any more to use it. `isCollected` says the
- * attempt's runtime brought its tool home back.
+ * fails on the file system still releases the login and says why: nothing of the attempt runs any more to use it.
+ * `isCollected` says the attempt's runtime brought its tool home back.
  */
-export async function endLogin(tool: LoginTool, { run, attempt, toolHome, from = dedicatedSource(tool), isCollected = true }: { run: RunId; attempt: AttemptId; toolHome: string; from?: LoginSource; isCollected?: boolean }): Promise<EndedLogin> {
+export async function endLogin(tool: LoginTool, { run, attempt, toolHome, from = dedicatedSource(tool), isCollected }: { run: RunId; attempt: AttemptId; toolHome: string; from?: LoginSource; isCollected: boolean }): Promise<EndedLogin> {
   const holder = await loginHolder(tool);
 
-  if (holder?.run !== run || holder.attempt !== attempt) return { held: false, notBack: notWrittenBack(tool, from, 'this attempt no longer holds the login') };
+  if (holder?.run !== run || holder.attempt !== attempt) return { wasHeld: false, notBack: notWrittenBack(tool, from, 'this attempt no longer holds the login') };
   const source = holder.from ?? from;
 
   try {
-    if (holder.copied === undefined) return { held: true };
+    if (holder.copied === undefined) return { wasHeld: true };
     let notBack: WorkflowFailure | undefined;
 
     try {
       notBack = await writeLoginBack({ tool, copied: holder.copied, toolHome: holder.toolHome ?? toolHome, from: source, isCollected });
     } catch (error) {
+      if (errnoCode(error) === undefined) throw error;
       notBack = notWrittenBack(tool, source, `writing it failed (${error instanceof Error ? error.message : String(error)})`);
     }
 
-    return notBack ? { held: true, notBack } : { held: true };
+    return notBack ? { wasHeld: true, notBack } : { wasHeld: true };
   } finally {
     await releaseLogin(tool, { run, attempt });
   }
@@ -430,9 +431,11 @@ export async function holdLoginFrom({ tool, executable, from, toolHome, run, att
 }): Promise<{ ok: true; release(): Promise<WorkflowFailure | undefined> } | { ok: false; failure: WorkflowFailure }> {
   if (!await holdsLogin(path.join(from, LOGIN_FILES[tool]))) return { ok: true, release: async () => undefined };
 
-  // A lock this attempt holds is a killed run's: its home keeps what the tool refreshed, unless the home went with it.
-  if (!await holdsLogin(path.join(toolHome, LOGIN_FILES[tool]))) await releaseLogin(tool, { run, attempt });
   const source: LoginSource = { home: from, signIn: `${HOME_VARIABLES[tool]}=${from} ${executable} login` };
+
+  // A lock this attempt holds is a killed run's: its home keeps what the tool refreshed, unless the home went with it,
+  // and then that hold ends, so this run copies the login again; what nothing refreshed has nothing to say.
+  if (!await holdsLogin(path.join(toolHome, LOGIN_FILES[tool]))) await endLogin(tool, { run, attempt, toolHome, from: source, isCollected: true });
 
   const held = await holdLogin({
     tool, run, attempt, toolHome, from: source, signal,
@@ -445,6 +448,6 @@ export async function holdLoginFrom({ tool, executable, from, toolHome, run, att
 
   return {
     ok: true,
-    release: async () => (await endLogin(tool, { run, attempt, toolHome, from: source })).notBack,
+    release: async () => (await endLogin(tool, { run, attempt, toolHome, from: source, isCollected: true })).notBack,
   };
 }

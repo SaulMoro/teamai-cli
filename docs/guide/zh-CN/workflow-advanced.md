@@ -1382,7 +1382,7 @@ $ teamai workflow resume redf22a69e4ae6652 --no-auto-approve         # 从现在
 
 历史保留在 passes 和 archive 中，因此 `length(steps.x.passes)` 也统计失败尝试。重试循环所有者会重置其迭代数；重试范围内的其他步骤则保留所有者的计数。重试保留顶层工作流的 round，耗尽最后一轮后重试仍可能再次 `loop_exhausted`。
 
-指定步骤的 cancel 停止 pending、waiting、leased、running 或 delivering 工作，同时停止尚未结束的后代。cancelled 属于 stopped，因此依赖步骤会跳过，除非其 if 读取取消结果来恢复；运行通常失败。取消整个运行立即以 `cancelled` 结束，不启动下一轮。cancel 不增加修订号。迟到的报告返回 `lease_cancelled`，`next.cancelled` 告诉驱动停止哪些工具。在 `--driver skill` 下，若某步骤的 runner 仍在本机运行，它会在约 10 秒内自行停止该步骤，连同它持有的工具和登录：`cancel` 会说明这一点，并把该步骤留给它。若一分钟后 runner 仍在运行，先停止它，再运行一次 `cancel`。
+指定步骤的 cancel 停止 pending、waiting、leased、running 或 delivering 工作，同时停止尚未结束的后代。cancelled 属于 stopped，因此依赖步骤会跳过，除非其 if 读取取消结果来恢复；运行通常失败。取消整个运行立即以 `cancelled` 结束，不启动下一轮。cancel 不增加修订号。迟到的报告返回 `lease_cancelled`，`next.cancelled` 告诉驱动停止哪些工具。在 `--driver skill` 下，若 skill 驱动中某步骤的 runner 仍在本机运行，它会在约 10 秒内自行停止该步骤，连同它持有的工具和登录：`cancel` 会说明这一点，并把该步骤留给它。若一分钟后 runner 仍在运行，先停止它，再运行一次 `cancel`。
 
 在重试、回答、Ctrl-C 或关闭终端后，用 resume 继续本地运行。`workflow start --driver local` 在运行开始时就把运行 id 和继续它的 `resume` 命令输出到 stderr。它优先使用本机未结本地租约的工作目录，其次使用最近调用 `next` 的驱动工作目录（该驱动必须是本机本地驱动），最后使用当前目录。因此重试后即使从子目录继续，也会保留原来的本地工作目录。每个运行同时只能有一个本地驱动。重复 resume 返回 driver_running 和持有者进程号，请停止该驱动或等待；死进程留下的锁会自动回收。被杀掉的驱动留下仍在运行的命令时，会在它的步骤再次运行前停止该命令及它启动的进程。如果 teamai 是在你的终端里由另一个程序（例如 `npm run` 或脚本）启动的，并且命令的 shell 和它一起被杀掉，那个 shell 启动的进程会继续运行，需要你自己停止。已结算运行返回 done。本地运行失败时，`start`、`resume` 和 `resume --next` 会在 stderr 写出每个步骤失败的原因，以及它的 `retry` 和 `resume` 命令，见[必需的键在本机没有值](#必需的键在本机没有值)。如果是整个运行的限制（它的 `timeout` 或 `budget`）让它停下，则改为写出运行失败的原因，以及限制停下的每个步骤的 `retry` 命令。本地运行以 failed 或 cancelled 结束时退出码为 1；控制命令成功时退出码为 0，即使返回的运行状态为 failed 或 cancelled。
 
@@ -1832,13 +1832,13 @@ teamai 把这个 `auth.json` 复制到这次尝试的工具主目录，步骤结
 
 本机上的 Codex 评审（judge）在它这次尝试下自己的主目录里使用你自己的 Codex 登录，运行期间持有同一把锁：放开之前，它会把 Codex 在那里刷新过的登录写回你的 Codex 主目录，所以一次刷新不会让你日常使用的 Codex 退出登录。
 
-如果持有者的驱动已被杀掉，对它的运行执行 `teamai workflow resume` 或 `teamai workflow cancel` 会先停止工具（在步骤运行时上或本机上）并写回登录，再释放它。联系不上运行时，登录就继续被持有，命令会说明工具停止后要删除哪个锁文件。
+如果持有者的驱动已被杀掉，对它的运行执行 `teamai workflow resume` 或 `teamai workflow cancel` 会先停止工具（在步骤运行时上或本机上）并写回登录，再释放它。联系不上运行时，登录就继续被持有，命令会说明工具停止后如何放开该 attempt。
 
 Codex 运行期间运行时自己停止，或之后无法关闭位置时，登录同样继续被持有，因为 Codex 可能还在那里运行。步骤失败为 `runtime_lost`，teamai 会说明怎么处理：
 
 ```text
 ⚠ Step runtime "sandbox" could not close the place of attempt a339da600, so what ran there may still run (runtime_exited): Step runtime "sandbox" stopped: it exited with status 70.
-⚠ The codex login teamai keeps stays held by attempt a339da600 of run r9a395746ec65dbd7, whose tool may still run. Stop that tool on its step runtime, then delete /home/me/.teamai/logins/codex.lock.
+⚠ The codex login teamai keeps stays held by attempt a339da600 of run r9a395746ec65dbd7, whose tool may still run. Stop that tool on its step runtime, then run teamai workflow cancel r9a395746ec65dbd7 --release a339da600, which lets the attempt go and ends its login.
 ```
 
 ### 来自你环境的凭据
@@ -1922,7 +1922,7 @@ teamai 在发送每个操作之前，把它的操作 id 写入 `attempts/<attemp
 
 ```text
 ⚠ Could not stop attempt a3f0c2b1d of run r48201aa on step runtime "sandbox" of driver "containers": its exec or prompt may still run, since the runtime did not confirm it stopped (cancel_failed): docker could not stop container teamai-r48201aa-a3f0: the daemon is not running. Start Docker, then run teamai workflow cancel r48201aa again.
-⚠ The codex login teamai keeps stays held by attempt a3f0c2b1d of run r48201aa, whose tool may still run. Stop that tool on its step runtime, then delete ~/.teamai/logins/codex.lock.
+⚠ The codex login teamai keeps stays held by attempt a3f0c2b1d of run r48201aa, whose tool may still run. Stop that tool on its step runtime, then run teamai workflow cancel r48201aa --release a3f0c2b1d, which lets the attempt go and ends its login.
 ```
 
 解决原因后，再运行一次同样的 `teamai workflow cancel r48201aa`。这个运行已经取消，所以它会停止这次尝试、关闭它的位置、释放登录，并回答这个运行以及它关闭的尝试。没有可停止的内容时，它回答 `run_settled`：
