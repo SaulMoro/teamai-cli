@@ -143,15 +143,15 @@ export function providerOf(instance: InitInstance, tool: PaseoTool, { custom, na
 
     if (problem !== undefined) return { cannot: problem };
 
-    return command === undefined || runsCommand({ executable: runs, command })
+    return command === undefined || runsCommand({ executable: runs, command, expandsHome: false })
       ? { provider: named }
       : { cannot: `the runtime's providers option names ${named}, which runs ${runs ?? 'its tool\'s own command'} rather than its command ${command}; name a provider whose command is ${command}` };
   }
 
   // A provider with no command of its own runs the tool's.
   const runsOwn = (entry: CustomProviders[string]): boolean => (command === undefined
-    ? (entry.command?.[0] === undefined || runsCommand({ executable: entry.command[0], command: tool })) && home !== undefined && entry.env?.[variable] === home
-    : runsCommand({ executable: entry.command?.[0], command }));
+    ? (entry.command?.[0] === undefined || runsCommand({ executable: entry.command[0], command: tool, expandsHome: false })) && home !== undefined && entry.env?.[variable] === home
+    : runsCommand({ executable: entry.command?.[0], command, expandsHome: false }));
 
   if (command === undefined && home === undefined) {
     return { cannot: `the team instance names neither a command nor a home for Paseo to run ${tool} with; add a Paseo provider on the daemon's host that extends ${tool}, then name it in the runtime's providers option` };

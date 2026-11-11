@@ -20,7 +20,7 @@ import type { Provider } from './t3.js';
  * that command by name or path. Any other is a wrapper or a team tool's command, which a base tool never runs on.
  */
 export function runsOwnBinary(binaryPath: string | undefined, driver: Driver): boolean {
-  return binaryPath === undefined || runsCommand({ executable: binaryPath, command: DRIVERS[driver].tool });
+  return binaryPath === undefined || runsCommand({ executable: binaryPath, command: DRIVERS[driver].tool, expandsHome: true });
 }
 
 /** What finds the provider instance of each tool instance: T3's instances, which of them can run now, and each one's Binary path. */
@@ -96,7 +96,7 @@ export function servedInstances({ instances, mapped, lookup }: { instances: Init
 
       const binaryPath = lookup.binaryPathOf(id);
 
-      if (command !== undefined && binaryPath !== undefined && !runsCommand({ executable: binaryPath, command })) {
+      if (command !== undefined && binaryPath !== undefined && !runsCommand({ executable: binaryPath, command, expandsHome: true })) {
         unavailable[name] = fitReason(`T3 Code provider instance "${id}" has the Binary path ${binaryPath}, which is not ${command}, the command ${name} runs. Set its Binary path in T3 Code under Settings → Providers to the absolute path of ${command} (command -v ${command}), or change instances.${name}`);
         continue;
       }
@@ -116,7 +116,7 @@ export function servedInstances({ instances, mapped, lookup }: { instances: Init
 
       if (provider.driverKind !== driver) return false;
 
-      return home === undefined ? runsCommand({ executable: binaryPath, command: runs }) : runsOwnBinary(binaryPath, driver) && lookup.homeOf(provider, driver) === home;
+      return home === undefined ? runsCommand({ executable: binaryPath, command: runs, expandsHome: true }) : runsOwnBinary(binaryPath, driver) && lookup.homeOf(provider, driver) === home;
     });
 
     const what = home === undefined ? runs : `${runs} in ${lookup.shown(home)}`;

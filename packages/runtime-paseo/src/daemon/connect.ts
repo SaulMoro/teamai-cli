@@ -721,7 +721,7 @@ export async function connect(url: string, paseo: PaseoClient, abandoned?: Abort
       }
 
       const setUp = `add one on the daemon's host that extends ${tool} with command ${JSON.stringify([id])} (\`paseo daemon config set agents.providers …\`, then \`paseo daemon reload\`)`;
-      let provider = Object.entries(configured).find(([, entry]) => entry.extends === tool && runsCommand({ executable: entry.command?.[0], command: id }))?.[0];
+      let provider = Object.entries(configured).find(([, entry]) => entry.extends === tool && runsCommand({ executable: entry.command?.[0], command: id, expandsHome: false }))?.[0];
       let added = false;
 
       if (provider === undefined) {

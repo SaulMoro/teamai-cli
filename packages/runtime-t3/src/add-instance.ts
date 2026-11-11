@@ -76,7 +76,7 @@ function isSame({ settings, id, instance, userHome }: { settings: z.infer<typeof
 
   if (kept?.driver !== instance.driver) return false;
 
-  if (!(binaryPath === undefined ? instance.command === DRIVERS[instance.driver].tool : runsCommand({ executable: binaryPath, command: instance.command }))) return false;
+  if (!(binaryPath === undefined ? instance.command === DRIVERS[instance.driver].tool : runsCommand({ executable: binaryPath, command: instance.command, expandsHome: true }))) return false;
 
   return instance.homePath === undefined || instanceToolHome(settings, { instanceId: id, driver: instance.driver, userHome }) === instance.homePath;
 }

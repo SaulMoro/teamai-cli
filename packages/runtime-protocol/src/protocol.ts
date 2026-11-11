@@ -407,17 +407,17 @@ const WINDOWS_COMMAND_EXTENSIONS = ['', '.exe', '.cmd', '.bat'];
 
 /**
  * Whether an app's provider whose Binary path or command is `executable` runs an instance's `command`, as T3 Code and
- * Paseo start it: the same name, which the app finds on its PATH, or a path to a file of that name, absolute or in the
- * home folder (`~/`, which T3 Code expands); on Windows also `<command>.exe`, `.cmd` or `.bat`, in any case. A path
- * relative to another folder names no file the runtime can know.
+ * Paseo start it: the same name, which the app finds on its PATH, or a path to a file of that name, absolute or, for an
+ * app that `expandsHome` (T3 Code; Paseo does not), in the home folder (`~/`); on Windows also `<command>.exe`, `.cmd` or
+ * `.bat`, in any case. A path relative to another folder names no file the runtime can know.
  */
-export function runsCommand({ executable, command, platform = process.platform }: { executable: string | undefined; command: string; platform?: NodeJS.Platform }): boolean {
+export function runsCommand({ executable, command, expandsHome, platform = process.platform }: { executable: string | undefined; command: string; expandsHome: boolean; platform?: NodeJS.Platform }): boolean {
   if (executable === undefined) return false;
 
   if (executable === command) return true;
   const paths = platform === 'win32' ? path.win32 : path.posix;
   const name = paths.basename(executable);
-  const isInHome = executable.startsWith('~/') || (platform === 'win32' && executable.startsWith('~\\'));
+  const isInHome = expandsHome && (executable.startsWith('~/') || (platform === 'win32' && executable.startsWith('~\\')));
 
   if (paths.isAbsolute(command) || (!paths.isAbsolute(executable) && !isInHome && name !== executable)) return false;
 

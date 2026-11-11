@@ -19,24 +19,25 @@ describe('a reason a runtime gives in init\'s unavailable', () => {
 // T3 Code and Paseo start a provider's Binary path or command as given: a bare name from PATH, an absolute path as it is.
 describe('whether an app\'s provider runs an instance\'s command', () => {
   it.each([
-    { executable: undefined, command: 'acme-claude', platform: 'darwin', runs: false },
-    { executable: 'acme-claude', command: 'acme-claude', platform: 'darwin', runs: true },
-    { executable: '/opt/acme/bin/acme-claude', command: 'acme-claude', platform: 'darwin', runs: true },
-    { executable: '/opt/acme/bin/acme-claude', command: '/opt/acme/bin/acme-claude', platform: 'linux', runs: true },
-    { executable: '/opt/acme/bin/acme-claude-old', command: 'acme-claude', platform: 'darwin', runs: false },
-    { executable: '/opt/acme/bin/Acme-Claude', command: 'acme-claude', platform: 'darwin', runs: false },
-    { executable: 'bin/acme-claude', command: 'acme-claude', platform: 'linux', runs: false },
-    // T3 Code expands a Binary path in the home folder, such as Claude's own local install.
-    { executable: '~/.claude/local/claude', command: 'claude', platform: 'darwin', runs: true },
-    { executable: '~\\bin\\acme-claude.exe', command: 'acme-claude', platform: 'win32', runs: true },
-    { executable: '~acme/bin/acme-claude', command: 'acme-claude', platform: 'linux', runs: false },
-    { executable: '/opt/acme/bin/acme-claude', command: '/usr/local/bin/acme-claude', platform: 'linux', runs: false },
-    { executable: 'C:\\Acme\\bin\\Acme-Claude.EXE', command: 'acme-claude', platform: 'win32', runs: true },
-    { executable: 'C:\\Acme\\bin\\acme-claude.cmd', command: 'acme-claude', platform: 'win32', runs: true },
-    { executable: 'acme-claude.exe', command: 'acme-claude', platform: 'win32', runs: true },
-    { executable: 'C:\\Acme\\bin\\acme-claude.ps1', command: 'acme-claude', platform: 'win32', runs: false },
-  ] as const)('$executable runs $command on $platform: $runs', ({ executable, command, platform, runs }) => {
-    expect(runsCommand({ executable, command, platform })).toBe(runs);
+    { executable: undefined, command: 'acme-claude', platform: 'darwin', expandsHome: false, runs: false },
+    { executable: 'acme-claude', command: 'acme-claude', platform: 'darwin', expandsHome: false, runs: true },
+    { executable: '/opt/acme/bin/acme-claude', command: 'acme-claude', platform: 'darwin', expandsHome: false, runs: true },
+    { executable: '/opt/acme/bin/acme-claude', command: '/opt/acme/bin/acme-claude', platform: 'linux', expandsHome: false, runs: true },
+    { executable: '/opt/acme/bin/acme-claude-old', command: 'acme-claude', platform: 'darwin', expandsHome: false, runs: false },
+    { executable: '/opt/acme/bin/Acme-Claude', command: 'acme-claude', platform: 'darwin', expandsHome: false, runs: false },
+    { executable: 'bin/acme-claude', command: 'acme-claude', platform: 'linux', expandsHome: false, runs: false },
+    // T3 Code expands a Binary path in the home folder, such as Claude's own local install; Paseo does not.
+    { executable: '~/.claude/local/claude', command: 'claude', platform: 'darwin', expandsHome: true, runs: true },
+    { executable: '~\\bin\\acme-claude.exe', command: 'acme-claude', platform: 'win32', expandsHome: true, runs: true },
+    { executable: '~/bin/acme-claude', command: 'acme-claude', platform: 'darwin', expandsHome: false, runs: false },
+    { executable: '~acme/bin/acme-claude', command: 'acme-claude', platform: 'linux', expandsHome: true, runs: false },
+    { executable: '/opt/acme/bin/acme-claude', command: '/usr/local/bin/acme-claude', platform: 'linux', expandsHome: false, runs: false },
+    { executable: 'C:\\Acme\\bin\\Acme-Claude.EXE', command: 'acme-claude', platform: 'win32', expandsHome: false, runs: true },
+    { executable: 'C:\\Acme\\bin\\acme-claude.cmd', command: 'acme-claude', platform: 'win32', expandsHome: false, runs: true },
+    { executable: 'acme-claude.exe', command: 'acme-claude', platform: 'win32', expandsHome: false, runs: true },
+    { executable: 'C:\\Acme\\bin\\acme-claude.ps1', command: 'acme-claude', platform: 'win32', expandsHome: false, runs: false },
+  ] as const)('$executable runs $command on $platform, expanding ~/ $expandsHome: $runs', ({ executable, command, platform, expandsHome, runs }) => {
+    expect(runsCommand({ executable, command, platform, expandsHome })).toBe(runs);
   });
 });
 
