@@ -2906,7 +2906,7 @@ describe('a warm image', () => {
     await vi.waitFor(() => { expect(engine.containers()).toEqual([]); }, { timeout: 10_000 });
   }, 40_000);
 
-  it.each([
+  it.each<{ options: Message; says: (tag: string) => unknown }>([
     { options: { provider: 'docker', image: IMAGE }, says: (tag: string) => `The warm image ${tag} was removed after it was made for attempt ${ATTEMPT}, so no sandbox was made for it. Start the step again, and teamai makes the image again.` },
     { options: { provider: 'sbx', agent: 'claude' }, says: (tag: string) => expect.stringContaining(`template ${tag} not found`) },
   ])('fails the open on $options.provider of an attempt whose warm image was removed once made, rather than making it again while creating the sandbox, which a close waits for', async ({ options, says }) => {
