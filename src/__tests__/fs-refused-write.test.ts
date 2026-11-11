@@ -66,6 +66,23 @@ it.skipIf(process.platform === 'win32' || isRoot).each([
   expect(refusedWrite(await thrown(() => operation(source, path.join(refusing, 'target.txt'))))).toEqual({ folder: refusing, code: 'EACCES' });
 });
 
+it.skipIf(process.platform === 'win32' || isRoot)('names the source\'s folder when a rename may not take the file out of it', async () => {
+  const { writable, refusing } = folders();
+  fs.chmodSync(refusing, 0o755);
+  const source = path.join(refusing, 'source.txt');
+  fs.writeFileSync(source, 'kept\n');
+  fs.chmodSync(refusing, 0o555);
+
+  expect(refusedWrite(await thrown(() => fs.promises.rename(source, path.join(writable, 'target.txt'))))).toEqual({ folder: refusing, code: 'EACCES' });
+});
+
+it.skipIf(process.platform === 'win32' || isRoot)('reads no refused write in a copy whose source may not be read', async () => {
+  const { writable, source } = folders();
+  fs.chmodSync(source, 0o200);
+
+  expect(refusedWrite(await thrown(() => fs.promises.copyFile(source, path.join(writable, 'target.txt'))))).toBeUndefined();
+});
+
 it('reads no refused write in an EPERM of a rename on Windows, where another process holding the file open causes it', () => {
   vi.stubGlobal('process', { ...process, platform: 'win32' });
   const renamed = (code: string) => Object.assign(new Error(`${code}: rename`), { code, syscall: 'rename', path: 'C:\\team\\lock.new', dest: 'C:\\team\\lock' });

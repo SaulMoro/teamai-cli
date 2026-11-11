@@ -91,7 +91,29 @@ function isRefusedWriteCall({ code, path: file, syscall }: z.infer<typeof Refuse
   // Windows refuses a rename over a file another process holds open, such as a virus scanner, for a moment.
   if (process.platform === 'win32' && code === 'EPERM' && syscall === 'rename') return false;
 
-  return syscall !== 'open' || !isRefusedRead(file);
+  // A copy reads its source, so one refused there is a read.
+  return (syscall !== 'open' && syscall !== 'copyfile') || !isRefusedRead(file);
+}
+
+/** Whether this process may write in `folder`. */
+function mayWriteIn(folder: string): boolean {
+  try {
+    accessSync(folder, fsConstants.W_OK);
+
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * The folder a refused call was refused a write in: where it writes, or, for a rename that may write there, the folder
+ * it takes its source out of.
+ */
+function refusedFolderOf({ path: file, dest, syscall }: z.infer<typeof RefusedWriteErrorSchema>): string {
+  if (dest === undefined) return path.dirname(file);
+
+  return syscall === 'rename' && mayWriteIn(path.dirname(dest)) && !mayWriteIn(path.dirname(file)) ? path.dirname(file) : path.dirname(dest);
 }
 
 /** The strerror git prints after the path it may not write, by the code it stands for. */
@@ -128,7 +150,7 @@ export function refusedWrite(cause: unknown, { gitCwd }: { gitCwd?: string } = {
     if (current instanceof RefusedWriteError) return current.refused;
     const errno = RefusedWriteErrorSchema.safeParse(current);
 
-    if (errno.success && isRefusedWriteCall(errno.data)) return { folder: path.dirname(errno.data.dest ?? errno.data.path), code: errno.data.code };
+    if (errno.success && isRefusedWriteCall(errno.data)) return { folder: refusedFolderOf(errno.data), code: errno.data.code };
     const line = gitCwd !== undefined && current instanceof Error ? GIT_REFUSAL_LINE.exec(current.message) : null;
     const written = line?.[1] ?? line?.[2];
     const code = GIT_REFUSALS.find(({ strerror }) => strerror === line?.[3])?.code;
