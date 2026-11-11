@@ -1,4 +1,3 @@
-import crypto from 'node:crypto';
 import path from 'node:path';
 import fse from 'fs-extra';
 import type { TeamaiConfig, LocalConfig } from '../types.js';
@@ -13,6 +12,7 @@ import {
   dirTeamSubsetEqual,
   readFileSafe,
   writeFile,
+  syncFolders,
 } from './fs.js';
 import { getFileContentAtRev, getFileContentWhenAdded } from './git.js';
 import { installOf, locate, ownOf, writable } from '../locate.js';
@@ -308,10 +308,7 @@ async function syncSkillsToLocal(
  * as they would a copy over it, and renamed into place.
  */
 async function replaceSkillDir(teamSkillDir: string, localSkillDir: string): Promise<void> {
-  const parent = path.dirname(localSkillDir);
-  const tag = `${path.basename(localSkillDir)}.${process.pid}.${crypto.randomBytes(6).toString('hex')}`;
-  const staged = path.join(parent, `.${tag}.teamai-sync`);
-  const previous = path.join(parent, `.${tag}.teamai-prev`);
+  const { staged, previous } = syncFolders(localSkillDir);
 
   try {
     await copyRegularTree(localSkillDir, staged);

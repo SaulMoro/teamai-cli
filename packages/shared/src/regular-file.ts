@@ -327,6 +327,21 @@ async function renameRetrying(from: string, to: string): Promise<void> {
 }
 
 /**
+ * The folder beside `to` a copy into it is built in, renamed or copied into place once whole: `.<name>.<8 hex>.staging`.
+ * A copy cut short leaves it, which a scan passes over (`isStagingName`).
+ */
+export function stagingFolder(to: string): string {
+  return path.join(path.dirname(to), `.${path.basename(to)}.${randomBytes(4).toString('hex')}.staging`);
+}
+
+/** Whether `name` is a folder `stagingFolder` makes: for a destination named `of` when given, else for any. */
+export function isStagingName(name: string, of?: string): boolean {
+  const prefix = of === undefined ? undefined : `.${of}.`;
+
+  return prefix === undefined ? /^\..+\.[0-9a-f]{8}\.staging$/.test(name) : name.startsWith(prefix) && /^[0-9a-f]{8}\.staging$/.test(name.slice(prefix.length));
+}
+
+/**
  * Moves `from`, a file or a folder, to `to`, where nothing is yet, as fs-extra's `move` does: a rename, or across
  * filesystems a copy through `copyRegularTree` and then a removal of `from`. The copy goes into a folder beside `to`,
  * renamed into place once whole, so a copy that refuses an entry leaves `from` as it was and nothing at `to`.
@@ -345,7 +360,7 @@ export async function moveRegularTree(from: string, to: string): Promise<void> {
     if (!(error instanceof Error && 'code' in error && error.code === 'EXDEV')) throw error;
   }
 
-  const staging = path.join(path.dirname(to), `.${path.basename(to)}.${randomBytes(4).toString('hex')}.staging`);
+  const staging = stagingFolder(to);
 
   try {
     await copyRegularTree(from, staging, { existing: 'fail' });

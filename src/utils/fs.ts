@@ -1,4 +1,4 @@
-import { copyRegularTree, readRegularFile } from '@teamai/shared/regular-file';
+import { copyRegularTree, isStagingName, readRegularFile, stagingFolder } from '@teamai/shared/regular-file';
 import fse from 'fs-extra';
 import crypto from 'node:crypto';
 import path from 'node:path';
@@ -16,16 +16,23 @@ const IGNORED_NAMES = new Set([
   '.git',
 ]);
 
+/** A pre-push sync's update and backup of a skill (`replaceSkillDir`): `.<name>.<pid>.<12 hex>.teamai-sync` and `-prev`. */
+const SYNC_NAME = /^\..+\.\d+\.[0-9a-f]{12}\.teamai-(?:sync|prev)$/;
+
 /**
- * The working folders teamai's own copies leave beside their destination when cut short, each holding a whole skill:
- * a copy's staging folder (`copyDir`, and `moveRegularTree` across filesystems), `.<name>.<8 hex>.staging`, and the
- * pre-push sync's update and backup of a skill (`replaceSkillDir`), `.<name>.<pid>.<12 hex>.teamai-sync` and `-prev`.
+ * The folders a pre-push sync builds beside skill folder `dir`: `staged`, the update, renamed into place once whole, and
+ * `previous`, the copy it replaces until then. A sync cut short leaves them, each holding a whole skill, which a scan
+ * passes over (`isIgnored`).
  */
-const WORKING_NAMES = [/^\..+\.[0-9a-f]{8}\.staging$/, /^\..+\.\d+\.[0-9a-f]{12}\.teamai-(?:sync|prev)$/];
+export function syncFolders(dir: string) {
+  const tag = path.join(path.dirname(dir), `.${path.basename(dir)}.${process.pid}.${crypto.randomBytes(6).toString('hex')}`);
+
+  return { staged: `${tag}.teamai-sync`, previous: `${tag}.teamai-prev` };
+}
 
 /** Whether a scan or a copy passes `name` over: caches, git's folder, and a working folder a copy cut short left. */
 export function isIgnored(name: string): boolean {
-  return IGNORED_NAMES.has(name) || name.endsWith('.pyc') || WORKING_NAMES.some((working) => working.test(name));
+  return IGNORED_NAMES.has(name) || name.endsWith('.pyc') || isStagingName(name) || SYNC_NAME.test(name);
 }
 
 /**
@@ -310,7 +317,7 @@ export async function copyDir(
 
   if (there !== undefined && !there.isDirectory() && !there.isSymbolicLink()) throw new Error(`${destExpanded} is not a folder, so teamai does not copy the folder ${srcExpanded} over it`);
   await removeStaleStaging(destExpanded);
-  const staging = path.join(path.dirname(destExpanded), `.${path.basename(destExpanded)}.${crypto.randomBytes(4).toString('hex')}.staging`);
+  const staging = stagingFolder(destExpanded);
 
   try {
     await copyRegularTree(srcExpanded, staging, {
@@ -343,10 +350,9 @@ const STALE_STAGING_MS = 60 * 60 * 1000;
 /** Removes the staging folders beside `dest` that a copy of it cut short left over an hour ago. */
 async function removeStaleStaging(dest: string): Promise<void> {
   const parent = path.dirname(dest);
-  const prefix = `.${path.basename(dest)}.`;
 
   for (const name of await fse.readdir(parent).catch(() => [])) {
-    if (!name.startsWith(prefix) || !/^[0-9a-f]{8}\.staging$/.test(name.slice(prefix.length))) continue;
+    if (!isStagingName(name, path.basename(dest))) continue;
     const left = await fse.lstat(path.join(parent, name)).catch(() => undefined);
 
     if (left !== undefined && left.mtimeMs + STALE_STAGING_MS < Date.now()) await fse.remove(path.join(parent, name));

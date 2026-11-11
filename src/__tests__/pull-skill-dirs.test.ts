@@ -45,6 +45,7 @@ vi.mock('../skill-content.js', async (importOriginal) => {
 });
 
 import { pull } from '../pull.js';
+import { syncFolders } from '../utils/fs.js';
 import { resolveDesiredSkills } from '../resources/desired.js';
 import { deployBuiltinSkills } from '../builtin-skills.js';
 import { packagedSkillRoots } from '../skill-content.js';
@@ -132,8 +133,8 @@ describe('a pull and the homes the env moves', () => {
 
   it('delivers none of the folders a pre-push sync cut short leaves beside a skill, as a skill of its own', async () => {
     await fse.ensureDir(path.join(home, '.config', 'opencode'));
-    for (const left of ['.deploy.4242.0123456789ab.teamai-sync', '.deploy.4242.0123456789ab.teamai-prev']) {
-      await fse.outputFile(path.join(repo, 'skills', left, 'SKILL.md'), '---\nname: deploy\ndescription: d\n---\nHalf synced.\n');
+    for (const left of Object.values(syncFolders(path.join(repo, 'skills', 'deploy')))) {
+      await fse.outputFile(path.join(left, 'SKILL.md'), '---\nname: deploy\ndescription: d\n---\nHalf synced.\n');
     }
 
     await pull({});
