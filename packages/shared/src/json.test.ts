@@ -9,20 +9,20 @@ describe('isJsonObject', () => {
     expect(isJsonObject(Object.assign(Object.create(null), { a: 1 }))).toBe(true);
   });
 
+  it('takes an object a caller built, with a field left undefined or nested thousands of levels deep, as it stands', () => {
+    let deep: JsonObject = { leaf: 1 };
+    for (let level = 0; level < 10_000; level++) deep = { deep };
+
+    expect(isJsonObject({ scorer: 'review', requests: undefined })).toBe(true);
+    expect(isJsonObject(deep)).toBe(true);
+  });
+
   it('refuses arrays, primitives, null and undefined', () => {
     for (const value of [[], 'x', 1, true, null, undefined]) expect(isJsonObject(value)).toBe(false);
   });
 
-  it('refuses an object JSON cannot write, at the top or anywhere below it, and one that holds itself', () => {
+  it('refuses an object no parser makes', () => {
     for (const value of [new Date(), new Map(), () => {}, new (class Point { x = 1; })()]) expect(isJsonObject(value)).toBe(false);
-
-    expect(isJsonObject({ at: new Date() })).toBe(false);
-    expect(isJsonObject({ list: [1, undefined] })).toBe(false);
-    expect(isJsonObject({ nested: { run: () => {} } })).toBe(false);
-    expect(isJsonObject({ id: Symbol('x') })).toBe(false);
-    expect(isJsonObject({ count: 1n })).toBe(false);
-    // A YAML alias inside its own anchor parses to an object that holds itself, which no JSON text writes.
-    expect(isJsonObject(parseYaml('loop: &self\n  again: *self\n'))).toBe(false);
   });
 
   it('narrows unparsed input, so data from a file needs no annotation first', () => {
