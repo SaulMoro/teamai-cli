@@ -2,6 +2,8 @@
 //
 //  How teamai and the runtimes stop what they started: a detached process group, or an attached command with its
 //  descendants, through a child handle while its starter lives, or through the record it left once its starter died.
+//  It also owns process identity, how a recorded pid is told from a later process given it, which the locks judge
+//  their holders by as well.
 //
 
 import { execFile, execFileSync, type ChildProcess } from 'node:child_process';
@@ -141,7 +143,7 @@ async function recordedStartOf(pid: number): Promise<{ startTicks: number; pidNa
  * What a record keeps to tell the process its pid named from a later one given that pid, as a container hands pids out
  * again. On Linux `startTicks` is when it started, in clock ticks since boot, and `pidNamespace` the pid namespace its
  * pid belongs to. Elsewhere a stop's record keeps `start`, when it started as ps prints it, and a lock keeps
- * `startedAt`, a time it was running, as an ISO date. A stop's record written before the start was read keeps
+ * `startedAt`, a time it was running, written as an ISO date. A stop's record written before the start was read keeps
  * `spawnedAt`, the time in milliseconds its starter spawned it, and keeps it beside `startTicks` for a teamai that
  * reads no `startTicks`. Every record of a process derives its fields from this one.
  */
@@ -151,7 +153,8 @@ export const ProcessIdentitySchema = z.object({
   pidNamespace: z.string().min(1).optional(),
   start: z.string().min(1).optional(),
   spawnedAt: z.number().int().nonnegative().optional(),
-  startedAt: z.string().optional(),
+  // Written as an ISO date, read as milliseconds; NaN when it names no time.
+  startedAt: z.string().transform((at) => Date.parse(at)).optional(),
 });
 
 export type ProcessIdentity = z.infer<typeof ProcessIdentitySchema>;
@@ -178,12 +181,16 @@ function isOtherPidNamespace(recorded: string | undefined, own: string | undefin
   return recorded !== undefined && recorded !== own;
 }
 
+let ownNamespace: Promise<string | undefined> | undefined;
+
 /** This process's pid namespace, read once: a process never changes its own. */
-let namespaceHere: Promise<string | undefined> | undefined;
+function namespaceHere(): Promise<string | undefined> {
+  return ownNamespace ??= ownPidNamespace();
+}
 
 /** Whether `recorded` keeps a start, or a time, that the start of a live process can be compared with. */
 function keepsStart(recorded: ProcessIdentity): boolean {
-  return recorded.startTicks !== undefined || recorded.start !== undefined || recorded.spawnedAt !== undefined || !Number.isNaN(Date.parse(recorded.startedAt ?? ''));
+  return recorded.startTicks !== undefined || recorded.start !== undefined || recorded.spawnedAt !== undefined || !Number.isNaN(recorded.startedAt ?? Number.NaN);
 }
 
 /** Whether `live`, the start of the process with the recorded pid now, if any, is the start `recorded` names. */
@@ -203,7 +210,7 @@ function verdictOf(recorded: ProcessIdentity, live: ProcessStart | undefined, na
   // once the spawn returned.
   if (recorded.spawnedAt !== undefined) return live.at <= recorded.spawnedAt && recorded.spawnedAt - live.at < SPAWN_LEEWAY_MS ? 'same' : 'other';
 
-  const written = Date.parse(recorded.startedAt ?? '');
+  const written = recorded.startedAt ?? Number.NaN;
 
   if (Number.isNaN(written)) return 'unknown';
 
@@ -217,7 +224,7 @@ function verdictOf(recorded: ProcessIdentity, live: ProcessStart | undefined, na
  * start or time the record keeps. A pid another user's process has (EPERM) is live.
  */
 export async function isSameProcess(recorded: ProcessIdentity): Promise<ProcessVerdict> {
-  const namespace = await (namespaceHere ??= ownPidNamespace());
+  const namespace = await namespaceHere();
 
   // Its pid names another process here, or none, so neither says anything of the recorded one.
   if (isOtherPidNamespace(recorded.pidNamespace, namespace)) return 'foreign';
@@ -236,7 +243,7 @@ export async function isSameProcess(recorded: ProcessIdentity): Promise<ProcessV
 
 /** On Linux, what tells process `pid` from a later one given its pid: when it started, and its pid namespace. Elsewhere only its pid: no ps runs for it. */
 export async function identityOf(pid: number): Promise<ProcessIdentity> {
-  const [startTicks, pidNamespace] = await Promise.all([processStartTicks(pid), namespaceHere ??= ownPidNamespace()]);
+  const [startTicks, pidNamespace] = await Promise.all([processStartTicks(pid), namespaceHere()]);
 
   return { pid, ...(startTicks !== undefined && { startTicks }), ...(pidNamespace !== undefined && { pidNamespace }) };
 }
@@ -324,7 +331,7 @@ function writeGroup(file: string, body: string): void {
 export async function stopRecordedGroup(dir: string): Promise<void> {
   // A record this process is still completing is finished first, so the stop removes it rather than racing its write.
   await pendingStarts.get(path.resolve(dir));
-  const namespace = await (namespaceHere ??= ownPidNamespace());
+  const namespace = await namespaceHere();
 
   for (const file of await recordedGroups(dir)) {
     const recorded = await readGroup(file);
@@ -383,7 +390,7 @@ export async function stopGroup(group: Recorded): Promise<boolean> {
   const leader = running?.get(group.pid);
 
   // Without current identities, a pid reused since cannot be told apart, so the group is left alone.
-  if (!running || (leader !== undefined && verdictOf(group, leader.start, await (namespaceHere ??= ownPidNamespace())) !== 'same')) return false;
+  if (!running || (leader !== undefined && verdictOf(group, leader.start, await namespaceHere()) !== 'same')) return false;
   signalGroup(group.pid, 'SIGTERM');
 
   // Counted rather than timed, so a faked clock cannot stretch the grace period.
@@ -441,7 +448,7 @@ function descendantsOf(pid: number): FoundProcess[] {
 async function stopTree(recorded: Recorded): Promise<void> {
   const rootStart = runningProcesses()?.get(recorded.pid)?.start;
 
-  if (process.platform === 'win32' || rootStart === undefined || verdictOf(recorded, rootStart, await (namespaceHere ??= ownPidNamespace())) !== 'same') return;
+  if (process.platform === 'win32' || rootStart === undefined || verdictOf(recorded, rootStart, await namespaceHere()) !== 'same') return;
   const tree = [...descendantsOf(recorded.pid), { pid: recorded.pid, start: rootStart }];
 
   /** Signals each process of the tree that is still the one recorded; whether any was reached. */

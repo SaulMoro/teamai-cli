@@ -428,7 +428,10 @@ describe('workflow: { from } per item of a for_each, on a driver that launches n
     const run = await readRun(config, runId);
     if (typeof run !== 'object') throw new Error(`run ${run}`);
 
-    expect(run.steps.filter((step) => step.id.startsWith('trials')).map(({ id, status }) => ({ id, status }))).not.toContainEqual(expect.objectContaining({ status: 'leased' }));
+    const trials = run.steps.filter((step) => step.id.startsWith('trials')).map(({ id, status }) => ({ id, status }));
+    // The second item starts only once the first is refused, the case this pins.
+    expect(trials).toContainEqual({ id: 'trials[1]', status: 'failed' });
+    expect(trials).not.toContainEqual(expect.objectContaining({ status: 'leased' }));
     expect(next).toMatchObject({ data: { done: { outcome: 'failed' } } });
   });
 });

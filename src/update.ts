@@ -601,7 +601,7 @@ export async function isHolderGone(holder: LockHolder): Promise<boolean> {
     case 'unknown':
       return false;
     case 'foreign':
-      return Date.now() - Date.parse(holder.startedAt ?? '') > FOREIGN_HOLD_MS;
+      return Date.now() - (holder.startedAt ?? Number.NaN) > FOREIGN_HOLD_MS;
     default: {
       const unhandled: never = verdict;
 

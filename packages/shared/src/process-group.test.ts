@@ -456,8 +456,8 @@ it.skipIf(process.platform === 'win32')('tells the process a record names from a
 
     expect(await isSameProcess({ pid, spawnedAt })).toBe('same');
     expect(await isSameProcess({ pid, spawnedAt: spawnedAt - 3_600_000 })).toBe('other');
-    expect(await isSameProcess({ pid, startedAt: new Date(spawnedAt + 1000).toISOString() })).toBe('same');
-    expect(await isSameProcess({ pid, startedAt: new Date(spawnedAt - 3_600_000).toISOString() })).toBe('other');
+    expect(await isSameProcess({ pid, startedAt: spawnedAt + 1000 })).toBe('same');
+    expect(await isSameProcess({ pid, startedAt: spawnedAt - 3_600_000 })).toBe('other');
     expect(await isSameProcess({ pid })).toBe('unknown');
     expect(await isSameProcess({ pid: 2147483646 })).toBe('other');
   } finally {

@@ -85,7 +85,7 @@ export async function readRegularFile(file: string, encoding?: BufferEncoding): 
 /**
  * The contents of `file`, which must be a regular file and not a link to one: for a folder whose hash or acceptance
  * holds a link's text and not what it points to, so what is read is what was accepted. A link rejects with
- * `NotRegularFileError`, and so does one put there after the check, which the open does not follow.
+ * `NotRegularFileError`, and off Windows so does one put there after the check, which the open does not follow.
  */
 export async function readRegularFileNoLink(file: string): Promise<Buffer>;
 export async function readRegularFileNoLink(file: string, encoding: BufferEncoding): Promise<string>;

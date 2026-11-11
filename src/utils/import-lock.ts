@@ -286,7 +286,7 @@ async function judgeLock(lockPath: string): Promise<boolean> {
     if (await isRunLive(meta)) return true;
 
     // Check TTL.
-    const parsed = Date.parse(meta.startedAt ?? '');
+    const parsed = meta.startedAt ?? Number.NaN;
     const age = Number.isNaN(parsed) ? Infinity : Date.now() - parsed;
 
     if (age > LOCK_TTL_MS) {
