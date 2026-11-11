@@ -8,7 +8,7 @@ import { toolsLaunchDeps } from '../workflow/runtimes/sources.js';
 import { attemptRun, type AttemptRun } from '../workflow/runtimes/attempt.js';
 import type { DriverCan } from '../workflow/requirements.js';
 import type { LocalConfig } from '../types.js';
-import { AttemptIdSchema, RunIdSchema } from '../workflow/store.js';
+import { AttemptIdSchema, attemptResultPath, RunIdSchema } from '../workflow/store.js';
 import type { StepRuntime } from '@teamai/runtime-protocol/step-runtime';
 import type { OpId } from '@teamai/runtime-protocol';
 
@@ -137,6 +137,56 @@ describe('a prompt\'s tool a resumed step attaches to on its step runtime', () =
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }
+  });
+});
+
+describe('a prompt\'s tool a restarted teamai sends anew on its step runtime', () => {
+  it('reads no result an earlier run of the tool left, when the runtime never got that exec and the tool writes none', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-sent-anew-'));
+    onTestFinished(() => fs.rmSync(root, { recursive: true, force: true }));
+    const config: LocalConfig = { repo: { localPath: root, remote: 'local', kind: 'self' }, username: 'tester', scope: 'project', additionalRoles: [], projectRoot: root, dataHome: path.join(root, 'data') };
+    const ids = { run: RunIdSchema.parse('r0123abcd'), attempt: AttemptIdSchema.parse('a00000001') };
+    const resultPath = attemptResultPath(config, ids.run, ids.attempt);
+    const view = { worktree: root, readonly: [], result: path.dirname(resultPath), runDir: path.join(root, 'scratch'), toolHome: {} };
+    let execs = 0;
+    // The first tool writes its result and teamai is killed before the end; the runtime that comes back knows no
+    // operation of the place, so the exec is sent again and the tool starts anew, writing no result this time.
+    const runtime: StepRuntime<DriverCan> = {
+      name: 'forgetful',
+      init: async () => ({ ok: true, can: {}, launchesAgents: false }),
+      open: async (_request, onAccepted) => {
+        await onAccepted('h-1');
+
+        return { kind: 'ready', handle: 'h-1' };
+      },
+      exec: async (_request, events) => {
+        execs += 1;
+        events.onAccepted?.({});
+
+        if (execs > 1) return { kind: 'exited', code: 0, stdout: '' };
+        fs.mkdirSync(path.dirname(resultPath), { recursive: true });
+        fs.writeFileSync(resultPath, '{"output":{"ok":true}}');
+
+        return new Promise(() => {});
+      },
+      prompt: async () => ({ kind: 'cancelled' }),
+      cancel: async () => {},
+      collect: async () => ({ ok: true }),
+      reattach: async () => ({ kind: 'alive', ops: [] }),
+      close: async () => ({ ok: true }),
+      dispose: async () => {},
+    };
+    const first = attemptRun({ config, ...ids, runtime, driver: 'forgetful' });
+    await first.open(view);
+    void first.exec({ argv: ['claude'], env: {}, unset: [], credentials: {}, cwd: root }, {}, 'tool');
+    await vi.waitFor(() => { expect(fs.existsSync(resultPath)).toBe(true); });
+
+    const launcher = runtimeLauncher(attemptRun({ config, ...ids, runtime, driver: 'forgetful' }), { view, tool: 'claude', toolHome: { tool: 'claude', dir: path.join(root, 'home') }, unset: [], credentials: {}, setUp: async () => undefined });
+    const ran = await stepLauncher(toolsLaunchDeps(), { start: launcher, canReattach: true, resolveTool: () => 'claude', resolveInstanceCommand: () => null })
+      .run('claude', { prompt: 'review', cwd: root, resultPath, secrets: {}, expected: undefined });
+
+    expect(execs).toBe(2);
+    expect('output' in ran ? ran.output : undefined).toBeUndefined();
   });
 });
 

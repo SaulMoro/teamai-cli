@@ -47,4 +47,14 @@ async function mask(file: string, secrets: Record<string, string>): Promise<void
   if (JSON.stringify(masked) !== JSON.stringify(kept)) await writeJsonAtomic(file, masked);
 }
 
-export const AttemptResult = { write, mask } as const;
+/**
+ * Removes the result file `file` a run of the step's tool left, before the tool starts anew, so the attempt reads only
+ * the result its own run writes. Anything but a regular file is left for the reader to refuse.
+ */
+async function removeLeft(file: string): Promise<void> {
+  const left = await fs.lstat(file).catch(() => undefined);
+
+  if (left?.isFile()) await fs.rm(file, { force: true });
+}
+
+export const AttemptResult = { write, mask, removeLeft } as const;

@@ -880,8 +880,13 @@ function attemptThrough({ config, run, attempt, sends, driver, deadline }: { con
 
       const exec = before.exec ?? { op: newOpId() };
       await save({ ...before, exec, phase: 'running' });
+      const reconnects = before.exec !== undefined && runtime.isExecReconnected === true;
+
+      // A tool sent anew, even under an id a teamai before this one recorded, writes its own result: one an earlier run
+      // of it left is not this run's. One it reconnects to, or found ended above, is.
+      if (kind === 'tool' && !reconnects) await AttemptResult.removeLeft(attemptResultPath(config, run, attempt));
       const acceptance = accepting(events);
-      const end = await sends.exec({ op: exec.op, handle, ...request }, { ...events, onAccepted: acceptance.onAccepted, onDisplay: acceptance.onDisplay }, kind, { reconnects: before.exec !== undefined && runtime.isExecReconnected === true, kept: acceptance.kept });
+      const end = await sends.exec({ op: exec.op, handle, ...request }, { ...events, onAccepted: acceptance.onAccepted, onDisplay: acceptance.onDisplay }, kind, { reconnects, kept: acceptance.kept });
       isLeft = end.kind === 'left';
 
       return end.kind === 'left' ? end : ended(end);
