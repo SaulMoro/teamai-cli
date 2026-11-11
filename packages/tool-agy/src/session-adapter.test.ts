@@ -1,5 +1,5 @@
 /**
- * agy-session-adapter.test.ts — reading Antigravity CLI (agy) conversations as sessions.
+ * session-adapter.test.ts — reading Antigravity CLI (agy) conversations as sessions.
  *
  * The transcripts under fixtures/agy are copies of real agy 1.4.8 conversations; the summaries
  * database is rebuilt here with agy's own table and the rows agy wrote for them.

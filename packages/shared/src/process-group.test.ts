@@ -4,7 +4,8 @@ import os from 'node:os';
 import path from 'node:path';
 import { afterEach, expect, it, vi } from 'vitest';
 import { z } from 'zod';
-import { identityOf, isSameProcess, recordGroup, stopGroup, stopProcess, stopRecordedGroup } from './process-group.js';
+import diagnostics from 'node:diagnostics_channel';
+import { identityOf, isSameProcess, ownGroups, PROCESS_READ_CHANNEL, recordGroup, stopGroup, stopProcess, stopRecordedGroup } from './process-group.js';
 
 /** Whether this platform tells start times through ps rather than `/proc`, so a fake ps on PATH is what is read. */
 const READS_PS = process.platform !== 'win32' && process.platform !== 'linux';
@@ -22,6 +23,8 @@ it('stops an attached child through child.kill without probing other PIDs', asyn
 });
 
 it('gives an attached child five seconds before SIGKILL and waits for its exit', async () => {
+  // No ps to list its descendants: the grace period counts on the faked clock, which a real ps answering would not.
+  vi.stubEnv('PATH', '');
   vi.useFakeTimers();
   const child = new ChildProcess();
   Object.defineProperty(child, 'pid', { value: 2147483647 });
@@ -88,7 +91,7 @@ it.skipIf(process.platform === 'win32')('stops an attached command when ps is un
 });
 
 it.runIf(READS_PS)('only escalates captured descendants with the same start time, including reparented survivors', async () => {
-  vi.useFakeTimers();
+  // On the real clock: the grace period runs out while ps, which runs off the event loop, answers in real time.
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-stop-'));
   const snapshot = path.join(directory, 'snapshot');
   const child = new ChildProcess();
@@ -110,7 +113,6 @@ esac
 `, { mode: 0o755 });
     vi.stubEnv('PATH', directory);
     const stopping = stopProcess(child, Promise.resolve('closed'), false)();
-    await vi.advanceTimersByTimeAsync(5000);
     expect(await stopping).toBe('closed');
     for (const pid of [424243, 424244, 424245]) expect(processKill).toHaveBeenCalledWith(pid, 'SIGTERM');
     expect(processKill).not.toHaveBeenCalledWith(424243, 0);
@@ -126,7 +128,7 @@ esac
 });
 
 it.runIf(READS_PS)('escalates only the shell when the current process snapshot fails', async () => {
-  vi.useFakeTimers();
+  // On the real clock: the grace period runs out while ps, which runs off the event loop, answers in real time.
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-stop-'));
   const child = new ChildProcess();
   Object.defineProperty(child, 'pid', { value: 424242 });
@@ -141,7 +143,6 @@ echo '424243 424242 Sun Oct 18 10:00:00 2026'
 `, { mode: 0o755 });
     vi.stubEnv('PATH', directory);
     const stopping = stopProcess(child, Promise.resolve('closed'), false)();
-    await vi.advanceTimersByTimeAsync(5000);
     expect(await stopping).toBe('closed');
     expect(processKill.mock.calls).toEqual([[424243, 'SIGTERM']]);
     expect(kill.mock.calls.filter(([signal]) => signal !== 0)).toEqual([['SIGTERM'], ['SIGKILL']]);
@@ -575,4 +576,45 @@ it.skipIf(process.platform === 'win32')('stops only what started in the starter\
     try { process.kill(-leader, 'SIGKILL'); } catch { /* Already stopped. */ }
     fs.rmSync(directory, { recursive: true, force: true });
   }
+});
+
+it.runIf(READS_PS)('lets a timer fire on time while it stops an attached command and what it left, however long ps takes', async () => {
+  const { directory, bin } = slowPs(0.5);
+  const shell = spawn('/bin/sh', ['-c', 'sleep 30 & echo $!; wait'], { stdio: ['ignore', 'pipe', 'ignore'] });
+  const left = await new Promise<number>((resolve) => { shell.stdout?.once('data', (chunk: Buffer) => resolve(Number(chunk.toString().trim()))); });
+  const exit = new Promise<void>((resolve) => { shell.once('exit', () => resolve()); });
+  try {
+    vi.stubEnv('PATH', `${bin}:/bin:/usr/bin`);
+    const lags: number[] = [];
+    let last = performance.now();
+    const lagTimer = setInterval(() => { const now = performance.now(); lags.push(now - last); last = now; }, 10);
+    await stopProcess(shell, exit, false)();
+    clearInterval(lagTimer);
+    vi.unstubAllEnvs();
+
+    expect(isRunning(left)).toBe(false);
+    expect(Math.max(...lags)).toBeLessThan(250);
+  } finally {
+    try { process.kill(left, 'SIGKILL'); } catch { /* Already stopped. */ }
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+  // The stop may wait out its five-second grace, with each ps it runs taking half a second.
+}, 20_000);
+
+it.skipIf(process.platform === 'win32')('tells each process read once, with the ps it ran or stands for, on every platform', async () => {
+  const told: unknown[] = [];
+  const listen = (message: unknown): void => { told.push(message); };
+  diagnostics.subscribe(PROCESS_READ_CHANNEL, listen);
+  try {
+    expect(await isSameProcess({ pid: process.pid, startedAt: Date.now() })).toBe('same');
+    expect(await ownGroups()).toBeDefined();
+  } finally {
+    diagnostics.unsubscribe(PROCESS_READ_CHANNEL, listen);
+  }
+
+  const spawned = process.platform !== 'linux';
+  expect(told).toEqual([
+    { ps: ['-o', 'lstart=', '-p', String(process.pid)], spawned },
+    { ps: ['-o', 'pgid=,tpgid=', '-p', String(process.pid)], spawned },
+  ]);
 });

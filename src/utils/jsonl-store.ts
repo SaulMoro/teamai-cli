@@ -18,7 +18,7 @@
  */
 import { randomBytes, randomUUID } from 'node:crypto';
 import fs from 'node:fs';
-import { readRegularFile } from '@teamai/shared/regular-file';
+import { openRegularFileForWrite, readRegularFile } from '@teamai/shared/regular-file';
 import path from 'node:path';
 import { z } from 'zod';
 import { isJsonObject, type JsonlRecord, type JsonValue } from '@teamai/shared/json';
@@ -184,7 +184,8 @@ async function withLock(filePath: string, wait: LockWait, mode: number, fn: () =
   const deadline = Date.now() + wait.budgetMs;
 
   for (;;) {
-    if (await acquireLock(lockPath)) {
+    // Judging a live holder reads its start, through ps outside Linux: the budget cuts that read short too.
+    if (await acquireLock(lockPath, { signal: AbortSignal.timeout(Math.max(1, deadline - Date.now())) })) {
       try {
         await foldSideRecords(filePath, mode);
         await fn();
@@ -257,7 +258,7 @@ async function foldSideRecords(filePath: string, mode: number): Promise<void> {
  * that torn line stays malformed on its own instead of swallowing this one.
  */
 async function appendWhole(filePath: string, text: string, mode: number): Promise<void> {
-  const handle = await fs.promises.open(filePath, 'a+', mode);
+  const handle = await openRegularFileForWrite(filePath, { append: true, mode, read: true });
 
   try {
     const { size } = await handle.stat();

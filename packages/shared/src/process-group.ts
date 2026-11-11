@@ -6,15 +6,62 @@
 //  their holders by as well.
 //
 
-import { execFile, execFileSync, type ChildProcess } from 'node:child_process';
+import { execFile, type ChildProcess } from 'node:child_process';
+import diagnostics from 'node:diagnostics_channel';
 import fs from 'node:fs';
 import path from 'node:path';
 import { z } from 'zod';
-import { readRegularFile, readRegularFileSync } from '@teamai/shared/regular-file';
+import { readRegularFile } from '@teamai/shared/regular-file';
 
-/** Runs ps with `args` in the C locale, whose `lstart` reads the same on every machine and parses as a date. */
-function ps(args: string[]): string {
-  return execFileSync('ps', args, { encoding: 'utf8', env: { ...process.env, LC_ALL: 'C' } });
+/** How long a ps read may take before it reads as telling nothing: a loaded machine answers in well under a second. */
+const PS_TIMEOUT_MS = 5_000;
+
+/**
+ * The channel each process read is told on (`tellProcessRead`). The agent wait budget counts the reads Linux answers from
+ * `/proc` as the ps macOS runs for them, so a wait only macOS has shows on a Linux runner too.
+ */
+export const PROCESS_READ_CHANNEL = 'teamai:process-read';
+
+/** A process read: the ps argv it ran or, read from `/proc`, stands for, and whether it ran ps. */
+export interface ProcessRead { readonly ps: readonly string[]; readonly spawned: boolean }
+
+const processReads = diagnostics.channel(PROCESS_READ_CHANNEL);
+
+/** Tells a process read on `PROCESS_READ_CHANNEL`: every read of `/proc`, where macOS runs ps, is told, once per ps it stands for. */
+export function tellProcessRead(read: ProcessRead): void {
+  processReads.publish(read);
+}
+
+/**
+ * The one way this module reads processes: from `/proc` on Linux when `fromProc` tells, else through ps with `args`, in
+ * the C locale, whose `lstart` reads the same on every machine and parses as a date. ps runs off the event loop, for at
+ * most `PS_TIMEOUT_MS` or until `signal` aborts. Undefined when neither tells. Each read is told on
+ * `PROCESS_READ_CHANNEL`.
+ */
+async function readProcesses<T>({ args, fromPs, fromProc, signal }: {
+  args: readonly string[];
+  fromPs: (stdout: string) => T | undefined;
+  fromProc?: () => Promise<T | undefined>;
+  signal?: AbortSignal;
+}): Promise<T | undefined> {
+  if (fromProc !== undefined && process.platform === 'linux') {
+    const read = await fromProc();
+
+    if (read !== undefined) {
+      tellProcessRead({ ps: args, spawned: false });
+
+      return read;
+    }
+  }
+
+  if (signal?.aborted === true) return undefined;
+  tellProcessRead({ ps: args, spawned: true });
+
+  return new Promise((resolve) => {
+    execFile('ps', args, { encoding: 'utf8', env: { ...process.env, LC_ALL: 'C' }, timeout: PS_TIMEOUT_MS, ...(signal !== undefined && { signal }) }, (error, stdout) => {
+      resolve(error ? undefined : fromPs(stdout));
+    });
+  });
 }
 
 /**
@@ -33,8 +80,8 @@ function isSameStart(a: ProcessStart, b: ProcessStart): boolean {
 interface RunningProcess { ppid: number; pgid: number; start: ProcessStart }
 
 /** Every running process by pid, from `/proc` on Linux and from ps elsewhere; undefined when neither can tell. */
-function runningProcesses(): Map<number, RunningProcess> | undefined {
-  return procProcesses() ?? psProcesses();
+function runningProcesses(): Promise<Map<number, RunningProcess> | undefined> {
+  return readProcesses({ args: PROCESSES_ARGS, fromPs: processesOf, fromProc: procProcesses });
 }
 
 /**
@@ -67,15 +114,14 @@ function tickStart(ticks: number, boot: number): ProcessStart {
   return { ticks, at: boot + (ticks * 1000) / USER_HZ };
 }
 
-/** Every running process, read from `/proc`; undefined off Linux or when `/proc` cannot be read. */
-function procProcesses(): Map<number, RunningProcess> | undefined {
-  if (process.platform !== 'linux') return undefined;
+/** Every running process, read from `/proc`; undefined when `/proc` cannot be read. */
+async function procProcesses(): Promise<Map<number, RunningProcess> | undefined> {
   let boot: number | undefined;
   let names: string[];
 
   try {
-    boot = bootTime(readRegularFileSync('/proc/stat', 'utf8'));
-    names = fs.readdirSync('/proc');
+    boot = bootTime(await readRegularFile('/proc/stat', 'utf8'));
+    names = await fs.promises.readdir('/proc');
   } catch {
     return undefined;
   }
@@ -83,33 +129,23 @@ function procProcesses(): Map<number, RunningProcess> | undefined {
   if (boot === undefined) return undefined;
   const running = new Map<number, RunningProcess>();
 
-  for (const name of names) {
-    if (!/^\d+$/.test(name)) continue;
-    let fields: ReturnType<typeof statFields>;
-
+  const stats = await Promise.all(names.filter((name) => /^\d+$/.test(name)).map(async (name) => {
     try {
-      fields = statFields(readRegularFileSync(`/proc/${name}/stat`, 'utf8'));
+      return { pid: Number(name), fields: statFields(await readRegularFile(`/proc/${name}/stat`, 'utf8')) };
     } catch {
       // The process exited while the folder was read.
-      continue;
+      return undefined;
     }
+  }));
 
-    if (fields !== undefined) running.set(Number(name), { ppid: fields.ppid, pgid: fields.pgid, start: tickStart(fields.ticks, boot) });
+  for (const stat of stats) {
+    if (stat?.fields !== undefined) running.set(stat.pid, { ppid: stat.fields.ppid, pgid: stat.fields.pgid, start: tickStart(stat.fields.ticks, boot) });
   }
 
   return running;
 }
 
 const PROCESSES_ARGS = ['-A', '-o', 'pid=,ppid=,pgid=,lstart='];
-
-/** Every running process, as ps lists it; undefined when ps cannot run or prints no start time. */
-function psProcesses(): Map<number, RunningProcess> | undefined {
-  try {
-    return processesOf(ps(PROCESSES_ARGS));
-  } catch {
-    return undefined;
-  }
-}
 
 function processesOf(stdout: string): Map<number, RunningProcess> {
   const running = new Map<number, RunningProcess>();
@@ -129,16 +165,18 @@ function processesOf(stdout: string): Map<number, RunningProcess> {
  * Undefined when no process has the pid or neither can tell.
  */
 async function recordedStartOf(pid: number): Promise<{ startTicks: number; pidNamespace?: string } | { start: string } | undefined> {
-  const { startTicks, pidNamespace } = await identityOf(pid);
+  return readProcesses<{ startTicks: number; pidNamespace?: string } | { start: string }>({
+    args: PROCESSES_ARGS,
+    fromProc: async () => {
+      const { startTicks, pidNamespace } = await identityOf(pid);
 
-  if (startTicks !== undefined) return { startTicks, ...(pidNamespace !== undefined && { pidNamespace }) };
+      return startTicks === undefined ? undefined : { startTicks, ...(pidNamespace !== undefined && { pidNamespace }) };
+    },
+    fromPs: (stdout) => {
+      const start = processesOf(stdout).get(pid)?.start;
 
-  return new Promise((resolve) => {
-    execFile('ps', PROCESSES_ARGS, { encoding: 'utf8', env: { ...process.env, LC_ALL: 'C' } }, (error, stdout) => {
-      const start = error ? undefined : processesOf(stdout).get(pid)?.start;
-
-      resolve(start !== undefined && 'lstart' in start ? { start: start.lstart } : undefined);
-    });
+      return start !== undefined && 'lstart' in start ? { start: start.lstart } : undefined;
+    },
   });
 }
 
@@ -226,9 +264,10 @@ function verdictOf(recorded: ProcessIdentity, live: ProcessStart | undefined, na
 
 /**
  * Whether the process with `recorded`'s pid now is the one `recorded` names: by its start ticks on Linux, else by the
- * start or time the record keeps. A pid another user's process has (EPERM) is live.
+ * start or time the record keeps. A pid another user's process has (EPERM) is live. A ps read `signal` cuts short, as a
+ * wait with a budget does, tells nothing: `unknown`.
  */
-export async function isSameProcess(recorded: ProcessIdentity): Promise<ProcessVerdict> {
+export async function isSameProcess(recorded: ProcessIdentity, { signal }: { signal?: AbortSignal } = {}): Promise<ProcessVerdict> {
   const namespace = await namespaceHere();
 
   // Its pid names another process here, or none, so neither says anything of the recorded one.
@@ -243,7 +282,7 @@ export async function isSameProcess(recorded: ProcessIdentity): Promise<ProcessV
 
   if (!keepsStart(recorded)) return 'unknown';
 
-  return verdictOf(recorded, await liveStartOf(recorded.pid), namespace);
+  return verdictOf(recorded, await liveStartOf(recorded.pid, signal), namespace);
 }
 
 /** On Linux, what tells process `pid` from a later one given its pid: when it started, and its pid namespace. Elsewhere only its pid: no ps runs for it. */
@@ -342,28 +381,23 @@ export interface OwnGroups { pgid: number; foreground: number }
 export async function ownGroups(): Promise<OwnGroups | undefined> {
   if (process.platform === 'win32') return undefined;
 
-  if (process.platform === 'linux') {
-    let stat: string | undefined;
+  return readProcesses({
+    args: ['-o', 'pgid=,tpgid=', '-p', String(process.pid)],
+    fromProc: async () => {
+      try {
+        const fields = statFields(await readRegularFile('/proc/self/stat', 'utf8'));
 
-    try {
-      stat = await readRegularFile('/proc/self/stat', 'utf8');
-    } catch {
-      // No /proc: ps may tell.
-    }
-
-    if (stat !== undefined) {
-      const fields = statFields(stat);
-
-      return fields && groupsOf(fields.pgid, fields.foreground);
-    }
-  }
-
-  return new Promise((resolve) => {
-    execFile('ps', ['-o', 'pgid=,tpgid=', '-p', String(process.pid)], { encoding: 'utf8', timeout: 5_000 }, (error, stdout) => {
+        return fields && groupsOf(fields.pgid, fields.foreground);
+      } catch {
+        // No /proc: ps may tell.
+        return undefined;
+      }
+    },
+    fromPs: (stdout) => {
       const [pgid, foreground] = stdout.trim().split(/\s+/);
 
-      resolve(error ? undefined : groupsOf(Number(pgid), Number(foreground)));
-    });
+      return groupsOf(Number(pgid), Number(foreground));
+    },
   });
 }
 
@@ -446,7 +480,7 @@ function signalGroup(pid: number, name: NodeJS.Signals | 0): boolean {
  */
 export async function stopGroup(group: Recorded): Promise<boolean> {
   if (process.platform === 'win32' || !signalGroup(group.pid, 0)) return false;
-  const running = runningProcesses();
+  const running = await runningProcesses();
   const leader = running?.get(group.pid);
 
   // Without current identities, a pid reused since cannot be told apart, so the group is left alone.
@@ -490,7 +524,7 @@ async function stopLeftStarterGroup(recorded: Recorded, pgid: number): Promise<v
 
   // A group this process cannot tell from its own is left alone too.
   if (own === undefined || own === pgid) return;
-  const running = runningProcesses();
+  const running = await runningProcesses();
 
   if (running === undefined) return;
   await endProcesses([...running].flatMap(([pid, { pgid: group, start }]) => (group === pgid && pid !== process.pid && startedSince(start, recorded) ? [{ pid, start }] : [])));
@@ -523,10 +557,10 @@ function isStillRunning(now: Map<number, RunningProcess>, found: FoundProcess): 
  * Each descendant of process `pid`, deepest first, with when it started, as they run now; none when that cannot be
  * read. A process that daemonized away from the tree is not among them.
  */
-function descendantsOf(pid: number): FoundProcess[] {
+async function descendantsOf(pid: number): Promise<FoundProcess[]> {
   const children = new Map<number, FoundProcess[]>();
 
-  for (const [child, { ppid, start }] of runningProcesses() ?? []) {
+  for (const [child, { ppid, start }] of await runningProcesses() ?? []) {
     const siblings = children.get(ppid) ?? [];
     siblings.push({ pid: child, start });
     children.set(ppid, siblings);
@@ -558,17 +592,17 @@ async function stopTree(recorded: Recorded & { tree: true }): Promise<void> {
 
 /** Stops the attached command `recorded` names and the processes it started that still descend from it. */
 async function stopRecordedTree(recorded: Recorded): Promise<void> {
-  const rootStart = runningProcesses()?.get(recorded.pid)?.start;
+  const rootStart = (await runningProcesses())?.get(recorded.pid)?.start;
 
   if (rootStart === undefined || verdictOf(recorded, rootStart, await namespaceHere()) !== 'same') return;
-  await endProcesses([...descendantsOf(recorded.pid), { pid: recorded.pid, start: rootStart }]);
+  await endProcesses([...await descendantsOf(recorded.pid), { pid: recorded.pid, start: rootStart }]);
 }
 
 /** Stops each process of `found` that still runs as found, with a five-second grace period before SIGKILL. */
 async function endProcesses(found: FoundProcess[]): Promise<void> {
   /** Signals each process that is still the one found; whether any was reached. */
-  const signal = (name: NodeJS.Signals | 0): boolean => {
-    const now = runningProcesses() ?? new Map<number, RunningProcess>();
+  const signal = async (name: NodeJS.Signals | 0): Promise<boolean> => {
+    const now = await runningProcesses() ?? new Map<number, RunningProcess>();
 
     return found.filter(({ pid, start }) => isStillRunning(now, { pid, start })).reduce((reached, { pid }) => {
       try {
@@ -579,12 +613,12 @@ async function endProcesses(found: FoundProcess[]): Promise<void> {
     }, false);
   };
 
-  signal('SIGTERM');
+  await signal('SIGTERM');
 
   // Counted rather than timed, so a faked clock cannot stretch the grace period.
-  for (let probe = 0; signal(0); probe += 1) {
+  for (let probe = 0; await signal(0); probe += 1) {
     if (probe === 100) {
-      signal('SIGKILL');
+      await signal('SIGKILL');
       break;
     }
 
@@ -598,14 +632,14 @@ export function stopProcess<T>(child: ChildProcess, exit: Promise<T>, detached: 
   let descendants: FoundProcess[] = [];
 
   /** Whether the signal reached any process in the group or tree. */
-  const signal = (name: NodeJS.Signals | 0): boolean => {
+  const signal = async (name: NodeJS.Signals | 0): Promise<boolean> => {
     try {
       if (detached && child.pid !== undefined) return process.kill(-child.pid, name);
       let targets = descendants;
 
       if ((name === 0 || name === 'SIGKILL') && descendants.length > 0) {
         // Without current identities, stop only the shell.
-        const now = runningProcesses() ?? new Map<number, RunningProcess>();
+        const now = await runningProcesses() ?? new Map<number, RunningProcess>();
         // ps's lstart has one-second resolution and the check is not atomic with kill, so this narrows the window but does not close it.
         targets = descendants.filter((found) => isStillRunning(now, found));
       }
@@ -629,14 +663,14 @@ export function stopProcess<T>(child: ChildProcess, exit: Promise<T>, detached: 
       return exit;
     }
 
-    if (!detached && child.pid !== undefined) descendants = descendantsOf(child.pid);
+    if (!detached && child.pid !== undefined) descendants = await descendantsOf(child.pid);
 
-    signal(initial);
+    await signal(initial);
     let timer: NodeJS.Timeout | undefined;
     let escalated = false;
 
     const killed = new Promise<void>((resolve) => {
-      timer = setTimeout(() => { escalated = true; signal('SIGKILL'); resolve(); }, 5000);
+      timer = setTimeout(() => { escalated = true; void signal('SIGKILL').then(() => { resolve(); }); }, 5000);
     });
 
     const result = await exit;
@@ -647,11 +681,14 @@ export function stopProcess<T>(child: ChildProcess, exit: Promise<T>, detached: 
     // of waiting the whole grace period after that first successful probe.
     // `escalated` flips inside the setTimeout closure registered above, which the linter can't see.
     // oxlint-disable-next-line no-unmodified-loop-condition
-    while (!escalated && signal(0)) {
+    while (!escalated && await signal(0)) {
       await Promise.race([killed, new Promise<void>((resolve) => setTimeout(resolve, 50))]);
     }
 
     clearTimeout(timer);
+
+    // A SIGKILL begun once the grace period ran out ends before the stop does.
+    if (escalated) await killed;
 
     return result;
   };
@@ -691,26 +728,33 @@ async function ownPidNamespace(): Promise<string | undefined> {
  * When the process `pid` started: on Linux from `/proc`, which a container without a full `ps` still has, elsewhere as
  * `ps -o lstart=` prints it, to the second. Undefined when no process has the pid or neither can tell.
  */
-async function liveStartOf(pid: number): Promise<ProcessStart | undefined> {
+async function liveStartOf(pid: number, signal?: AbortSignal): Promise<ProcessStart | undefined> {
   const ticks = await processStartTicks(pid);
 
-  if (ticks !== undefined) {
-    try {
-      const boot = bootTime(await readRegularFile('/proc/stat', 'utf8'));
+  const start = await readProcesses<ProcessStart>({
+    args: ['-o', 'lstart=', '-p', String(pid)],
+    ...(signal !== undefined && { signal }),
+    fromProc: async () => {
+      if (ticks === undefined) return undefined;
 
-      if (boot !== undefined) return tickStart(ticks, boot);
-    } catch {
-      // No /proc/stat: the ticks still tell, and ps may tell the time.
-    }
-  }
+      try {
+        const boot = bootTime(await readRegularFile('/proc/stat', 'utf8'));
 
-  return new Promise((resolve) => {
-    execFile('ps', ['-o', 'lstart=', '-p', String(pid)], { encoding: 'utf8', env: { ...process.env, LC_ALL: 'C' }, timeout: 5_000 }, (error, stdout) => {
+        return boot === undefined ? undefined : tickStart(ticks, boot);
+      } catch {
+        // No /proc/stat: the ticks still tell, and ps may tell the time.
+        return undefined;
+      }
+    },
+    fromPs: (stdout) => {
       const lstart = stdout.trim();
       const at = Date.parse(lstart);
 
-      if (ticks !== undefined) resolve({ ticks, at });
-      else resolve(error || lstart === '' ? undefined : { lstart, at });
-    });
+      if (ticks !== undefined) return { ticks, at };
+
+      return lstart === '' ? undefined : { lstart, at };
+    },
   });
+
+  return start ?? (ticks === undefined ? undefined : { ticks, at: Number.NaN });
 }

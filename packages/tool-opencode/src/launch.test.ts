@@ -3,8 +3,8 @@ import os from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { FAKE_AGENT_MARKERS, fakeAgent, leftFakeAgents, runFakeAgent } from '@teamai/tool-testing/fake-agent';
-import { launch } from '../launch.js';
-import { opencodeFake } from './index.js';
+import { launch } from './launch.js';
+import { opencodeFake } from './testing/index.js';
 
 const call = launch.opencode.call;
 const made: string[] = [];

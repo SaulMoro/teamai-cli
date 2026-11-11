@@ -1,8 +1,11 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { z } from 'zod';
+import { WRAPPER_PREFIX } from '@teamai/runtime-kit/outer';
 import { tempDir } from '../testing/harness.js';
-import { cliOf } from './cli.js';
+import { cliOf, LAUNCHABLE } from './cli.js';
 
 // An engine CLI's run: how much of a command's output the runtime keeps.
 
@@ -36,5 +39,15 @@ describe('cliOf: run', () => {
     const ran = await cli().run(['ls', '--json'], { isListing: true });
 
     expect(ran.kind === 'ran' ? ran.stdout.length : 0).toBe(PRINTED);
+  });
+});
+
+describe('teamai-sandbox-<tool> as teamai-cli installs it', () => {
+  it('is a bin of teamai-cli for each tool the sandbox launches, on the runtime\'s own executable', () => {
+    const manifest = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..', '..', 'package.json');
+    const bins = z.object({ bin: z.record(z.string(), z.string()) }).parse(JSON.parse(fs.readFileSync(manifest, 'utf8'))).bin;
+    const wrappersOf = Object.fromEntries(Object.entries(bins).filter(([name]) => name.startsWith(WRAPPER_PREFIX)));
+
+    expect(wrappersOf).toEqual(Object.fromEntries(LAUNCHABLE.map((tool) => [`${WRAPPER_PREFIX}${tool}`, bins['teamai-runtime-sandbox']])));
   });
 });

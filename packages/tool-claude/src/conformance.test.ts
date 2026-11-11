@@ -7,7 +7,7 @@ const fixture = (name: string): string => fixtureText(new URL(`./fixtures/${name
 
 /** Claude Code keeps a session at `<store>/<real cwd with every non-alphanumeric character as ->/<id>.jsonl`;
  * written out here rather than through the adapter's encoder, so an encoder bug fails the round trip. Long cwds are
- * covered with names Claude Code wrote, in project-dir.test.ts. */
+ * covered with names Claude Code wrote, in sessions.test.ts. */
 const claudeTranscript = {
   text: fixture('claude-code-transcript.jsonl'),
   place: (store: string, cwd: string, sessionId: string): string => path.join(store, fs.realpathSync(cwd).replace(/[^A-Za-z0-9]/g, '-'), `${sessionId}.jsonl`),

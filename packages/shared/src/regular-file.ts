@@ -149,19 +149,20 @@ export function readRegularFileSync(file: string, encoding?: BufferEncoding): st
 //  reads fails at once (ENXIO), and one a reader holds is caught by the handle's own type, as for a read.
 //
 
-/** Opening for writing without waiting, creating a missing file. Windows has no flag, and no FIFO a path opens. */
-const NONBLOCKING_WRITE = (process.platform === 'win32' ? fs.constants.O_WRONLY : fs.constants.O_WRONLY | fs.constants.O_NONBLOCK) | fs.constants.O_CREAT;
+/** Opening without waiting, creating a missing file. Windows has no flag, and no FIFO a path opens. */
+const NONBLOCKING_CREATE = (process.platform === 'win32' ? 0 : fs.constants.O_NONBLOCK) | fs.constants.O_CREAT;
 
 /**
  * The open handle of `file` for writing, created when missing, with `mode` when given: at its end when `append`, else
- * emptied. Anything but a regular file there rejects with `NotRegularFileError`, and is left as it was.
+ * emptied; with `read`, it reads as well, as an append that looks at the file's last byte first does. Anything but a
+ * regular file there rejects with `NotRegularFileError`, and is left as it was.
  */
-export async function openRegularFileForWrite(file: string, { append, mode }: { append: boolean; mode?: number }): Promise<FileHandle> {
+export async function openRegularFileForWrite(file: string, { append, mode, read = false }: { append: boolean; mode?: number; read?: boolean }): Promise<FileHandle> {
   let handle: FileHandle;
 
   try {
-    // oxlint-disable-next-line teamai/regular-file-reads -- opens for writing, with flags the rule cannot see as a write
-    handle = await fs.promises.open(file, NONBLOCKING_WRITE | (append ? fs.constants.O_APPEND : fs.constants.O_TRUNC), mode);
+    // oxlint-disable-next-line teamai/regular-file-reads -- the helper's own open: nonblocking, and its handle is checked before a byte is read or written
+    handle = await fs.promises.open(file, NONBLOCKING_CREATE | (read ? fs.constants.O_RDWR : fs.constants.O_WRONLY) | (append ? fs.constants.O_APPEND : fs.constants.O_TRUNC), mode);
   } catch (error) {
     // A FIFO no process reads, or a device with nothing behind it.
     if (error instanceof Error && 'code' in error && error.code === 'ENXIO') throw new NotRegularFileError(file, await fs.promises.stat(file), 'write');
@@ -354,9 +355,10 @@ const RENAME_RETRY_MS = 60_000;
 
 /**
  * Renames `from` to `to`. On Windows a scanner or an indexer holding a file under `from` makes a rename fail EACCES,
- * EPERM or EBUSY for a moment, so it is tried again, backing off, while nothing has taken `to`.
+ * EPERM or EBUSY for a moment, so it is tried again, backing off, while nothing has taken `to`, or, `isReplacing` a file
+ * at `to`, however long that file stays.
  */
-async function renameRetrying(from: string, to: string): Promise<void> {
+async function renameRetrying(from: string, to: string, { isReplacing = false }: { isReplacing?: boolean } = {}): Promise<void> {
   const started = Date.now();
 
   for (let backoff = 0; ; backoff = Math.min(backoff + 10, 100)) {
@@ -368,7 +370,7 @@ async function renameRetrying(from: string, to: string): Promise<void> {
       const code = error instanceof Error && 'code' in error ? error.code : undefined;
       const isMomentary = process.platform === 'win32' && (code === 'EACCES' || code === 'EPERM' || code === 'EBUSY');
 
-      if (!isMomentary || Date.now() - started >= RENAME_RETRY_MS || await lstatOrMissing(to) !== undefined) throw error;
+      if (!isMomentary || Date.now() - started >= RENAME_RETRY_MS || (!isReplacing && await lstatOrMissing(to) !== undefined)) throw error;
       await new Promise((resolve) => { setTimeout(resolve, backoff); });
     }
   }
@@ -387,6 +389,29 @@ export function isStagingName(name: string, of?: string): boolean {
   const prefix = of === undefined ? undefined : `.${of}.`;
 
   return prefix === undefined ? /^\..+\.[0-9a-f]{8}\.staging$/.test(name) : name.startsWith(prefix) && /^[0-9a-f]{8}\.staging$/.test(name.slice(prefix.length));
+}
+
+/**
+ * Puts what `from`, a folder, holds into `to`, a folder on the same filesystem, as `copyRegularTree(from, to)` would,
+ * but by rename, so nothing is read again: a folder in both is merged into, a file or link at `to` is replaced, and
+ * what only `to` holds stays. As the copy does, it refuses a folder over anything but a folder, and a file over a folder.
+ */
+export async function mergeRegularTree(from: string, to: string): Promise<void> {
+  for (const entry of await fs.promises.readdir(from)) {
+    const [source, target] = [path.join(from, entry), path.join(to, entry)];
+    const [moving, there] = await Promise.all([fs.promises.lstat(source), lstatOrMissing(target)]);
+
+    if (moving.isDirectory() && there?.isDirectory() === true) {
+      await mergeRegularTree(source, target);
+      continue;
+    }
+
+    if (moving.isDirectory() && there !== undefined) throw new Error(`${target} is not a folder, so teamai does not copy the folder ${source} over it`);
+
+    if (there?.isDirectory() === true) throw new Error(`${target} is a folder, so teamai does not copy ${source} over it`);
+    // A rename replaces a file or link there in one step, so one that fails leaves it as it was.
+    await renameRetrying(source, target, { isReplacing: there !== undefined });
+  }
 }
 
 /**

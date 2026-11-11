@@ -369,10 +369,15 @@ const LAUNCHES = {
   async opencode(context) {
     const { request, deps, dir, cwd, env, tmp } = context;
     const { executable } = request;
-    await copyRegularTree(dir, cwd);
-    const entries = await fs.readdir(cwd, { recursive: true, withFileTypes: true });
+    // OpenCode follows a link it finds there, out of the directory or round a loop. The copy walks without following
+    // one, so it refuses each as it meets it: a recursive readdir follows links to folders on Node 26 and never ends.
+    await copyRegularTree(dir, cwd, {
+      filter: async (source) => {
+        if ((await fs.lstat(source)).isSymbolicLink()) throw new Error(`OpenCode would follow a symlink in ${dir}. Remove the symlink before running it confined`);
 
-    if (entries.some((entry) => entry.isSymbolicLink())) throw new Error(`OpenCode would follow a symlink in ${dir}. Remove the symlink before running it confined`);
+        return true;
+      },
+    });
     await noInstructionsAbove(cwd);
 
     return {

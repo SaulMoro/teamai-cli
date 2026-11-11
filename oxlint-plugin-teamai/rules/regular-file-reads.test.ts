@@ -73,14 +73,14 @@ export const open = async (file: string) => [await fs.promises.open(file), fs.op
 valid('allows an open for writing, which the write rule guards where a step writes', `import fs from 'node:fs';
 export const open = (file: string) => fs.openSync(file, 'w');`);
 
-invalid('rejects a read under computed access, destructured from a file module, or off one imported at run time', `import fs from 'node:fs';
-const { readFileSync: readNow } = fs;
+invalid('rejects a read under computed access, destructured from a file module or its promises, or off one imported at run time', `import fs from 'node:fs';
+const { readFileSync: readNow, promises: later } = fs;
 export const all = async (file: string) => {
   const fsp = await import('node:fs/promises');
   const { readFile } = await import('node:fs/promises');
-  return [fs['readFileSync'](file), readNow(file), await fsp.readFile(file), await readFile(file), await (await import('node:fs/promises')).readFile(file)];
+  return [fs['readFileSync'](file), readNow(file), await fsp.readFile(file), await readFile(file), await (await import('node:fs/promises')).readFile(file), await later.readFile(file)];
 };`, (output) => {
-  expect(output.match(/Read a file with readRegularFile/g)).toHaveLength(5);
+  expect(output.match(/Read a file with readRegularFile/g)).toHaveLength(6);
 });
 
 invalid('rejects a read passed on as a value, which a later call makes', `import { readFile } from 'node:fs/promises';
@@ -158,4 +158,36 @@ it('matches the production source of src/ and of every package in this checkout'
   expect(matched.filter((file) => file.startsWith('src/')).length).toBeGreaterThan(500);
   expect(matched.filter((file) => file.startsWith('packages/')).length).toBeGreaterThan(150);
   expect(matched.filter((file) => /\.test\.|\/__tests__\/|\/testing\//.test(file))).toEqual([]);
+});
+
+invalid('rejects a module re-exporting a read, so no wrapper module carries plain reads out of sight', `export { readFile } from 'node:fs/promises';
+export { readFileSync as readNow } from 'node:fs';`, (output) => {
+  expect(output.match(/re-exports or passes on a file module/g)).toHaveLength(2);
+}, { filename: 'src/utils/files.ts' });
+
+invalid('rejects a module re-exporting a file module whole', `export * from 'fs-extra';
+export { default as fs } from 'node:fs';
+export * as fsp from 'node:fs/promises';`, (output) => {
+  expect(output.match(/re-exports or passes on a file module/g)).toHaveLength(3);
+}, { filename: 'src/utils/files.ts' });
+
+invalid('rejects a file module passed on as a value: an argument, an export, a property, a return', `import fs from 'node:fs';
+import fse from 'fs-extra';
+declare function readWith(files: object, file: string): string;
+export const viaArgument = (file: string) => readWith(fs, file);
+export const files = fse;
+export const deps = { fs: fs.promises };
+export function module() { return fs; }`, (output) => {
+  expect(output.match(/re-exports or passes on a file module/g)).toHaveLength(4);
+}, { filename: 'src/workflow/steps/result.ts' });
+
+valid('allows a file module used where it stands, aliased or destructured', `import fs from 'node:fs';
+const fsp = fs.promises;
+const local = fs;
+const { stat } = fs;
+export const all = async (dir: string) => [await fsp.readdir(dir), local.existsSync(dir), await stat(dir)];`);
+
+invalid('rejects an open that may read as well as write, whose handle reads elsewhere', `import fs from 'node:fs';
+export const open = async (file: string) => [await fs.promises.open(file, 'r+'), fs.openSync(file, 'w+'), fs.openSync(file, 'a+'), fs.openSync(file, fs.constants.O_RDWR)];`, (output) => {
+  expect(output.match(/Read a file with readRegularFile/g)).toHaveLength(4);
 });

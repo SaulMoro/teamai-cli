@@ -3,12 +3,10 @@ import fs from 'node:fs';
 import net from 'node:net';
 import path from 'node:path';
 import readline from 'node:readline';
-import { fileURLToPath } from 'node:url';
 import { afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { z } from 'zod';
 import { OuterHandleSchema, registerLine, registerThrough, WRAPPER_PREFIX } from '@teamai/runtime-kit/outer';
 import type { InitInstance } from '@teamai/runtime-protocol';
-import { LAUNCHABLE } from './providers/cli.js';
 import { bundleRuntime, connect, fakeEngine, tempDir, type Connection, type FakeEngine, type Message } from './testing/harness.js';
 import { closeLeftovers, expectNothingLeft } from './testing/leaks.js';
 
@@ -208,16 +206,6 @@ function attemptContainer(): string {
 
   return z.object({ id: z.string() }).parse(JSON.parse(fs.readFileSync(record, 'utf8'))).id;
 }
-
-describe('teamai-sandbox-<tool> as teamai-cli installs it', () => {
-  it('is a bin of teamai-cli for each tool the sandbox launches, on the runtime\'s own executable', () => {
-    const manifest = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..', 'package.json');
-    const bins = z.object({ bin: z.record(z.string(), z.string()) }).parse(JSON.parse(fs.readFileSync(manifest, 'utf8'))).bin;
-    const wrappersOf = Object.fromEntries(Object.entries(bins).filter(([name]) => name.startsWith(WRAPPER_PREFIX)));
-
-    expect(wrappersOf).toEqual(Object.fromEntries(LAUNCHABLE.map((tool) => [`${WRAPPER_PREFIX}${tool}`, bins['teamai-runtime-sandbox']])));
-  });
-});
 
 describe('teamai-sandbox-<tool> on Windows', () => {
   const ON_WINDOWS = { SANDBOX_TEST_PLATFORM: 'win32' };
