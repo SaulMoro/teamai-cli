@@ -117,7 +117,7 @@ export async function handOver(live: Daemon, { record, provider, registration, s
   if (outcome === 'stopped') return 'stopped';
 
   /** Removes the agent, which got no prompt: what that did, for the step's failure. */
-  const removed = async (): Promise<string> => {
+  const removeAgent = async (): Promise<string> => {
     try {
       await live.remove(agentId);
 
@@ -135,7 +135,7 @@ export async function handOver(live: Daemon, { record, provider, registration, s
     } catch (error) {
       return {
         code: 'tool_failed',
-        message: `teamai-runtime-paseo could not journal that it sends the prompt to the ${record.tool} agent ${agentId} (${error instanceof Error ? error.message : String(error)}), so it sent none, and ${await removed()}. Make that directory writable, then run the step again.`,
+        message: `teamai-runtime-paseo could not journal that it sends the prompt to the ${record.tool} agent ${agentId} (${error instanceof Error ? error.message : String(error)}), so it sent none, and ${await removeAgent()}. Make the folder of the file it names writable, then run the step again.`,
       };
     }
 
@@ -154,7 +154,7 @@ export async function handOver(live: Daemon, { record, provider, registration, s
     }
   }
 
-  const removal = await removed();
+  const removal = await removeAgent();
 
   return {
     code: 'isolation_unproven',

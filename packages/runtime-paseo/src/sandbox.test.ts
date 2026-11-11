@@ -102,7 +102,7 @@ describe('teamai-runtime-paseo', () => {
 
       expect(failed).toMatchObject({
         event: 'failed',
-        failure: { code: 'tool_failed', message: expect.stringMatching(new RegExp(`^teamai-runtime-paseo could not journal that it sends the prompt to the claude agent ${agentId} \\(EACCES: .*\\), so it sent none, and removed the agent\\. Make that directory writable, then run the step again\\.$`)) },
+        failure: { code: 'tool_failed', message: expect.stringMatching(new RegExp(`^teamai-runtime-paseo could not journal that it sends the prompt to the claude agent ${agentId} \\(EACCES: .*\\), so it sent none, and removed the agent\\. Make the folder of the file it names writable, then run the step again\\.$`)) },
       });
       expect(received().map((request) => request.type)).not.toContain('send_agent_message_request');
       expect(received().filter((request) => request.type === 'delete_agent_request')).toMatchObject([{ agentId }]);
