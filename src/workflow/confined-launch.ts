@@ -23,6 +23,8 @@ import type { ConfinedUsage } from '@teamai/tool-core/stdout';
 import { confinedVariables } from '@teamai/tool-launch/confined-launch';
 import { confinedIsolation, runConfined as launchConfined, type ConfinedDeps, type ConfinedFailure, type ConfinedFamily, type ConfinedRequest } from '@teamai/runtime-tools/confined';
 import { CONFINED_TOOLS, executableOf, launchAdapterIdOf, launchAdapterOf, type ConfinedTool } from '../launch-registry.js';
+import { holdLoginFrom } from './runtimes/login.js';
+import { AttemptIdSchema, RunIdSchema } from './store.js';
 
 type ToolLookup = { resolveTool?: (tool: string) => string | null };
 
@@ -113,7 +115,7 @@ export async function confinedOffers(lookup: ToolLookup = {}): Promise<ConfinedO
 }
 
 /** A confined run teamai asks for: the tool, and what the runtime's request carries of the work itself. */
-export type ConfinedInput = Pick<ConfinedRequest, 'model' | 'dir' | 'prompt' | 'schema' | 'level' | 'timeoutMs' | 'group' | 'signal'> & { tool: ConfinedTool };
+export type ConfinedInput = Pick<ConfinedRequest, 'model' | 'dir' | 'prompt' | 'schema' | 'level' | 'timeoutMs' | 'group' | 'attempt' | 'signal'> & { tool: ConfinedTool };
 
 /** What ran: the tool, the model and effort observed, the level it reached, what it could do, and what it spent. */
 export interface ConfinedRun {
@@ -160,6 +162,20 @@ const CONFINED_DEPS: ConfinedDeps = {
   parseOpenCodeConfig: (text) => parseJsonAs(text, mcpSyntaxOf('opencode', 'user')),
   parseCodexConfig: (text) => parseToml(withoutTomlBom(text)),
   judgeKeyVariable: 'TEAMAI_JUDGE_API_KEY',
+  async holdCodexLogin({ executable, from, toolHome: home, attempt, signal }) {
+    const held = await holdLoginFrom({ tool: 'codex', executable, from, toolHome: home, run: RunIdSchema.parse(attempt.run), attempt: AttemptIdSchema.parse(attempt.attempt), signal });
+
+    if (!held.ok) return { ok: false, code: held.failure.code === 'login_held' ? 'login_held' : 'login_missing', message: held.failure.message };
+
+    return {
+      ok: true,
+      release: async () => {
+        const kept = await held.release();
+
+        return kept && { code: 'login_not_written_back', message: kept.message };
+      },
+    };
+  },
 };
 
 /**

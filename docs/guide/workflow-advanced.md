@@ -1836,6 +1836,8 @@ teamai copies that `auth.json` into the attempt's tool home, and once the step e
 ℹ Step "review" waits for the codex login teamai keeps, which attempt a339da600 of run r9a395746ec65dbd7 holds. It goes on once that attempt ends; teamai workflow cancel r9a395746ec65dbd7 releases it.
 ```
 
+A Codex judge on this machine reads your own Codex login, in its own temporary home, and holds the same lock while it runs: it writes a login Codex refreshed there back to your Codex home before it lets go, so a refresh never logs your daily Codex out.
+
 When the holder's driver was killed, `teamai workflow cancel` of its run first stops the tool on the step runtime and writes the login back, then releases it. A runtime it cannot reach keeps the login held, and the command says which lock file to delete once the tool stopped.
 
 The login is also kept when the runtime itself stops while Codex runs, or cannot close the place afterwards, because Codex may still be running there. The step fails `runtime_lost`, and teamai says what to do:

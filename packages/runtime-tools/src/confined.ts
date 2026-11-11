@@ -26,7 +26,21 @@ export interface ConfinedDeps {
   parseCodexConfig(text: string): TomlTable;
   /** The variable a confined Codex reads the credential of the member's provider from, which teamai names. */
   judgeKeyVariable: string;
+  /**
+   * Brings the Codex login in the home `from` into the run's own Codex home `toolHome`, under the machine-wide login
+   * lock, as the attempt the run belongs to. Codex rotates its refresh token when it refreshes, so `release` writes a
+   * login refreshed there back to `from` before it frees the lock, and says why when it could not.
+   */
+  holdCodexLogin(input: { executable: string; from: string; toolHome: string; attempt: ConfinedAttempt; signal: AbortSignal }): Promise<ConfinedLoginHold>;
 }
+
+/** The attempt a confined run belongs to, which holds a login the run brings. */
+export interface ConfinedAttempt { readonly run: string; readonly attempt: string }
+
+/** A login a confined run holds, or why it could not take it. */
+export type ConfinedLoginHold =
+  | { ok: true; release(): Promise<{ code: 'login_not_written_back'; message: string } | undefined> }
+  | { ok: false; code: 'login_held' | 'login_missing'; message: string };
 
 /** The launch adapter ids that run confined, each with its own setup below. */
 export type ConfinedFamily = 'claude' | 'codex' | 'codebuddy' | 'cursor' | 'pi' | 'agy' | 'opencode';
@@ -53,12 +67,17 @@ export interface ConfinedRequest {
   /** The least level the run must reach; a tool that cannot reach it does not run. */
   level: ConfinedLevel;
   timeoutMs: number;
-  /** The directory the tool's process group is recorded in, where `stopRecordedGroup` finds it if its caller dies. */
+  /**
+   * The attempt's directory, which outlives the caller: the tool's process group is recorded there, where
+   * `stopRecordedGroup` finds it if its caller dies, and a Codex run keeps its home there while it holds the login.
+   */
   group?: string;
+  /** The attempt the run belongs to. */
+  attempt: ConfinedAttempt;
   signal?: AbortSignal;
 }
 
-export type ConfinedFailureCode = 'confined_tool_unavailable' | 'confined_failed' | 'confined_reply_invalid' | 'usage_limited';
+export type ConfinedFailureCode = 'confined_tool_unavailable' | 'confined_failed' | 'confined_reply_invalid' | 'usage_limited' | 'login_held' | 'login_missing' | 'login_not_written_back';
 
 /** `raw`: the tool's saved output. `reported`: the error the tool itself reported, when it reported one. */
 export type ConfinedFailure = { ok: false; code: ConfinedFailureCode; message: string; raw?: string; reported?: string; usage?: ConfinedUsage };
@@ -272,6 +291,8 @@ interface Launch {
   stdin: string;
   configuredModel?: string;
   failureOf?(run: HeadlessRun, spent: Spend): Promise<ConfinedFailure | undefined>;
+  /** Ends what the launch holds once its tool ended, saying why the run fails when that did not end well. */
+  release?(): Promise<ConfinedFailure | undefined>;
 }
 
 const rawOf = (run: HeadlessRun): string => run.stdout + '\n' + run.stderr;
@@ -287,20 +308,38 @@ const LAUNCHES = {
 
     return { stdin: confinedStdin('claude', request.prompt), args: confinedArgs({ family: 'claude', model: request.model, schema: request.schema, settingsFile: settings, promptFile: prompt }) };
   },
-  async codex(context) {
+  async codex(context): Promise<Launch | ConfinedFailure> {
     const { request, deps, env, tmp, dir } = context;
     const settings = await codexSettings(request, env, deps);
-    const auth = await optionalFile(path.join(env.CODEX_HOME || request.home, 'auth.json'));
-    env.CODEX_HOME = path.join(tmp, 'codex');
-    await fs.mkdir(env.CODEX_HOME);
-
-    if (auth !== undefined) await writeRegularFile(path.join(env.CODEX_HOME, 'auth.json'), auth, { mode: 0o600 });
-    await writeRegularFile(path.join(env.CODEX_HOME, 'config.toml'), codexProfile(dir));
+    const from = env.CODEX_HOME || request.home;
+    // In the attempt's directory when it has one, so a run killed while it held the login leaves what Codex refreshed.
+    const toolHome = request.group === undefined ? path.join(tmp, 'codex') : path.join(request.group, 'tool-home', 'codex');
+    env.CODEX_HOME = toolHome;
+    await fs.mkdir(toolHome, { recursive: true });
+    await writeRegularFile(path.join(toolHome, 'config.toml'), codexProfile(dir));
     const schema = path.join(tmp, 'schema.json');
 
     if (request.schema !== undefined) await writeRegularFile(schema, JSON.stringify(request.schema));
+    // Last, so nothing after it fails while it holds the login.
+    const waitEnds = AbortSignal.any([AbortSignal.timeout(request.timeoutMs), ...(request.signal ? [request.signal] : [])]);
+    const login = await deps.holdCodexLogin({ executable: request.executable, from, toolHome, attempt: request.attempt, signal: waitEnds });
+
+    if (!login.ok) {
+      await fs.rm(toolHome, { recursive: true, force: true });
+
+      return { ok: false, code: login.code, message: login.message };
+    }
 
     return {
+      async release() {
+        try {
+          const kept = await login.release();
+
+          return kept && { ok: false, ...kept };
+        } finally {
+          await fs.rm(toolHome, { recursive: true, force: true });
+        }
+      },
       stdin: confinedStdin('codex', request.prompt),
       configuredModel: settings.model,
       args: confinedArgs({ family: 'codex', model: request.model, schemaFile: request.schema === undefined ? undefined : schema, answerFile: path.join(tmp, 'answer.json'), configArgs: settings.args }),
@@ -353,7 +392,7 @@ const LAUNCHES = {
       },
     };
   },
-} satisfies { [F in ConfinedFamily]: (context: LaunchContext) => Promise<Launch> };
+} satisfies { [F in ConfinedFamily]: (context: LaunchContext) => Promise<Launch | ConfinedFailure> };
 
 /** Claude's result record, which CodeBuddy and Cursor print too; only Claude and CodeBuddy fill structured_output. */
 async function resultRecordReply(stdout: string): Promise<JsonValue | undefined> {
@@ -453,11 +492,24 @@ export async function runConfined(request: ConfinedRequest, deps: ConfinedDeps):
     const level = await levelReached(context);
 
     if (!level.ok) return level;
-    const launch = await LAUNCHES[request.family](context);
-    const { stdinOf } = request.adapter.call;
-    const run = await runTool({ executable: request.executable, args: launch.args, cwd: context.cwd, env: context.env, stdin: stdinOf ? stdinOf(launch.stdin) : launch.stdin, timeoutMs: request.timeoutMs, detached: true, group: request.group, signal: request.signal });
+    const launch: Launch | ConfinedFailure = await LAUNCHES[request.family](context);
 
-    return await outcomeOf(context, launch, run, level.isolation);
+    if ('ok' in launch) return launch;
+    let end: ConfinedEnd;
+    let released: ConfinedFailure | undefined;
+
+    try {
+      const { stdinOf } = request.adapter.call;
+      const run = await runTool({ executable: request.executable, args: launch.args, cwd: context.cwd, env: context.env, stdin: stdinOf ? stdinOf(launch.stdin) : launch.stdin, timeoutMs: request.timeoutMs, detached: true, group: request.group, signal: request.signal });
+      end = await outcomeOf(context, launch, run, level.isolation);
+    } finally {
+      released = await launch.release?.();
+    }
+
+    // A run that failed keeps its own failure, with why the release failed too.
+    if (!released) return end;
+
+    return end.ok ? released : { ...end, message: `${end.message} ${released.message}` };
   } catch (error) {
     return { ok: false, code: 'confined_failed', message: `${request.tool} could not run confined: ${error instanceof Error ? error.message : String(error)}. Fix that, then retry.` };
   } finally { await fs.rm(tmp, { recursive: true, force: true, maxRetries: 3 }); }

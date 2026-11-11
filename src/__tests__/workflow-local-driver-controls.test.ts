@@ -128,6 +128,8 @@ ${fields}`;
 
   /** The prompt every tool receives for `text`, with the result instruction the adapter adds. */
   const prompt = (text: string) => expect.stringMatching(new RegExp(`^${text.replaceAll('.', '\\.')}\\n\\nWrite the workflow result as JSON to .+result\\.json\\. Use this shape`, 's'));
+  /** The attempt's out/ directory, which Codex's `--add-dir` lets its sandbox write the result file in. */
+  const resultDir = expect.stringMatching(/[\\/]attempts[\\/]a[0-9a-f]+[\\/]out$/);
   /** Claude's allow rule for the attempt's out/ directory, which holds the result file, and only it. */
   const resultGrant = expect.stringMatching(/^--allowedTools=Edit\(\/.+\/attempts\/[^/]+\/out\/\*\*\)$/);
 
@@ -146,8 +148,8 @@ ${fields}`;
     const strong = await runOn('codex', oneStep('    model: strong\n'));
     const fast = await runOn('codex', oneStep('    model: fast\n'));
 
-    expect(strong.argv).toEqual([['exec', '--json', '--model', 'gpt-6-sol', '-c', 'model_reasoning_effort=high', prompt('Review this project.')]]);
-    expect(fast.argv).toEqual([['exec', '--json', '--model', 'gpt-6-mini', prompt('Review this project.')]]);
+    expect(strong.argv).toEqual([['exec', '--add-dir', resultDir, '--json', '--model', 'gpt-6-sol', '-c', 'model_reasoning_effort=high', prompt('Review this project.')]]);
+    expect(fast.argv).toEqual([['exec', '--add-dir', resultDir, '--json', '--model', 'gpt-6-mini', prompt('Review this project.')]]);
   });
 
   it('runs an agent with a model, an effort and allowed tools on the step model and effort, and keeps its other settings', async () => {
@@ -177,7 +179,7 @@ model = "gpt-5.4"
 model_reasoning_effort = "low"
 ` } });
 
-    expect(codex.argv).toEqual([['exec', '--json', '--model', 'gpt-6-sol', '-c', 'model_reasoning_effort=high', prompt('Follow the review checklist.\n\nReview this project.')]]);
+    expect(codex.argv).toEqual([['exec', '--add-dir', resultDir, '--json', '--model', 'gpt-6-sol', '-c', 'model_reasoning_effort=high', prompt('Follow the review checklist.\n\nReview this project.')]]);
     expect(codex.argv?.flat()).not.toContain('gpt-5.4');
   });
 
@@ -272,7 +274,7 @@ model = "gpt-5.4"
     const opencode = await runOn('opencode', oneStep(''));
 
     expect(claude.argv).toEqual([['-p', prompt('Review this project.'), '--output-format', 'stream-json', '--verbose', resultGrant, '--agent', 'reviewer']]);
-    expect(codex.argv).toEqual([['exec', '--json', '--model', 'gpt-5.4', prompt('Follow the review checklist.\n\nReview this project.')]]);
+    expect(codex.argv).toEqual([['exec', '--add-dir', resultDir, '--json', '--model', 'gpt-5.4', prompt('Follow the review checklist.\n\nReview this project.')]]);
     expect(opencode.argv).toEqual([['run', '--format', 'json', prompt('Review this project.')]]);
   });
 
@@ -353,7 +355,7 @@ steps:
       'run', '--format', 'json', prompt('Review this project.'), '--agent', 'reviewer', '--model', 'anthropic/claude-sonnet', '--variant', 'low',
     ]]);
     expect(defaults.argv).toEqual([['run', '--format', 'json', prompt('Review this project.'), '--agent', 'helper', '--model', 'anthropic/claude-haiku']]);
-    expect(ownOn2.argv).toEqual([['run', '--format', 'json', prompt('Review this project.'), '--agent', 'reviewer', '--model', 'anthropic/claude-sonnet']]);
+    expect(ownOn2.argv).toEqual([['run', '--standalone', '--format', 'json', prompt('Review this project.'), '--agent', 'reviewer', '--model', 'anthropic/claude-sonnet']]);
     expect(subagent.argv).toEqual([['run', '--format', 'json', prompt('Follow the review checklist.\n\nReview this project.'), '--model', 'anthropic/claude-sonnet']]);
     expect(own.argv).toBeUndefined();
     expect(own.run.steps[0]).toMatchObject({
@@ -374,7 +376,7 @@ steps:
     expect(warn).not.toHaveBeenCalled();
     const on1 = await runOn('opencode', oneStep('    agent: reviewer\n'), { agents: { reviewer } });
 
-    expect(on2.argv).toEqual([['run', '--format', 'json', prompt('Review this project.'), '--agent', 'reviewer', '--model', 'anthropic/claude-sonnet#low']]);
+    expect(on2.argv).toEqual([['run', '--standalone', '--format', 'json', prompt('Review this project.'), '--agent', 'reviewer', '--model', 'anthropic/claude-sonnet#low']]);
     expect(on1.argv).toEqual([[
       'run', '--format', 'json', prompt('Follow the review checklist.\n\nReview this project.'), '--model', 'anthropic/claude-sonnet', '--variant', 'low',
     ]]);
@@ -394,7 +396,7 @@ steps:
         + 'from the deployed agent file. The step is not blocked.',
     );
     const helperOn2 = await runOn('opencode', oneStep('    agent: helper\n'), { agents: { helper }, version: 'opencode v2.0.30' });
-    expect(helperOn2.argv).toEqual([['run', '--format', 'json', prompt('Review this project.'), '--agent', 'helper']]);
+    expect(helperOn2.argv).toEqual([['run', '--standalone', '--format', 'json', prompt('Review this project.'), '--agent', 'helper']]);
     expect(warn).toHaveBeenLastCalledWith(
       'Agent "helper" sets a variant with no model, and opencode 2 takes a variant only with a model, so it does not apply variant '
         + 'from the deployed agent file. The step is not blocked.',
@@ -405,8 +407,8 @@ steps:
     const strong = await runOn('opencode', oneStep('    model: strong\n'), { version: 'opencode v2.0.30' });
     const literal = await runOn('opencode', oneStep('    model: anthropic/claude-sonnet\n'), { version: 'opencode v2.0.30' });
 
-    expect(strong.argv).toEqual([['run', '--format', 'json', prompt('Review this project.'), '--model', 'anthropic/claude-opus#high']]);
-    expect(literal.argv).toEqual([['run', '--format', 'json', prompt('Review this project.'), '--model', 'anthropic/claude-sonnet']]);
+    expect(strong.argv).toEqual([['run', '--standalone', '--format', 'json', prompt('Review this project.'), '--model', 'anthropic/claude-opus#high']]);
+    expect(literal.argv).toEqual([['run', '--standalone', '--format', 'json', prompt('Review this project.'), '--model', 'anthropic/claude-sonnet']]);
   });
 });
 

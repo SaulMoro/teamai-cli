@@ -131,6 +131,39 @@ describe('teamai-runtime-t3', () => {
       expect(t3.threads().find((thread) => thread.environmentId !== undefined)?.message).toContain(`permission rule Bash(${WAKE_COMMAND}:*) in`);
     });
 
+    // Codex runs teamai's command in its sandbox in every mode, with no network and no write to ~/.teamai, unless it asks
+    // to run it outside; it asks the person only for that (codex-cli 0.167.0 on T3 Code, Auto and Supervised).
+    it.each([
+      { runtimeMode: undefined, launched: 'auto' },
+      { runtimeMode: 'approval-required', launched: 'approval-required' },
+      { runtimeMode: 'auto-accept-edits', launched: 'auto-accept-edits' },
+    ])('tells a Codex member to run the command outside its sandbox, and the person to approve it, in mode $launched', async ({ runtimeMode, launched }) => {
+      signIn(t3);
+      t3.config({ ...LINKED, environments: { ...LINKED.environments, 'env-sam': { projects: [{ ...acmeApp, defaultModelSelection: { instanceId: 'codex', model: 'gpt-6.1-sol' } }], providers: [CODEX, CLAUDE] } } });
+      const { runtime } = await initialized({}, runtimeMode === undefined ? {} : { runtime_mode: runtimeMode });
+
+      runtime.send(wake('op-000000e9'));
+
+      expect(await woke(runtime, 'op-000000e9')).toMatchObject({ event: 'woken' });
+      const member = t3.threads().find((thread) => thread.environmentId !== undefined);
+      expect(member).toMatchObject({
+        provider: 'codex', runtimeMode: launched,
+        message: `teamai woke this agent to take one attempt of the fleet pool gpu. Run \`teamai workflow resume\` below with escalated permissions, outside the sandbox: it needs the network and writes ~/.teamai, which the sandbox blocks. Whoever watches this agent: approve that command when Codex asks, or the attempt waits here.\n\nRun teamai workflow resume --claim gpu, then report.\n\n${END_OF_WAKE}`,
+      });
+      expect(member?.message).toContain(`Run \`${WAKE_COMMAND}\` below with escalated permissions`);
+    });
+
+    it('tells a Codex member to run the command outside its sandbox when the machine lists no provider for the project\'s default', async () => {
+      signIn(t3);
+      t3.config({ ...LINKED, environments: { ...LINKED.environments, 'env-sam': { projects: [{ ...acmeApp, defaultModelSelection: { instanceId: 'codex', model: 'gpt-6.1-sol' } }], providers: [] } } });
+      const { runtime } = await initialized({}, { runtime_mode: 'approval-required' });
+
+      runtime.send(wake('op-000000ea'));
+
+      expect(await woke(runtime, 'op-000000ea')).toMatchObject({ event: 'woken' });
+      expect(t3.threads().find((thread) => thread.environmentId !== undefined)?.message).toMatch(/^teamai woke this agent to take one attempt of the fleet pool gpu\. Run `teamai workflow resume` below with escalated permissions, outside the sandbox/);
+    });
+
     it('fails wake_unavailable, naming each machine it looked at and what to add, when no linked machine has the repository', async () => {
       signIn(t3);
       t3.config({ ...LINKED, environments: { 'env-other': LINKED.environments?.['env-other'] ?? { projects: [], providers: [] } } });

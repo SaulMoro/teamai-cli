@@ -46,7 +46,7 @@ const refusalOf = (executable: string, args: readonly string[]): string | undefi
 const profiles = LAUNCH_ORDER.map((tool) => {
   const call = launchAdapterOf(tool).call;
 
-  return { tool, executable: executableOf(tool), takes: call.prompt, args: (prompt: string) => call.args({ prompt, promptFile: 'C:\\t\\prompt.md', lastMessageFile: 'C:\\t\\last.txt' }) };
+  return { tool, executable: executableOf(tool), takes: call.prompt, args: (prompt: string) => call.args({ prompt, promptFile: 'C:\\t\\prompt.md', lastMessageFile: 'C:\\t\\last.txt', opencodeMajor: 2 }) };
 });
 
 describe('arguments for an npm .cmd shim', () => {

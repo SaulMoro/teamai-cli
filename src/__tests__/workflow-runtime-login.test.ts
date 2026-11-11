@@ -7,7 +7,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { LocalConfig } from '../types.js';
 import { attemptRun, attemptSessionStore, attemptToolHome, readAttemptPlacement, seedToolHome, type AttemptRuntimeRecord } from '../workflow/runtimes/attempt.js';
-import { ensureLogin, holdLogin, loginHolder, writeLoginBack } from '../workflow/runtimes/login.js';
+import { ensureLogin, holdLogin, holdLoginFrom, loginHolder, loginLockFile, writeLoginBack } from '../workflow/runtimes/login.js';
 import { OpIdSchema, type RuntimeDisplay } from '@teamai/runtime-protocol';
 import { newOpId, type ExecEnd, type PromptEnd, type Reattached, type StepRuntime } from '@teamai/runtime-protocol/step-runtime';
 import type { DriverCan } from '../workflow/requirements.js';
@@ -77,6 +77,32 @@ describe('the dedicated Codex login lock', () => {
     expect(await hold(FIRST, new AbortController().signal)).toEqual({ ok: true });
 
     expect(fs.readFileSync(path.join(toolHome, 'auth.json'), 'utf8')).toBe(auth('r2'));
+  });
+
+  it('copies the login again into the fresh home of a run in this process whose attempt already holds the lock, as after a restart', async () => {
+    const daily = path.join(root, '.codex');
+    fs.mkdirSync(daily, { recursive: true });
+    fs.writeFileSync(path.join(daily, 'auth.json'), auth('r1'));
+    fs.mkdirSync(path.dirname(loginLockFile('codex')), { recursive: true });
+    fs.writeFileSync(loginLockFile('codex'), JSON.stringify({ run: RUN, attempt: FIRST, takenAt: new Date().toISOString(), copied: createHash('sha256').update(auth('r1')).digest('hex') }));
+    const toolHome = path.join(root, 'fresh');
+
+    const held = await holdLoginFrom({ tool: 'codex', executable: 'codex', from: daily, toolHome, run: RUN, attempt: FIRST, signal: new AbortController().signal });
+
+    expect({ ok: held.ok, login: fs.existsSync(path.join(toolHome, 'auth.json')) ? fs.readFileSync(path.join(toolHome, 'auth.json'), 'utf8') : undefined }).toEqual({ ok: true, login: auth('r1') });
+  });
+
+  it('names the executable that ran in the login command it gives when it cannot write a login back to the home it came from', async () => {
+    const daily = path.join(root, '.tcodex');
+    fs.mkdirSync(daily, { recursive: true });
+    fs.writeFileSync(path.join(daily, 'auth.json'), auth('r1'));
+    const toolHome = path.join(root, 'fresh');
+    const held = await holdLoginFrom({ tool: 'codex', executable: 'tcodex', from: daily, toolHome, run: RUN, attempt: FIRST, signal: new AbortController().signal });
+    fs.writeFileSync(path.join(toolHome, 'auth.json'), auth('r2'));
+    // The member signed in again meanwhile.
+    fs.writeFileSync(path.join(daily, 'auth.json'), auth('r9'));
+
+    expect(held.ok ? await held.release() : held).toMatchObject({ code: 'login_not_written_back', message: expect.stringContaining(`log in again with CODEX_HOME=${daily} tcodex login,`) });
   });
 });
 

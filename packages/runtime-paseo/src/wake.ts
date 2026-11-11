@@ -6,6 +6,7 @@ import type { Host } from './daemon/host.js';
 import type { ProcessState } from './process-state.js';
 import type { PaseoTool } from './providers.js';
 import { repositoryKey } from '@teamai/runtime-kit/repository';
+import { codexWakeLine } from '@teamai/runtime-kit/wake';
 
 // ─── Waking a fleet member ───────────────────────────────
 //
@@ -21,16 +22,13 @@ export const END_OF_WAKE = 'When that one attempt is done, or nothing is left to
 /**
  * What a woken agent may run without asking, in the mode Paseo starts it in: teamai's command, by the tool's own rule,
  * and nothing else. Claude's default mode and OpenCode's asked before running it (recorded). Codex takes no rule for one
- * command, so its first prompt tells the person what to approve (`approveFirst`).
+ * command, and runs it in its sandbox, so its first prompt tells it to run the command outside (`codexWakeLine`).
  */
 const WAKE_ALLOWS: Readonly<Record<PaseoTool, PaseoAgentConfig['options']>> = {
   claude: { allowedTools: [`Bash(${WAKE_COMMAND}:*)`] },
   codex: undefined,
   opencode: { permission: { bash: { [`${WAKE_COMMAND} *`]: 'allow' } } },
 };
-
-/** The line a woken Codex agent's first prompt starts with, for the person who sees Codex ask. */
-const approveFirst = (pool: string): string => `teamai woke this agent to take one attempt of the fleet pool ${pool}: approve \`${WAKE_COMMAND}\` when Codex asks, or the attempt waits here.`;
 
 /** What the person adds so a wake finds a machine. */
 const NEXT_STEP = 'Add the machine with `paseo host add <host:port>`, and open a checkout of the repository in Paseo there.';
@@ -90,7 +88,7 @@ export function wakes({ ledger, write, fail }: Pick<ProcessState, 'ledger' | 'wr
         const agentId = agentIdOf(request.op);
         waking.state = 'launched';
         const options = WAKE_ALLOWS[member.tool];
-        const prompt = `${options ? '' : `${approveFirst(request.pool)}\n\n`}${request.message}\n\n${END_OF_WAKE}`;
+        const prompt = `${member.tool === 'codex' ? `${codexWakeLine(request.pool)}\n\n` : ''}${request.message}\n\n${END_OF_WAKE}`;
         await host.launch({ workspace, agentId, title, prompt, provider: member.provider, options, labels: { 'teamai-pool': request.pool } });
 
         return {

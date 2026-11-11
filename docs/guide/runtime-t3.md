@@ -375,7 +375,7 @@ To set it up:
 
 teamai picks the first linked machine that answers and has the project. The thread appears in that machine's T3 Code, in that project, titled after the step, the run and the pool, such as `teamai: step build of run r70d31098c8884803, fleet pool gpu`. It starts on the project's default model there, else the first Claude or Codex instance that machine runs, in `runtime_mode`, else Auto, and never in Full access: `full-access` wakes it in Auto. Its first message is teamai's command to take one attempt of the pool, and ends by telling it to end once that attempt is done. The run's details link the thread. Waking a member spends that machine's account.
 
-In Auto, the member runs teamai's command without asking. In Supervised or Auto-accept edits it asks first, and nobody is there to answer, so the message's first line says what to approve and names the rule below. To let a Claude member run that one command without asking, add it to `.claude/settings.local.json` in the checkout on that machine:
+In Auto, a Claude member runs teamai's command without asking. In Supervised or Auto-accept edits it asks first, and nobody is there to answer, so the message's first line says what to approve and names the rule below. A Codex member runs commands in its sandbox in every mode, with no network and no write to `~/.teamai`, so its first line tells it to run teamai's command with escalated permissions, outside the sandbox, which Codex asks for: approve it in that machine's T3 Code. To let a Claude member run that one command without asking, add it to `.claude/settings.local.json` in the checkout on that machine:
 
 ```json
 { "permissions": { "allow": ["Bash(teamai workflow resume:*)"] } }

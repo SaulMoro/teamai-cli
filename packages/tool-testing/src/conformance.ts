@@ -74,7 +74,7 @@ function scratch(label: string): string {
 
 function describeLaunch(id: string, profile: LaunchAdapter, call: RecordedCall): void {
   describe(`launch profile ${id}`, () => {
-    const input: CallInput = { prompt: PROMPT, promptFile: '/scratch/prompt.md', lastMessageFile: '/scratch/last-message.txt' };
+    const input: CallInput = { prompt: PROMPT, promptFile: '/scratch/prompt.md', lastMessageFile: '/scratch/last-message.txt', opencodeMajor: 2 };
     const args = profile.call.args(input);
 
     it(`hands the prompt over on ${profile.call.prompt}`, () => {

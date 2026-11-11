@@ -149,7 +149,7 @@ export async function runConfinedStep(input: ConfinedStepInput): Promise<Confine
 
   const result = await runConfined({
     tool: found.tool, model: found.model, dir: lease.confined.dir, prompt: lease.prompt ?? '', schema: schema?.schema, level: lease.confined.level,
-    timeoutMs: timeoutOf(lease), group: attemptDir(config, run, lease.attempt), signal,
+    timeoutMs: timeoutOf(lease), group: attemptDir(config, run, lease.attempt), attempt: { run, attempt: lease.attempt }, signal,
   }, resolveTool ? { resolveTool } : {});
 
   const durationMs = Date.now() - startedAt;

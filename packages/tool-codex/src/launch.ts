@@ -27,16 +27,21 @@ function readCodexExec({ stdout, lastMessage }: CallOutput): CallReading {
 
 const UNATTENDED = ['--dangerously-bypass-approvals-and-sandbox'] as const;
 
-/** A Codex step: `exec --json` headless, which also takes the definition's own model; the definition always goes in the prompt. */
+/**
+ * A Codex step: `exec --json` headless, which also takes the definition's own model; the definition always goes in the
+ * prompt. Codex's sandbox lets it write only in the checkout, so `--add-dir` lets it write the result file too; `exec`
+ * takes it before `resume` (codex-cli 0.167.0 refused the write without it, and wrote with it, resumed or not).
+ */
 function stepArgs(input: StepArgsInput, { interactive }: StepArgsHow): string[] {
   const unattended = input.unattended ? UNATTENDED : [];
   const resume = input.resume ? ['resume', input.resume] : [];
   const effort = input.effort ? ['-c', `model_reasoning_effort=${input.effort}`] : [];
+  const resultDir = ['--add-dir', input.resultDir];
 
-  if (interactive) return [...resume, ...unattended, ...(input.model ? ['--model', input.model] : []), ...effort, input.prompt];
+  if (interactive) return [...resume, ...resultDir, ...unattended, ...(input.model ? ['--model', input.model] : []), ...effort, input.prompt];
   const model = input.model ?? input.agent?.model;
 
-  return ['exec', ...resume, '--json', ...unattended, ...(model ? ['--model', model] : []), ...effort, input.prompt];
+  return ['exec', ...resultDir, ...resume, '--json', ...unattended, ...(model ? ['--model', model] : []), ...effort, input.prompt];
 }
 
 /** How teamai launches Codex and its variants headless; each variant starts its own command. */
