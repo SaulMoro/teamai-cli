@@ -1336,6 +1336,10 @@ steps:
       fs.mkdirSync(dir, { recursive: true });
       fs.writeFileSync(path.join(dir, 'nodefault.yaml'), stringify({ schemaVersion: 'v1alpha1', name: 'nodefault', runtimes: [{ use: 'toy', options: { state, agent: { output: { ok: true } } } }] }));
       const before = sends().length;
+      // init --agent claude named the member's tool in the install's config; this member names none.
+      const installConfig = path.join(dataHome, 'config.yaml');
+      const { ai: _named, ...unnamed } = parse(fs.readFileSync(installConfig, 'utf8')) as Record<string, unknown>;
+      fs.writeFileSync(installConfig, stringify(unnamed));
 
       const ran = await runCLI(['workflow', 'start', 'notoolset', '--driver', 'nodefault'], repo, env({ TEAMAI_AI_TOOL: '' }));
 
