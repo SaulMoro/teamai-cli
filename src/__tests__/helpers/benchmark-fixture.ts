@@ -524,7 +524,11 @@ process.stdout.write(JSON.stringify({ type: 'result', session_id: 'fake-session'
   const configPath = path.join(dataHome(), 'config.yaml');
   const config: unknown = YAML.parse(fs.readFileSync(configPath, 'utf8'));
   const parsed = z.object({ repo: z.object({ localPath: z.string() }).passthrough(), workflows: z.record(z.string(), z.unknown()).optional() }).passthrough().parse(config);
-  fs.writeFileSync(configPath, YAML.stringify({ ...parsed, workflows: { ...parsed.workflows, sandbox: options.sandbox, ...(options.maxParallel !== undefined ? { max_parallel: options.maxParallel } : {}) } }));
+  // init --agent claude names the member's AI tool too, which the driver offers without looking it up: a member whose
+  // machine has no claude names none.
+  const { ai: _named, ...member } = parsed;
+  const kept = (options.tools ?? ['claude']).includes('claude') ? parsed : member;
+  fs.writeFileSync(configPath, YAML.stringify({ ...kept, workflows: { ...parsed.workflows, sandbox: options.sandbox, ...(options.maxParallel !== undefined ? { max_parallel: options.maxParallel } : {}) } }));
 
   return {
     root, home, work, bin, env, teamOrigin, productOrigin, tmp, teamClone: parsed.repo.localPath, startingCommit, teamai, dataHome,
