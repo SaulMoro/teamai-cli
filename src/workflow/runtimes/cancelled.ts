@@ -139,7 +139,7 @@ export async function stopLeftInProcess(config: LocalConfig, run: RunId, attempt
 /** Writes back and releases each login attempt `attempt` of run `run`, run in teamai's process, holds; warns of one not written back. */
 export async function releaseLeftLogins(config: LocalConfig, run: RunId, attempt: AttemptId): Promise<void> {
   for (const tool of LOGIN_TOOLS) {
-    // Where a step or a judge of the attempt had the tool keep its login.
+    // Where a step or a judge of the attempt had the tool keep its login, when its lock does not say.
     const notBack = await releaseLeftLogin(tool, { run, attempt, toolHome: attemptToolHome(config, run, attempt, tool) });
 
     if (notBack) log.warn(notBack.message);

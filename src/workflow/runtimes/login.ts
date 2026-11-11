@@ -73,8 +73,9 @@ export function loginLockFile(tool: LoginTool): string {
 }
 
 /**
- * Who holds a login, the home it copied it from (the dedicated one when absent, as a lock an earlier teamai wrote), and
- * the hash of the file it copied into its tool home once it did.
+ * Who holds a login, the home it copied it from (the dedicated one when absent, as a lock an earlier teamai wrote), and,
+ * once it copied it, the hash of the file it copied and the tool home it copied it into (absent from a lock an earlier
+ * teamai wrote).
  */
 export const LoginLockSchema = z.object({
   run: RunIdSchema,
@@ -82,6 +83,7 @@ export const LoginLockSchema = z.object({
   takenAt: z.string(),
   from: LoginSourceSchema.optional(),
   copied: z.string().optional(),
+  toolHome: z.string().optional(),
 });
 
 export type LoginLock = z.infer<typeof LoginLockSchema>;
@@ -234,7 +236,7 @@ export async function holdLogin({ tool, run, attempt, toolHome, from = dedicated
 
       await fs.mkdir(toolHome, { recursive: true });
       await writeRegularFile(path.join(toolHome, LOGIN_FILES[tool]), body, { mode: 0o600 });
-      await placeLock(tool, { ...lock, copied: sha256(body) }, { replace: true });
+      await placeLock(tool, { ...lock, copied: sha256(body), toolHome }, { replace: true });
 
       return { ok: true };
     }
@@ -325,10 +327,10 @@ export async function releaseLogin(tool: LoginTool, { run, attempt }: { run: Run
 }
 
 /**
- * Writes back the login of `tool` that attempt `attempt` of run `run` holds, from its tool home `toolHome` to the home
- * its lock names, then releases it, as the attempt's own release does: for an attempt nothing of runs any more, such as
- * a judge whose teamai was killed. Says why the login was not written back; undefined once it was, or when the attempt
- * holds none or copied none.
+ * Writes back the login of `tool` that attempt `attempt` of run `run` holds, from the tool home its lock names (or
+ * `toolHome`, for a lock an earlier teamai wrote) to the home it copied it from, then releases it, as the attempt's own
+ * release does: for an attempt nothing of runs any more, such as a judge whose teamai was killed. Says why the login was
+ * not written back; undefined once it was, or when the attempt holds none or copied none.
  */
 export async function releaseLeftLogin(tool: LoginTool, { run, attempt, toolHome }: { run: RunId; attempt: AttemptId; toolHome: string }): Promise<WorkflowFailure | undefined> {
   const holder = await loginHolder(tool);
@@ -336,7 +338,7 @@ export async function releaseLeftLogin(tool: LoginTool, { run, attempt, toolHome
   if (holder?.run !== run || holder.attempt !== attempt) return undefined;
 
   try {
-    return holder.copied === undefined ? undefined : await writeLoginBack({ tool, run, attempt, toolHome, from: holder.from, collected: true });
+    return holder.copied === undefined ? undefined : await writeLoginBack({ tool, run, attempt, toolHome: holder.toolHome ?? toolHome, from: holder.from, collected: true });
   } finally {
     await releaseLogin(tool, { run, attempt });
   }
