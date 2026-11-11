@@ -56,11 +56,11 @@ let caseInsensitiveCache = new Map<string, boolean>();
  *
  * The probe reads first: a name in the folder, looked up with one letter's case
  * swapped, folds case when it reaches the same file (`dev` and `ino`). A folder
- * whose names hold no letter (`研发`) asks the same of its own path, up to the
- * edge of its volume. A sandbox that refuses writes to the folder (Codex's
- * workspace-write or read-only) gets the answer a writable folder gets, so it
- * resolves the partition `init` made. Only a folder where neither finds a letter
- * is probed by writing a file. Result is cached per probe directory. On any probe error we
+ * whose names hold no ASCII letter (all CJK, say) asks the same of its own path,
+ * up to the edge of its volume. A sandbox that refuses writes to the folder
+ * (Codex's workspace-write or read-only) gets the answer a writable folder gets,
+ * so it resolves the partition `init` made. Only a folder that is missing, or
+ * where neither finds a letter, is probed by writing a file. Result is cached per probe directory. On any probe error we
  * fall back to case-sensitive (no lowercasing) — the conservative choice: it
  * never merges two distinct anchors, at worst it keeps two spellings of one
  * anchor separate.
