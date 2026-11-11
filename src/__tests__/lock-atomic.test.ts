@@ -140,10 +140,16 @@ describe('acquireLock (real fs)', () => {
     ['reclaims a lock another pid namespace wrote more than an hour ago, by its file\'s time, when its own time cannot be read', 2 * 3_600_000, true],
     ['keeps a lock another pid namespace wrote a moment ago, by its file\'s time, when its own time cannot be read', 0, false],
   ])('%s', async (_name, age, isReclaimed) => {
-    fs.writeFileSync(lockPath, JSON.stringify({ pid: 999999, owner: 'theirs', startedAt: 'yesterday', pidNamespace: 'pid:[1]' }));
+    // The same lock, also under a name doctor --fix looks for, which lists for removal what acquireLock would reclaim.
+    const scanned = path.join(tmpDir, '.sync-lock');
     const written = new Date(Date.now() - age);
-    fs.utimesSync(lockPath, written, written);
 
+    for (const file of [lockPath, scanned]) {
+      fs.writeFileSync(file, JSON.stringify({ pid: 999999, owner: 'theirs', startedAt: 'yesterday', pidNamespace: 'pid:[1]' }));
+      fs.utimesSync(file, written, written);
+    }
+
+    expect(await listZombieLocks([tmpDir])).toEqual(isReclaimed ? [scanned] : []);
     expect(await acquireLock(lockPath)).toBe(isReclaimed);
     if (isReclaimed) await releaseLock(lockPath);
     else expect(JSON.parse(fs.readFileSync(lockPath, 'utf-8')).owner).toBe('theirs');

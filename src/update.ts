@@ -493,7 +493,7 @@ async function inspectLock(resolved: string): Promise<LockVerdict> {
     return { state: 'live' };
   }
 
-  if (!(await isHolderGone(parsed, { writtenAt: async () => (await fse.lstat(resolved).catch(() => undefined))?.mtimeMs }))) return { state: 'live' };
+  if (!(await isHolderGone(parsed, { writtenAt: writtenAtOf(resolved) }))) return { state: 'live' };
 
   // The owner may have released the lock and exited after the read, and
   // another process created a fresh one: only the dead owner's own file is stale.
@@ -527,10 +527,11 @@ export async function isHolderGone(holder: LockHolder, { writtenAt }: { writtenA
     case 'unknown':
       return false;
     case 'foreign': {
-      const own = holder.startedAt ?? Number.NaN;
+      const since = holder.startedAt !== undefined && !Number.isNaN(holder.startedAt) ? holder.startedAt : await writtenAt?.();
 
-      return Date.now() - (Number.isNaN(own) ? await writtenAt?.() ?? Number.NaN : own) > FOREIGN_HOLD_MS;
+      return since !== undefined && Date.now() - since > FOREIGN_HOLD_MS;
     }
+
     default: {
       const unhandled: never = verdict;
 
@@ -915,13 +916,18 @@ async function walkLockCandidates(roots: string[]): Promise<string[]> {
   return found;
 }
 
-/** True when `content` is a lock payload whose owning process is provably gone. */
-async function isDeadPidLock(content: string): Promise<boolean> {
-  const parsed = parseLockContent(content);
+/** When the lock at `file` was last written, by its file's time: undefined once the file is gone. */
+function writtenAtOf(file: string): () => Promise<number | undefined> {
+  return async () => (await fse.lstat(file).catch(() => undefined))?.mtimeMs;
+}
+
+/** True when `file` holds a lock payload whose owning process is provably gone, judged as `acquireLock` judges it. */
+async function isDeadPidLock(file: string): Promise<boolean> {
+  const parsed = parseLockContent(await readRegularFile(file, 'utf-8'));
 
   if (!parsed) return false; // names no owner: never provably stale (#760)
 
-  return isHolderGone(parsed);
+  return isHolderGone(parsed, { writtenAt: writtenAtOf(file) });
 }
 
 /**
@@ -935,7 +941,7 @@ export async function listZombieLocks(roots: string[]): Promise<string[]> {
 
   for (const p of await walkLockCandidates(roots)) {
     try {
-      if (await isDeadPidLock(await readRegularFile(p, 'utf-8'))) zombies.push(p);
+      if (await isDeadPidLock(p)) zombies.push(p);
     } catch {
       // unreadable: leave it alone
     }
