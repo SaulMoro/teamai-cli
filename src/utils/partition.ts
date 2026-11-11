@@ -54,34 +54,76 @@ let caseInsensitiveCache = new Map<string, boolean>();
  * as-is, verified in the issue), so normalization must be an explicit lowercase
  * gated on this probe.
  *
- * Result is cached per probe directory. On any probe error we fall back to
- * case-sensitive (no lowercasing) — the conservative choice: it never merges two
- * distinct anchors, at worst it keeps two spellings of one anchor separate.
+ * The probe reads first: a name in the folder, looked up with one letter's case
+ * swapped, folds case when it reaches the same file (`dev` and `ino`). A sandbox
+ * that refuses writes to the folder (Codex's workspace-write or read-only) gets
+ * the answer a writable folder gets, so it resolves the partition `init` made.
+ * Only a folder that is missing or holds no name with a letter is probed by
+ * writing a file. Result is cached per probe directory. On any probe error we
+ * fall back to case-sensitive (no lowercasing) — the conservative choice: it
+ * never merges two distinct anchors, at worst it keeps two spellings of one
+ * anchor separate.
  */
 export function isCaseInsensitiveFs(probeDir?: string): boolean {
   const base = probeDir ?? path.join(getUserHome(), '.teamai');
   const cached = caseInsensitiveCache.get(base);
 
   if (cached !== undefined) return cached;
-  let insensitive = false;
-
-  try {
-    fs.mkdirSync(base, { recursive: true });
-    const token = `.teamai-case-probe-${process.pid}-${Date.now()}`;
-    const upper = path.join(base, token.toUpperCase());
-    const lower = path.join(base, token.toLowerCase());
-    fs.writeFileSync(upper, '');
-    // If the lowercased path resolves to the file we wrote under the uppercased
-    // name, the FS folds case → case-insensitive.
-    insensitive = fs.existsSync(lower);
-    fs.rmSync(upper, { force: true });
-  } catch {
-    insensitive = false;
-  }
-
+  const insensitive = foldsCaseOfAName(base) ?? foldsCaseOfAWrite(base);
   caseInsensitiveCache.set(base, insensitive);
 
   return insensitive;
+}
+
+/**
+ * Whether the first name in `dir` with a letter, looked up with that letter's case swapped, reaches the same file.
+ * Undefined when `dir` cannot be read or holds no such name.
+ */
+function foldsCaseOfAName(dir: string): boolean | undefined {
+  let entries: fs.Dir;
+
+  try {
+    entries = fs.opendirSync(dir);
+  } catch {
+    return undefined;
+  }
+
+  try {
+    for (let entry = entries.readSync(); entry !== null; entry = entries.readSync()) {
+      const letter = entry.name.search(/[A-Za-z]/);
+
+      if (letter < 0) continue;
+      const char = entry.name.charAt(letter);
+      const swapped = entry.name.slice(0, letter) + (char === char.toLowerCase() ? char.toUpperCase() : char.toLowerCase()) + entry.name.slice(letter + 1);
+      const named = fs.lstatSync(path.join(dir, entry.name));
+      const other = fs.lstatSync(path.join(dir, swapped), { throwIfNoEntry: false });
+
+      return other !== undefined && named.dev === other.dev && named.ino === other.ino;
+    }
+  } catch {
+    // A name that vanished or cannot be read: the write probe decides.
+  } finally {
+    entries.closeSync();
+  }
+
+  return undefined;
+}
+
+/** Whether a file written in `dir` under an upper-case name exists under its lower-case one. False when it cannot write. */
+function foldsCaseOfAWrite(dir: string): boolean {
+  try {
+    fs.mkdirSync(dir, { recursive: true });
+    const token = `.teamai-case-probe-${process.pid}-${Date.now()}`;
+    const upper = path.join(dir, token.toUpperCase());
+    const lower = path.join(dir, token.toLowerCase());
+    fs.writeFileSync(upper, '');
+    const insensitive = fs.existsSync(lower);
+    fs.rmSync(upper, { force: true });
+
+    return insensitive;
+  } catch {
+    return false;
+  }
 }
 
 /** Test-only: reset the cached case-sensitivity probes. */
