@@ -144,7 +144,10 @@ describe('fake codex', () => {
     const agent = fakeAgent(codexFake, { bin });
     const result = path.join(root, 'attempt', 'out', 'result.json');
 
-    const out = await runFakeAgent(agent.executable, ['exec', '--json', 'Set the output word to done.'], '', { cwd: repo, env: { HOME: home, CODEX_HOME: codexHome, TMPDIR: path.join(root, 't'), TEAMAI_WORKFLOW_RESULT: result } });
+    // /tmp and TMPDIR excluded, as codex-cli 0.167.0 takes them: the scratch folder is under /tmp where TMPDIR is unset.
+    const excluded = ['-c', 'sandbox_workspace_write.exclude_slash_tmp=true', '-c', 'sandbox_workspace_write.exclude_tmpdir_env_var=true'];
+
+    const out = await runFakeAgent(agent.executable, ['exec', ...excluded, '--json', 'Set the output word to done.'], '', { cwd: repo, env: { HOME: home, CODEX_HOME: codexHome, TMPDIR: path.join(root, 't'), TEAMAI_WORKFLOW_RESULT: result } });
 
     expect({ code: out.code, wrote: fs.existsSync(result) }).toEqual({ code: 0, wrote: false });
   });
