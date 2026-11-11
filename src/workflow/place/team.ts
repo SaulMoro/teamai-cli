@@ -17,7 +17,7 @@ import { checkoutCredentials, getConfiguredRemoteUrl, redactGitCredentials } fro
 import type { StepChanges } from '../workspace.js';
 import { runsDir, type RunId } from '../store.js';
 import type { WorkflowFailure } from '../types.js';
-import { commitWork, git, remoteGit, untrustedGit, type Git, type UntrustedGit } from '../worktree.js';
+import { commitWork, git, gitAnswer, remoteGit, untrustedGit, unansweredGit, type Git, type UntrustedGit } from '../worktree.js';
 
 /** How long one git call that reaches origin may take. */
 const ORIGIN_TIMEOUT_MS = 120_000;
@@ -91,9 +91,11 @@ export async function openTeamClone(input: { config: LocalConfig; run: RunId; st
 
   const head = await git(root, ['symbolic-ref', '--short', 'refs/remotes/origin/HEAD']);
   const target = head.code === 0 ? head.stdout.trim().replace(/^origin\//, '') : '';
-  const base = target === '' ? undefined : await git(root, ['rev-parse', '--verify', '-q', `refs/remotes/origin/${target}^{commit}`]);
+  const base = target === '' ? undefined : gitAnswer(await git(root, ['rev-parse', '--verify', '-q', `refs/remotes/origin/${target}^{commit}`]));
 
-  if (base?.code !== 0) {
+  if (base?.said === 'nothing') return { code: 'workspace_base', message: unansweredGit(`whether the team repo's origin has ${target}`, base.result).message };
+
+  if (base?.said !== 'yes') {
     return { code: 'workspace_base', message: `Step "${step}" found no default branch on the team repo's origin ${config.repo.remote}, so it has nothing to start ${branch} from. Push a default branch there, then run the workflow again.` };
   }
 
@@ -101,15 +103,17 @@ export async function openTeamClone(input: { config: LocalConfig; run: RunId; st
     return { code: 'workspace_base', message: `Step "${step}" would commit to ${branch}, the team repo's default branch, so its work would skip review. Give workspace team branch another name.` };
   }
 
-  const found = await git(root, ['rev-parse', '--verify', '-q', `refs/remotes/origin/${branch}^{commit}`]);
+  const found = gitAnswer(await git(root, ['rev-parse', '--verify', '-q', `refs/remotes/origin/${branch}^{commit}`]));
 
-  const started = found.code === 0
+  if (found.said === 'nothing') return { code: 'workspace_base', message: unansweredGit(`whether the team repo's origin has ${branch}`, found.result).message };
+
+  const started = found.said === 'yes'
     ? await git(root, ['checkout', '-q', '-B', branch, `refs/remotes/origin/${branch}`])
     : await git(root, ['checkout', '-q', '-b', branch, `refs/remotes/origin/${target}`]);
 
   if (started.code !== 0) return { code: 'workspace_base', message: `Step "${step}" could not check out ${branch} in the team repo: ${said(started)}` };
 
-  if (found.code === 0) {
+  if (found.said === 'yes') {
     const merged = await git(root, [...TEAMAI, 'merge', '-q', '--no-edit', `refs/remotes/origin/${target}`]);
 
     if (merged.code !== 0) {
@@ -127,7 +131,7 @@ export async function openTeamClone(input: { config: LocalConfig; run: RunId; st
   const dir = isSelfMode(config) ? path.join(root, '.teamai') : root;
   await fs.mkdir(dir, { recursive: true });
 
-  return { root, dir, target, base: base.stdout.trim(), start: start.stdout.trim(), found: found.code === 0 ? found.stdout.trim() : undefined };
+  return { root, dir, target, base: base.result.stdout.trim(), start: start.stdout.trim(), found: found.said === 'yes' ? found.result.stdout.trim() : undefined };
 }
 
 /**

@@ -82,6 +82,16 @@ export const GIT_NOT_STARTED = 127;
  */
 export type GitAnswer = { readonly said: 'yes' | 'no' | 'nothing'; readonly result: GitResult };
 
+/**
+ * What a git whose process could not start returns, by `error`, the spawn's: in a `cwd` that is not a directory, the
+ * failure `git -C` exits 128 with, since Node reports it as a missing git; otherwise GIT_NOT_STARTED.
+ */
+export function unstartedGit(cwd: string, error: Error, isCwdThere: boolean): GitResult {
+  if (!isCwdThere) return { code: 128, stdout: '', stderr: `fatal: cannot change to '${cwd}': No such directory` };
+
+  return { code: GIT_NOT_STARTED, stdout: '', stderr: `git did not start: ${error.message}` };
+}
+
 /** Reads `result`, git's exit to a question it answers with its exit code, as its answer (`GitAnswer`). */
 export function gitAnswer(result: GitResult): GitAnswer {
   if (result.code === 0) return { said: 'yes', result };
@@ -496,6 +506,10 @@ function settleOnSignal(child: ChildProcess): void {
   });
 }
 
+function isDirectory(dir: string): Promise<boolean> {
+  return fs.stat(dir).then((stats) => stats.isDirectory(), () => false);
+}
+
 function spawnGit(cwd: string, args: string[], options: GitOptions | undefined, base: NodeJS.ProcessEnv): Promise<GitResult> {
   if (options === undefined) {
     return new Promise((resolve) => {
@@ -504,7 +518,7 @@ function spawnGit(cwd: string, args: string[], options: GitOptions | undefined, 
 
         // Only the spawn's own error names the spawn syscall (ENOENT, EACCES): git never started, so it answered nothing.
         if (error && 'syscall' in error && String(error.syscall).startsWith('spawn')) {
-          resolve({ code: GIT_NOT_STARTED, stdout: '', stderr: `git did not start: ${error.message}` });
+          resolve(isDirectory(cwd).then((isCwdThere) => unstartedGit(cwd, error, isCwdThere)));
 
           return;
         }
@@ -540,10 +554,10 @@ function spawnGit(cwd: string, args: string[], options: GitOptions | undefined, 
   child.stdin.on('error', () => {});
   child.stdin.end('input' in options ? options.input : undefined);
 
-  return exited.then((code) => {
+  return exited.then(async (code) => {
     clearTimeout(timer);
 
-    return notStarted === undefined ? { code, stdout, stderr } : { code, stdout: '', stderr: `git did not start: ${notStarted.message}` };
+    return notStarted === undefined ? { code, stdout, stderr } : unstartedGit(cwd, notStarted, await isDirectory(cwd));
   });
 }
 
@@ -601,7 +615,7 @@ export async function headCommit(cwd: string): Promise<{ ref?: string; commit: s
   const commit = result.stdout.trim();
 
   if (!commit) return undefined;
-  const ref = (await git(cwd, ['symbolic-ref', '--quiet', '--short', 'HEAD'])).stdout.trim();
+  const ref = yesOutput(gitAnswer(await git(cwd, ['symbolic-ref', '--quiet', '--short', 'HEAD'])), `the branch ${cwd} is on`);
 
   return ref ? { ref, commit } : { commit };
 }
@@ -637,10 +651,12 @@ export async function ensureWorktree(main: string, branch: string, start: string
 
   await fs.mkdir(path.dirname(dir), { recursive: true });
   const config = ['-c', `core.hooksPath=${hooks}`];
-  const exists = await git(main, ['rev-parse', '--verify', '--quiet', branch]);
+  const exists = gitAnswer(await git(main, ['rev-parse', '--verify', '--quiet', branch]));
+
+  if (exists.said === 'nothing') return { error: unansweredGit(`whether branch ${branch} exists in ${main}`, exists.result).message };
   // Not `worktree add -b`: it makes the branch before it reads the worktrees, so when git runs it again after a half
   // written entry (see `git`), it finds the branch it made.
-  const branched = exists.code === 0 ? exists : await git(main, [...config, 'branch', branch, start]);
+  const branched = exists.said === 'yes' ? exists.result : await git(main, [...config, 'branch', branch, start]);
   const created = branched.code === 0 ? await git(main, [...config, 'worktree', 'add', dir, branch]) : branched;
 
   if (created.code !== 0) return { error: created.stderr.trim() || created.stdout.trim() || 'git worktree add failed' };
@@ -672,7 +688,7 @@ export async function markSetup(dir: string, state: 'unfinished' | 'finished'): 
  * is. `runGit` runs each git call.
  */
 export async function offBranch(dir: string, branch: string, runGit: Git = git): Promise<string | undefined> {
-  const head = (await runGit(dir, ['symbolic-ref', '--quiet', 'HEAD'])).stdout.trim();
+  const head = yesOutput(gitAnswer(await runGit(dir, ['symbolic-ref', '--quiet', 'HEAD'])), `the branch ${dir} is on`);
 
   if (head === `refs/heads/${branch}`) return undefined;
 
@@ -687,10 +703,12 @@ export async function offBranch(dir: string, branch: string, runGit: Git = git):
  */
 export async function reconcileCopy(main: string, branch: string, expected: string): Promise<{ error: string } | undefined> {
   const ref = `refs/heads/${branch}`;
-  const local = await git(main, ['rev-parse', '--verify', '--quiet', ref]);
+  const local = gitAnswer(await git(main, ['rev-parse', '--verify', '--quiet', ref]));
 
-  if (local.code !== 0) return undefined;
-  const tip = local.stdout.trim();
+  if (local.said === 'nothing') return { error: unansweredGit(`whether branch ${branch} is here`, local.result).message };
+
+  if (local.said === 'no') return undefined;
+  const tip = local.result.stdout.trim();
 
   const behind = tip === expected ? undefined : gitAnswer(await git(main, ['merge-base', '--is-ancestor', tip, expected]));
 
@@ -812,9 +830,11 @@ export async function mergeBranch(dir: string, commit: string, runGit: Git): Pro
 
   if (unmerged.code !== 0) return { state: 'failed', error: unmerged.stderr.trim() || 'git diff failed' };
   // An earlier attempt that left its merge unfinished resolves it as a conflict, even with every file staged.
-  const unfinished = (await runGit(dir, ['rev-parse', '--verify', '--quiet', 'MERGE_HEAD'])).code === 0;
+  const unfinished = gitAnswer(await runGit(dir, ['rev-parse', '--verify', '--quiet', 'MERGE_HEAD']));
 
-  if (unmerged.paths.length > 0 || unfinished) return { state: 'conflict', files: unmerged.paths };
+  if (unfinished.said === 'nothing') return { state: 'failed', error: unansweredGit(`whether a merge is in progress in ${dir}`, unfinished.result).message };
+
+  if (unmerged.paths.length > 0 || unfinished.said === 'yes') return { state: 'conflict', files: unmerged.paths };
 
   return { state: 'failed', error: (merged.stderr || merged.stdout).trim() || 'git merge failed' };
 }
@@ -839,7 +859,9 @@ export async function applyBaseConfig(
       return { ok: false, message: `Agent configuration ${linked.relative} is under the symlink ${linked.parent} in the run's base commit ${commit}, so it was not reset. Commit ${linked.parent} as a directory on the base branch, then start a new run.` };
     }
 
-    const branch = (await options.run(dir, ['symbolic-ref', '--quiet', 'HEAD'])).stdout.trim().replace(/^refs\/heads\//, '');
+    // Only names the branch in the refusal: no branch, and a git that did not answer, name none.
+    const head = gitAnswer(await options.run(dir, ['symbolic-ref', '--quiet', 'HEAD']));
+    const branch = head.said === 'yes' ? head.result.stdout.trim().replace(/^refs\/heads\//, '') : '';
 
     return { ok: false, message: `Agent configuration ${linked.relative} is under the symlink ${linked.parent} on branch ${branch}, so it was not reset. Commit ${linked.parent} as a directory on branch ${branch} in ${dir}, then retry the step.` };
   }
@@ -1032,8 +1054,7 @@ async function gitlinkCommit(dir: string, relative: string, run: Git): Promise<s
 
   if (staged === undefined) return undefined;
   const indexSha = staged.slice(0, staged.indexOf('\t')).split(' ')[1] ?? '';
-  const head = await run(path.join(dir, relative), ['rev-parse', '--verify', '--quiet', 'HEAD']);
-  const checked = head.code === 0 ? head.stdout.trim() : '';
+  const checked = yesOutput(gitAnswer(await run(path.join(dir, relative), ['rev-parse', '--verify', '--quiet', 'HEAD'])), `the commit checked out in ${relative}`);
 
   return /^[0-9a-f]{40}$/i.test(checked) ? checked : indexSha;
 }
@@ -1329,7 +1350,9 @@ export async function commitWork(
 
   if (before.code !== 0) return { error: before.stderr.trim() || 'HEAD could not be read' };
   const from = before.stdout.trim();
-  const merging = (await runGit(dir, ['rev-parse', '--verify', '--quiet', 'MERGE_HEAD'])).code === 0;
+  const merging = gitAnswer(await runGit(dir, ['rev-parse', '--verify', '--quiet', 'MERGE_HEAD']));
+
+  if (merging.said === 'nothing') return { error: unansweredGit(`whether a merge is in progress in ${dir}`, merging.result).message };
   const added = paths === undefined ? await stageAll(dir, runGit) : await stagePaths(dir, paths, runGit);
 
   if (added.code !== 0) return { error: added.stderr.trim() || 'git add failed' };
@@ -1337,7 +1360,7 @@ export async function commitWork(
 
   if (staged.said === 'nothing') return { error: unansweredGit(`whether anything is staged in ${dir}`, staged.result).message };
 
-  if (staged.said === 'no' || merging) {
+  if (staged.said === 'no' || merging.said === 'yes') {
     // Older Git also applies diff.ignoreSubmodules to commit's staged-change check.
     // We deliberately staged these gitlinks, so do not hide them again here.
     const committed = await runGit(dir, ['-c', 'user.name=TeamAI', '-c', 'user.email=teamai@localhost', '-c', 'diff.ignoreSubmodules=none', 'commit', '-m', message]);
@@ -1397,14 +1420,12 @@ export async function pushIfOrigin(dir: string, branch: string, commits: string[
  * a first push that never landed leaves commits only on this branch.
  */
 async function branchNeedsPush(dir: string, branch: string, runGit: Git): Promise<boolean> {
-  const local = await runGit(dir, ['rev-parse', '--verify', '--quiet', `refs/heads/${branch}`]);
+  const tip = yesOutput(gitAnswer(await runGit(dir, ['rev-parse', '--verify', '--quiet', `refs/heads/${branch}`])), `the tip of ${branch} in ${dir}`);
 
-  if (local.code !== 0) return false;
-  const tip = local.stdout.trim();
+  if (tip === '') return false;
   const remote = `refs/remotes/origin/${branch}`;
-  const known = await runGit(dir, ['rev-parse', '--verify', '--quiet', remote]);
 
-  if (known.code === 0) {
+  if (saidYes(gitAnswer(await runGit(dir, ['rev-parse', '--verify', '--quiet', remote])), `whether ${dir} tracks ${remote}`)) {
     return !saidYes(gitAnswer(await runGit(dir, ['merge-base', '--is-ancestor', tip, remote])), `whether ${remote} holds ${branch} at ${tip}`);
   }
 
@@ -1591,7 +1612,10 @@ async function copyStatus(dir: string, runGit: Git): Promise<{ lines: string[] }
 
 /** Why `dir` is not on `branch` at `commit` with the status `found`, submodules included. Undefined when it is. */
 async function copyLeftOver(dir: string, { branch, commit, found }: { branch: string; commit: string; found: string[] }, runGit: Git): Promise<string | undefined> {
-  const head = (await runGit(dir, ['symbolic-ref', '--quiet', 'HEAD'])).stdout.trim();
+  const onBranch = gitAnswer(await runGit(dir, ['symbolic-ref', '--quiet', 'HEAD']));
+
+  if (onBranch.said === 'nothing') return unansweredGit(`the branch ${dir} is on`, onBranch.result).message;
+  const head = onBranch.said === 'yes' ? onBranch.result.stdout.trim() : '';
 
   if (head !== `refs/heads/${branch}`) return head ? `HEAD is on ${head}` : 'HEAD is detached';
   const at = (await runGit(dir, ['rev-parse', 'HEAD'])).stdout.trim();

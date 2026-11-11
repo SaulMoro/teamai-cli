@@ -94,7 +94,7 @@ async function adoptedMismatch({ root, dir, run, attempt, workspace }: Adoption)
     return `${dir} is ${on}, not on branch ${branch} nor detached at its start ${start.commit}, so attempt ${attempt} was not prepared there. Check out ${branch} in ${dir}, then adopt it again.`;
   }
 
-  if (on !== undefined && (await git(dir, ['rev-parse', '--verify', '--quiet', `refs/heads/${branch}`])).code === 0) {
+  if (on !== undefined && saidYes(gitAnswer(await git(dir, ['rev-parse', '--verify', '--quiet', `refs/heads/${branch}`])), `whether branch ${branch} exists in ${dir}`)) {
     return `${dir} is detached at the start of branch ${branch}, which already exists, so attempt ${attempt} was not prepared there. Check out ${branch} in ${dir}, then adopt it again.`;
   }
 

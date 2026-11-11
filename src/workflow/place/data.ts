@@ -19,7 +19,7 @@ import { commitSkippingHooks, createGit } from '../../utils/git.js';
 import { runsDir, type AttemptId, type RunId } from '../store.js';
 import type { WorkflowFailure } from '../types.js';
 import type { DataAt } from './record.js';
-import { git, gitAnswer, saidYes } from '../worktree.js';
+import { git, gitAnswer, saidYes, yesOutput } from '../worktree.js';
 
 const said = (result: { stderr: string; stdout: string }): string => (result.stderr || result.stdout).trim();
 
@@ -81,9 +81,7 @@ export async function openDataCheckout(input: { config: LocalConfig; run: RunId;
  */
 async function startOf(repo: string, branch: DataBranch): Promise<string> {
   const tipOf = async (ref: string): Promise<string> => {
-    const found = await git(repo, ['rev-parse', '--verify', '-q', `${ref}^{commit}`]);
-
-    return found.code === 0 ? found.stdout.trim() : '';
+    return yesOutput(gitAnswer(await git(repo, ['rev-parse', '--verify', '-q', `${ref}^{commit}`])), `the tip of ${ref} in ${repo}`);
   };
 
   const [origin, local] = await Promise.all([tipOf(`refs/remotes/origin/${branch}`), tipOf(`refs/heads/${branch}`)]);

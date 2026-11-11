@@ -24,7 +24,7 @@ import { parseSnapshot, snapshotPath } from './snapshot.js';
 import { AttemptIdSchema, attemptsDir, installOwner, readRun, readRuns, RunIdSchema, updateRun, withCleanupLock } from './store.js';
 import type { KeptBranchReason, RunLeftovers, RunState } from './types.js';
 import { runBranchPrefix, runCopyToMerge } from './workspace.js';
-import { fetchMissingCommits, git, gitAnswer, removeWorktree, saidYes, worktreeCheckout } from './worktree.js';
+import { fetchMissingCommits, git, gitAnswer, removeWorktree, saidYes, unansweredGit, worktreeCheckout } from './worktree.js';
 import { readRegularFile } from '@teamai/shared/regular-file';
 
 /** Where each branch of a run points: in the checkout, and on `origin`, which is absent when the checkout has none. */
@@ -477,7 +477,11 @@ async function recordFiles(config: LocalConfig): Promise<{ files: RecordFile[] }
   const ref = `origin/${REPORTS_BRANCH}`;
 
   // A refresh that found no teamai-reports on origin leaves no tracking ref, and no records.
-  if ((await git(reports, ['rev-parse', '--verify', '--quiet', `refs/remotes/${ref}`])).code !== 0) return { files: [] };
+  const tracked = gitAnswer(await git(reports, ['rev-parse', '--verify', '--quiet', `refs/remotes/${ref}`]));
+
+  if (tracked.said === 'nothing') return { from: ref, error: unansweredGit(`whether ${reports} tracks ${ref}`, tracked.result).message };
+
+  if (tracked.said === 'no') return { files: [] };
   const listed = await git(reports, ['ls-tree', '--name-only', ref, '--', `${RECORDS_DIR}/`]);
 
   if (listed.code !== 0) return { from: `${ref}:${RECORDS_DIR}`, error: listed.stderr.trim() || 'git ls-tree failed' };

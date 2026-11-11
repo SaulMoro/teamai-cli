@@ -14,7 +14,7 @@ import { log } from '@teamai/shared/log';
 import { withTeamRevision } from './cache.js';
 import { runsDir, TeamPinSchema } from './store.js';
 import type { RunState } from './types.js';
-import { boundedGit, git } from './worktree.js';
+import { boundedGit, git, gitAnswer } from './worktree.js';
 import { readRegularFile, writeRegularFile } from '@teamai/shared/regular-file';
 
 export type TeamPin = z.infer<typeof TeamPinSchema>;
@@ -84,12 +84,12 @@ export const TeamPin = {
    */
   async capture(config: LocalConfig): Promise<{ pin: TeamPin; patch?: string } | undefined> {
     const root = repositoryRoot(config);
-    const [top, head] = await Promise.all([git(root, ['rev-parse', '--show-toplevel']), git(root, ['rev-parse', '--verify', '--quiet', 'HEAD^{commit}'])]);
+    const [top, head] = await Promise.all([git(root, ['rev-parse', '--show-toplevel']), git(root, ['rev-parse', '--verify', '--quiet', 'HEAD^{commit}']).then(gitAnswer)]);
     const spec = teamPathspec(config);
 
     // A clone at the revision reads the team files where the checkout does only when this is the repository's top.
-    if (top.code !== 0 || head.code !== 0 || spec.startsWith('..') || !await isSameRealPath(top.stdout.trim(), root)) return undefined;
-    const revision = await pushedRevision(root, head.stdout.trim());
+    if (top.code !== 0 || head.said !== 'yes' || spec.startsWith('..') || !await isSameRealPath(top.stdout.trim(), root)) return undefined;
+    const revision = await pushedRevision(root, head.result.stdout.trim());
     const changes = await changesPast(root, spec, revision);
 
     if ('failed' in changes) log.warn(`The run reads team commit ${revision.slice(0, 7)} without the edits past it: ${changes.failed}`);

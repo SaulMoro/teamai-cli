@@ -36,7 +36,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { getTeamaiHomeDir } from '../types.js';
 import { acquireLock, releaseLock } from '../update.js';
 import { resolveAnchors } from '../utils/git.js';
-import { GIT_NOT_STARTED, gitAnswer, unansweredGit, type GitResult } from '../workflow/worktree.js';
+import { gitAnswer, unansweredGit, unstartedGit, type GitResult } from '../workflow/worktree.js';
 import { z } from 'zod';
 import { AgentObservationSchema, CommitStateSchema, type AgentObservation } from '../agent-observation.js';
 import type { Session } from '@teamai/tool-core/sessions/ir';
@@ -1835,12 +1835,12 @@ export class SyncManager {
     return holds.said === 'no';
   }
 
-  /** git's exit to `args`, as `git()` returns it, GIT_NOT_STARTED when git did not start: for a question its exit code answers. */
+  /** git's exit to `args`, as `git()` returns it, with a git that did not start told apart: for a question its exit code answers. */
   private askGit(args: string[]): GitResult {
     const ran = spawnSync('git', args, { cwd: this.repoRoot, encoding: 'utf-8', timeout: 30_000, env: { ...process.env, LANGUAGE: 'en' } });
 
     // Only a git that never started has no pid; one stopped at its timeout has one, and no exit code.
-    if (ran.error && !ran.pid) return { code: GIT_NOT_STARTED, stdout: '', stderr: `git did not start: ${ran.error.message}` };
+    if (ran.error && !ran.pid) return unstartedGit(this.repoRoot, ran.error, fs.statSync(this.repoRoot, { throwIfNoEntry: false })?.isDirectory() === true);
 
     return { code: ran.status ?? 1, stdout: ran.stdout, stderr: ran.stderr };
   }

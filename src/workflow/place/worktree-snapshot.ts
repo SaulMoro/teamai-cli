@@ -2,7 +2,7 @@
 import { createHash } from 'node:crypto';
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import { git, type Git } from '../worktree.js';
+import { git, gitAnswer, type Git } from '../worktree.js';
 import { readRegularFile } from '@teamai/shared/regular-file';
 
 /** Every tracked or non-ignored path that differs from HEAD, with its content and mode, and where HEAD is. */
@@ -182,17 +182,18 @@ export async function snapshotWorktree(workspace: string, run: Git, depth = 0): 
   const [status, headRead, branchRead] = await Promise.all([
     gitStatus(workspace, run),
     run(workspace, ['rev-parse', 'HEAD']),
-    run(workspace, ['symbolic-ref', '--quiet', 'HEAD']),
+    run(workspace, ['symbolic-ref', '--quiet', 'HEAD']).then(gitAnswer),
   ]);
 
   const head = headRead.stdout.trim();
-  const branch = branchRead.stdout.trim();
+  // No branch is detached; a git that did not answer read no status either, so the snapshot is not ok.
+  const branch = branchRead.said === 'yes' ? branchRead.result.stdout.trim() : '';
 
   const resolved: Pick<WorktreeSnapshot, 'head'> = {};
 
   if (head) resolved.head = head;
 
-  if (!status.ok) return { ok: false, files: new Map(), ...resolved, branch };
+  if (!status.ok || branchRead.said === 'nothing') return { ok: false, files: new Map(), ...resolved, branch };
   const files = new Map<string, string>();
   const entries = statusEntries(status.text);
   const staging = await stagedEntries(workspace, entries.map((entry) => entry.relative), run);

@@ -22,7 +22,7 @@ import { SyncManager } from '../session-flow/sync.js';
 import { getReportsDir, isSelfMode, usesBranchWorktree, type DashboardEvent, type LocalConfig } from '../types.js';
 import { execCommand } from '@teamai/shared/exec';
 import { buildEndRecord, RECORDS_DIR } from '../workflow/records.js';
-import { gitAnswer, saidYes } from '../workflow/worktree.js';
+import { gitAnswer, saidYes, unansweredGit } from '../workflow/worktree.js';
 import { isRunId, readRun, runsDir } from '../workflow/store.js';
 import { HttpError } from './http.js';
 import { readRegularFile } from '@teamai/shared/regular-file';
@@ -157,9 +157,10 @@ const teamReadsCache = new Map<string, { at: string; reads: Promise<TeamReads> }
 
 /** The commit checked out in `dir`, or undefined when it has none or is gone: then nothing read from it is kept. */
 async function headOf(dir: string): Promise<string | undefined> {
-  const head = await execCommand('git', ['rev-parse', '--verify', '--quiet', 'HEAD'], { cwd: dir, timeoutMs: 10_000 }).catch(() => undefined);
+  // A git that did not start or ran out of time rejects, and reads no head either.
+  const head = await execCommand('git', ['rev-parse', '--verify', '--quiet', 'HEAD'], { cwd: dir, timeoutMs: 10_000 }).then(gitAnswer, () => undefined);
 
-  return head?.code === 0 ? head.stdout.trim() : undefined;
+  return head?.said === 'yes' ? head.result.stdout.trim() : undefined;
 }
 
 async function readTeam(config: LocalConfig): Promise<TeamReads> {
@@ -284,13 +285,15 @@ async function teamGit(config: LocalConfig, args: string[]) {
 
 /** The full commit `commit` names in this machine's team clone. Throws an HttpError the page shows when it has none. */
 async function resolveCommit(config: LocalConfig, commit: string): Promise<string> {
-  const resolved = await teamGit(config, ['rev-parse', '--verify', '--quiet', '--end-of-options', `${commit}^{commit}`]);
+  const resolved = gitAnswer(await teamGit(config, ['rev-parse', '--verify', '--quiet', '--end-of-options', `${commit}^{commit}`]));
 
-  if (resolved.code !== 0) {
+  if (resolved.said === 'nothing') throw unansweredGit(`whether this machine's team clone has commit ${commit}`, resolved.result);
+
+  if (resolved.said === 'no') {
     throw new HttpError(400, `Commit ${commit} is not in this machine's team clone. Run teamai pull, or give a commit of the team repo.`);
   }
 
-  return resolved.stdout.trim();
+  return resolved.result.stdout.trim();
 }
 
 /** How many git processes a split starts at once, however many team revisions the labels name. */

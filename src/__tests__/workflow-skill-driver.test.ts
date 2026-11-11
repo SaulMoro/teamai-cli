@@ -1536,7 +1536,11 @@ steps:
   it('a session whose session host has no child agent, and whose tool is not on PATH, does not judge its run: choosing h4 turns judging off', async () => {
     const harness = await skillHarness({ review: REVIEW }, { scorers: { 'review-quality': REVIEW_QUALITY } });
     roots.push(harness.root);
-    vi.stubEnv('PATH', path.join(harness.root, 'empty-bin'));
+    // Only claude is gone: the step's worktree still needs git.
+    const bin = path.join(harness.root, 'git-only-bin');
+    fs.mkdirSync(bin);
+    fs.symlinkSync(execFileSync('which', ['git'], { encoding: 'utf8' }).trim(), path.join(bin, 'git'));
+    vi.stubEnv('PATH', bin);
     const { chosen, turn: done } = await reviewed(harness, 'attended', { host: 'h4' });
     expect(chosen).toMatchObject({ data: { turn: { events: expect.arrayContaining([{ kind: 'judging-off', failure: { code: 'no_child_agent', message: expect.stringContaining('claude') } }]) } } });
     expect(done).toMatchObject({ data: { turn: { status: 'done', actions: [{ kind: 'done', outcome: 'succeeded' }] } } });

@@ -4,7 +4,7 @@ import type { LocalConfig } from '../types.js';
 import { AGENT_SESSION_ENV } from '../utils/session-id.js';
 import { isRunId, runScratchDir } from './store.js';
 import type { WorkflowFailure } from './types.js';
-import { git, worktreeCheckout } from './worktree.js';
+import { git, gitAnswer, worktreeCheckout, yesOutput } from './worktree.js';
 
 /**
  * What every process of an attempt of `run` gets: the attempt marker, the run's mode, and the run's directory, and the
@@ -91,7 +91,7 @@ export async function nestedStart(env: NodeJS.ProcessEnv, cwd: string): Promise<
   const checkout = worktreeCheckout(cwd);
 
   if (checkout !== undefined) return { kind: 'worktree-path', dir: cwd, checkout };
-  const branch = (await git(cwd, ['symbolic-ref', '--quiet', '--short', 'HEAD'])).stdout.trim();
+  const branch = yesOutput(gitAnswer(await git(cwd, ['symbolic-ref', '--quiet', '--short', 'HEAD'])), `the branch ${cwd} is on`);
   const [owner, run, ...rest] = branch.split('/');
 
   return owner === 'teamai' && run !== undefined && isRunId(run) && rest.length > 0 ? { kind: 'workflow-branch', dir: cwd, branch } : undefined;

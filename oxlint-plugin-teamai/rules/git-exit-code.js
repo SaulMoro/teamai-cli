@@ -18,6 +18,16 @@ const EXIT_CODE_ANSWERS = new Map([
 ]);
 
 /**
+ * Git commands that print their answer on a yes and answer a no with their exit code alone when quiet: the subcommand,
+ * and the flags any of which makes it quiet. simple-git raw reads them by their output, which is right; a git that
+ * returns the exit code needs gitAnswer, or a git that did not start reads as a missing ref or a detached HEAD.
+ */
+const QUIET_ANSWERS = new Map([
+  ['rev-parse', ['--quiet', '-q']],
+  ['symbolic-ref', ['--quiet', '-q']],
+]);
+
+/**
  * The literal text of each argument of `node`, an array expression; undefined for an argument that is not literal.
  * @param {ESTree.Node | undefined} node
  * @returns {Array<string | undefined>}
@@ -35,27 +45,43 @@ function literalArgs(node) {
 /**
  * The exit-code question `node`, an array of git arguments, asks: its subcommand, when it is one; undefined otherwise.
  * @param {ESTree.Node | undefined} node
+ * @param {Map<string, string[]>} [questions]
  * @returns {string | undefined}
  */
-function exitCodeQuestion(node) {
+function exitCodeQuestion(node, questions = EXIT_CODE_ANSWERS) {
   const [command, ...rest] = literalArgs(node);
-  const flags = command === undefined ? undefined : EXIT_CODE_ANSWERS.get(command);
+  const flags = command === undefined ? undefined : questions.get(command);
 
   return flags && rest.some((arg) => arg !== undefined && flags.includes(arg)) ? command : undefined;
 }
+
+/** Every question git answers with its exit code alone, quiet ones included. */
+const ALL_QUESTIONS = new Map([...EXIT_CODE_ANSWERS, ...QUIET_ANSWERS]);
 
 /** The helper that reads an exit-code answer, telling a no from a git that never ran. */
 const ANSWER_READER = 'gitAnswer';
 
 /**
- * Whether `node`, a call, is read through `gitAnswer(...)`, awaited or not.
+ * Whether `node` is the answer reader itself.
+ * @param {ESTree.Node | undefined} node
+ */
+function isAnswerReader(node) {
+  return node?.type === 'Identifier' && node.name === ANSWER_READER;
+}
+
+/**
+ * Whether `node`, a call, is read through `gitAnswer(...)`, awaited or not, or through `.then(gitAnswer, ...)`.
  * @param {ESTree.CallExpression} node
  */
 function readAsAnswer(node) {
   const value = node.parent?.type === 'AwaitExpression' ? node.parent : node;
   const reader = value.parent;
 
-  return reader?.type === 'CallExpression' && reader.callee.type === 'Identifier' && reader.callee.name === ANSWER_READER && reader.arguments[0] === value;
+  if (reader?.type === 'CallExpression' && isAnswerReader(reader.callee) && reader.arguments[0] === value) return true;
+  const then = node.parent;
+
+  return then?.type === 'MemberExpression' && then.object === node && then.property.type === 'Identifier' && then.property.name === 'then'
+    && then.parent?.type === 'CallExpression' && then.parent.callee === then && isAnswerReader(then.parent.arguments[0]);
 }
 
 export default defineRule({
@@ -79,7 +105,7 @@ export default defineRule({
           return;
         }
 
-        const command = node.arguments.map(exitCodeQuestion).find((asked) => asked !== undefined);
+        const command = node.arguments.map((argument) => exitCodeQuestion(argument, ALL_QUESTIONS)).find((asked) => asked !== undefined);
 
         if (command === undefined || readAsAnswer(node)) return;
         context.report({

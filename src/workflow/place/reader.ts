@@ -4,7 +4,7 @@ import { z } from 'zod';
 import { writeJsonAtomic } from '../../utils/fs.js';
 import type { StepRead } from '../step-state.js';
 import type { WorkflowFailure } from '../types.js';
-import { gitAnswer, keptSentence, putBackCopy, saidYes, type Git, type KeptChanges } from '../worktree.js';
+import { gitAnswer, keptSentence, putBackCopy, saidYes, yesOutput, type Git, type KeptChanges } from '../worktree.js';
 import { restoreOverlay } from './overlay.js';
 import { changedPaths, snapshotWorktree, type WorktreeSnapshot } from './worktree-snapshot.js';
 import { Writes } from '../writes.js';
@@ -114,7 +114,7 @@ export async function leaveReadCopy(input: {
   const changed = changedPaths(before, await snapshotWorktree(dir, run));
   // A detach or a switch to another branch at the same commit changes no file, but a later step would commit off the branch.
   // The full ref: --short prints heads/<branch> when a tag has the same name.
-  const onBranch = (await run(dir, ['symbolic-ref', '--quiet', 'HEAD'])).stdout.trim() === `refs/heads/${workspace.branch}`;
+  const onBranch = yesOutput(gitAnswer(await run(dir, ['symbolic-ref', '--quiet', 'HEAD'])), `the branch ${dir} is on`) === `refs/heads/${workspace.branch}`;
 
   if (!onBranch && !changed.includes('HEAD')) changed.push('HEAD');
   const unrestored = await restoreOverlay({ dir, configCommit: workspace.configCommit, saved, run });
