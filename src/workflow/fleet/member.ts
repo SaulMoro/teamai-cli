@@ -11,10 +11,9 @@ import type { HandoffOwner } from '../snapshot.js';
 import type { LocalConfig } from '../../types.js';
 import { errnoCode } from '../../utils/fs.js';
 import { log } from '@teamai/shared/log';
-import { stopRecordedGroup } from '@teamai/shared/process-group';
 import { shellArgv, startGroupedCommand, STOPPED_EXIT_CODE, type GroupedCommand, type GroupedCommandExit } from '../shell-command.js';
 import { attemptHoldingSession, attemptRun, attemptRuntimePath } from '../runtimes/attempt.js';
-import { stopCancelledAttempts, stopLeftAttempt } from '../runtimes/cancelled.js';
+import { stopCancelledAttempts, stopLeftAttempt, stopLeftInProcess } from '../runtimes/cancelled.js';
 import type { OpenedDriver } from '../runtimes/sources.js';
 import type { StepRuntime } from '@teamai/runtime-protocol/step-runtime';
 import type { DriverCan } from '../requirements.js';
@@ -343,8 +342,9 @@ async function finishLeftClaims(config: LocalConfig, { repository, root, member,
   for (const record of await listMemberRecords(config, { member, repository })) {
     const held = await takeRunLock(config, record.run, async (lock): Promise<WorkflowEnvelope | undefined> => {
       // A member killed mid-step leaves its command's process group running, or its exec on a step runtime: nothing
-      // else stops either. One that may still run keeps the claim, so no second copy of the step runs beside it.
-      await stopRecordedGroup(attemptDir(config, record.run, record.attempt));
+      // else stops either. One that may still run keeps the claim, so no second copy of the step runs beside it. What ran
+      // in its own process, such as a Codex judge, also left its login held: that is written back and released.
+      await stopLeftInProcess(config, record.run, record.attempt);
       // A whole workflow's nested run leaves its steps' commands under attempts of its own, and its state running.
       const nestedRun = await endLeftNestedRun(config, record.run, record.attempt);
 

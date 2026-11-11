@@ -19,6 +19,7 @@ import { stdioStepRuntime } from '../workflow/runtimes/stdio.js';
 import { TOY_RUNTIME } from './helpers/toy-runtime.js';
 import type { OpId } from '@teamai/runtime-protocol';
 import { attemptRuntimePath, attemptToolHome } from '../workflow/runtimes/attempt.js';
+import { holdLoginFrom, loginHolder } from '../workflow/runtimes/login.js';
 import { readableReportsWorktree, reportsBranch, updateReports } from '../utils/reports-branch.js';
 import { acquireLock, releaseLock } from '../update.js';
 import { REPORTS_LOCK_FILENAME } from '../types.js';
@@ -933,6 +934,26 @@ describe('a restarted member', () => {
 
     expect(await recordOf(alice, run)).toMatchObject({ state: 'finished', result: { exitCode: 0, to: left } });
   });
+
+  it('writes back and frees the Codex login the judge of its killed run refreshed, before it finishes the claim', async () => {
+    const { alice, bob, run, offered } = await offerSlow(60_000, { definition: AGAIN.replace('test -f left.txt && echo again > again.txt', 'echo again > again.txt'), command: 'echo again > again.txt' });
+    const claimed = await claimAttempt(bob.config, offered, await installOwner(bob.config));
+    if (!claimed.ok) throw new Error(claimed.error.message);
+    const daily = path.join(path.dirname(bob.checkout), 'bob-codex');
+    // Codex rotates its refresh token on a refresh and refuses the old one after (refresh_token_reused).
+    const login = (refresh: string): string => JSON.stringify({ auth_mode: 'chatgpt', tokens: { account_id: 'acct-1', refresh_token: refresh } });
+    fs.mkdirSync(daily);
+    fs.writeFileSync(path.join(daily, 'auth.json'), login('refresh-1'), { mode: 0o600 });
+    const toolHome = attemptToolHome(bob.config, run, ATTEMPT, 'codex');
+    expect((await holdLoginFrom({ tool: 'codex', executable: 'codex', from: daily, toolHome, run, attempt: ATTEMPT, signal: new AbortController().signal })).ok).toBe(true);
+    fs.writeFileSync(path.join(toolHome, 'auth.json'), login('refresh-2'));
+    await readableReportsWorktree(bob.config);
+
+    await takeFleetAttempt(bob.config, { pool: 'default', repository: 'github.com/acme/business', root: bob.checkout, member: await installOwner(bob.config), secrets: {}, place: HERE });
+
+    expect({ daily: JSON.parse(fs.readFileSync(path.join(daily, 'auth.json'), 'utf8')).tokens.refresh_token, holder: await loginHolder('codex'), state: (await recordOf(alice, run))?.state })
+      .toEqual({ daily: 'refresh-2', holder: undefined, state: 'finished' });
+  }, 60_000);
 
   it('stops the command it left running, and finishes the claim it held from the work it pushed', async () => {
     const { alice, bob, run, offered } = await offerSlow(60_000, { definition: AGAIN, command: 'test -f left.txt && echo again > again.txt' });
