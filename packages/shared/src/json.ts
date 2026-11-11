@@ -14,9 +14,24 @@ export const JsonObjectSchema = z.record(z.string(), JsonValueSchema) satisfies 
 /** One line of a JSONL file, parsed: a JSON object. */
 export type JsonlRecord = JsonObject;
 
-/** Whether a JSON value is an object, not an array, a primitive or null: JSON and YAML parse every object as an Object instance. */
-export function isJsonObject(value: JsonValue | undefined): value is JsonObject {
-  return value instanceof Object && !Array.isArray(value);
+/**
+ * Whether `value`, parsed or not, is a JSON object: a plain object, as JSON and YAML parse one, whose every value is JSON
+ * in turn. A Date, a Map, a function or a class instance is not, at the top or below it.
+ */
+export function isJsonObject(value: unknown): value is JsonObject {
+  if (value === null || value === undefined || Array.isArray(value)) return false;
+  const prototype: unknown = Object.getPrototypeOf(value);
+
+  return (prototype === Object.prototype || prototype === null) && Object.values(value).every(isJsonValue);
+}
+
+/** Whether `value` is JSON as JSON and YAML parse it: null, a boolean, a string, a number (YAML's .inf and .nan too), an array of JSON or a JSON object. */
+function isJsonValue(value: unknown): value is JsonValue {
+  if (value === null || value === true || value === false || String(value) === value) return true;
+
+  if (Number.isFinite(value) || Number.isNaN(value) || value === Infinity || value === -Infinity) return true;
+
+  return Array.isArray(value) ? value.every(isJsonValue) : isJsonObject(value);
 }
 
 /**
