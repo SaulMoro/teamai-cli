@@ -444,6 +444,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { execFileSync, spawnSync } = require('node:child_process');
 ${tool === 'claude' ? judgeMode(judgeLog, path.join(tmp, 'teamai-clones'), options.judge ?? 'first-label') : ''}
+${tool === 'codex' ? CODEX_VERSION : ''}
 const git = (...args) => execFileSync('git', args, { encoding: 'utf8' }).trim();
 const first = !fs.existsSync(${JSON.stringify(toolLog)});
 const files = (dir) => fs.readdirSync(dir, { withFileTypes: true }).filter((entry) => !(dir === '.' && entry.name === '.git'))
@@ -575,6 +576,12 @@ process.stdout.write(JSON.stringify({ type: 'result', session_id: 'fake-session'
     remove: () => fs.rmSync(root, { recursive: true, force: true }),
   };
 }
+
+/** The start of the fake `codex`: its version, as codex-cli 0.167.0 prints it, which teamai reads before a launch. */
+const CODEX_VERSION = `if (process.argv.includes('--version')) {
+  console.log('codex-cli 0.167.0');
+  process.exit(0);
+}`;
 
 /** The start of the fake `claude`: its version, which has a verified judge profile, and, launched as a judge, its answer. */
 function judgeMode(log: string, trialRoots: string, judge: FakeJudge): string {
