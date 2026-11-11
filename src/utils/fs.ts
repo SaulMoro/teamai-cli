@@ -447,6 +447,7 @@ export async function copyDir(
   const staging = stagingFolder(destExpanded);
   // The copy sits a folder below, beside the process making it, so the next copy can tell a folder whose copy died.
   const copy = path.join(staging, 'copy');
+  copyingNow.add(path.basename(staging));
 
   try {
     await fse.outputFile(path.join(staging, STAGING_OWNER), JSON.stringify({ ...(await identityOf(process.pid)), startedAt: new Date().toISOString(), host: os.hostname() }));
@@ -470,12 +471,16 @@ export async function copyDir(
     if (there === undefined || there.isSymbolicLink()) await fse.rename(copy, destExpanded);
     else await mergeRegularTree(copy, destExpanded);
   } finally {
+    copyingNow.delete(path.basename(staging));
     await fse.remove(staging);
   }
 }
 
 /** The file in a staging folder naming the process that copies into it, as a lock names its holder, and its host. */
 const STAGING_OWNER = 'owner.json';
+
+/** The names of the staging folders this process copies into now: one it owns that is not among them, it left. */
+const copyingNow = new Set<string>();
 
 const StagingOwnerSchema = ProcessIdentitySchema.extend({ host: z.string().min(1) });
 
@@ -503,6 +508,7 @@ async function isLeftBehind(staging: string): Promise<boolean> {
 
   // A pid another host recorded, as a container sharing the home does, names nothing here.
   if (owner.success && owner.data.host === os.hostname()) {
+    if (owner.data.pid === process.pid) return !copyingNow.has(path.basename(staging));
     const verdict = await isSameProcess(owner.data);
 
     if (verdict === 'other') return true;
