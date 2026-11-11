@@ -172,7 +172,7 @@ async function completedRecord(records: string, pid: number): Promise<Record<str
   let record: Record<string, unknown> = {};
   await vi.waitFor(() => {
     record = z.record(z.string(), z.unknown()).parse(JSON.parse(fs.readFileSync(file, 'utf8')));
-    expect(record).not.toHaveProperty('spawnedAt');
+    expect('startTicks' in record || 'start' in record).toBe(true);
   }, { timeout: 5000 });
   return record;
 }
@@ -387,6 +387,21 @@ it.runIf(process.platform === 'linux')('leaves a recorded group alone when its r
     await stopRecordedGroup(records);
 
     expect(group.alive()).toBe(true);
+    // Kept for a stop in that namespace, which can still tell its process.
+    expect(fs.existsSync(path.join(records, `group-${group.pid}.json`))).toBe(true);
+  } finally {
+    try { process.kill(-group.pid, 'SIGKILL'); } catch { /* Already stopped. */ }
+    fs.rmSync(records, { recursive: true, force: true });
+  }
+});
+
+it.runIf(process.platform === 'linux')('keeps the spawn time in a record whose start /proc tells, which a teamai that reads no startTicks stops by', async () => {
+  const records = fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-record-spawned-'));
+  const group = await detachedGroup();
+  try {
+    recordGroup(group.shell, records);
+
+    expect(await completedRecord(records, group.pid)).toMatchObject({ pid: group.pid, startTicks: kernelStartTicks(group.pid), spawnedAt: expect.any(Number) });
   } finally {
     try { process.kill(-group.pid, 'SIGKILL'); } catch { /* Already stopped. */ }
     fs.rmSync(records, { recursive: true, force: true });

@@ -205,7 +205,8 @@ export function recordGroup(child: ChildProcess, dir: string, { isAttached = fal
   // starter to be killed: until then the spawn time stands for the start. A teamai that reads only `start` stops nothing
   // from it, as when nothing was recorded. ps then runs off the event loop, so a step's command and its output are not
   // held while it does.
-  writeGroup(file, JSON.stringify({ pid, spawnedAt: Date.now(), ...(isAttached && { tree: true }) }));
+  const spawnedAt = Date.now();
+  writeGroup(file, JSON.stringify({ pid, spawnedAt, ...(isAttached && { tree: true }) }));
   const recordsDir = path.resolve(dir);
 
   // The start is read at once; it is written after the records begun before it in `dir`, so `group.json` stays the latest.
@@ -216,7 +217,8 @@ export function recordGroup(child: ChildProcess, dir: string, { isAttached = fal
     // the record meanwhile: it is not written again.
     if (start === undefined || child.exitCode !== null || child.signalCode !== null || !fs.existsSync(file)) return;
     // A teamai that reads no `tree` signals a group led by this pid, which an attached command never leads: it stops nothing.
-    const body = JSON.stringify({ pid, ...start, ...(isAttached && { tree: true }) });
+    // One that reads no `startTicks` still stops by `spawnedAt`.
+    const body = JSON.stringify({ pid, ...('startTicks' in start && { spawnedAt }), ...start, ...(isAttached && { tree: true }) });
     writeGroup(file, body);
     // A teamai before #1523 reads only `group.json`, so the latest group is written there as well: a release that
     // predates the per-group files then stops one group rather than none. It reads the same group twice here, which
@@ -241,7 +243,8 @@ function writeGroup(file: string, body: string): void {
 
 /**
  * Stops every process group, and every attached command with its descendants, recorded in `dir`, and removes the
- * records. A setup and the command of one attempt each start one there, and a stop of the attempt has to reach both.
+ * records, but those another pid namespace wrote. A setup and the command of one attempt each start one there, and a
+ * stop of the attempt has to reach both.
  */
 export async function stopRecordedGroup(dir: string): Promise<void> {
   // A record this process is still completing is finished first, so the stop removes it rather than racing its write.
@@ -251,10 +254,11 @@ export async function stopRecordedGroup(dir: string): Promise<void> {
   for (const file of await recordedGroups(dir)) {
     const recorded = await readGroup(file);
 
-    if (recorded === undefined || ('pidNamespace' in recorded && isOtherPidNamespace(recorded.pidNamespace, namespace))) {
-      // Nothing here to stop: a pid recorded in another pid namespace names another process here.
-    } else if (recorded.tree) await stopTree(recorded);
-    else await stopGroup(recorded);
+    // A pid recorded in another pid namespace names another process here: the record is left for a stop there.
+    if (recorded !== undefined && 'pidNamespace' in recorded && isOtherPidNamespace(recorded.pidNamespace, namespace)) continue;
+
+    if (recorded?.tree) await stopTree(recorded);
+    else if (recorded !== undefined) await stopGroup(recorded);
     await fs.promises.rm(file, { force: true });
   }
 }
