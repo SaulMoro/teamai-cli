@@ -1,6 +1,7 @@
 import { copyRegularTree, isStagingName, readRegularFile, stagingFolder } from '@teamai/shared/regular-file';
 import fse from 'fs-extra';
 import crypto from 'node:crypto';
+import { accessSync, constants as fsConstants } from 'node:fs';
 import path from 'node:path';
 import { z } from 'zod';
 import { log } from '@teamai/shared/log';
@@ -64,7 +65,32 @@ const WRITE_REFUSALS = ['EACCES', 'EPERM', 'EROFS'] as const;
 /** The calls that write: an EACCES of `spawn` (a program that may not run) or `scandir` (a read) is not a refused write. */
 const WRITING_CALLS = new Set(['open', 'mkdir', 'mkdtemp', 'rename', 'unlink', 'rmdir', 'rm', 'link', 'symlink', 'copyfile', 'write', 'utime', 'futime', 'chmod', 'chown']);
 
-const RefusedWriteErrorSchema = z.object({ code: z.enum(WRITE_REFUSALS), path: z.string(), syscall: z.string() });
+/** A refused call's error: `dest` is where `rename`, `link`, `copyfile` and `symlink` write, `path` their source. */
+const RefusedWriteErrorSchema = z.object({ code: z.enum(WRITE_REFUSALS), path: z.string(), dest: z.string().optional(), syscall: z.string() });
+
+/**
+ * Whether a refused `open`, which reads as well as writes, was a read: the file is there, and this process may not read
+ * it. One it may read, or one that is not there yet, was refused a write.
+ */
+function isRefusedRead(file: string): boolean {
+  try {
+    accessSync(file, fsConstants.R_OK);
+
+    return false;
+  } catch (error) {
+    return errnoCode(error) !== 'ENOENT';
+  }
+}
+
+/** Whether `refused` is a write the filesystem refused, rather than a read or, on Windows, a file another process holds open. */
+function isRefusedWriteCall({ code, path: file, syscall }: z.infer<typeof RefusedWriteErrorSchema>): boolean {
+  if (!WRITING_CALLS.has(syscall)) return false;
+
+  // Windows refuses a rename over a file another process holds open, such as a virus scanner, for a moment.
+  if (process.platform === 'win32' && code === 'EPERM' && syscall === 'rename') return false;
+
+  return syscall !== 'open' || !isRefusedRead(file);
+}
 
 /** The strerror git prints after the path it may not write, by the code it stands for. */
 const GIT_REFUSALS = [
@@ -100,7 +126,7 @@ export function refusedWrite(cause: unknown, { gitCwd }: { gitCwd?: string } = {
     if (current instanceof RefusedWriteError) return current.refused;
     const errno = RefusedWriteErrorSchema.safeParse(current);
 
-    if (errno.success && WRITING_CALLS.has(errno.data.syscall)) return { folder: path.dirname(errno.data.path), code: errno.data.code };
+    if (errno.success && isRefusedWriteCall(errno.data)) return { folder: path.dirname(errno.data.dest ?? errno.data.path), code: errno.data.code };
     const line = gitCwd !== undefined && current instanceof Error ? GIT_REFUSAL_LINE.exec(current.message) : null;
     const written = line?.[1] ?? line?.[2];
     const code = GIT_REFUSALS.find(({ strerror }) => strerror === line?.[3])?.code;
