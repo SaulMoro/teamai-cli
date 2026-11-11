@@ -1,4 +1,5 @@
 import { spawn } from 'node:child_process';
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -537,12 +538,19 @@ function paseoOptions(agent: JsonValue): RuntimeOptions {
 }
 
 /**
- * `inner` through the sandbox on the fake docker over `state`, as a definition entry `use: <app>, through: sandbox` runs
- * it. The sandbox serves its attempt socket under TMPDIR when the result's folder is too deep for one, as the test's is.
+ * The sandbox's TMPDIR over `state`, short enough for a socket: the sandbox serves its attempt socket there when the
+ * result's folder is too deep for one, as the test's can be, and a runtime the test kills leaves that socket's folder.
  */
-const throughDocker = (state: string, inner: StepRuntime<DriverCan>): StepRuntime<DriverCan> => composedStepRuntime({
-  outer: stdioStepRuntime({ name: 'sandbox', command: docker.command, args: ['TMPDIR=/tmp', ...docker.args(state)] }), inner, innerCredentials: {},
-});
+const socketTemp = (state: string): string => path.join('/tmp', `teamai-scenario-${crypto.createHash('sha256').update(state).digest('hex').slice(0, 12)}`);
+
+/** `inner` through the sandbox on the fake docker over `state`, as a definition entry `use: <app>, through: sandbox` runs it. */
+const throughDocker = (state: string, inner: StepRuntime<DriverCan>): StepRuntime<DriverCan> => {
+  fs.mkdirSync(socketTemp(state), { recursive: true });
+
+  return composedStepRuntime({
+    outer: stdioStepRuntime({ name: 'sandbox', command: docker.command, args: [`TMPDIR=${socketTemp(state)}`, ...docker.args(state)] }), inner, innerCredentials: {},
+  });
+};
 
 /**
  * Claude in the fake docker's image, as teamai's wrapper starts it there for an app's agent over `state`: it marks that
@@ -734,6 +742,7 @@ describe.each(PROMPT_SUBJECTS)('StepRuntime prompt scenarios: $name', (subject) 
       await expectNothingLeft({ dir });
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
+      if (subject.through) fs.rmSync(socketTemp(state), { recursive: true, force: true });
     }
   });
 
