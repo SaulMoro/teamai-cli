@@ -70,8 +70,11 @@ const AgentCreateSchema = z.object({
   title: z.string(),
   prompt: z.string(),
   labels: z.record(z.string(), z.string()),
-  /** The agent's environment: the run directory's and the workflow folder's paths and nothing else, since Paseo keeps it in plain text. */
-  env: z.strictObject({ [RUN_DIR_ENV]: z.string(), [WORKFLOW_DIR_ENV]: z.string().optional() }).optional(),
+  /**
+   * The agent's environment: the run directory's and the workflow folder's paths and nothing else, since Paseo keeps it
+   * in plain text. A key a later runtime on this journal sends is kept as it wrote it, so a create sent again is the same.
+   */
+  env: z.object({ [RUN_DIR_ENV]: z.string(), [WORKFLOW_DIR_ENV]: z.string().optional() }).catchall(z.string()).optional(),
   config: z.object({
     provider: z.string(),
     /** Absent: the mode Paseo starts the tool in when it sets no default for it. */
