@@ -152,8 +152,8 @@ paths: { skills: .acme-claude/skills }   # the toolPaths keys
 
 ## Registry
 
-- **What it holds.** `tool-definitions` builds `BUILT_IN_TOOLS` from the family packages, with every family's definitions and extra platforms. Adding a family to it, or a definition to a family, fails to compile until every table that must decide it does, as `TOOL_IDS` makes it today (`src/tools.ts:401`).
-- **What reads it.** At load, the app builds one registry from `BUILT_IN_TOOLS` and the resolved instances. Every reader of a tool id or a session platform goes through it:
+- **What it holds.** `tool-definitions` builds `BUILT_IN_TOOLS` from the family packages, with every family's definitions and extra platforms, and `BUILT_IN_FACTS` (`@teamai/tool-definitions/facts`) from each family's facts entry alone. Adding a family to it, or a definition to a family, fails to compile until every table that must decide it does, as `TOOL_IDS` makes it today (`src/tools.ts:401`).
+- **What reads it.** At load, the app builds one registry from `BUILT_IN_FACTS` and the resolved instances; a family's behaviour (`BUILT_IN_TOOLS`) loads where it is first needed. Every reader of a tool id or a session platform goes through it:
   - `pull`, `--tools`, launch, session find, migration, restore, token reading, `doctor` and the dashboard;
   - the gates `isToolId`, `sessionPlatformsOf`, `channelsOf` and `isLaunchTool`.
 - **Fixed-id tables** (`LaunchedToolId`, `CodexToolId`, `SessionPlatform`, `DETECTORS`, `DEFAULT_TOOL_PATHS`, …) stay keyed by shipped definition or platform id, never collapsed to a family, so `tclaude` never merges into `claude`. An instance reaches them through the definition it extends; only its session identity is its own name, a validated instance platform id rather than a member of the union.

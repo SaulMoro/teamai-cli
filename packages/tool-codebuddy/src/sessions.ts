@@ -1,8 +1,8 @@
 import type { AgentAdapter } from '@teamai/tool-core/sessions/base';
+import type { SessionPlatformDefinition } from '@teamai/tool-core/sessions/platform';
 import { CodeBuddyAdapter } from './codebuddy-adapter.js';
 import { CodeBuddyIdeAdapter } from './codebuddy-ide-adapter.js';
 import { WorkBuddyAdapter } from './workbuddy-adapter.js';
-import type { SessionPlatformDefinition } from '@teamai/tool-core/sessions/platform';
 import { facts } from './facts.js';
 
 /** Each session platform's adapter on its store, over the facts the family declares (`facts.ts`). */

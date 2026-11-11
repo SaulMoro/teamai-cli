@@ -5,8 +5,8 @@ import { FAMILY, lintedPath, scopedFiles, sourcePath, workspaceFile, workspaceRo
 
 /**
  * The facts modules outside a family: the list of every family's facts and the app modules that read only facts. A
- * family's own `src/facts.ts` and `src/definitions.ts` are facts modules too, in any `tool-<name>` package (FAMILY), with
- * no edit here. Paths are from the repository root.
+ * family's own `src/facts.ts`, `src/definitions.ts` and `src/detect.ts` are facts modules too, in any `tool-<name>`
+ * package (FAMILY), with no edit here. Paths are from the repository root.
  */
 export const FACTS_FILES = new Set(scopedFiles([
   'packages/tool-definitions/src/facts.ts',
