@@ -1,4 +1,13 @@
+import { execFileSync } from 'node:child_process';
+import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { expect, it } from 'vitest';
+import { z } from 'zod';
 import { ruleHarness } from '../test/harness.ts';
+import { isProductionSource } from '../utils.js';
+
+const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 
 const rule = ruleHarness('teamai/git-exit-code', { filename: 'src/workflow/cache.ts' });
 
@@ -10,6 +19,12 @@ rule.invalid('rejects an exit-code diff through raw', `await git.raw(['diff-inde
 rule.invalid('rejects a quiet ref check through raw', `await git.raw(['show-ref', '--verify', '--quiet', 'refs/heads/main']);`);
 rule.invalid('rejects a quiet check-ignore through raw', `await git.raw(['check-ignore', '-q', file]);`);
 rule.invalid('applies in packages too', `await git.raw(['merge-base', '--is-ancestor', a, b]);`, undefined, { filename: 'packages/runtime-t3/src/runtime.ts' });
+rule.invalid('rejects a quiet rev-parse through raw read by whether it settled, which is always', `const exists = await git.raw(['rev-parse', '--verify', '--quiet', ref]).then(() => true, () => false);`,
+  (output) => { if (!output.includes('always')) throw new Error(output); });
+rule.invalid('rejects a quiet symbolic-ref through raw awaited for its settling alone', `try {\n  await git.raw(['symbolic-ref', '-q', 'HEAD']);\n  return true;\n} catch {\n  return false;\n}`);
+rule.valid('allows a quiet symbolic-ref through raw read by its output in then', `const branch = await git.raw(['symbolic-ref', '-q', 'HEAD']).then((out) => out.trim() || null, () => null);`);
+rule.valid('allows a quiet action through raw, which fails loudly', `await git.raw(['fetch', '--quiet', 'origin']);`);
+rule.invalid('holds a package added later, with no rule edit', `await git.raw(['show-ref', '--quiet', ref]);`, undefined, { filename: 'packages/tool-newcomer/src/refs.ts' });
 rule.valid('allows a raw call that fails loudly', `await git.raw(['rev-parse', '--verify', \`\${rev}^{commit}\`]);`);
 rule.valid('allows a quiet rev-parse, whose output names the commit', `const sha = (await git.raw(['rev-parse', '-q', '--verify', name])).trim() || null;`);
 rule.valid('allows a raw call that reads output', `const out = await git.raw(['symbolic-ref', '--short', 'HEAD']);`);
@@ -28,3 +43,21 @@ rule.valid('allows an exit-code question read through gitAnswer', `const reached
 rule.valid('allows an exit-code question read through gitAnswer without await', `const reached = gitAnswer(result(['cat-file', '-e', sha]));`);
 rule.valid('allows a git call that is not an exit-code question', `const { code, stderr } = await git(root, ['merge', '--no-edit', sha]);`);
 rule.valid('leaves tests alone', `await git.raw(['merge-base', '--is-ancestor', a, b]);`, { filename: 'src/__tests__/x.test.ts' });
+
+it('holds the production source of this checkout, where git questions are asked', () => {
+  const files = execFileSync('git', ['ls-files', 'src', 'packages'], { cwd: REPO, encoding: 'utf8' }).split('\n').filter((file) => /\.[cm]?tsx?$/.test(file));
+  const matched = files.filter(isProductionSource);
+  const asking = matched.filter((file) => /'(?:merge-base|cat-file|show-ref|check-ignore|rev-parse|symbolic-ref)'/.test(fs.readFileSync(path.join(REPO, file), 'utf8')));
+
+  expect(matched.length).toBeGreaterThan(500);
+  expect(matched.some((file) => file.startsWith('packages/'))).toBe(true);
+  expect(asking.length).toBeGreaterThan(20);
+});
+
+it('is an error in this checkout, with no file let off', () => {
+  const config = fs.readFileSync(path.join(REPO, '.oxlintrc.json'), 'utf8').replace(/^\s*\/\/.*$/gm, '');
+  const parsed = z.object({ rules: z.record(z.string(), z.unknown()), overrides: z.array(z.object({ rules: z.record(z.string(), z.unknown()) })) }).parse(JSON.parse(config));
+
+  expect(parsed.rules['teamai/git-exit-code']).toBe('error');
+  expect(parsed.overrides.filter((override) => 'teamai/git-exit-code' in override.rules)).toEqual([]);
+});

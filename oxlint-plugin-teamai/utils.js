@@ -189,14 +189,23 @@ export function inTestSupport(context) {
 }
 
 /**
- * Whether the linted file is production source: under `src/` of its package or of a `packages/<name>/` folder, outside `src/__tests__/`, and not a test beside its source.
+ * Whether `file`, from the repository root, is production source: under `src/` of its package or of a `packages/<name>/` folder, outside `src/__tests__/`, and not a test beside its source.
+ * @param {string} file
+ * @returns {boolean}
+ */
+export function isProductionSource(file) {
+  const relative = file.replace(/^packages\/[^/]+\//, '');
+
+  return relative.startsWith('src/') && !relative.startsWith('src/__tests__/') && !/\.test\.[cm]?[jt]sx?$/.test(relative);
+}
+
+/**
+ * Whether the linted file is production source ({@link isProductionSource}).
  * @param {Context} context
  * @returns {boolean}
  */
 export function inProductionSource(context) {
-  const relative = sourcePath(context).replace(/^packages\/[^/]+\//, '');
-
-  return relative.startsWith('src/') && !relative.startsWith('src/__tests__/') && !/\.test\.[cm]?[jt]sx?$/.test(relative);
+  return isProductionSource(sourcePath(context));
 }
 
 /**

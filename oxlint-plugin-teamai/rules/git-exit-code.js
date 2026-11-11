@@ -84,6 +84,24 @@ function readAsAnswer(node) {
     && then.parent?.type === 'CallExpression' && then.parent.callee === then && isAnswerReader(then.parent.arguments[0]);
 }
 
+/**
+ * Whether `node`, a call, is read only by whether it settled: awaited or run as a statement whose value is dropped, or
+ * followed by a `then` whose first callback takes no value.
+ * @param {ESTree.CallExpression} node
+ */
+function readBySettling(node) {
+  const value = node.parent?.type === 'AwaitExpression' ? node.parent : node;
+
+  if (value.parent?.type === 'ExpressionStatement') return true;
+  const then = node.parent;
+
+  if (then?.type !== 'MemberExpression' || then.object !== node || then.property.type !== 'Identifier' || then.property.name !== 'then') return false;
+  const call = then.parent;
+  const onValue = call?.type === 'CallExpression' && call.callee === then ? call.arguments[0] : undefined;
+
+  return (onValue?.type === 'ArrowFunctionExpression' || onValue?.type === 'FunctionExpression') && onValue.params.length === 0;
+}
+
 export default defineRule({
   meta: { type: 'problem', docs: { description: 'Ask git questions answered by the exit code through a git that returns it, and read the answer through gitAnswer.' } },
   create(context) {
@@ -94,6 +112,18 @@ export default defineRule({
         const isRaw = node.callee.type === 'MemberExpression' && node.callee.property.type === 'Identifier' && node.callee.property.name === 'raw';
 
         if (isRaw) {
+          const quiet = exitCodeQuestion(node.arguments[0], QUIET_ANSWERS);
+
+          if (quiet !== undefined && readBySettling(node)) {
+            context.report({
+              node,
+              message: `git ${quiet} answers a no with its exit code alone when quiet, and simple-git raw resolves on that exit with nothing on stderr, so whether it settled is always yes. `
+                + 'Read what it printed, or ask through git() from src/workflow/worktree.ts and read the result through gitAnswer().',
+            });
+
+            return;
+          }
+
           const command = exitCodeQuestion(node.arguments[0]);
 
           if (command === undefined) return;
