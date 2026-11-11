@@ -67,8 +67,9 @@ function destructuredNames(node) {
 }
 
 /**
- * Every import syntax the workflow policy owns: static imports and re-exports, `import()`, `require()` and vi.mock.
- * `computed` gets an `import()` or `require()` whose module name is computed, which `visit` cannot be given.
+ * Every import syntax the workflow policy owns: static imports and re-exports, TypeScript's `import x = require()`,
+ * `import()`, `require()` and vi.mock. `computed` gets an `import()` or `require()` whose module name is computed, which
+ * `visit` cannot be given.
  */
 export function importVisitors(
   /** @type {(edge: { node: ESTree.Node; specifier: string; typeOnly: boolean; names: string[] }) => void} */ visit,
@@ -87,6 +88,12 @@ export function importVisitors(
     /** @param {ESTree.ExportAllDeclaration} node */
     ExportAllDeclaration(node) {
       visit({ node, specifier: String(node.source.value), typeOnly: node.exportKind === 'type', names: ['*'] });
+    },
+    /** @param {ESTree.TSImportEqualsDeclaration} node */
+    TSImportEqualsDeclaration(node) {
+      // `import x = Space.name` aliases a namespace; only `require('...')` names a module.
+      if (node.moduleReference.type !== 'TSExternalModuleReference') return;
+      visit({ node, specifier: String(node.moduleReference.expression.value), typeOnly: node.importKind === 'type', names: ['*'] });
     },
     /** @param {ESTree.ImportExpression} node */
     ImportExpression(node) {
@@ -136,6 +143,12 @@ function dynamicModule(node) {
 /** @param {import('@babel/types').Statement} statement @param {boolean} includeTypes */
 function staticModule(statement, includeTypes) {
   if (statement.type === 'ImportDeclaration') return includeTypes || statement.importKind !== 'type' ? statement.source.value : undefined;
+
+  if (statement.type === 'TSImportEqualsDeclaration') {
+    const reference = statement.moduleReference;
+
+    return reference.type === 'TSExternalModuleReference' && (includeTypes || statement.importKind !== 'type') ? reference.expression.value : undefined;
+  }
 
   if (statement.type !== 'ExportNamedDeclaration' && statement.type !== 'ExportAllDeclaration') return undefined;
 

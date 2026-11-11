@@ -16,6 +16,10 @@ rule.invalid('rejects a transitive dynamic import of the local driver', `import 
   'src/workflow/protocol.ts': `export const protocol = () => import('./drivers/local/local-driver.js');`,
   'src/workflow/drivers/local/local-driver.ts': `export const local = 1;`,
 } });
+rule.invalid('rejects a transitive import-equals require of the local driver', `import { protocol } from '../../protocol.js';`, undefined, { files: {
+  'src/workflow/protocol.ts': `import local = require('./drivers/local/local-driver.js');\nexport const protocol = local;`,
+  'src/workflow/drivers/local/local-driver.ts': `export const local = 1;`,
+} });
 rule.invalid('rejects private entries from consumers', `export { tick } from './workflow/drivers/skill/tick.js';`, undefined, { filename: 'src/pull.ts' });
 rule.invalid('rejects private entries in test mocks', `vi.mock('../workflow/place/setup.js');`, undefined, { filename: 'src/__tests__/sample.test.ts' });
 rule.valid('allows a test of the worktree snapshot', `import { snapshotWorktree } from '../workflow/place/worktree-snapshot.js';`, { filename: 'src/__tests__/sample.test.ts' });

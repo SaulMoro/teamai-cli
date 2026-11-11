@@ -265,3 +265,17 @@ export const start = [runtime, fork];`, (output) => {
   expect(output).toContain('packages/tool-launch/src/hosts/start.ts -> @teamai/runtime-sandbox');
   expect(output).toContain('packages/tool-launch/src/hosts/start.ts -> child_process');
 }, inWorkspace('packages/tool-launch/src/hosts/start.ts', launchLibrary));
+
+rule.invalid('rejects a package reaching src/ through an import-equals require', `import locate = require('../../../src/locate.js');
+export const found = locate;`, (output) => {
+  expect(output).toContain('packages/tool-core/src/sessions.ts -> src/locate.js');
+}, inWorkspace('packages/tool-core/src/sessions.ts'));
+
+rule.invalid('rejects src/ reaching a runtime package through an import-equals require', `import runtime = require('@teamai/runtime-sandbox');
+export const found = runtime;`, (output) => {
+  expect(output).toContain('src/workflow/engine.ts -> @teamai/runtime-sandbox');
+}, inWorkspace('src/workflow/engine.ts'));
+
+rule.valid('reads a namespace alias as no import', `namespace Paths { export const root = '/'; }
+import root = Paths.root;
+export const found = root;`, inWorkspace('packages/tool-core/src/sessions.ts'));
