@@ -505,7 +505,8 @@ const LockContentSchema = z.union([ProcessIdentitySchema.shape.pid.transform((pi
  * Parse a lock file's contents. Understands both the current JSON payload and
  * the legacy plain-integer PID format written by older teamai versions, so an
  * on-disk lock from a previous install is still evaluated for staleness rather
- * than treated as un-owned garbage.
+ * than treated as un-owned garbage. That bare pid reads as JSON, so both go
+ * through one schema; text that is not JSON names no owner.
  */
 function parseLockContent(content: string): LockHolder | null {
   const trimmed = content.trim();
@@ -517,10 +518,7 @@ function parseLockContent(content: string): LockHolder | null {
 
     return parsed.success ? parsed.data : null;
   } catch {
-    // Legacy format: the file held only the bare PID as a string.
-    const pid = parseInt(trimmed, 10);
-
-    return isNaN(pid) ? null : { pid };
+    return null;
   }
 }
 

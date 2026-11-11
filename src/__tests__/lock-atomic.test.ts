@@ -182,6 +182,13 @@ describe('acquireLock (real fs)', () => {
     await releaseLock(lockPath);
   });
 
+  // An older teamai wrote the bare pid, which reads as JSON; text that is not JSON names no owner, whatever it starts with.
+  it.each(['0', '-999999', '999999abc', '-999999 999999'])('does not reclaim a lock that holds %s, which names no process', async (content) => {
+    fs.writeFileSync(lockPath, content);
+    expect(await acquireLock(lockPath)).toBe(false);
+    expect(fs.readFileSync(lockPath, 'utf-8')).toBe(content);
+  });
+
   it('does not reclaim a lock whose contents name no owner (garbage) (#760)', async () => {
     // Nothing proves its owner dead; a crash that left it needs a hand removal.
     fs.writeFileSync(lockPath, 'not-json-not-a-pid');
