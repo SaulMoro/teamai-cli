@@ -375,7 +375,7 @@ teamai workflow cancel r70d31098c8884803
 
 teamai 选择第一台有响应并且有该项目的关联机器。线程出现在那台机器的 T3 Code 中、该项目下，标题包含步骤、运行和池，例如 `teamai: step build of run r70d31098c8884803, fleet pool gpu`。线程使用那里项目的默认模型，否则使用那台机器运行的第一个 Claude 或 Codex 实例，模式为 `runtime_mode`，否则为 Auto，并且从不使用 Full access：`full-access` 会以 Auto 唤醒它。它的第一条消息是 teamai 让它接手该池一个 attempt 的命令，最后一句告诉它完成那个 attempt 后就结束。运行的详情会链接这个线程。唤醒成员会消耗那台机器的账号。
 
-在 Auto 模式下，Claude 成员不经询问就运行 teamai 的命令。在 Supervised 或 Auto-accept edits 模式下，它会先询问，而那里没有人回答，所以消息的第一行说明要批准什么，并给出下面的规则。Codex 成员在任何模式下都在自己的沙箱里运行命令：没有网络，也不能写 `~/.teamai`，所以它的第一行告诉它以提升的权限、在沙箱之外运行 teamai 的命令，Codex 会为此询问：请在那台机器的 T3 Code 中批准。要让 Claude 成员不经询问就运行这一条命令，在那台机器的检出中把它加入 `.claude/settings.local.json`：
+在 Auto 模式下，Claude 成员不经询问就运行 teamai 的命令。在 Supervised 或 Auto-accept edits 模式下，它会先询问，而那里没有人回答，所以消息的第一行说明要批准什么，并给出下面的规则。Codex 成员在任何模式下都在自己的沙箱里运行命令：没有网络，也不能写 `~/.teamai`，所以它的第一行告诉它以提升的权限、在沙箱之外运行 teamai 的命令，Codex 会为此询问：请在那台机器的 T3 Code 中批准。在 Supervised 模式下，即使那台机器的 Codex 设置了 `approvals_reviewer = "auto_review"`，T3 Code 也会显示这个请求；在其他模式下，可能由 Codex 的审核者回应，T3 Code 中不会出现请求：在那台机器上项目的 `.codex/config.toml` 中把它设为 `"user"`，就能看到请求。要让 Claude 成员不经询问就运行这一条命令，在那台机器的检出中把它加入 `.claude/settings.local.json`：
 
 ```json
 { "permissions": { "allow": ["Bash(teamai workflow resume:*)"] } }
