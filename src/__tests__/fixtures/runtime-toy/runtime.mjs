@@ -49,7 +49,9 @@
 // running stops nothing and ends it failed with that failure, which reattach keeps reporting until a later cancel stops
 // it. With `stop_ms`, a stop completes that long after the cancel, and the operation is reported running until then.
 // With `stray`, an exec it accepts also starts a process that shares the toy's stdout and stderr and outlives it, which
-// writes its pid to `stray.pid` in the state; the toy then writes a line that is not JSON.
+// writes its pid to `stray.pid` in the state; the toy then writes a line that is not JSON. With `binds`, a place keeps
+// the worktree folder it was first opened on until it is closed, as a container binds a folder: an exec in a place
+// whose worktree was made again since exits 128, as Docker's does.
 //
 // `calls` names a file, which two toys may share, that each request after init is appended to, in the order the toy
 // reads them: the toy's state directory's name, the request's type, operation and handle, an open's `outer` and the
@@ -71,7 +73,7 @@ import readline from 'node:readline';
 import { RuntimeRequestSchema } from '@teamai/runtime-protocol';
 import { encodeCwdClaude } from '@teamai/tool-core/sessions/fs';
 
-const OPTIONS = new Set(['state', 'die_at', 'exit_at', 'close_fails', 'open_fails', 'open_refuses', 'can', 'display', 'agent', 'judge', 'path', 'answer', 'init_fails', 'cancel_fails', 'recover', 'check', 'stop_ms', 'stray', 'notice', 'unavailable', 'permissions', 'own_logins', 'calls', 'wake_log', 'prompt_tool_home']);
+const OPTIONS = new Set(['state', 'die_at', 'exit_at', 'close_fails', 'open_fails', 'open_refuses', 'can', 'display', 'agent', 'judge', 'path', 'answer', 'init_fails', 'cancel_fails', 'recover', 'check', 'stop_ms', 'stray', 'notice', 'unavailable', 'permissions', 'own_logins', 'calls', 'wake_log', 'prompt_tool_home', 'binds']);
 
 const DEFAULT_CAN = {
   hitl: false, workspace: ['read-only', 'new', 'continue'], network: false, isolation: 'none', env: true,
@@ -293,6 +295,7 @@ function open(request) {
   // A confined prompt's place is opened with no view of the host.
   writeJson(opPath(request.op), { kind: 'open', handle, view: request.view ?? null, tool: request.tool ?? null, deadline: request.deadline ?? null });
   if (options.prompt_tool_home === true) writeJson(file('views', `${handle}.json`), request.view ?? null);
+  if (options.binds === true && request.view && !fs.existsSync(file('bound', `${handle}.json`))) writeJson(file('bound', `${handle}.json`), { worktree: request.view.worktree, ino: fs.statSync(request.view.worktree).ino });
   noteCredentials(request, handle);
   openCredentials.set(handle, request.credentials ?? {});
 
@@ -360,6 +363,15 @@ function exec(request) {
       if (fs.existsSync(file('cancel', request.op))) return;
       send({ op: request.op, event: 'failed', failure: { code: 'runtime_lost', message: `The toy lost exec ${request.op}.` } });
     }, 25);
+
+    return;
+  }
+
+  const bound = options.binds === true ? readJson(file('bound', `${request.handle}.json`), undefined) : undefined;
+
+  if (bound !== undefined && fs.statSync(bound.worktree, { throwIfNoEntry: false })?.ino !== bound.ino) {
+    send({ op: request.op, event: 'accepted' });
+    send({ op: request.op, event: 'exited', code: 128, stdout: 'OCI runtime exec failed: exec failed: unable to start container process: current working directory is outside of container mount namespace root -- possible container breakout detected' });
 
     return;
   }
@@ -768,6 +780,7 @@ function close(request) {
   }
 
   forget(request.handle);
+  fs.rmSync(file('bound', `${request.handle}.json`), { force: true });
 
   // It ends the conversations this place launched, and stops only its own turns of any it continued.
   for (const { op } of opsOf(request.handle)) {

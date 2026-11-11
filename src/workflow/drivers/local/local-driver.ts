@@ -33,6 +33,8 @@ import { resumeOrPublish, retryCommand } from '../../runtimes/retry-command.js';
 import type { RuntimeOffer, SoleDriver } from '../../engine.js';
 import { attemptDir, AttemptIdSchema, attemptResultPath, readRun, RunIdSchema, runScratchDir, updateRun, withRunLock, type AttemptId, type RunId, type RunLock } from '../../store.js';
 import { abandonPlace, placeLeaseOf, placeOf, placeRoot, preparePlace, refuseDirtyAdoptedCommand, releaseUnlaunchedPlace, runPlaceSetup, sweepClones } from '../../place/place.js';
+// oxlint-disable-next-line teamai/workflow-boundaries -- reads whether the prepare makes a cut-short setup's folder again, which place.ts does not export yet
+import { readPlaceRecord } from '../../place/record.js';
 import { commandEnd, commandOutputs, managedReport, StartedRunSchema, unreadablePlace, type StartedRun } from '../../protocol.js';
 import { WholeEndSchema } from '../../whole-workflow.js';
 import { memberTools } from '../../member-tools.js';
@@ -295,7 +297,9 @@ async function stageLease(lease: StagedLease, { config, lock, root, env, mode, s
   const moved = await stopLeftElsewhere({ config, run: lock.run, attempt: lease.attempt, runsOn, checkout: root });
 
   if (moved) return moved;
-  const leftSetup = (await setUpOn?.stopLeftSetup())?.failure;
+  // A setup cut short is given up with the folder it ran in, which the prepare makes again (`preparePlace`).
+  const placed = setUpOn && await readPlaceRecord(config, lock.run, lease.attempt);
+  const leftSetup = (await setUpOn?.stopLeftSetup({ isFolderRemade: placed?.kind === 'found' && placed.record.phase === 'setting-up' }))?.failure;
 
   if (leftSetup) return { code: 'runtime_lost', message: leftSetup.message };
 

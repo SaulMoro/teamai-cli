@@ -494,10 +494,12 @@ export interface AttemptRun {
   setup(request: Omit<ExecRequest, 'op' | 'handle'>, events: ExecEvents): Promise<AttemptExecEnd>;
   /**
    * Stops the setup a killed teamai left running, before the place it ran in is prepared again: on a runtime that
-   * mounts the host's folders, it would go on writing into the new one. Ends `lost` when the stop is not confirmed, so
-   * the place is kept; undefined once it is, or when no setup was left.
+   * mounts the host's folders, it would go on writing into the new one. With `isFolderRemade`, the prepare makes the
+   * place's folder again, which a runtime that mounted the old one cannot reach, so the place is closed there too and the
+   * next open makes a new one. Ends `lost` when the stop or that close is not confirmed, so the place is kept; undefined
+   * once it is, or when no setup was left.
    */
-  stopLeftSetup(): Promise<Lost | undefined>;
+  stopLeftSetup(how: { isFolderRemade: boolean }): Promise<Lost | undefined>;
   /**
    * Sends the prompt step to a runtime that launches agents its own way. Built again after a restart, it reads the
    * outcome the runtime kept, or reconnects to the prompt still running by sending the same id again.
@@ -981,15 +983,34 @@ export function attemptRun({ config, run, attempt, runtime, driver, deadline }: 
       return undefined;
     },
 
-    async stopLeftSetup() {
+    async stopLeftSetup({ isFolderRemade }) {
       const before = await current();
       const handle = before?.open.handle;
 
       // One left on another runtime was stopped through the driver recorded for it before this attempt reached here.
-      if (!before?.setup || !isSetupLeftRunning(before) || before.runtime !== runtime.name || handle === undefined) return undefined;
-      const notStopped = await stopLeftRunning(handle, before.setup.op);
+      if (!before || before.phase === 'closed' || before.runtime !== runtime.name || handle === undefined) return undefined;
 
-      return notStopped && leftSetupNotStopped(notStopped);
+      if (before.setup && isSetupLeftRunning(before)) {
+        const notStopped = await stopLeftRunning(handle, before.setup.op);
+
+        if (notStopped) return leftSetupNotStopped(notStopped);
+      }
+
+      if (!isFolderRemade) return undefined;
+      const closed = await runtime.close(handle);
+
+      if (!closed.ok) {
+        const failure = masked(closed.failure);
+        await save({ ...before, closeFailed: failure });
+
+        return lostFor({ code: failure.code, message: `Step runtime "${runtime.name}" could not close the place of attempt ${attempt}, whose folder teamai makes again after the setup a teamai before this one cut short, so the step cannot run in it: ${failure.message}` });
+      }
+
+      // With no handle, the next open makes a new place on the folder made again rather than the one closed.
+      const { closeFailed: _earlier, ...kept } = before;
+      await save({ ...closedRecord(kept), open: { op: before.open.op } });
+
+      return undefined;
     },
 
     async stopLeftOperation() {
