@@ -9,6 +9,7 @@ import { executableOf, LAUNCH_ORDER, launchAdapterIdOf, launchAdapterOf, type La
 import { agyGatewayEnv } from '../../models/agy-gateway.js';
 import { extractReply } from '@teamai/tool-core/reply';
 import { answerLaunch } from '@teamai/runtime-tools/answer';
+import { opencodeMajorVersion } from '../../opencode-version.js';
 import type { z } from 'zod';
 import { withoutOuterSessionMarkers } from '../attempt-marker.js';
 
@@ -162,7 +163,7 @@ export function createToolCaller({ resolveTool = resolveCliPath, resolveScope = 
 
     const end = await answerLaunch({
       tool: { name: tool, family: launchAdapterIdOf(tool), call: launchAdapterOf(tool).call, executable },
-      prompt, session, timeoutMs: timeout, idleTimeoutMs: idleTimeout, signal, cwd, env,
+      prompt, session, timeoutMs: timeout, idleTimeoutMs: idleTimeout, signal, cwd, env, host: { opencodeMajor: opencodeMajorVersion },
     });
 
     // A call teamai stopped at its limit names no tool: the tool gave no answer of its own.

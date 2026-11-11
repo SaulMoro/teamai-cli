@@ -81,6 +81,11 @@ export interface CallTool {
   readonly executable: string;
 }
 
+/** What a call reads from the host: OpenCode's major version, from its executable. */
+export interface CallLaunchHost {
+  opencodeMajor(executable: string): Promise<number>;
+}
+
 /** How a call ended: the tool's answer, the tool's own failure, or a stop at one of its limits, at which teamai stopped it. */
 export type CallEnd =
   | { kind: 'answered'; text: string; tokens?: TokenUsage; session?: string }
@@ -92,7 +97,7 @@ export type CallEnd =
  * the profile names, a scratch directory for its prompt and last-message files, the timeout, an idle limit for a call
  * that prints as it works, and the answer or failure the profile reads back.
  */
-export async function callLaunch({ tool, prompt, session, timeoutMs, idleTimeoutMs, signal, start }: {
+export async function callLaunch({ tool, prompt, session, timeoutMs, idleTimeoutMs, signal, host, start }: {
   tool: CallTool;
   prompt: string;
   session?: string | undefined;
@@ -100,6 +105,7 @@ export async function callLaunch({ tool, prompt, session, timeoutMs, idleTimeout
   /** Stops a call that prints nothing for this long, run in a way that prints as it works. A call that prints only once it ends gets none. */
   idleTimeoutMs?: number | undefined;
   signal?: AbortSignal | undefined;
+  host: CallLaunchHost;
   /** Starts the process with the call's argv; the rest of the launch is the caller's. */
   start: (args: string[]) => HeadlessStarter;
 }): Promise<CallEnd> {
@@ -113,7 +119,8 @@ export async function callLaunch({ tool, prompt, session, timeoutMs, idleTimeout
     if (call.prompt === 'file') await fs.writeFile(promptFile, prompt);
     const resumed = session !== undefined && call.resume ? call.resume.args(session) : [];
     const streaming = idleTimeoutMs === undefined ? undefined : call.streams;
-    const args = [...(streaming?.args ?? call.args)({ prompt, promptFile, lastMessageFile }), ...resumed];
+    const opencodeMajor = tool.family === 'opencode' ? await host.opencodeMajor(tool.executable) : 1;
+    const args = [...(streaming?.args ?? call.args)({ prompt, promptFile, lastMessageFile, opencodeMajor }), ...resumed];
     const stdin = call.prompt !== 'stdin' ? '' : call.stdinOf ? call.stdinOf(prompt) : prompt;
     const run = await runHeadless({ start: start(args), stdin, timeoutMs, ...(streaming && { idleTimeoutMs }), signal });
 

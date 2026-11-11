@@ -108,6 +108,23 @@ describe('runStepLaunch', () => {
     expect(ran.failure).toEqual({ code: 'usage_limited', message: 'claude hit its usage limit: You\'ve hit your limit · resets 3pm (Europe/Madrid)' });
   });
 
+  it.each([
+    { major: 2, argv: ['run', '--standalone', '--format', 'json', 'Fix it.'] },
+    { major: 1, argv: ['run', '--format', 'json', 'Fix it.'] },
+  ])('runs a plain OpenCode $major step on its own server when OpenCode has a background service to leave behind', async ({ major, argv }) => {
+    const opencode = { name: 'opencode', family: 'opencode', step: BUILT_IN_TOOLS.opencode.launch.opencode.step, executable: '/usr/bin/opencode' } as const;
+    let launched: string[] = [];
+    const { start } = fakeLauncher([JSON.stringify({ type: 'text', sessionID: 'ses_1', part: { text: 'Done.' } })]);
+
+    await runStepLaunch({
+      tool: opencode, input: { prompt: 'Fix it.', cwd: os.tmpdir(), resultPath: await resultPathIn(), secrets: {}, expected: undefined },
+      start: (launch) => { launched = launch.args; return start(launch); }, interactive: false, host: { ...host, opencodeMajor: async () => major },
+    });
+
+    // `opencode run` of 2.2.5 without --standalone starts `opencode serve --service`, which outlives it with the step's env.
+    expect(launched).toEqual(argv);
+  });
+
   it.skipIf(process.platform === 'win32')('refuses a FIFO the tool left at its result path, without reading it', async () => {
     const resultPath = await resultPathIn();
     await fs.mkdir(path.dirname(resultPath));

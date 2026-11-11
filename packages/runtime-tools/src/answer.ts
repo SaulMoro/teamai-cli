@@ -1,4 +1,4 @@
-import { callLaunch, type CallEnd, type CallTool } from '@teamai/tool-launch/call-launch';
+import { callLaunch, type CallEnd, type CallLaunchHost, type CallTool } from '@teamai/tool-launch/call-launch';
 import { spawnHeadless } from './headless.js';
 
 /**
@@ -6,7 +6,7 @@ import { spawnHeadless } from './headless.js';
  * which an answer step on the host slot takes. It continues `session` when given, and ends at `timeoutMs`, at
  * `idleTimeoutMs` of silence, or when `signal` aborts.
  */
-export function answerLaunch({ tool, prompt, session, timeoutMs, idleTimeoutMs, signal, cwd, env }: {
+export function answerLaunch({ tool, prompt, session, timeoutMs, idleTimeoutMs, signal, cwd, env, host }: {
   tool: CallTool;
   prompt: string;
   session?: string | undefined;
@@ -15,6 +15,7 @@ export function answerLaunch({ tool, prompt, session, timeoutMs, idleTimeoutMs, 
   signal?: AbortSignal | undefined;
   cwd: string;
   env: NodeJS.ProcessEnv;
+  host: CallLaunchHost;
 }): Promise<CallEnd> {
-  return callLaunch({ tool, prompt, session, timeoutMs, idleTimeoutMs, signal, start: (args) => spawnHeadless({ executable: tool.executable, args, cwd, env, detached: false }) });
+  return callLaunch({ tool, prompt, session, timeoutMs, idleTimeoutMs, signal, host, start: (args) => spawnHeadless({ executable: tool.executable, args, cwd, env, detached: false }) });
 }

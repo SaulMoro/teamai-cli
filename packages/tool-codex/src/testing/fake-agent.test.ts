@@ -55,7 +55,7 @@ describe('fake codex', () => {
     const agent = fakeAgent(codexFake, { bin, answer: 'It uses Jest.' });
     const lastMessageFile = path.join(root, 'last-message.txt');
 
-    const out = await runFakeAgent(agent.executable, call.args({ prompt: '', promptFile: '', lastMessageFile }), 'Which test runner?', { cwd: root, env: { HOME: home, CODEX_HOME: codexHome } });
+    const out = await runFakeAgent(agent.executable, call.args({ prompt: '', promptFile: '', lastMessageFile, opencodeMajor: 1 }), 'Which test runner?', { cwd: root, env: { HOME: home, CODEX_HOME: codexHome } });
 
     // codex-cli 0.167.0 printed input_tokens 42861 and output_tokens 196 for this turn.
     expect({ code: out.code, read: call.read({ stdout: out.stdout, lastMessage: fs.readFileSync(lastMessageFile, 'utf8') }) })
@@ -67,7 +67,7 @@ describe('fake codex', () => {
     const agent = fakeAgent(codexFake, { bin });
     const lastMessageFile = path.join(root, 'last-message.txt');
 
-    const out = await runFakeAgent(agent.executable, call.args({ prompt: '', promptFile: '', lastMessageFile }), `Go. ${FAKE_AGENT_MARKERS.fail}`, { cwd: root, env: { HOME: home, CODEX_HOME: codexHome } });
+    const out = await runFakeAgent(agent.executable, call.args({ prompt: '', promptFile: '', lastMessageFile, opencodeMajor: 1 }), `Go. ${FAKE_AGENT_MARKERS.fail}`, { cwd: root, env: { HOME: home, CODEX_HOME: codexHome } });
     const session = await readSession(codexHome, threadOf(out.stdout), root);
 
     // codex-cli 0.167.0, given a model it has no provider for, exited 1, wrote no -o file and kept the session.

@@ -29,7 +29,7 @@ describe('fake opencode', () => {
     const root = scratch();
     const agent = fakeAgent(opencodeFake, { bin: path.join(root, 'b'), answer: 'It uses Jest.' });
 
-    const out = await runFakeAgent(agent.executable, call.args(), 'Which test runner?', { cwd: root });
+    const out = await runFakeAgent(agent.executable, call.args({ prompt: '', promptFile: '', lastMessageFile: '', opencodeMajor: 2 }), 'Which test runner?', { cwd: root });
 
     expect({ code: out.code, read: call.read({ stdout: out.stdout, lastMessage: undefined }) }).toMatchObject({ code: 0, read: { ok: true, text: 'It uses Jest.' } });
   });
@@ -38,7 +38,7 @@ describe('fake opencode', () => {
     const root = scratch();
     const agent = fakeAgent(opencodeFake, { bin: path.join(root, 'b') });
 
-    const out = await runFakeAgent(agent.executable, call.args(), `Go. ${FAKE_AGENT_MARKERS.fail}`, { cwd: root });
+    const out = await runFakeAgent(agent.executable, call.args({ prompt: '', promptFile: '', lastMessageFile: '', opencodeMajor: 2 }), `Go. ${FAKE_AGENT_MARKERS.fail}`, { cwd: root });
 
     expect(call.read({ stdout: out.stdout, lastMessage: undefined })).toEqual({ ok: false, message: 'Model not found: opencode/no-such-model' });
   });
@@ -47,7 +47,7 @@ describe('fake opencode', () => {
     const root = scratch();
     const agent = fakeAgent(opencodeFake, { bin: path.join(root, 'b'), always: ['hang'] });
 
-    const out = await runFakeAgent(agent.executable, call.args(), 'Go.', { cwd: root, stopAfterMs: 800 });
+    const out = await runFakeAgent(agent.executable, call.args({ prompt: '', promptFile: '', lastMessageFile: '', opencodeMajor: 2 }), 'Go.', { cwd: root, stopAfterMs: 800 });
 
     expect(out.stdout.trim().split('\n').map((line) => JSON.parse(line))).toEqual([expect.objectContaining({ type: 'step_start' })]);
   });

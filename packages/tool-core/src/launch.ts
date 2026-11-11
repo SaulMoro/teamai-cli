@@ -29,6 +29,8 @@ export interface CallInput {
   promptFile: string;
   /** For a tool that writes its last message to a file. */
   lastMessageFile: string;
+  /** The OpenCode major version on PATH, for OpenCode's call; 1 for another tool. */
+  opencodeMajor: number;
 }
 
 /** How an adapter runs a prompt headless and reads the answer back. */

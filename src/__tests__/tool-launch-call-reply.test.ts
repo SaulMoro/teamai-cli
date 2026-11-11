@@ -106,7 +106,7 @@ describe('a call that must reply with a value', () => {
     const called = await caller.callForReply('Name one color.', Color, { launchedBy: 'answer', cwd: root, retries: 1 });
 
     expect(called.reply).toEqual({ color: 'red' });
-    expect(agent.calls()[1]?.args).toEqual(['run', '--format', 'json', '--session', expect.stringMatching(/^ses_/)]);
+    expect(agent.calls()[1]?.args).toEqual(['run', '--standalone', '--format', 'json', '--session', expect.stringMatching(/^ses_/)]);
   });
 
   it('asks once when the first reply holds the value', async () => {

@@ -34,6 +34,12 @@ function readOpenCodeRun({ stdout }: CallOutput): CallReading {
 
 const UNATTENDED = ['--auto'] as const;
 
+/**
+ * OpenCode 2's `run` without `--standalone` talks to its background service, and starts `opencode serve --service`
+ * when none runs, which outlives the run with the env it was started in (2.2.5). OpenCode 1 has neither.
+ */
+const standalone = (opencodeMajor: number): string[] => (opencodeMajor >= 2 ? ['--standalone'] : []);
+
 /** An OpenCode step: `run --format json` headless, the TUI with `--prompt` for a person. */
 function stepArgs(input: StepArgsInput, { interactive, opencodeMajor }: StepArgsHow): string[] {
   const unattended = input.unattended ? UNATTENDED : [];
@@ -41,7 +47,7 @@ function stepArgs(input: StepArgsInput, { interactive, opencodeMajor }: StepArgs
 
   if (interactive) return [...unattended, ...agent, ...(input.model ? ['--model', input.model] : []), '--prompt', input.prompt];
 
-  return ['run', '--format', 'json', ...unattended, input.prompt, ...agent, ...opencodeModelArgs(input.model === undefined ? undefined : { name: input.model, effort: input.effort }, opencodeMajor)];
+  return ['run', ...standalone(opencodeMajor), '--format', 'json', ...unattended, input.prompt, ...agent, ...opencodeModelArgs(input.model === undefined ? undefined : { name: input.model, effort: input.effort }, opencodeMajor)];
 }
 
 /** How teamai launches OpenCode headless. */
@@ -50,7 +56,7 @@ export const launch = {
     call: {
       evidence: 'verified',
       prompt: 'stdin',
-      args: () => ['run', '--format', 'json'],
+      args: ({ opencodeMajor }) => ['run', ...standalone(opencodeMajor), '--format', 'json'],
       read: readOpenCodeRun,
       // `opencode run --help` of 2.1.2: `-s, --session` continues a session by its id.
       resume: { evidence: 'docs', args: (session) => ['--session', session] },

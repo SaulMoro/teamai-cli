@@ -273,7 +273,8 @@ export async function runStepLaunch({ tool, input, start, limits = {}, signal, i
   }
 
   const opencode = tool.family === 'opencode';
-  const opencodeMajor = opencode && (input.agent || input.model?.effort) ? await host.opencodeMajor(tool.executable) : 1;
+  // Headless, the version also decides whether OpenCode runs on its own server rather than its background service.
+  const opencodeMajor = opencode && (!interactive || input.agent || input.model?.effort) ? await host.opencodeMajor(tool.executable) : 1;
 
   if (opencode && input.agent) {
     const { name: agent, model, settings = {} } = input.agent;
