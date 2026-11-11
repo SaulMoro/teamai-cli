@@ -16,6 +16,19 @@ export const own = () => fs.readFileSync('/proc/self/stat', 'utf8');`, (output) 
   expect(output).toContain(MESSAGE);
 }, { filename: 'packages/runtime-x/src/own.ts' });
 
+rule.invalid('rejects the process listing, a /proc path joined or added up, each untold', `import fs from 'node:fs';
+import path from 'node:path';
+export const all = (pid: number) => [fs.readdirSync('/proc'), fs.readFileSync(path.join('/proc', String(pid), 'stat')), fs.readFileSync('/proc' + '/' + pid + '/comm')];`, (output) => {
+  expect(output.match(/Linux answers from \/proc where macOS runs ps/g)).toHaveLength(3);
+});
+
+rule.invalid('rejects a /proc read in a module that only imports the way to tell it', `import fs from 'node:fs';
+import { tellProcessRead } from '@teamai/shared/process-group';
+export const parentOf = (pid: number) => fs.readFileSync(\`/proc/\${pid}/stat\`, 'utf8');
+export { tellProcessRead };`, (output) => {
+  expect(output).toContain(MESSAGE);
+});
+
 rule.valid('allows a /proc read in a module that tells its reads', `import fs from 'node:fs';
 import { tellProcessRead } from '@teamai/shared/process-group';
 export const parentOf = (pid: number) => {
