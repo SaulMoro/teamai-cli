@@ -25,8 +25,8 @@ import { failedCommand, placeView, runtimeCommand, runtimeSetup, runtimeStepEnv,
 import { attemptRun, credentialSecrets, HeldPlace, isExecRuntimeTool, readAttemptPlacement, recordInProcessAttempt, attemptRuntimePath, maskAttemptResults, type AttemptRun } from '../../runtimes/attempt.js';
 import { answerCallTool, hostStepRuntime } from '../../runtimes/host.js';
 import { writeHeldSteps, type HeldSteps } from '../../runtimes/held.js';
-import { closeAfterSweep, stopLeftInProcess, stopOnRecordedDriver } from '../../runtimes/cancelled.js';
-import { LOGIN_TOOLS, loginHolder, loginLockFile, releaseLogin } from '../../runtimes/login.js';
+import { closeAfterSweep, releaseLeftLogins, stopLeftInProcess, stopOnRecordedDriver } from '../../runtimes/cancelled.js';
+import { loginHolder, loginLockFile, releaseLogin } from '../../runtimes/login.js';
 import { toolsLaunchDeps, type EngineOptions, type OpenedDriver } from '../../runtimes/sources.js';
 import { newOpId, type ExecAnswer, type ExecQuestion, type StepRuntime } from '@teamai/runtime-protocol/step-runtime';
 import { resumeOrPublish, retryCommand } from '../../runtimes/retry-command.js';
@@ -780,8 +780,6 @@ async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, given: 
     const closing = attemptRuns.get(attempt);
     const handle = localHandles.get(attempt);
     const slot = slotOf.get(attempt);
-    // One in teamai's process, as a Codex judge, may hold any login; nothing of it runs once it closes.
-    const logins = slot?.kind === 'external' ? slot.engine.logins : LOGIN_TOOLS;
     const placement = slot?.kind === 'external' ? await readAttemptPlacement(config, runId, attempt) : undefined;
     const closingHandle = placement?.kind === 'external' ? placement.record.open.handle : undefined;
     attemptRuns.delete(attempt);
@@ -797,7 +795,10 @@ async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, given: 
     // still run its tool, so it keeps the login until a person stops that tool.
     if (notClosed) log.warn(notClosed.message);
 
-    for (const tool of logins) {
+    // One in teamai's process left its tool home under the attempt, which a killed judge refreshed its login in.
+    if (slot?.kind !== 'external') return releaseLeftLogins(config, runId, attempt);
+
+    for (const tool of slot.engine.logins) {
       if (!notClosed) {
         await releaseLogin(tool, { run: runId, attempt });
         continue;

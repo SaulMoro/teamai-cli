@@ -6,8 +6,8 @@ import type { RunStatus, WorkflowFailure } from '../types.js';
 import { existingCheckout } from '../run-location.js';
 import { attemptDir, AttemptIdSchema, attemptsDir, readRun, type AttemptId, type RunId, type RunLock } from '../store.js';
 import { knownSecrets } from '../../env-resolution.js';
-import { attemptRun, attemptRuntimePath, maskAttemptResults, readAttemptPlacement, releaseAttemptRuntime, type AttemptRuntimeRecord } from './attempt.js';
-import { LOGIN_TOOLS, loginHolder, loginLockFile, releaseEndedLogins, releaseLogin, writeLoginBack } from './login.js';
+import { attemptRun, attemptRuntimePath, attemptToolHome, maskAttemptResults, readAttemptPlacement, releaseAttemptRuntime, type AttemptRuntimeRecord } from './attempt.js';
+import { LOGIN_TOOLS, loginHolder, loginLockFile, releaseEndedLogins, releaseLeftLogin, releaseLogin, writeLoginBack } from './login.js';
 import { disposeDriver, openDriver } from './sources.js';
 import { retryCommand } from './retry-command.js';
 import { CANCEL_FAILED } from '@teamai/runtime-protocol';
@@ -123,17 +123,26 @@ async function placesLeftOpen(config: LocalConfig, run: RunId, leased: ReadonlyS
 const RELEASE = { release: true } as const;
 
 /**
- * Stops what a killed teamai left running of attempt `attempt` in its own process, and releases the logins it held, as
- * a Codex judge holds one: nothing of it runs any more to use them. One on a step runtime keeps its login until that
- * runtime closes its place (`stopOnRecordedDriver`).
+ * Stops what a killed teamai left running of attempt `attempt` in its own process, then writes back and releases the
+ * logins it held, as a Codex judge holds one: nothing of it runs any more to use them. One on a step runtime keeps its
+ * login until that runtime closes its place (`stopOnRecordedDriver`).
  */
 export async function stopLeftInProcess(config: LocalConfig, run: RunId, attempt: AttemptId): Promise<void> {
   await stopRecordedGroup(attemptDir(config, run, attempt));
   const placement = await readAttemptPlacement(config, run, attempt);
 
   if (placement.kind !== 'in_process' && placement.kind !== 'unrecorded') return;
+  await releaseLeftLogins(config, run, attempt);
+}
 
-  for (const tool of LOGIN_TOOLS) await releaseLogin(tool, { run, attempt });
+/** Writes back and releases each login attempt `attempt` of run `run`, run in teamai's process, holds; warns of one not written back. */
+export async function releaseLeftLogins(config: LocalConfig, run: RunId, attempt: AttemptId): Promise<void> {
+  for (const tool of LOGIN_TOOLS) {
+    // Where a step or a judge of the attempt had the tool keep its login.
+    const notBack = await releaseLeftLogin(tool, { run, attempt, toolHome: attemptToolHome(config, run, attempt, tool) });
+
+    if (notBack) log.warn(notBack.message);
+  }
 }
 
 /**

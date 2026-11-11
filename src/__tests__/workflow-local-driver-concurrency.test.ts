@@ -12,7 +12,7 @@ import { _setDriverPollMs, runLocalDriver } from '../workflow/drivers/local/loca
 import { driverIdentity } from '../driver-identity.js';
 import { attemptDir, readRun, RunIdSchema } from '../workflow/store.js';
 import { attemptToolHome } from '../workflow/runtimes/attempt.js';
-import { holdLogin, loginHolder, loginHome } from '../workflow/runtimes/login.js';
+import { holdLogin, holdLoginFrom, loginHolder, loginHome } from '../workflow/runtimes/login.js';
 import { knownSecrets } from '../env-resolution.js';
 import { alive, dirs, exitsWithin, LOG, parallelFixture, toolPaths, TWO_BARRIERS, workflowFixture } from './helpers/workflow-local-driver-fixture.js';
 import { recordGroup } from '@teamai/shared/process-group';
@@ -613,6 +613,40 @@ steps:
     expect(await runLocalDriver(config, runId, workspace)).toMatchObject({ data: { done: { outcome: 'succeeded' } } });
 
     expect(await loginHolder('codex')).toBeUndefined();
+  });
+
+  // Codex rotates its refresh token on a refresh and refuses the old one after (refresh_token_reused).
+  it.each([
+    ['whose lease the next driver takes back', ''],
+    ['whose step timed out before the next driver ran', '    timeout: 1s\n'],
+  ])('writes back the Codex login a killed judge refreshed, of an attempt %s, before it releases it', async (_case, timeout) => {
+    const { config, workspace, runId } = await workflowFixture(`schemaVersion: v1alpha1
+name: build
+description: A step whose earlier driver was killed while its Codex judge held the member's login.
+steps:
+  - id: check
+    command: "true"
+${timeout}`);
+    const leased = await leaseNext(config, runId, driverIdentity('local', workspace));
+    if (!('data' in leased)) throw new Error(leased.error.message);
+    const run = RunIdSchema.parse(runId);
+    const attempt = LeaseIdSchema.parse(leased.data.lease).attempt;
+    const daily = path.join(path.dirname(workspace), 'codex');
+    const login = (refresh: string): string => JSON.stringify({ auth_mode: 'chatgpt', tokens: { account_id: 'acct-1', refresh_token: refresh } });
+    fs.mkdirSync(daily);
+    fs.writeFileSync(path.join(daily, 'auth.json'), login('refresh-1'), { mode: 0o600 });
+    const toolHome = attemptToolHome(config, run, attempt, 'codex');
+    const held = await holdLoginFrom({ tool: 'codex', executable: 'codex', from: daily, toolHome, run, attempt, signal: new AbortController().signal });
+    expect(held.ok).toBe(true);
+    // The judge's Codex refreshed its login as Codex 0.167.0 does, then its teamai was killed before the judge released it.
+    fs.writeFileSync(path.join(toolHome, 'auth.json.tmp'), login('refresh-2'));
+    fs.renameSync(path.join(toolHome, 'auth.json.tmp'), path.join(toolHome, 'auth.json'));
+    if (timeout) await new Promise((resolve) => setTimeout(resolve, 1_200));
+
+    await runLocalDriver(config, runId, workspace);
+
+    expect({ daily: JSON.parse(fs.readFileSync(path.join(daily, 'auth.json'), 'utf8')).tokens.refresh_token, holder: await loginHolder('codex') })
+      .toEqual({ daily: 'refresh-2', holder: undefined });
   });
 
   it('runs a prompt an earlier driver leased alone, between the commands leased before and after it', async () => {
