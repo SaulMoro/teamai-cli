@@ -438,8 +438,8 @@ steps:
 describe('a member taking a prompt attempt', () => {
   const agents: FakeAgent[] = [];
 
-  afterEach(() => {
-    const left = agents.splice(0).flatMap((agent) => agent.stopLeft());
+  afterEach(async () => {
+    const left = (await Promise.all(agents.splice(0).map((agent) => agent.stopLeft()))).flat();
     vi.unstubAllEnvs();
     expect(left, 'fake agents left running').toEqual([]);
   });

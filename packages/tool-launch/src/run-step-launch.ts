@@ -96,7 +96,11 @@ export interface ToolProcess {
   closed: Promise<ToolClosed>;
   /** Whether the process started: it spawned, or its runtime accepted it. */
   started(): boolean;
-  /** Stops the process and everything it started; a signal from the person is forwarded to an interactive one. */
+  /**
+   * Stops the process and everything it started; a signal from the person is forwarded to an interactive one. It may be
+   * called at any time, before the process started, again, or after it ended, and it settles and never rejects: a stop
+   * that failed is the adapter's to report. `toolLauncherConformance` checks it.
+   */
   stop(signal?: NodeJS.Signals): Promise<void>;
 }
 
@@ -136,6 +140,11 @@ export type StepLaunchResult =
   | { started: false; exitCode: number; failure: StepFailure };
 
 type ResultFile = ToolReport & { failure?: StepFailure };
+
+/** Why a step whose signal stopped it before its tool started has no result: it was cancelled, not failed. */
+function stoppedBeforeStart(name: string): StepFailure {
+  return { code: 'cancelled', message: `The step was stopped before ${name} started.` };
+}
 
 /** The step's prompt, and the instruction to write the result file. */
 function resultInstruction(input: Pick<StepLaunchInput, 'resultPath' | 'expected'>, prompt: string): string {
@@ -263,7 +272,8 @@ function combineResults(fileResult: ResultFile | null, reported: ToolReport | nu
  * Runs one workflow step on `tool`, whatever starts its process: it builds the argv with the family's `step.args`, meters
  * the budget from stdout and stops the tool at its limits through `start`, reads the result file, and parses stdout for
  * the session, tokens and cost. It never starts a process itself. `canReattach` says `start` may attach to the tool an
- * earlier launch of the attempt began, whose result file is then this launch's.
+ * earlier launch of the attempt began, whose result file is then this launch's. A `signal` that stops it before the tool
+ * started, already aborted or while a runtime sets up, ends it `cancelled`.
  */
 export async function runStepLaunch({ tool, input, start, canReattach = false, limits = {}, signal, interactive, host }: {
   tool: StepTool;
@@ -374,19 +384,32 @@ export async function runStepLaunch({ tool, input, start, canReattach = false, l
     active();
   };
 
+  // A step stopped before its launch opens no place and starts nothing.
+  if (signal?.aborted) return { started: false, exitCode: 1, failure: stoppedBeforeStart(name) };
+
   if (!canReattach) await removeLeftResult(input.resultPath);
   const processRun = start({ executable: tool.executable, args, cwd: input.cwd, env, interactive, onStart: started, onStdout });
 
+  // Every stop goes through here. The port's `stop` never rejects by its contract, which nothing enforces at run time:
+  // one that rejects anyway is reported rather than left to end teamai as an unhandled rejection.
+  const stopTool = async (forwarded?: NodeJS.Signals): Promise<void> => {
+    try {
+      await processRun.stop(forwarded);
+    } catch (error) {
+      log.warn(`teamai could not confirm that ${name} stopped: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  };
+
   function stopAt(limit: 'timeout' | 'budget' | 'idle'): void {
     stopCause ??= limit;
-    void processRun.stop();
+    void stopTool();
   }
 
   const abort = (): void => {
     const reason: unknown = signal?.reason;
     const forwarded = reason === 'SIGINT' || reason === 'SIGQUIT' || reason === 'SIGTERM' || reason === 'SIGHUP' ? reason : undefined;
     stopCause ??= 'aborted';
-    void processRun.stop(interactive ? forwarded : undefined);
+    void stopTool(interactive ? forwarded : undefined);
   };
 
   signal?.addEventListener('abort', abort, { once: true });
@@ -403,7 +426,7 @@ export async function runStepLaunch({ tool, input, start, canReattach = false, l
     signal?.removeEventListener('abort', abort);
   }
 
-  if (stopCause !== undefined) await processRun.stop();
+  if (stopCause !== undefined) await stopTool();
 
   if (stopCause === 'idle' && idleMs !== undefined) {
     return {
@@ -422,7 +445,8 @@ export async function runStepLaunch({ tool, input, start, canReattach = false, l
       exitCode: completed.exitCode,
       failure: completed.error?.code === 'ENOENT'
         ? { code: 'tool_unavailable', message: `The ${name} executable is not available on PATH` }
-        : { code: 'tool_failed', message: `${name} could not be started` },
+        // Stopped while its runtime opened the place or set it up: a cancel, not a launch that failed.
+        : stopCause === 'aborted' ? stoppedBeforeStart(name) : { code: 'tool_failed', message: `${name} could not be started` },
     };
   }
 

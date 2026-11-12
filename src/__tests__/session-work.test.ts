@@ -245,6 +245,22 @@ describe('the evidence a step left beside a pushed session', () => {
     expect(fs.readFileSync(path.join(dir, 'evidence', 'run.log'), 'utf8')).toBe(log);
   });
 
+  // Windows opens a device for a reserved name, with any extension, and strips a trailing dot or space from a name
+  // ("Naming Files, Paths, and Namespaces", Microsoft Learn), so a teammate's out/nul.txt would be written nowhere there.
+  it('gives a reserved Windows device name, and a name Windows would strip, a name of its own under evidence/', () => {
+    const session: Session = {
+      sessionId: SESSION, title: 'check', cwd: '/tmp/proj', platform: 'claude-code', createdAt: NOW, updatedAt: NOW,
+      messages: [{ role: 'user', content: [{ type: 'text', text: 'check it' }], timestamp: NOW }],
+    };
+    const paths = ['out/nul.txt', 'CON', 'aux.tar.gz', 'COM1.log', 'lpt9', 'prn/report.md', 'notes.', 'notes', 'draft ', 'console.log', 'com10.txt'];
+    const evidence: ArchivedEvidence = { version: 1, files: paths.map((at) => ({ kind: 'text' as const, path: at, type: 'text/plain', size: 1, text: at, cut: false })) };
+
+    expect(judgeSession({ platform: 'claude-code', found: { session }, captures: [], mask: (text) => text, evidence }).stepEvidence.map((file) => file.path)).toEqual([
+      'evidence/out/_nul.txt', 'evidence/_CON', 'evidence/_aux.tar.gz', 'evidence/_COM1.log', 'evidence/_lpt9', 'evidence/_prn/report.md',
+      'evidence/notes_', 'evidence/notes', 'evidence/draft_', 'evidence/console.log', 'evidence/com10.txt',
+    ]);
+  });
+
   it('writes each evidence file under a name every platform can hold, also two whose masked names are the same', async () => {
     const session: Session = {
       sessionId: SESSION, title: 'check', cwd: '/tmp/proj', platform: 'claude-code', createdAt: NOW, updatedAt: NOW,

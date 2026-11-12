@@ -2,7 +2,8 @@ import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { log } from '@teamai/shared/log';
 import { SessionEvidence } from '../session-flow/session-evidence.js';
 
 const cutLine = (bytes: number): string => `\n[teamai: cut at ${bytes} bytes: the archive keeps at most 1 MiB of a file and 10 MiB of a step's evidence]\n`;
@@ -96,6 +97,22 @@ describe('evidence a step left in its out/ directory', () => {
       ]);
     } finally {
       fs.rmSync(outside, { force: true });
+    }
+  });
+
+  // A backslash is a file-name character on POSIX, and a path separator on Windows, where no such file can be made.
+  it.skipIf(process.platform === 'win32')('leaves out only a file whose name the archive cannot keep, and names it', async () => {
+    const warn = vi.spyOn(log, 'warn').mockImplementation(() => {});
+    fs.writeFileSync(path.join(out, 'logs\\run.txt'), 'refused');
+    fs.writeFileSync(path.join(out, 'run.log'), 'kept');
+
+    try {
+      expect((await SessionEvidence.collect(out, mask))?.files).toEqual([
+        { kind: 'text', path: 'run.log', type: 'text/plain', size: 4, text: 'kept', cut: false },
+      ]);
+      expect(warn.mock.calls.map(([message]) => String(message))).toEqual([expect.stringContaining('logs\\run.txt')]);
+    } finally {
+      warn.mockRestore();
     }
   });
 

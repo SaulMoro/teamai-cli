@@ -9,8 +9,8 @@ import { opencodeFake } from './testing/index.js';
 const call = launch.opencode.call;
 const made: string[] = [];
 
-afterEach(() => {
-  const left = leftFakeAgents();
+afterEach(async () => {
+  const left = await leftFakeAgents();
 
   for (const dir of made.splice(0)) fs.rmSync(dir, { recursive: true, force: true });
   expect(left, 'fake agents left running').toEqual([]);

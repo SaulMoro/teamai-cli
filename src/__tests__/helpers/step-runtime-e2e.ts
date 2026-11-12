@@ -67,8 +67,8 @@ export const CODEBUDDY_SESSIONS: SessionLayout = {
 export function codexOnPath(bin: string): FakeAgent {
   const codex = fakeAgent(codexFake, { bin });
 
-  onTestFinished(() => {
-    const left = codex.stopLeft();
+  onTestFinished(async () => {
+    const left = await codex.stopLeft();
 
     for (const file of ['codex', 'codex.calls.jsonl', 'codex.pids']) fs.rmSync(path.join(bin, file), { force: true });
     expect(left, 'fake codex left running').toEqual([]);

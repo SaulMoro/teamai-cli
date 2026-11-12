@@ -3,7 +3,8 @@ import { closeSync, constants, openSync } from 'node:fs';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { log } from '@teamai/shared/log';
 import { BUILT_IN_TOOLS } from '@teamai/tool-definitions';
 import { runStepLaunch, type StepLaunchHost, type ToolClosed, type ToolLauncher } from './run-step-launch.js';
 
@@ -78,6 +79,67 @@ describe('runStepLaunch', () => {
 
     expect(ran).toMatchObject({ started: true, stoppedBy: 'budget', tokens: { input: 40, output: 70, cachedInput: 1000 } });
     expect(stops()).toBeGreaterThan(0);
+  });
+
+  it('reports a stop the port rejected, against its contract, and still ends the step at its limit', async () => {
+    const warn = vi.spyOn(log, 'warn').mockImplementation(() => {});
+    const { start: fake } = fakeLauncher([
+      JSON.stringify({ type: 'stream_event', event: { type: 'message_start', message: { id: 'm1', usage: { input_tokens: 200, output_tokens: 1 } } } }),
+    ], { untilStopped: true });
+
+    const start: ToolLauncher = (launch) => {
+      const run = fake(launch);
+
+      return { ...run, stop: async (signal) => { await run.stop(signal); throw new Error('the sandbox did not answer'); } };
+    };
+
+    try {
+      const ran = await runStepLaunch({ tool: claude, input: { prompt: 'Fix it.', cwd: os.tmpdir(), resultPath: await resultPathIn(), secrets: {}, expected: 'a summary' }, start, limits: { budget: 100 }, interactive: false, host });
+      await new Promise((resolve) => { setTimeout(resolve, 20); });
+
+      expect(ran).toMatchObject({ started: true, stoppedBy: 'budget' });
+      expect(warn.mock.calls.map(([message]) => String(message))).toContain('teamai could not confirm that claude stopped: the sandbox did not answer');
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it('opens nothing for a step stopped before its launch, and ends it cancelled', async () => {
+    const controller = new AbortController();
+    controller.abort();
+    let starts = 0;
+    const { start: fake } = fakeLauncher([JSON.stringify({ type: 'result', subtype: 'success', result: 'Done.' })]);
+
+    const ran = await runStepLaunch({
+      tool: claude, input: { prompt: 'Fix it.', cwd: os.tmpdir(), resultPath: await resultPathIn(), secrets: {}, expected: 'a summary' },
+      start: (launch) => { starts++; return fake(launch); }, signal: controller.signal, interactive: false, host,
+    });
+
+    expect(starts).toBe(0);
+    expect(ran).toEqual({ started: false, exitCode: 1, failure: { code: 'cancelled', message: 'The step was stopped before claude started.' } });
+  });
+
+  it('ends cancelled, not failed, a step stopped while its runtime set up, before its tool started', async () => {
+    const controller = new AbortController();
+    let stops = 0;
+
+    // A runtime's port: it opens the place and sets it up before the exec, and a stop there sends no exec.
+    const start: ToolLauncher = () => {
+      let isStopRequested = false;
+      const closed = (async (): Promise<ToolClosed> => {
+        controller.abort();
+        await new Promise((resolve) => { setTimeout(resolve, 10); });
+
+        return isStopRequested ? { exitCode: 143, stdout: '' } : { exitCode: 0, stdout: '' };
+      })();
+
+      return { closed, started: () => false, stop: async () => { stops++; isStopRequested = true; } };
+    };
+
+    const ran = await runStepLaunch({ tool: claude, input: { prompt: 'Fix it.', cwd: os.tmpdir(), resultPath: await resultPathIn(), secrets: {}, expected: 'a summary' }, start, signal: controller.signal, interactive: false, host });
+
+    expect(stops).toBeGreaterThan(0);
+    expect(ran).toEqual({ started: false, exitCode: 143, failure: { code: 'cancelled', message: 'The step was stopped before claude started.' } });
   });
 
   it('stops nothing at the timeout once the port\'s process end rejected', async () => {

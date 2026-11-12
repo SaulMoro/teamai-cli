@@ -2,7 +2,7 @@ import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { z } from 'zod';
-import { signalGroup, signalPid } from '@teamai/shared/process-group';
+import { isSameProcess, ProcessIdentitySchema, signalGroup, signalPid, type ProcessIdentity } from '@teamai/shared/process-group';
 import { readRegularFileSync } from '@teamai/shared/regular-file';
 
 /** What the prompt or the options ask a fake agent to do beyond answering. */
@@ -63,8 +63,11 @@ export interface FakeAgent {
   readonly executable: string;
   /** Every call so far, in order: its arguments, the prompt it read on stdin, and its cwd. */
   calls(): FakeAgentCall[];
-  /** The processes of this fake still alive, which it then kills: an `afterEach` expects none, whoever started them. */
-  stopLeft(): number[];
+  /**
+   * The processes of this fake still alive, which it then kills: an `afterEach` expects none, whoever started them. A
+   * pid the system gave to another process since that fake ended is left alone, as teamai leaves a pid it did not start.
+   */
+  stopLeft(): Promise<number[]>;
 }
 
 /**
@@ -96,25 +99,45 @@ export function fakeAgent(recording: FakeAgentRecording, options: FakeAgentOptio
 
   return {
     executable,
-    stopLeft: () => {
-      const listed = fs.existsSync(pids) ? readRegularFileSync(pids, 'utf8').split('\n').filter(Boolean).map(Number) : [];
-      const alive = listed.filter(isAlive);
+    stopLeft: async () => {
+      const listed = fs.existsSync(pids) ? readRegularFileSync(pids, 'utf8').split('\n').flatMap(recordedFake) : [];
 
-      for (const pid of alive) signalPid(pid, 'SIGKILL');
-
-      return alive;
+      return killSame(listed, (pid) => signalPid(pid, 'SIGKILL'));
     },
     calls: () => (fs.existsSync(log) ? readRegularFileSync(log, 'utf8').trim().split('\n').filter(Boolean).map((line) => Call.parse(JSON.parse(line))) : []),
   };
 }
 
-function isAlive(pid: number): boolean {
-  return signalPid(pid, 0) === 'sent';
+/**
+ * One line of a pids file: the pid a fake ran as and the time it read once it ran, which tells it from a later process
+ * given that pid. A line a fake was still writing, or any other, names no fake.
+ */
+function recordedFake(line: string): ProcessIdentity[] {
+  try {
+    const recorded = ProcessIdentitySchema.safeParse(JSON.parse(line));
+
+    return recorded.success && recorded.data.spawnedAt !== undefined ? [recorded.data] : [];
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * The processes of `recorded` still running as recorded, each of which `kill` then gets: a pid now another process's,
+ * or one this machine cannot tell, gets nothing. A pid below 2 is never one: `isSameProcess` takes it as live.
+ */
+async function killSame(recorded: readonly ProcessIdentity[], kill: (pid: number) => void): Promise<number[]> {
+  const verdicts = await Promise.all(recorded.map(async (fake) => ({ pid: fake.pid, isSame: fake.pid > 1 && await isSameProcess(fake) === 'same' })));
+  const alive = verdicts.flatMap(({ pid, isSame }) => (isSame ? [pid] : []));
+
+  for (const pid of alive) kill(pid);
+
+  return alive;
 }
 
 const ENGINE = String.raw`
 const fs = require('node:fs');
-fs.appendFileSync(settings.pids, process.pid + '\n');
+fs.appendFileSync(settings.pids, JSON.stringify({ pid: process.pid, spawnedAt: Date.now() }) + '\n');
 const path = require('node:path');
 const { randomUUID } = require('node:crypto');
 const { execFileSync } = require('node:child_process');
@@ -141,7 +164,7 @@ process.stdin.on('end', async () => {
 });
 `;
 
-const started = new Set<number>();
+const started: ProcessIdentity[] = [];
 
 /**
  * Runs a fake as a tool launch does, with `prompt` on stdin, in its own process group, and gives what it printed and
@@ -154,7 +177,7 @@ export function runFakeAgent(executable: string, args: readonly string[], prompt
     const pid = child.pid;
     let stdout = '';
 
-    if (pid !== undefined) started.add(pid);
+    if (pid !== undefined) started.push({ pid, spawnedAt: Date.now() });
     child.stdout.on('data', (chunk: Buffer) => {
       if (stdout === '' && stopAfterOutputMs !== undefined && pid !== undefined) setTimeout(() => signalGroup(pid, 'SIGTERM'), stopAfterOutputMs);
       stdout += chunk.toString('utf8');
@@ -164,13 +187,10 @@ export function runFakeAgent(executable: string, args: readonly string[], prompt
   });
 }
 
-/** The fakes `runFakeAgent` started that are still alive, which it then kills: an `afterEach` expects none. */
-export function leftFakeAgents(): number[] {
-  const alive = [...started].filter(isAlive);
-
-  started.clear();
-
-  for (const pid of alive) signalGroup(pid, 'SIGKILL');
-
-  return alive;
+/**
+ * The fakes `runFakeAgent` started that are still alive, whose groups it then kills: an `afterEach` expects none. A pid
+ * the system gave to another process since that fake ended is left alone.
+ */
+export function leftFakeAgents(): Promise<number[]> {
+  return killSame(started.splice(0), (pid) => signalGroup(pid, 'SIGKILL'));
 }
