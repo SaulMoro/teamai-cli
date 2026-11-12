@@ -589,9 +589,14 @@ function isStillRunning(now: Map<number, RunningProcess>, found: FoundProcess): 
  * read. A process that daemonized away from the tree is not among them.
  */
 export async function descendantsOf(pid: number): Promise<FoundProcess[]> {
+  return descendantsIn(await runningProcesses() ?? new Map<number, RunningProcess>(), pid);
+}
+
+/** Each descendant of process `pid` in `running`, deepest first, with when it started. */
+function descendantsIn(running: Map<number, RunningProcess>, pid: number): FoundProcess[] {
   const children = new Map<number, FoundProcess[]>();
 
-  for (const [child, { ppid, start }] of await runningProcesses() ?? []) {
+  for (const [child, { ppid, start }] of running) {
     const siblings = children.get(ppid) ?? [];
     siblings.push({ pid: child, start });
     children.set(ppid, siblings);
@@ -637,7 +642,8 @@ async function stopRecordedTree(recorded: Recorded): Promise<StopEnd> {
 
   if (verdict !== 'same') return 'unconfirmed';
 
-  return await endProcesses([...await descendantsOf(recorded.pid), { pid: recorded.pid, start: rootStart }]) ? 'stopped' : 'unconfirmed';
+  // What it started comes from the table that found it: a second read that failed would read as nothing started.
+  return await endProcesses([...descendantsIn(running, recorded.pid), { pid: recorded.pid, start: rootStart }]) ? 'stopped' : 'unconfirmed';
 }
 
 /**

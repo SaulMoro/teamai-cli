@@ -601,13 +601,19 @@ it.runIf(READS_PS)('lets a timer fire on time while it stops an attached command
   // The stop may wait out its five-second grace, with each ps it runs taking half a second.
 }, 20_000);
 
-/** A directory with a `ps` that answers its first `times` calls and fails every later one, as one past its timeout. */
-function psAnswering(times: number): { directory: string; bin: string } {
+/** A directory with a `ps` that fails the calls `failing` counts (from 1), as one past its timeout, and answers the rest. */
+function psFailing(failing: (call: number) => boolean, upTo = 20): { directory: string; bin: string } {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-failing-ps-'));
   const bin = path.join(directory, 'bin');
   fs.mkdirSync(bin);
-  fs.writeFileSync(path.join(bin, 'ps'), `#!/bin/sh\necho . >> "${directory}/calls"\n[ "$(wc -l < "${directory}/calls")" -le ${times} ] || exit 1\nexec /bin/ps "$@"\n`, { mode: 0o755 });
+  const fails = Array.from({ length: upTo }, (_, at) => at + 1).filter(failing).join(' ');
+  fs.writeFileSync(path.join(bin, 'ps'), `#!/bin/sh\necho . >> "${directory}/calls"\ncall=$(wc -l < "${directory}/calls" | tr -d ' ')\nfor n in ${fails}; do [ "$call" = "$n" ] && exit 1; done\nexec /bin/ps "$@"\n`, { mode: 0o755 });
   return { directory, bin };
+}
+
+/** A directory with a `ps` that answers its first `times` calls and fails every later one, as one past its timeout. */
+function psAnswering(times: number): { directory: string; bin: string } {
+  return psFailing((call) => call > times);
 }
 
 /** An attached shell whose child ignores SIGTERM, as a tool that traps it does; the shell itself ends on it. */
@@ -638,6 +644,28 @@ it.runIf(READS_PS)('keeps the record of an attached command whose stop ps stoppe
     expect(fs.existsSync(path.join(records, `group-${pid}.json`))).toBe(true);
   } finally {
     try { process.kill(deaf, 'SIGKILL'); } catch { /* Already stopped. */ }
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+}, 20_000);
+
+it.runIf(READS_PS)('keeps the record of an attached command when ps fails only on the read of what the command started', async () => {
+  // The read that finds the command answers, the one that lists what it started does not, and every later one answers.
+  const { directory, bin } = psFailing((call) => call === 2);
+  const { shell, deaf } = await shellLeavingDeafChild();
+  const records = path.join(directory, 'records');
+  fs.mkdirSync(records);
+  const pid = shell.pid ?? 0;
+  try {
+    fs.writeFileSync(path.join(records, `group-${pid}.json`), JSON.stringify({ pid, ...await recordedStart(pid), tree: true }));
+    vi.stubEnv('PATH', `${bin}:/bin:/usr/bin`);
+    const left = await stopRecordedGroup(records);
+    vi.unstubAllEnvs();
+
+    // A stop that leaves what the command started running keeps its record for a later stop.
+    expect(isRunning(deaf) ? left : [pid]).toEqual([pid]);
+  } finally {
+    vi.unstubAllEnvs();
+    for (const left of [deaf, pid]) try { process.kill(left, 'SIGKILL'); } catch { /* Already stopped. */ }
     fs.rmSync(directory, { recursive: true, force: true });
   }
 }, 20_000);
