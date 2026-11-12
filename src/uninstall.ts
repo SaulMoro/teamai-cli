@@ -845,7 +845,7 @@ async function discoverToolResources(
 
         for (const dir of staging.left) res.skillDirs.push({ dir, baseDir: rootBase });
 
-        for (const dir of staging.inUse) res.keptSkillDirs.push(`Kept ${dir}: a teamai copy on this machine may still write into it. Run \`teamai uninstall\` again once it ends.`);
+        for (const dir of staging.inUse) res.keptSkillDirs.push(`Kept ${dir}: a teamai copy on this machine may still write into it. Delete it by hand once no teamai command runs here: a later uninstall no longer looks for it.`);
       }
     }
   }
