@@ -5,7 +5,7 @@ import path from 'node:path';
 import { afterEach, expect, it, vi } from 'vitest';
 import { z } from 'zod';
 import diagnostics from 'node:diagnostics_channel';
-import { identityOf, isSameProcess, ownGroups, PROCESS_READ_CHANNEL, recordGroup, signalGroup, signalPid, stopGroup, stopProcess, stopRecordedGroup } from './process-group.js';
+import { descendantsOf, identityOf, isSameProcess, ownGroups, PROCESS_READ_CHANNEL, recordGroup, signalGroup, signalPid, signalStillRunning, stopGroup, stopProcess, stopRecordedGroup } from './process-group.js';
 
 /** Whether this platform tells start times through ps rather than `/proc`, so a fake ps on PATH is what is read. */
 const READS_PS = process.platform !== 'win32' && process.platform !== 'linux';
@@ -59,6 +59,25 @@ it.skipIf(process.platform === 'win32')('signals the group it is given and no pr
   } finally {
     bystander.kill('SIGKILL');
     group.kill('SIGKILL');
+  }
+});
+
+it.skipIf(process.platform === 'win32')('signals a process found earlier only while its pid still names the process found', async () => {
+  const child = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore' });
+  const exited = new Promise<NodeJS.Signals | null>((resolve) => { child.once('exit', (_code, signal) => resolve(signal)); });
+  try {
+    await new Promise<void>((resolve, reject) => { child.once('spawn', resolve); child.once('error', reject); });
+    const found = (await descendantsOf(process.pid)).find(({ pid }) => pid === child.pid);
+    if (found === undefined) throw new Error('the child was not found under this process');
+    // The pid as a later process given it would have it: the same number, started at another time.
+    const later = { pid: found.pid, start: 'ticks' in found.start ? { ...found.start, ticks: found.start.ticks + 1 } : { ...found.start, lstart: 'Thu Jan  1 00:00:00 1970' } };
+
+    expect(await signalStillRunning([later], 'SIGTERM')).toBe(false);
+    expect(signalPid(found.pid, 0)).toBe('sent');
+    expect(await signalStillRunning([found], 'SIGTERM')).toBe(true);
+    expect(await exited).toBe('SIGTERM');
+  } finally {
+    child.kill('SIGKILL');
   }
 });
 

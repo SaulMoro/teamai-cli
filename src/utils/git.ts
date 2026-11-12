@@ -10,7 +10,7 @@ import { copyRegularTree, openRegularFileSync, readRegularFile } from '@teamai/s
 import { GitError, simpleGit, type SimpleGit, type SimpleGitOptions, type outputHandler } from 'simple-git';
 import { z } from 'zod';
 import { execCommand } from '@teamai/shared/exec';
-import { descendantsOf } from '@teamai/shared/process-group';
+import { descendantsOf, signalStillRunning } from '@teamai/shared/process-group';
 import { errnoCode } from './fs.js';
 import { GitAnswers } from './git-answers.js';
 import { gitFindsNoRepository, linkedWorktreesStamp, repositoryStamp } from './git-discovery.js';
@@ -336,8 +336,10 @@ export function createGitWithBlockTimeout(basePath?: string, abort?: AbortSignal
       if (!abort?.aborted) stalled = gitCommandLine(args);
 
       if (child.pid === undefined || child.exitCode !== null || child.signalCode !== null) return kill(signal);
+      // endProcessTree signals git through this handle, and so does a later kill of simple-git's.
+      child.kill = kill;
       // git is signalled once its tree is listed: the processes under a git that ended move to init, out of its tree.
-      void endProcessTree(child.pid).then(() => kill(signal), () => kill(signal));
+      void endProcessTree(child).then(() => kill(signal), () => kill(signal));
 
       return true;
     };
@@ -386,26 +388,28 @@ function watchChildProcesses(): void {
 }
 
 /**
- * End `pid` and every process under it. On Windows `taskkill /T /F`. Elsewhere
+ * End `child` and every process under it. On Windows `taskkill /T /F`. Elsewhere
  * SIGTERM to each, which git handles by removing its lock files and ssh by
  * exiting; the tree is listed before any is signalled, because a killed
- * parent's children move to init and can no longer be found from `pid`.
- * When `ps` cannot list the tree, only `pid` is signalled.
+ * parent's children move to init and can no longer be found from its pid.
+ * `child` is signalled through its handle, which reaches no later process given
+ * its pid, and each process under it only while it is still the one listed.
+ * When `ps` cannot list the tree, or read it again, only `child` is signalled.
  */
-export async function endProcessTree(pid: number): Promise<void> {
+export async function endProcessTree(child: ChildProcess): Promise<void> {
+  // A spawn that failed has no pid, and no tree.
+  if (child.pid === undefined) return;
+
   if (process.platform === 'win32') {
-    await new Promise((resolve) => { execFile('taskkill', ['/PID', String(pid), '/T', '/F'], { windowsHide: true }, resolve); });
+    await new Promise((resolve) => { execFile('taskkill', ['/PID', String(child.pid), '/T', '/F'], { windowsHide: true }, resolve); });
 
     return;
   }
 
-  for (const member of [pid, ...(await descendantsOf(pid)).map((found) => found.pid)]) {
-    try {
-      process.kill(member, 'SIGTERM');
-    } catch {
-      // Already exited.
-    }
-  }
+  const found = await descendantsOf(child.pid);
+
+  child.kill('SIGTERM');
+  await signalStillRunning(found, 'SIGTERM');
 }
 
 /**

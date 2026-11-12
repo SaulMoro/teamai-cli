@@ -696,12 +696,7 @@ async function stopRecordedTree(recorded: Recorded & { tree: true }): Promise<{ 
  * reused since cannot be told apart and none is signalled blind.
  */
 async function endProcesses(found: FoundProcess[]): Promise<boolean> {
-  /** Signals each process that is still the one found; whether any was reached, undefined when that cannot be read. */
-  const signal = async (name: NodeJS.Signals | 0): Promise<boolean | undefined> => {
-    const now = await runningProcesses();
-
-    return now === undefined ? undefined : found.filter(({ pid, start }) => isStillRunning(now, { pid, start })).reduce((reached, { pid }) => signalPid(pid, name) === 'sent' || reached, false);
-  };
+  const signal = (name: NodeJS.Signals | 0): Promise<boolean | undefined> => signalStillRunning(found, name);
 
   if (await signal('SIGTERM') === undefined) return false;
 
@@ -714,6 +709,17 @@ async function endProcesses(found: FoundProcess[]): Promise<boolean> {
     if (probe === 100) return await signal('SIGKILL') !== undefined;
     await new Promise<void>((resolve) => setTimeout(resolve, 50));
   }
+}
+
+/**
+ * Sends `name` to each process of `found`, as `descendantsOf` found them, that still runs as found: its pid names a
+ * process that started when it did, so a process given a pid since it was found gets nothing. Whether the signal
+ * reached any; undefined when the process table cannot be read, and then none is signalled blind.
+ */
+export async function signalStillRunning(found: readonly FoundProcess[], name: NodeJS.Signals | 0): Promise<boolean | undefined> {
+  const now = await runningProcesses();
+
+  return now === undefined ? undefined : found.filter((process) => isStillRunning(now, process)).reduce((reached, { pid }) => signalPid(pid, name) === 'sent' || reached, false);
 }
 
 /** Stops a detached process group or an attached process tree, with a five-second grace period before SIGKILL. */
