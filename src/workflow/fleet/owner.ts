@@ -82,7 +82,7 @@ type FleetCan = NonNullable<z.infer<typeof FleetOptionsSchema>['can']> & { label
 
 /**
  * Whether a fleet entry that offers `earlier` takes every step one that offers `later` could take, so the later one never
- * gets a step. What cannot be ordered, the tools and the confined offers, must be the same.
+ * gets a step. What cannot be ordered, the tools, must be the same.
  */
 function coversCan(earlier: FleetCan, later: FleetCan): boolean {
   if ((later.labels ?? []).some((label) => !(earlier.labels ?? []).includes(label))) return false;
@@ -96,7 +96,8 @@ function coversCan(earlier: FleetCan, later: FleetCan): boolean {
 
   if (DRIVER_ENV_REACH.indexOf(later.env ?? false) > DRIVER_ENV_REACH.indexOf(earlier.env ?? false)) return false;
 
-  return isDeepStrictEqual(earlier.tools, later.tools) && isDeepStrictEqual(earlier.confined, later.confined);
+  // A fleet offers no confined offer (init): an entry's `can.confined` tells two entries apart in nothing.
+  return isDeepStrictEqual(earlier.tools, later.tools);
 }
 
 /**

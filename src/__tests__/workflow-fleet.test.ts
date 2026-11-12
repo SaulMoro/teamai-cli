@@ -1231,8 +1231,11 @@ describe('fleet entries of one driver definition', () => {
       fleet({ pool: 'e2e', can: { network: true } }),
       { use: 'local' },
       fleet({ pool: 'spare' }),
+      // A member cannot reach a confined step's directory, so the fleet offers no confined offer an entry promises.
+      fleet({ pool: 'jail', can: { confined: [{ level: 'best-effort', tools: ['claude'] }] } }),
     ])).toEqual([
       'The fleet entry for pool "spare" never gets a step: the fleet entry for pool "default" before it offers everything it does, and takes each step first. The two offer the same, so the first takes every step: remove one, or make them offer different things.',
+      'The fleet entry for pool "jail" never gets a step: the fleet entry for pool "default" before it offers everything it does, and takes each step first. The two offer the same, so the first takes every step: remove one, or make them offer different things.',
     ]);
   });
 
