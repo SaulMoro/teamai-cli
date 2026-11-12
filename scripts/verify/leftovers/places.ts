@@ -34,9 +34,6 @@ function cancelOf(world: Pick<World, 'runId' | 'home' | 'members'>, file: string
   return `\`npm run -s verify -- teamai ${world.runId}${member === undefined ? '' : `@${member.name}`} workflow cancel ${keyOf(file).run}\``;
 }
 
-/** The providers no observer reads: seatbelt has no environment to list, and vercel runs on another machine. */
-const UNWATCHED = new Set(['seatbelt', 'vercel']);
-
 export const places: LeftoverKind = {
   title: 'open attempt place',
   onCleanup: {
@@ -70,7 +67,8 @@ export const places: LeftoverKind = {
       return provider === undefined ? [] : [{ file, provider }];
     });
 
-    const observed = sandboxed.length === 0 ? undefined : (await import('../observer.js')).attemptsObserved(world);
+    const observer = sandboxed.length === 0 ? undefined : await import('../observer.js');
+    const observed = observer?.attemptsObserved(world);
 
     const notes = sandboxed.flatMap(({ file, provider }) => {
       const { run, attempt } = keyOf(file);
@@ -79,7 +77,7 @@ export const places: LeftoverKind = {
 
       if (observed?.attempts.has(`${run}/${attempt}`) === true) return [];
 
-      return [UNWATCHED.has(provider)
+      return [observer?.observerReads(provider) === false
         ? `NOT OBSERVED: run ${attemptOf(file)}'s environment on ${provider}, which no observer reads: the env check proves nothing for it`
         : `NOT OBSERVED: run ${attemptOf(file)}'s environment on ${provider}, which no observer line read: its sandbox closed before the observer looked, or could not be read`];
     });

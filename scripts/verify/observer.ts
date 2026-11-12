@@ -43,6 +43,14 @@ function attemptNamed(name: string): string | undefined {
   return parts[0] === 'teamai' && parts.length >= 3 && RUN_ID.test(runId) && ATTEMPT_ID.test(attempt) ? `${runId}/${attempt}` : undefined;
 }
 
+/** Whether the observer reads a provider's sandboxes: seatbelt has none to list, and vercel runs on another machine. A new provider fails the type check until it has a row. */
+const OBSERVER_READS = { docker: true, podman: true, sbx: true, bwrap: true, seatbelt: false, vercel: false } satisfies Record<keyof typeof PROVIDER_COMMANDS, boolean>;
+
+/** Whether the observer reads sandboxes of `provider`, as a record names it; one this harness does not know, it may. */
+export function observerReads(provider: string): boolean {
+  return Object.entries(OBSERVER_READS).find(([name]) => name === provider)?.[1] ?? true;
+}
+
 const ObservedRecordSchema = z.looseObject({ what: z.string(), read: z.number() });
 
 /**
