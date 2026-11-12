@@ -17,7 +17,7 @@ import { errnoCode } from './utils/fs.js';
 import { log } from '@teamai/shared/log';
 import { warnOnce } from './utils/warn-once.js';
 
-const MARKED_TYPES = ['workflows', 'hooks', 'rules', 'mcp', 'benchmarks', 'scorers', 'agents', 'runtimes', 'tools'] as const;
+const MARKED_TYPES = ['workflows', 'hooks', 'rules', 'mcp', 'benchmarks', 'scorers', 'agents', 'runtimes', 'drivers', 'tools'] as const;
 
 export type MarkedType = typeof MARKED_TYPES[number];
 
@@ -84,6 +84,11 @@ export const FOLDER_MARKERS = {
   runtimes: {
     kind: 'Runtime folder',
     marker: 'RUNTIME.yaml',
+    supported: true,
+  },
+  drivers: {
+    kind: 'Driver folder',
+    marker: 'DRIVER.yaml',
     supported: true,
   },
   tools: {

@@ -86,6 +86,33 @@ describe('driver definition names', () => {
     expect(await resolveDriver(self, 'self-box', { personal: true })).toMatchObject({ ok: true, driver: { source: 'team', file: path.join(business, '.teamai', 'drivers', 'self-box.yaml') } });
   });
 
+  it('loads a definition kept as a folder with its DRIVER.yaml, named after the folder, of the team, a namespace or the member, and refuses one name kept both ways', async () => {
+    const team = { ...teamWith([]), projects: ['checkout'] };
+    const at = (file: string): string => path.join(team.repo.localPath, file);
+    fs.mkdirSync(at('manifest'));
+    fs.writeFileSync(at('manifest/projects.yaml'), 'version: 1\nprojects:\n  - id: checkout\n    resources: { workflows: [web] }\n  - id: billing\n    resources: { workflows: [mobile] }\n');
+    const files = {
+      'drivers/acme/DRIVER.yaml': definition('acme'), 'drivers/web/web-box/DRIVER.yaml': definition('web-box'), 'drivers/mobile/mobile-box/DRIVER.yaml': definition('mobile-box'),
+      'drivers/both.yaml': definition('both'), 'drivers/both/DRIVER.yaml': definition('both'),
+    };
+    for (const [file, text] of Object.entries(files)) {
+      fs.mkdirSync(path.dirname(at(file)), { recursive: true });
+      fs.writeFileSync(at(file), text);
+    }
+    fs.mkdirSync(path.join(getTeamaiHomeDir(), 'drivers', 'my_box'), { recursive: true });
+    fs.writeFileSync(path.join(getTeamaiHomeDir(), 'drivers', 'my_box', 'DRIVER.yaml'), definition('my_box'));
+
+    expect(await resolveDriver(team, 'acme', { personal: true })).toMatchObject({ ok: true, driver: { name: 'acme', source: 'team', file: at('drivers/acme/DRIVER.yaml') } });
+    expect(await resolveDriver(team, 'DRIVER', { personal: true })).toMatchObject({ ok: false, failure: { code: 'driver_not_found' } });
+    expect(await resolveDriver(team, 'web-box', { personal: true })).toMatchObject({ ok: true, driver: { name: 'web-box', file: at('drivers/web/web-box/DRIVER.yaml') } });
+    expect(await resolveDriver(team, 'mobile-box', { personal: true })).toMatchObject({ ok: false, failure: { code: 'driver_not_found' } });
+    expect(await resolveDriver(team, 'my_box', { personal: true })).toMatchObject({ ok: true, driver: { name: 'my_box', source: 'personal' } });
+    expect(await resolveDriver(team, 'both', { personal: true })).toEqual({ ok: false, failure: {
+      code: 'driver_namespace_conflict',
+      message: 'Driver "both" is defined twice in one place (drivers/both.yaml and drivers/both/). Keep one, push it, run teamai pull, and start again.',
+    } });
+  });
+
   it('refuses the definitions of a team repo whose drivers folder is a link, reads nothing through it, and runs no teamai default in their place', async () => {
     const team = teamWith([]);
     const outside = fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-drivers-outside-'));

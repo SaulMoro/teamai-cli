@@ -1539,7 +1539,7 @@ teamai workflow resume r1a2b3c4d                 # 在 toy 上继续，即这台
 teamai workflow resume r1a2b3c4d --driver local  # 回到普通的 local；运行也会记住这一点
 ```
 
-teamai 按下面的顺序查找 `<name>.yaml`，使用找到的第一个：
+teamai 按下面的顺序查找 `<name>.yaml`，或存放 `DRIVER.yaml`（内容相同）的文件夹 `<name>/`，使用找到的第一个。同一位置用两种方式定义同一个名字时，失败为 `driver_namespace_conflict`：
 
 | 位置 | 说明 |
 | --- | --- |
