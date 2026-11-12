@@ -1,7 +1,7 @@
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
-import { readRegularFileSync } from '@teamai/shared/regular-file';
+import { readRegularFileSync, writeNewFileSync } from '@teamai/shared/regular-file';
 
 // ─── Copying a hosted sandbox's work back to the host ───
 //
@@ -183,7 +183,7 @@ export function applyTar(entries: TarEntry[], { roots, added = { roots: [], went
       if (entry.kind === 'dir' && existing === undefined) fs.mkdirSync(entry.at, { mode: entry.mode || 0o755 });
 
       if (data !== undefined && (existing === undefined || existing.isFile()) && added.wentIn[entry.at] !== fingerprintOf(data)) {
-        fs.writeFileSync(entry.at, data, { mode: entry.mode || 0o644 });
+        writeNewFileSync(entry.at, data, { mode: entry.mode || 0o644 });
       }
 
       continue;
@@ -210,7 +210,7 @@ export function applyTar(entries: TarEntry[], { roots, added = { roots: [], went
 
         if (data === undefined) break;
         files.set(entry.at, data);
-        fs.writeFileSync(entry.at, data, { mode: entry.mode || 0o644 });
+        writeNewFileSync(entry.at, data, { mode: entry.mode || 0o644 });
         fs.chmodSync(entry.at, entry.mode || 0o644);
         break;
       }

@@ -3,7 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { HOST_PROCESSES, probeBinary } from '@teamai/shared/exec';
-import { readRegularFileSync } from '@teamai/shared/regular-file';
+import { readRegularFileSync, writeRegularFile } from '@teamai/shared/regular-file';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { readVersion } from '@teamai/tool-core/detect';
 import type { ToolFamily } from '@teamai/tool-core/family';
@@ -282,7 +282,7 @@ export function describeFamily(name: string, family: ToolFamily, recordings: Fam
           const transcriptPath = usage.place?.(dir, SESSION_ID) ?? path.join(dir, `${SESSION_ID}.jsonl`);
 
           fs.mkdirSync(path.dirname(transcriptPath), { recursive: true });
-          fs.writeFileSync(transcriptPath, usage.text);
+          await writeRegularFile(transcriptPath, usage.text);
 
           for (const [variable, value] of Object.entries(usage.env?.(dir) ?? {})) vi.stubEnv(variable, value);
 

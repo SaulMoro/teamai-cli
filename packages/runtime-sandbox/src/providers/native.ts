@@ -5,7 +5,7 @@ import path from 'node:path';
 import { z } from 'zod';
 import { PlaceViewSchema, type Can, type RuntimeFailure } from '@teamai/runtime-protocol';
 import { signalGroup } from '@teamai/shared/process-group';
-import { readRegularFileSync } from '@teamai/shared/regular-file';
+import { readRegularFileSync, writeNewFileSync, writeRegularFile } from '@teamai/shared/regular-file';
 import { COMMAND_MS, handleOf, type ExecEnd, type ExecSpec, type Provider } from '../provider.js';
 import { offerSignedIn, type SignInProvider } from '../sign-in.js';
 import { commandsOf, definedOnly, LAUNCHABLE, WORKSPACES } from './cli.js';
@@ -301,7 +301,7 @@ export function nativeProvider({ sandbox, state, env, home }: { sandbox: NativeS
       for (const at of [view.worktree, view.result, view.runDir, ...Object.values(view.toolHome)]) fs.mkdirSync(at, { recursive: true });
 
       for (const sub of ['home', 'tmp', 'pids']) fs.mkdirSync(path.join(dirOf(id), sub), { recursive: true, mode: 0o700 });
-      fs.writeFileSync(path.join(dirOf(id), 'view.json'), JSON.stringify({ view, hostPorts }), { mode: 0o600 });
+      await writeRegularFile(path.join(dirOf(id), 'view.json'), JSON.stringify({ view, hostPorts }), { mode: 0o600 });
 
       return { ok: true, id };
     },
@@ -327,7 +327,7 @@ export function nativeProvider({ sandbox, state, env, home }: { sandbox: NativeS
         const child = spawn('/bin/sh', ['-c', LAUNCH, 'sh', pidsOf(id), command, ...args], { cwd: spec.cwd, env: childEnv, detached: true, stdio: ['ignore', 'pipe', 'pipe', 'pipe'] });
         const pidFile = child.pid === undefined ? undefined : path.join(pidsOf(id), String(child.pid));
 
-        if (pidFile) fs.writeFileSync(pidFile, '');
+        if (pidFile) writeNewFileSync(pidFile, '');
         // Ending the watch pipe ends the group: nothing the step started outlives it, as nothing outlives a bwrap namespace.
         child.on('exit', () => child.stdio[3]?.destroy());
         // Pipes, as stdio asks; typed nullable only because node types no fourth stdio entry.

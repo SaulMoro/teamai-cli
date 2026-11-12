@@ -10,9 +10,8 @@
 
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import { pipeline } from 'node:stream/promises';
 import { pathToFileURL } from 'node:url';
-import { openRegularFile } from '@teamai/shared/regular-file';
+import { copyRegularFile } from '@teamai/shared/regular-file';
 import { WIN_EXEC_EXTENSIONS } from '@teamai/shared/lookpath';
 import type { CommandExecutor } from '@teamai/shared/exec';
 
@@ -41,11 +40,6 @@ export function findSqlite3(platform: NodeJS.Platform = process.platform): strin
   }
 
   return null;
-}
-
-/** Copies `from`, which must be a regular file: a FIFO a tool's process left there is refused, not waited on. */
-async function copyRegularFile(from: string, to: string): Promise<void> {
-  await pipeline((await openRegularFile(from)).createReadStream(), fs.createWriteStream(to));
 }
 
 /**

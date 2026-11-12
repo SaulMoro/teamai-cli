@@ -30,6 +30,7 @@ import { JsonValueSchema } from '@teamai/shared/json';
 import { resolveRealCwd } from '@teamai/tool-core/sessions/fs';
 import { deriveOpencodeMessageIds, deriveTargetSessionId } from '@teamai/tool-core/sessions/ids';
 import type { ExecResult, Processes } from '@teamai/shared/exec';
+import { writeRegularFile } from '@teamai/shared/regular-file';
 
 const OPENCODE_TO_IR_TOOL: ReadonlyMap<string, string> = new Map([
   ['read', 'read_file'],
@@ -604,7 +605,7 @@ export class OpencodeAdapter extends AgentAdapter {
     try {
       const file = path.join(dir, `${sessionId}.json`);
       // The real path, the one OpenCode records for a session started in that directory.
-      fs.writeFileSync(file, JSON.stringify(exportOf(session, sessionId, resolveRealCwd(cwd))));
+      await writeRegularFile(file, JSON.stringify(exportOf(session, sessionId, resolveRealCwd(cwd))));
       const result = await this.session(['import', file, '--directory', resolveRealCwd(cwd)]);
 
       if (result.code !== 0) throw new Error(`opencode session import failed: ${result.stderr.trim() || `exit ${result.code}`}`);

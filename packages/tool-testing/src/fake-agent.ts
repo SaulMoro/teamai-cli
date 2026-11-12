@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { z } from 'zod';
 import { isSameProcess, ProcessIdentitySchema, signalGroup, signalPid, type ProcessIdentity } from '@teamai/shared/process-group';
-import { readRegularFileSync } from '@teamai/shared/regular-file';
+import { readRegularFileSync, writeNewFileSync } from '@teamai/shared/regular-file';
 
 /** What the prompt or the options ask a fake agent to do beyond answering. */
 export const FAKE_AGENT_MARKERS = {
@@ -95,7 +95,7 @@ export function fakeAgent(recording: FakeAgentRecording, options: FakeAgentOptio
   const source = ENGINE.replace('/* before */', () => options.before ?? '').replace('/* answer */', () => recording.script);
 
   fs.mkdirSync(options.bin, { recursive: true });
-  fs.writeFileSync(executable, `#!${process.execPath}\nconst settings = ${JSON.stringify(settings)};\n${source}`, { mode: 0o755 });
+  writeNewFileSync(executable, `#!${process.execPath}\nconst settings = ${JSON.stringify(settings)};\n${source}`, { mode: 0o755 });
 
   return {
     executable,

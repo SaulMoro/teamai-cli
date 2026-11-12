@@ -206,6 +206,15 @@ export async function writeRegularFile(file: string, data: string | Uint8Array, 
   }
 }
 
+/**
+ * Writes `data` to `file` as a new file, for a caller that cannot await `writeRegularFile`: what is at `file` (a file, a
+ * FIFO, a link) is removed first, and the create fails rather than open whatever appears there meanwhile.
+ */
+export function writeNewFileSync(file: string, data: string | Uint8Array, { mode }: { mode?: number } = {}): void {
+  fs.rmSync(file, { force: true });
+  fs.writeFileSync(file, data, { flag: 'wx', ...(mode !== undefined && { mode }) });
+}
+
 const COPY_CHUNK = 1024 * 1024;
 
 /**

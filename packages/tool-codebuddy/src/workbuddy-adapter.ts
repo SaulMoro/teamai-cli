@@ -44,7 +44,7 @@ import { assertSafeSessionFileId, deriveTargetSessionId } from '@teamai/tool-cor
 import { registerWorkBuddySession, unregisterWorkBuddySession } from './workbuddy-store.js';
 import type { Processes } from '@teamai/shared/exec';
 import { log } from '@teamai/shared/log';
-import { readRegularFileSync } from '@teamai/shared/regular-file';
+import { readRegularFileSync, writeRegularFile } from '@teamai/shared/regular-file';
 
 // ---------------------------------------------------------------------------
 // Tool-name normalization map
@@ -713,7 +713,7 @@ export class WorkBuddyAdapter extends AgentAdapter {
     // Write meta.json — keep the real cwd so later reads do not depend on lossy directory-name decoding
     try {
       const metaPath = jsonlPath.replace(/\.jsonl$/, '.meta.json');
-      fs.writeFileSync(
+      await writeRegularFile(
         metaPath,
         JSON.stringify(
           {
@@ -727,7 +727,6 @@ export class WorkBuddyAdapter extends AgentAdapter {
           null,
           2,
         ),
-        'utf-8',
       );
     } catch {
       // A failed meta.json write does not affect the main flow

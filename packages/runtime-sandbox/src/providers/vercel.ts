@@ -6,7 +6,7 @@ import type { Command, Sandbox } from '@vercel/sandbox';
 import { z } from 'zod';
 import { PlaceViewSchema, type Can, type PlaceView, type RuntimeFailure } from '@teamai/runtime-protocol';
 import { mayBeRunning } from '@teamai/shared/process-group';
-import { readRegularFileSync } from '@teamai/shared/regular-file';
+import { readRegularFileSync, writeRegularFile } from '@teamai/shared/regular-file';
 import { boundedTail, STDERR_CHARS } from '../bounded-tail.js';
 import type { JournalId } from '../journal.js';
 import type { ProfileOption, VercelOptions } from '../options.js';
@@ -298,7 +298,7 @@ export function vercelProvider({ options, owner, state, env, home }: { options: 
       if (why !== undefined) return failed(`${why}. No step ran; start again.`);
       const { snapshotId } = await sandbox.snapshot({ expiration: warm.expiration ?? KEPT_MS });
       fs.mkdirSync(path.dirname(warmFile(plan.key)), { recursive: true, mode: 0o700 });
-      fs.writeFileSync(warmFile(plan.key), JSON.stringify({ snapshotId } satisfies z.infer<typeof WarmRecordSchema>), { mode: 0o600 });
+      await writeRegularFile(warmFile(plan.key), JSON.stringify({ snapshotId } satisfies z.infer<typeof WarmRecordSchema>), { mode: 0o600 });
 
       return { ok: true, snapshotId };
     } catch (error) {
@@ -474,7 +474,7 @@ export function vercelProvider({ options, owner, state, env, home }: { options: 
       }
 
       // Written last: a place with a view is one whose copy-in ended.
-      fs.writeFileSync(path.join(dirOf(id), 'view.json'), JSON.stringify({ view, runFiles }), { mode: 0o600 });
+      await writeRegularFile(path.join(dirOf(id), 'view.json'), JSON.stringify({ view, runFiles }), { mode: 0o600 });
 
       return { ok: true, id };
     },
@@ -491,7 +491,7 @@ export function vercelProvider({ options, owner, state, env, home }: { options: 
         const command = await found.sandbox.runCommand({ cmd, args, cwd: spec.cwd, env: spec.env, detached: true });
         const record = path.join(commandsOf(id), command.cmdId);
         fs.mkdirSync(commandsOf(id), { recursive: true });
-        fs.writeFileSync(record, '');
+        await writeRegularFile(record, '');
 
         try {
           for await (const line of command.logs()) onOutput(line.stream, line.data);

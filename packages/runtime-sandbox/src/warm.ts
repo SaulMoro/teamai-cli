@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import type { RuntimeFailure } from '@teamai/runtime-protocol';
 import { mayBeRunning } from '@teamai/shared/process-group';
-import { readRegularFileSync } from '@teamai/shared/regular-file';
+import { readRegularFileSync, writeNewFileSync } from '@teamai/shared/regular-file';
 import type { ProfileOption, WarmOptions } from './options.js';
 import type { Ran } from './providers/cli.js';
 
@@ -188,7 +188,7 @@ export function scratchOf(cache: WarmPlan['cache']) {
   for (const { file, from } of cache) {
     const to = path.join(dir, file);
     fs.mkdirSync(path.dirname(to), { recursive: true });
-    fs.writeFileSync(to, readRegularFileSync(from));
+    writeNewFileSync(to, readRegularFileSync(from));
     // As a copy would: a script the recipe runs stays executable.
     fs.chmodSync(to, fs.statSync(from).mode & 0o7777);
   }

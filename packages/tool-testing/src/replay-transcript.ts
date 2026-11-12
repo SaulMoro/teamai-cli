@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import { writeNewFileSync } from '@teamai/shared/regular-file';
 
 /** Where a recorded session goes: the store, the workspace it belongs to, and its id. */
 export interface ReplayTarget {
@@ -45,6 +46,6 @@ export function replayTranscript(transcript: RecordedTranscript, target: ReplayT
 
   for (const [file, text] of files) {
     fs.mkdirSync(path.dirname(file), { recursive: true });
-    fs.writeFileSync(file, fill(text));
+    writeNewFileSync(file, fill(text));
   }
 }

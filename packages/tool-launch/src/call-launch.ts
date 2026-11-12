@@ -3,7 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import type { CallLaunch } from '@teamai/tool-core/launch';
 import { stoppedOnUsageLimit, toolStdout, type TokenUsage } from '@teamai/tool-core/stdout';
-import { readRegularFile } from '@teamai/shared/regular-file';
+import { readRegularFile, writeRegularFile } from '@teamai/shared/regular-file';
 import { MAX_TIMER_MS } from '@teamai/shared/timer';
 
 /** What a headless run of a tool printed and ended with, and why teamai stopped it, when it did. */
@@ -116,7 +116,7 @@ export async function callLaunch({ tool, prompt, session, timeoutMs, idleTimeout
     const lastMessageFile = path.join(scratch, 'last-message.txt');
     const promptFile = path.join(scratch, 'prompt.md');
 
-    if (call.prompt === 'file') await fs.writeFile(promptFile, prompt);
+    if (call.prompt === 'file') await writeRegularFile(promptFile, prompt);
     const resumed = session !== undefined && call.resume ? call.resume.args(session) : [];
     const streaming = idleTimeoutMs === undefined ? undefined : call.streams;
     const opencodeMajor = tool.family === 'opencode' ? await host.opencodeMajor(tool.executable) : 1;
