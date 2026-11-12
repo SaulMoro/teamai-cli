@@ -357,12 +357,12 @@ export function serve({ input, write: send, journal, warn, provider: providerFor
     write({ event: 'alive', handle, ops: journal.opsOf(placeKey).map(({ op, record }) => execs.reported(op, record)), display: shown(ready, place) });
   };
 
-  /** Removes the place's sandbox, and a judge's filter and network: ok once the provider confirmed they are gone. */
+  /** Removes the place's sandbox, and its filter and network: ok once the provider confirmed they are gone. */
   const removeSandbox = async (place: PlaceRecord | undefined, provider: Provider): Promise<{ ok: true } | { ok: false; failure: RuntimeFailure }> => {
     const found = place ? await sandboxOf(place, provider) : { ok: true as const, id: undefined };
     const destroyed = !found.ok ? found : found.id === undefined ? { ok: true as const } : await provider.destroy(found.id);
 
-    return destroyed.ok && place?.confined && provider.judges ? provider.judges.release(place) : destroyed;
+    return destroyed.ok && place && provider.release ? provider.release(place) : destroyed;
   };
 
   /**

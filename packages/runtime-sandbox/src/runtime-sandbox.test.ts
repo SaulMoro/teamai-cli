@@ -142,12 +142,25 @@ describe('init', () => {
     expect(reply).not.toHaveProperty('ownLogins');
   });
 
-  it('offers a sandbox with the tools the image holds, and declares no network', async () => {
+  it('offers a sandbox with the tools the image holds on docker with node in the image, which runs the network filter, and declares no network', async () => {
+    engine.image(IMAGE, { claude: CLAUDE, node: '' });
     const reply = await init(start(), { provider: 'docker', image: IMAGE });
 
     expect(reply).toMatchObject({ ok: true, can: { isolation: 'sandbox', env: true, unattended: true, setup: true, workspace: ['read-only', 'new', 'continue', 'clone', 'team'], tools: ['claude'] } });
     expect(reply.can).not.toHaveProperty('network');
     expect(reply.can).not.toHaveProperty('hitl');
+  });
+
+  // Without the filter, a step's container reaches every port of this machine (host.docker.internal), so it is no sandbox.
+  it.each<{ label: string; options: Message; tools: Record<string, string> }>([
+    { label: 'docker with no node in the image', options: { provider: 'docker', image: IMAGE }, tools: { claude: CLAUDE } },
+    { label: 'podman, whose rootless network cannot connect the filter', options: { provider: 'podman', image: IMAGE }, tools: { claude: CLAUDE, node: '' } },
+  ])('offers isolation worktree and no unattended step on $label', async ({ options, tools }) => {
+    engine.image(IMAGE, tools);
+    const reply = await init(start(), options);
+
+    expect(reply).toMatchObject({ ok: true, can: { isolation: 'worktree', tools: ['claude'] } });
+    expect(reply.can).not.toHaveProperty('unattended');
   });
 });
 
@@ -1108,7 +1121,8 @@ describe('a prompt attempt in a container', () => {
     second.send({ type: 'close', handle: HANDLE });
     expect(await second.next((message) => message.event === 'closed' || message.event === 'close_failed', 30_000)).toEqual({ event: 'closed', handle: HANDLE });
 
-    expect(engine.calls().slice(before).map(([, command]) => command)).toEqual(['restart', 'rm']);
+    // The removal of its network filter and network, which a sandbox not behind one does not have, finds nothing.
+    expect(engine.calls().slice(before).map(([, command]) => command)).toEqual(['restart', 'rm', 'rm', 'network']);
     expect(engine.containers()).toEqual([]);
   });
 
@@ -1125,7 +1139,7 @@ describe('a prompt attempt in a container', () => {
     second.send({ type: 'close', handle: HANDLE });
     expect(await second.next((message) => message.event === 'closed' || message.event === 'close_failed', 30_000)).toEqual({ event: 'closed', handle: HANDLE });
 
-    expect(engine.calls().slice(before).map(([name, command]) => `${name} ${command}`)).toEqual(['docker rm']);
+    expect(engine.calls().slice(before).map(([name, command]) => `${name} ${command}`)).toEqual(['docker rm', 'docker rm', 'docker network']);
     expect(engine.containers()).toEqual([]);
   });
 
@@ -1174,7 +1188,7 @@ describe('a prompt attempt in a container', () => {
     second.send({ type: 'close', handle: HANDLE });
     expect(await second.next((message) => message.event === 'closed' || message.event === 'close_failed', 30_000)).toEqual({ event: 'closed', handle: HANDLE });
 
-    expect(engine.calls().slice(before).map(([name, command]) => `${name} ${command}`)).toEqual(['docker rm']);
+    expect(engine.calls().slice(before).map(([name, command]) => `${name} ${command}`)).toEqual(['docker rm', 'docker rm', 'docker network']);
   });
 
   it('answers a recover cancel with the end the runtime that ran the exec recorded while the stop ran, never silence', async () => {

@@ -48,7 +48,8 @@ beforeAll(async () => {
 beforeEach(() => {
   dir = tempDir();
   engine = fakeEngine(dir);
-  engine.image(IMAGE, { claude: TOOL, codex: TOOL, opencode: TOOL, 'acme-claude': TOOL });
+  // node runs the network filter that keeps the sandbox from this machine, without which no app's tool runs there.
+  engine.image(IMAGE, { claude: TOOL, codex: TOOL, opencode: TOOL, 'acme-claude': TOOL, node: '' });
   fs.mkdirSync(path.join(dir, 'home'));
   hostBin = path.join(dir, 'host-bin');
   wrappers = path.join(dir, 'wrappers');
@@ -369,7 +370,7 @@ describe('teamai-sandbox-<tool> inside an attempt', () => {
   });
 
   it('passes a signal the app sends the wrapper on to the tool in the sandbox', async () => {
-    engine.image(IMAGE, { claude: "process.on('SIGTERM', () => { require('node:fs').writeFileSync('got-term', 'term'); process.exit(143); }); console.log('started'); setInterval(() => {}, 1000);" });
+    engine.image(IMAGE, { node: '', claude: "process.on('SIGTERM', () => { require('node:fs').writeFileSync('got-term', 'term'); process.exit(143); }); console.log('started'); setInterval(() => {}, 1000);" });
     const connection = start();
     await init(connection);
     const at = place();
@@ -567,7 +568,7 @@ describe('an instance through the wrapper', () => {
 
   it('refuses an instance whose command the sandbox lacks, naming the command', async () => {
     const claudeOnly = 'ghcr.io/acme/claude-only:1';
-    engine.image(claudeOnly, { claude: TOOL });
+    engine.image(claudeOnly, { claude: TOOL, node: '' });
     const connection = start();
     await init(connection, [ACME_CLAUDE], claudeOnly);
     const at = place();

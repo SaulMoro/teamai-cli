@@ -80,8 +80,6 @@ export interface Judges {
    * through only `hosts` (`host:port`), and no credential. Returns its id; an existing one of `key` is that judge's.
    */
   create(key: PlaceKey, { dir, hosts }: { dir: string; hosts: string[] }): Promise<{ ok: true; id: string } | { ok: false; failure: RuntimeFailure }>;
-  /** Removes what a judge's sandbox needed besides itself: its network and the filter in front of it. */
-  release(key: PlaceKey): Promise<{ ok: true } | { ok: false; failure: RuntimeFailure }>;
 }
 
 /**
@@ -155,6 +153,11 @@ interface Sandboxing {
   reachesHost?(port: number, variable: string): Promise<{ ok: true } | { ok: false; failure: RuntimeFailure }>;
   /** The sandboxes of judges, on a provider that can confine one; a provider without them offers no confined prompt. */
   judges?: Judges;
+  /**
+   * Removes what the sandbox of `key`, a step's or a judge's, needed besides itself: its network and the filter in front
+   * of it, ok when it had none. Called once the sandbox is gone, at close and by a sweep.
+   */
+  release?(key: PlaceKey): Promise<{ ok: true } | { ok: false; failure: RuntimeFailure }>;
   /**
    * How a process outside this runtime, the sandbox wrapper, starts `spec.argv` in sandbox `id` with its stdin open:
    * the command line, and the whole environment to run it with, which holds every value; the argv names variables only.
