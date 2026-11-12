@@ -26,7 +26,7 @@ import { attemptRun, credentialSecrets, HeldPlace, isExecRuntimeTool, readAttemp
 import { answerCallTool, hostStepRuntime } from '../../runtimes/host.js';
 import { writeHeldSteps, type HeldSteps } from '../../runtimes/held.js';
 import { closeAfterSweep, endLeftLogins, stopLeftInProcess, stopOnRecordedDriver } from '../../runtimes/cancelled.js';
-import { loginHolder } from '../../runtimes/login.js';
+import { LOGIN_TOOLS, loginHolder } from '../../runtimes/login.js';
 import { toolsLaunchDeps, type EngineOptions, type OpenedDriver } from '../../runtimes/sources.js';
 import { newOpId, type ExecAnswer, type ExecQuestion, type StepRuntime } from '@teamai/runtime-protocol/step-runtime';
 import { resumeOrPublish, retryCommand } from '../../runtimes/retry-command.js';
@@ -273,9 +273,11 @@ const LocalLeaseSchema = LeaseWireSchema.or(z.preprocess((raw) => (isRecord(raw)
  * then fails, and the workspace it was preparing is removed. A prompt step's place is prepared for `launches`, the tool
  * `promptReport` launches there, when the lease names none.
  */
-async function stageLease(lease: StagedLease, { config, lock, root, env, mode, signal, launches, setUpOn, runsOn }: {
+async function stageLease(lease: StagedLease, { config, lock, root, env, mode, signal, launches, setUpOn, runsOn, leftRunning }: {
   config: LocalConfig;
   lock: RunLock;
+  /** The attempts whose earlier run left a process no stop here confirms ended, which `stopLeftHere` adds to. */
+  leftRunning: Set<string>;
   root: string;
   env: WorkflowEnv;
   mode: RunMode;
@@ -289,7 +291,9 @@ async function stageLease(lease: StagedLease, { config, lock, root, env, mode, s
   if (lease.unreadableWorkspace) return unreadablePlace(lock.run);
   // A lease is handed back to a driver after one of this run was killed: the setup or command that one left running
   // in the attempt's place is stopped before the attempt is staged again.
-  await stopRecordedGroup(attemptDir(config, lock.run, lease.attempt));
+  const leftHere = await stopLeftHere({ config, run: lock.run, attempt: lease.attempt, step: lease.step, leftRunning });
+
+  if (leftHere) return leftHere;
   // So is what a killed teamai left on a step runtime, which may write into the place by its path: on another runtime,
   // through the driver recorded for it; on this one, its setup here.
   const moved = await stopLeftElsewhere({ config, run: lock.run, attempt: lease.attempt, runsOn, checkout: root });
@@ -323,6 +327,23 @@ async function stageLease(lease: StagedLease, { config, lock, root, env, mode, s
   if (prepared.prompt !== undefined) lease.prompt = prepared.prompt;
 
   return setUpOn ? undefined : runPlaceSetup({ config, run: lock.run, attempt: lease.attempt, mode, env, signal });
+}
+
+/**
+ * Stops what a killed teamai left running in attempt `attempt`'s place here before the attempt runs again. A process
+ * no stop confirms ended may still run, its tool on the login the attempt holds: the attempt does not run beside it, and
+ * is added to `leftRunning`, whose login its close keeps.
+ */
+async function stopLeftHere({ config, run, attempt, step, leftRunning }: { config: LocalConfig; run: RunId; attempt: StagedLease['attempt']; step: string; leftRunning: Set<string> }): Promise<WorkflowFailure | undefined> {
+  const left = await stopRecordedGroup(attemptDir(config, run, attempt));
+
+  if (left.length === 0) return undefined;
+  leftRunning.add(attempt);
+
+  return {
+    code: 'runtime_lost',
+    message: `teamai could not confirm that process ${left.join(', ')}, which an earlier run of attempt ${attempt} of run ${run} left, ended, so the step did not run again beside it. Once that process has ended, run teamai workflow retry ${run} ${step}.`,
+  };
 }
 
 /**
@@ -711,6 +732,7 @@ async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, given: 
   // The runtime each open attempt runs on, and the handle of its place, until its report is recorded or its place abandoned.
   const slotOf = new Map<string, RuntimeSlot>();
   const attemptRuns = new Map<string, AttemptRun>();
+  const leftRunning = new Set<string>();
   // The place of each attempt on a runtime in this process, by the runtime that opened it.
   const localHandles = new Map<string, { runtime: StepRuntime<DriverCan>; handle: string }>();
 
@@ -799,7 +821,10 @@ async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, given: 
     // still run its tool, so it keeps the login until a person stops that tool.
     if (notClosed) log.warn(notClosed.message);
 
-    // One in teamai's process left its tool home under the attempt, which a killed judge refreshed its login in.
+    // One in teamai's process left its tool home under the attempt, which a killed judge refreshed its login in. One
+    // that did not run again beside what its earlier run left keeps its login while that may still use it.
+    if (slot?.kind !== 'external' && leftRunning.has(attempt)) return keepLeftLogins(attempt);
+
     if (slot?.kind !== 'external') return endLeftLogins(config, runId, attempt);
 
     if (!notClosed) {
@@ -813,6 +838,16 @@ async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, given: 
 
       if (holder?.run === runId && holder.attempt === attempt) {
         log.warn(`The ${tool} login teamai keeps stays held by attempt ${attempt} of run ${runId}, whose tool may still run. Stop that tool on its step runtime; once run ${runId} has ended, run teamai workflow cancel ${runId} --release ${attempt}, which lets the attempt go and ends its login.`);
+      }
+    }
+  };
+
+  const keepLeftLogins = async (attempt: AttemptId): Promise<void> => {
+    for (const tool of LOGIN_TOOLS) {
+      const holder = await loginHolder(tool);
+
+      if (holder?.run === runId && holder.attempt === attempt) {
+        log.warn(`The ${tool} login teamai keeps stays held by attempt ${attempt} of run ${runId}, whose tool an earlier run left and may still run. Once that process has ended and run ${runId} has ended, run teamai workflow cancel ${runId} --release ${attempt}, which lets the attempt go and ends its login.`);
       }
     }
   };
@@ -1409,7 +1444,7 @@ async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, given: 
         inFlight.set(lease.attempt, { lease, command: stageThenStart(
           lease,
           async (signal) => {
-            const staged = await stageLease(lease, { config, lock, root, env: turn, mode, signal, setUpOn: runOf(lease), runsOn: externalOf(lease) });
+            const staged = await stageLease(lease, { config, lock, root, env: turn, mode, signal, setUpOn: runOf(lease), runsOn: externalOf(lease), leftRunning });
 
             return staged ?? refuseDirtyAdoptedCommand({ config, run: lock.run, attempt: lease.attempt });
           },
@@ -1482,7 +1517,7 @@ async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, given: 
           const { confined: place, prompt } = lease;
 
           if (lease.answer && prompt !== undefined) {
-            const failure = await stageLease(lease, { config, lock, root, env: turn, mode, signal: controller.signal, runsOn: externalOf(lease) });
+            const failure = await stageLease(lease, { config, lock, root, env: turn, mode, signal: controller.signal, runsOn: externalOf(lease), leftRunning });
             const before = await beforeLaunch(lease, { signal: controller.signal, failure, slot: slotOf.get(lease.attempt) });
 
             if (before.kind !== 'launch') return before.kind === 'ends' ? before.report : undefined;
@@ -1496,8 +1531,8 @@ async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, given: 
             const slot = slotOf.get(lease.attempt);
             const onRuntime = runOf(lease);
 
-            if (!onRuntime) await stopRecordedGroup(attemptDir(config, runId, lease.attempt));
-            const moved = await stopLeftElsewhere({ config, run: runId, attempt: lease.attempt, runsOn: externalOf(lease), checkout: root });
+            const leftHere = onRuntime ? undefined : await stopLeftHere({ config, run: runId, attempt: lease.attempt, step: lease.step, leftRunning });
+            const moved = leftHere ?? await stopLeftElsewhere({ config, run: runId, attempt: lease.attempt, runsOn: externalOf(lease), checkout: root });
 
             if (!startable(lease, controller.signal)) return undefined;
 
@@ -1519,7 +1554,7 @@ async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, given: 
           // A role copy is checked and delivered for the tool the step launches, so another tool the member enables does not refuse it.
           const slot = slotOf.get(lease.attempt);
           const launch = lease.role !== undefined ? launchToolFor({ agent: lease.agent, tool: lease.tool }, config, options.tools ?? {}, await memberTools(config), slot?.can.default_tool) : undefined;
-          const failure = await stageLease(lease, { config, lock, root, env: turn, mode, signal: controller.signal, launches: launch?.ok ? launch.target.name : undefined, setUpOn: runOf(lease), runsOn: externalOf(lease) });
+          const failure = await stageLease(lease, { config, lock, root, env: turn, mode, signal: controller.signal, launches: launch?.ok ? launch.target.name : undefined, setUpOn: runOf(lease), runsOn: externalOf(lease), leftRunning });
 
           const before = await beforeLaunch(lease, { signal: controller.signal, failure, slot });
 

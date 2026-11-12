@@ -2,7 +2,7 @@ import { execFileSync, spawn } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, onTestFinished, vi } from 'vitest';
 import { type LocalConfig } from '../types.js';
 import { leaseNext, reportAttempt } from '../workflow/engine.js';
 import { LeaseIdSchema } from '../workflow/lease-wire.js';
@@ -15,7 +15,7 @@ import { attemptRuntimePath, attemptToolHome } from '../workflow/runtimes/attemp
 import { stopCancelledAttempts } from '../workflow/runtimes/cancelled.js';
 import { isSkillRunnerHolding } from '../workflow/drivers/skill/skill-driver.js';
 import { log } from '@teamai/shared/log';
-import { holdLogin, holdLoginFrom, loginHolder, loginHome } from '../workflow/runtimes/login.js';
+import { holdLogin, holdLoginFrom, loginHolder, loginHome, loginLockFile } from '../workflow/runtimes/login.js';
 import { knownSecrets } from '../env-resolution.js';
 import { alive, dirs, exitsWithin, LOG, parallelFixture, toolPaths, TWO_BARRIERS, workflowFixture } from './helpers/workflow-local-driver-fixture.js';
 import { recordGroup } from '@teamai/shared/process-group';
@@ -616,6 +616,43 @@ steps:
     expect(await runLocalDriver(config, runId, workspace)).toMatchObject({ data: { done: { outcome: 'succeeded' } } });
 
     expect(await loginHolder('codex')).toBeUndefined();
+  });
+
+  it('runs no attempt again beside what a killed driver left of it that no stop confirms ended, and keeps the Codex login its judge held', async () => {
+    const { config, workspace, runId } = await workflowFixture(`schemaVersion: v1alpha1
+name: build
+description: A step whose earlier driver was killed while its Codex judge held the member's login.
+steps:
+  - id: check
+    command: "touch ran"
+`);
+    const leased = await leaseNext(config, runId, driverIdentity('local', workspace));
+    if (!('data' in leased)) throw new Error(leased.error.message);
+    const run = RunIdSchema.parse(runId);
+    const attempt = LeaseIdSchema.parse(leased.data.lease).attempt;
+    const daily = path.join(path.dirname(workspace), 'codex');
+    const login = (refresh: string): string => JSON.stringify({ auth_mode: 'chatgpt', tokens: { account_id: 'acct-1', refresh_token: refresh } });
+    fs.mkdirSync(daily);
+    fs.writeFileSync(path.join(daily, 'auth.json'), login('refresh-1'), { mode: 0o600 });
+    const toolHome = attemptToolHome(config, run, attempt, 'codex');
+    expect((await holdLoginFrom({ tool: 'codex', executable: 'codex', from: daily, toolHome, run, attempt, signal: new AbortController().signal })).ok).toBe(true);
+    fs.writeFileSync(path.join(toolHome, 'auth.json'), login('refresh-2'));
+    // A group another pid namespace started, which no stop here can reach or tell ended: its Codex may still run.
+    fs.writeFileSync(path.join(attemptDir(config, run, attempt), 'group-424242.json'), JSON.stringify({ pid: 424242, spawnedAt: Date.now(), pidNamespace: 'pid:[1]' }));
+    const warn = vi.spyOn(log, 'warn').mockImplementation(() => undefined);
+    onTestFinished(() => { fs.rmSync(loginLockFile('codex'), { force: true }); });
+
+    await runLocalDriver(config, runId, workspace);
+
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining(`The codex login teamai keeps stays held by attempt ${attempt} of run ${run}, whose tool an earlier run left and may still run.`));
+    expect({
+      ran: fs.existsSync(path.join(workspace, 'ran')),
+      daily: JSON.parse(fs.readFileSync(path.join(daily, 'auth.json'), 'utf8')).tokens.refresh_token,
+      holder: await loginHolder('codex'),
+    }).toEqual({ ran: false, daily: 'refresh-1', holder: expect.objectContaining({ run, attempt }) });
+    expect(await readRun(config, runId)).toMatchObject({
+      steps: [{ id: 'check', status: 'failed', failure: { code: 'runtime_lost', message: expect.stringContaining('teamai could not confirm that process 424242') } }],
+    });
   });
 
   // Codex rotates its refresh token on a refresh and refuses the old one after (refresh_token_reused).
