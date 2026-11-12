@@ -13,6 +13,7 @@ import { type WorkflowEnv } from '../../env-resolution.js';
 import { launchEnv, workflowLaunch, type RunMode } from '../../launch-context.js';
 import type { LocalConfig, TeamaiConfig } from '../../types.js';
 import { writeJsonAtomic } from '../../utils/fs.js';
+import { entriesUnder } from '@teamai/shared/entries-under';
 import { log } from '@teamai/shared/log';
 import { AgentSession, type AgentSessionRef } from '../../session-flow/agent-session.js';
 import { type SessionArchive } from '../../session-flow/archive.js';
@@ -760,7 +761,17 @@ async function removeGitLocks(gitDir: string): Promise<void> {
 
   if (!await isDirectory(gitDir)) return;
   const top = await fs.readdir(gitDir).catch((): string[] => []);
-  const refs = await isDirectory(path.join(gitDir, 'refs')) ? await fs.readdir(path.join(gitDir, 'refs'), { recursive: true }).catch((): string[] => []) : [];
+  // The walk enters no link under refs, which the agent may have made too: one out of the clone would lose a lock there.
+  const refs = await isDirectory(path.join(gitDir, 'refs')) ? refsUnder(path.join(gitDir, 'refs')) : [];
   const locks = [...top.map((name) => path.join(gitDir, name)), ...refs.map((name) => path.join(gitDir, 'refs', name))].filter((at) => at.endsWith('.lock'));
   await Promise.all(locks.map((lock) => fs.rm(lock, { force: true })));
+}
+
+/** The paths under `refs`, from it; none when it cannot be read, such as when it went away. */
+function refsUnder(refs: string): string[] {
+  try {
+    return entriesUnder(refs).map(({ relative }) => relative);
+  } catch {
+    return [];
+  }
 }

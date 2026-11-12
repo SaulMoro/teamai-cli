@@ -574,6 +574,29 @@ sandbox_mode = "read-only"
     });
   });
 
+  it('removes the git locks a timed-out tool left in its checkout, and none behind a link it made under .git/refs', async () => {
+    const { config, workspace, runId } = await fixture();
+    const outside = path.join(path.dirname(workspace), 'outside');
+    fs.mkdirSync(outside);
+    fs.writeFileSync(path.join(outside, 'kept.lock'), '');
+    const adapter: StepLauncher = {
+      runInteractive: vi.fn(),
+      run: vi.fn(async (_tool, input) => {
+        const refs = path.join(input.cwd, '.git', 'refs');
+        fs.writeFileSync(path.join(input.cwd, '.git', 'index.lock'), '');
+        fs.writeFileSync(path.join(refs, 'heads', 'main.lock'), '');
+        fs.symlinkSync(outside, path.join(refs, 'outside'));
+        return { started: true as const, exitCode: 143, stoppedBy: 'timeout' as const };
+      }),
+    };
+
+    await runLocalDriver(config, runId, workspace, { adapter, toolPaths });
+
+    expect(adapter.run).toHaveBeenCalledTimes(1);
+    expect([fs.existsSync(path.join(workspace, '.git', 'index.lock')), fs.existsSync(path.join(workspace, '.git', 'refs', 'heads', 'main.lock'))]).toEqual([false, false]);
+    expect(fs.readdirSync(outside)).toEqual(['kept.lock']);
+  });
+
   it('publishes the failure code it sets when the tool is not on PATH', async () => {
     const { config, workspace, runId } = await fixture();
 
