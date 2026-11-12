@@ -17,6 +17,7 @@
 import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
+import { signalPid } from '@teamai/shared/process-group';
 import { z } from 'zod';
 import { runLedger } from './verify/ledger.js';
 import { createWorld, REPO_ROOT, runInWorld, saveWorld, TEAM_URL, worldFiles, type World } from './verify/world.js';
@@ -193,13 +194,8 @@ function subcommand(argv: readonly string[]): string {
 const REMOTE_GIT = new Set(['fetch', 'pull', 'push', 'ls-remote', 'clone']);
 
 function isAlive(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-
-    return true;
-  } catch (error) {
-    return error instanceof Error && 'code' in error && error.code === 'EPERM';
-  }
+  // A pid another user's process has is alive, and one that cannot be signalled is not taken for gone.
+  return signalPid(pid, 0) !== 'gone';
 }
 
 const sizeOf = (file: string): number => (fs.existsSync(file) ? fs.statSync(file).size : 0);

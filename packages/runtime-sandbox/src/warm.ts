@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import type { RuntimeFailure } from '@teamai/runtime-protocol';
+import { signalPid } from '@teamai/shared/process-group';
 import { readRegularFileSync } from '@teamai/shared/regular-file';
 import type { WarmOptions } from './options.js';
 import type { Ran } from './providers/cli.js';
@@ -35,15 +36,8 @@ export const WARM_BY = `${os.hostname()}:${process.pid}`;
 
 /** Whether `pid` names a process that runs, or one this process may not signal; a pid it cannot read is taken as running. */
 export function isRunning(pid: number): boolean {
-  if (!Number.isSafeInteger(pid) || pid <= 0) return true;
-
-  try {
-    process.kill(pid, 0);
-
-    return true;
-  } catch (error) {
-    return error instanceof Error && 'code' in error && error.code === 'EPERM';
-  }
+  // `refused`: a pid that names no one process, which cannot be read.
+  return signalPid(pid, 0) !== 'gone';
 }
 
 /** Whether `by`, what a scratch sandbox's WARM_BY says, names a process of this machine that no longer runs. */

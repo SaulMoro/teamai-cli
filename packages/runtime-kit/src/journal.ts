@@ -2,6 +2,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { z } from 'zod';
+import { signalPid } from '@teamai/shared/process-group';
 import { readRegularFileSync } from '@teamai/shared/regular-file';
 
 // ─── What a runtime keeps across its own processes ───────
@@ -142,13 +143,8 @@ function releaseHold({ file, text }: { file: string; text: string }): void {
 
 /** Whether a process runs: one another user runs is alive though it cannot be signalled. */
 function isAlive(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-
-    return true;
-  } catch (error) {
-    return error instanceof Error && 'code' in error && error.code === 'EPERM';
-  }
+  // A pid another user's process has is alive, and one that cannot be signalled is not taken for gone.
+  return signalPid(pid, 0) !== 'gone';
 }
 
 /** Holds `file` for one process at a time, waiting while a live one holds it, and taking it from one gone or stuck. */

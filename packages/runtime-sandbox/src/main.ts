@@ -3,6 +3,7 @@ import path from 'node:path';
 import { WRAPPER_PREFIX } from '@teamai/runtime-kit/outer';
 import { isStartedByTeamai } from '@teamai/runtime-kit/serve';
 import { getUserHome } from '@teamai/shared/home';
+import { signalPid } from '@teamai/shared/process-group';
 import { journal } from './journal.js';
 import type { RuntimeMessage } from '@teamai/runtime-protocol';
 import type { SandboxOptions } from './options.js';
@@ -71,7 +72,7 @@ if (PLATFORM === 'win32' && (wrapper !== undefined || !isStartedByTeamai(process
 } else {
   const end = await toolExec({ ...wrapper, env: process.env, cwd: process.cwd(), journal: sandboxJournal });
 
-  if ('signal' in end) process.kill(process.pid, end.signal);
+  if ('signal' in end) signalPid(process.pid, end.signal);
   else process.exit(end.code);
 }
 

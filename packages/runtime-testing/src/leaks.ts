@@ -1,5 +1,6 @@
 import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
+import { signalPid } from '@teamai/shared/process-group';
 import { z } from 'zod';
 import type { Connection } from './connect.js';
 
@@ -18,13 +19,8 @@ export function processesUnder(dir: string): string[] {
 
 /** Whether the process `pid` runs. */
 function isAlive(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-
-    return true;
-  } catch (error) {
-    return error instanceof Error && 'code' in error && error.code === 'EPERM';
-  }
+  // A pid another user's process has is alive, and one that cannot be signalled is not taken for gone.
+  return signalPid(pid, 0) !== 'gone';
 }
 
 /** An answer about a place that names what the runtime leaves of it on purpose. */

@@ -16,7 +16,7 @@ import os from 'node:os';
 import path from 'node:path';
 import type { ChildProcess } from 'node:child_process';
 import { spawnCommand } from '@teamai/shared/exec';
-import { ownGroups } from '@teamai/shared/process-group';
+import { ownGroups, signalPid } from '@teamai/shared/process-group';
 import { resolveTeamaiEntryScript } from './builtin-hooks.js';
 import { resolveConfigForDir } from './config.js';
 import { reportMissingSecrets } from './env-advisories.js';
@@ -133,7 +133,7 @@ export function exitLike(outcome: ExecOutcome): void {
     case 'signaled':
       process.exitCode = 128 + os.constants.signals[outcome.signal];
 
-      if (!SURVIVED_SIGNALS.has(outcome.signal)) process.kill(process.pid, outcome.signal);
+      if (!SURVIVED_SIGNALS.has(outcome.signal)) signalPid(process.pid, outcome.signal);
 
       return;
     default: {

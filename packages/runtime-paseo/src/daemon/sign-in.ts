@@ -1,6 +1,7 @@
 import { execFile } from 'node:child_process';
 import path from 'node:path';
 import { spawnCommand } from '@teamai/shared/exec';
+import { signalGroup } from '@teamai/shared/process-group';
 import { z } from 'zod';
 
 // ─── A tool's sign-in on the daemon's host ───────────────
@@ -65,7 +66,7 @@ export function codexLoginStatus(codex: string, env?: NodeJS.ProcessEnv): Promis
         if (child.pid === undefined) child.kill('SIGKILL');
         // A taskkill that cannot run leaves the process teamai started to be killed on its own, as on POSIX.
         else if (isWindows) execFile('taskkill', ['/pid', String(child.pid), '/T', '/F'], { windowsHide: true }, (error) => { if (error) child.kill('SIGKILL'); });
-        else process.kill(-child.pid, 'SIGKILL');
+        else signalGroup(child.pid, 'SIGKILL');
       } catch {
         child.kill('SIGKILL');
       }
