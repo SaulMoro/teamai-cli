@@ -3,7 +3,6 @@
  * world named, whose writes are recorded as sbx's. Each sandbox provider's readiness, the driver host command each step
  * runtime declares, each tool's cheapest model, and the keys present, by name. Loaded only by `doctor`.
  */
-import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import { z } from 'zod';
@@ -12,8 +11,7 @@ import { PROVIDER_COMMANDS } from '../../packages/runtime-sandbox/src/provider-c
 import { VERCEL_AUTH } from '../../packages/runtime-sandbox/src/providers/vercel.js';
 import { priceTokens } from '../../src/token-usage/pricing.js';
 import { captureOn } from './target.js';
-import { errnoCode } from '../../src/utils/fs.js';
-import { hostCommand, recordWriters, runtimeHostCommands, TOOL_COMMANDS, worldFiles, worldWritersFile, type World } from './world.js';
+import { hostCommand, recordWriters, runProbe, runtimeHostCommands, TOOL_COMMANDS, worldFiles, worldWritersFile, type World } from './world.js';
 
 /**
  * What `argv` printed, or why it could not say: its command as a world's `tools` links it (`hostCommand`), run in the
@@ -30,14 +28,11 @@ export function probeHostCommand(argv: readonly string[], { timeoutMs = 20_000 }
   }
 
   if (command === undefined) return { ok: false, why: 'not installed' };
-  // KILL, not TERM: a command that ignores TERM would hold the probe past its time.
-  const ran = spawnSync(command, args, { cwd: os.tmpdir(), encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: timeoutMs, killSignal: 'SIGKILL', maxBuffer: 64 * 1024 ** 2 });
+  const ran = runProbe({ command, args, shown: argv, cwd: os.tmpdir(), timeoutMs });
 
-  if (ran.error !== undefined && errnoCode(ran.error) === 'ETIMEDOUT') return { ok: false, why: `NOT OBSERVED: ${argv.join(' ')} did not answer within ${timeoutMs / 1000} s` };
+  if (ran.errno !== undefined) return { ok: false, why: ran.errno === 'ENOENT' ? 'not installed' : ran.why };
 
-  if (ran.error !== undefined) return { ok: false, why: errnoCode(ran.error) === 'ENOENT' ? 'not installed' : ran.error.message };
-
-  if (ran.status !== 0) return { ok: false, why: ran.stderr.trim().split('\n').at(-1) || `exit ${ran.status}` };
+  if (ran.code !== 0) return { ok: false, why: ran.stderr.trim().split('\n').at(-1) || `exit ${ran.code}` };
 
   return { ok: true, first: ran.stdout.trim().split('\n')[0] ?? '', stdout: ran.stdout };
 }

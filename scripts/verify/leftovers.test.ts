@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { signalChild } from '@teamai/shared/process-group';
-import { attributeLeftover, cleanupPlan, linesOf, planCleanup, worldTier, type WorldTies } from './leftovers.js';
+import { attributeLeftover, cleanupPlan, linesOf, planCleanup, probeHere, worldTier, type WorldTies } from './leftovers.js';
 import type { World } from './world.js';
 
 const roots: string[] = [];
@@ -183,5 +183,19 @@ describe('what cleanup prints when it refuses', () => {
     } finally {
       signalChild(left, 'SIGKILL');
     }
+  });
+});
+
+describe("a probe of an engine's listing", () => {
+  it('ends one that ignores TERM at its time, and says NOT OBSERVED', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'leftovers-probe-'));
+    roots.push(root);
+    // As an engine CLI stuck on a daemon that never answers, and that a TERM does not stop.
+    const engine = path.join(root, 'engine');
+    fs.writeFileSync(engine, '#!/bin/sh\ntrap "" TERM\nexec sleep 30\n', { mode: 0o755 });
+    const started = Date.now();
+
+    expect(probeHere([engine, 'ps'], { timeoutMs: 300 })).toEqual({ kind: 'ran', code: null, stdout: '', why: `NOT OBSERVED: ${engine} ps did not answer within 0.3 s` });
+    expect(Date.now() - started).toBeLessThan(5_000);
   });
 });

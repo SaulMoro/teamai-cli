@@ -3,13 +3,13 @@
  * the ledger's uninstall) runs it through `runOn`, which builds its environment, shows and logs its output, and records
  * what a member's own program wrote.
  */
-import { spawn, spawnSync } from 'node:child_process';
+import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { lineRedactor, worldRedactor } from './secrets.js';
 import { MEMBER_NAME } from './members.js';
 import { sandboxJournalRoot } from '../../packages/runtime-sandbox/src/journal-root.js';
-import { markDriverSeen, recordWriters, refuseCleaned, runtimeStateDirs, updateWorld, worldFiles, worldHomes, worldWritersFile, writeCommandLog, type Member, type World } from './world.js';
+import { markDriverSeen, recordWriters, refuseCleaned, runProbe, runtimeStateDirs, updateWorld, worldFiles, worldHomes, worldWritersFile, writeCommandLog, type Member, type World } from './world.js';
 
 export type Target = { kind: 'world' } | { kind: 'member'; name: string };
 
@@ -229,9 +229,9 @@ export function captureOn(world: World, target: Target, argv: readonly string[],
   const place = placeOf(world, target);
   // From /, so the probe's own processes name no path of the world.
   const { command, args, env } = commandOf(world, { ...place, env: place.env ?? Object.fromEntries(Object.entries(process.env).flatMap(([name, value]) => (value === undefined ? [] : [[name, value]]))) }, argv, { pass: new Map(), cwd: '/' });
-  const ran = spawnSync(command, args, { cwd: '/', env, encoding: 'utf8', timeout: timeoutMs, maxBuffer: 256 * 1024 ** 2 });
+  const { code, stdout, why } = runProbe({ command, args, shown: argv, cwd: '/', env, timeoutMs, maxBuffer: 256 * 1024 ** 2 });
 
-  return { code: ran.error === undefined ? ran.status : null, stdout: ran.stdout ?? '', why: ran.error?.message ?? ran.stderr?.trim().split('\n').at(-1) ?? '' };
+  return { code, stdout, why };
 }
 
 /** Each machine a world's commands run on: this one, whose process table every member on it shares, and each member's container. */

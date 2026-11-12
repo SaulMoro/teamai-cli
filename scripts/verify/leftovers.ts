@@ -6,13 +6,12 @@
  * A world that ran no step runtime pays for the process check alone; the rows that ask an engine are loaded only once
  * the world's own records show a runtime outside teamai's process ran (`worldTier`).
  */
-import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { z } from 'zod';
 import { ledgerRedactor } from './secrets.js';
-import { markDriverSeen, runtimeStateDirs, worldHomes, WORLDS_ROOT, type World } from './world.js';
+import { markDriverSeen, runProbe, runtimeStateDirs, worldHomes, WORLDS_ROOT, type World } from './world.js';
 
 /** Whose a leftover is: this world's (a LEAK), another world's, teamai's but no world's, or nothing of teamai's. */
 export type Attribution =
@@ -122,15 +121,16 @@ export interface LeftoverKind {
 
 /**
  * Runs an engine's listing with the harness's own environment, never the world's, so asking writes nothing into a HOME
- * of the world: `missing` when the command is not installed, `ran` with its exit code otherwise (null when it timed out).
+ * of the world: `missing` when the command is not installed, `ran` with its exit code otherwise (null, and a NOT OBSERVED
+ * reason, when it did not answer within `timeoutMs`).
  */
 export function probeHere(argv: readonly string[], { timeoutMs = 30_000 }: { timeoutMs?: number } = {}): { kind: 'missing' } | { kind: 'ran'; code: number | null; stdout: string; why: string } {
   const [command = 'true', ...args] = argv;
-  const ran = spawnSync(command, args, { cwd: os.tmpdir(), env: process.env, encoding: 'utf8', timeout: timeoutMs, maxBuffer: 64 * 1024 ** 2 });
+  const ran = runProbe({ command, args, cwd: os.tmpdir(), env: process.env, timeoutMs });
 
-  if (ran.error !== undefined && 'code' in ran.error && ran.error.code === 'ENOENT') return { kind: 'missing' };
+  if (ran.errno === 'ENOENT') return { kind: 'missing' };
 
-  return { kind: 'ran', code: ran.error === undefined ? ran.status : null, stdout: ran.stdout ?? '', why: ran.error?.message ?? ran.stderr?.trim().split('\n').at(-1) ?? '' };
+  return { kind: 'ran', code: ran.code, stdout: ran.stdout, why: ran.why };
 }
 
 /** The data homes under `home` whose runs teamai keeps: user scope's ~/.teamai and each workspace's ~/.teamai/projects/<slug>, read with the product's own layout. */

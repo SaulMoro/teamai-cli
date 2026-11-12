@@ -216,6 +216,28 @@ export function hostCommand(name: string): string | undefined {
   return at === '' ? undefined : at;
 }
 
+/** What a probe answered: its exit code, null when it did not end on its own, what it printed, and why it failed. */
+export interface Probed {
+  code: number | null;
+  stdout: string;
+  stderr: string;
+  why: string;
+  /** The errno of a probe that could not run or did not end, such as ENOENT or ETIMEDOUT. */
+  errno?: string;
+}
+
+/**
+ * Runs a probe that ends within `timeoutMs`: KILL, not TERM, at its time, since a command that ignores TERM would hold
+ * the probe past it. `why` says NOT OBSERVED, naming `shown`, for one that did not answer in time.
+ */
+export function runProbe({ command, args, shown = [command, ...args], cwd, env, timeoutMs, maxBuffer = 64 * 1024 ** 2 }: { command: string; args: readonly string[]; shown?: readonly string[]; cwd: string; env?: NodeJS.ProcessEnv; timeoutMs: number; maxBuffer?: number }): Probed {
+  const ran = spawnSync(command, args, { cwd, env, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: timeoutMs, killSignal: 'SIGKILL', maxBuffer });
+  const errno = ran.error === undefined ? undefined : errnoCode(ran.error);
+  const why = errno === 'ETIMEDOUT' ? `NOT OBSERVED: ${shown.join(' ')} did not answer within ${timeoutMs / 1000} s` : ran.error?.message ?? ran.stderr?.trim().split('\n').at(-1) ?? '';
+
+  return { code: ran.error === undefined ? ran.status : null, stdout: ran.stdout ?? '', stderr: ran.stderr ?? '', why, ...(errno !== undefined && { errno }) };
+}
+
 /**
  * Links each host command a world may run into `tools`, alone. Its folder would bring every other command there, such
  * as a launcher that tells itself from the real program by `$HOME`, which in a world names another folder.
