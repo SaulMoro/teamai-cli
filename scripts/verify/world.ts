@@ -525,7 +525,10 @@ export function loadWorld(runId: string | undefined): World {
 
   const parsed = WorldSchema.safeParse(text);
 
-  if (!parsed.success) throw new Error(`${file} is not a world.json this harness reads, such as one an older harness wrote.`);
+  if (!parsed.success) {
+    throw new Error(`${file} is not a world.json this harness reads (${z.prettifyError(parsed.error).replaceAll('\n', ' ')}), such as one an older harness wrote. Clean it up with the harness that made it, or remove ${path.dirname(file)}; make a new world with \`npm run verify:world\`.`);
+  }
+
   const world = parsed.data;
 
   // cleanup empties world.dir, so it must be this run's directory and nothing else.
@@ -539,13 +542,24 @@ export function loadWorld(runId: string | undefined): World {
   return world;
 }
 
+const CleanedUpSchema = z.looseObject({ cleanedAt: z.string() });
+
+/** Whether world.json `file` says its world was cleaned up, whichever harness wrote it: such a world is evidence only. */
+function isCleanedUp(file: string): boolean {
+  try {
+    return CleanedUpSchema.safeParse(JSON.parse(fs.readFileSync(file, 'utf8'))).success;
+  } catch {
+    return false;
+  }
+}
+
 /** Every world not cleaned up, and each folder whose world.json cannot be loaded, with why: one never hides the others. */
 export function liveWorlds() {
   const worlds: World[] = [];
   const skipped: Array<{ name: string; why: string }> = [];
 
   for (const name of fs.existsSync(WORLDS_ROOT) ? fs.readdirSync(WORLDS_ROOT).toSorted() : []) {
-    if (!fs.existsSync(path.join(WORLDS_ROOT, name, 'world.json'))) continue;
+    if (!fs.existsSync(path.join(WORLDS_ROOT, name, 'world.json')) || isCleanedUp(path.join(WORLDS_ROOT, name, 'world.json'))) continue;
 
     try {
       const world = loadWorld(name);

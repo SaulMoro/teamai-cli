@@ -218,13 +218,15 @@ describe('every live world', () => {
     }));
     write('20261112T113045-000000', '{');
     write('20261112T113046-000000', JSON.stringify({ runId: '20261112T113046-000000' }));
+    // Cleaned up long ago by an older harness, and kept as evidence: not a live world, so nothing to skip.
+    write('20261112T113047-000000', JSON.stringify({ runId: '20261112T113047-000000', cleanedAt: '2026-11-01T00:00:00.000Z' }));
 
     const live = liveWorlds();
 
     expect(live.worlds.map((world) => world.runId)).toEqual([good]);
     expect(live.skipped).toEqual([
       { name: '20261112T113045-000000', why: expect.stringContaining('cannot be read as JSON') },
-      { name: '20261112T113046-000000', why: expect.stringContaining('is not a world.json this harness reads') },
+      { name: '20261112T113046-000000', why: expect.stringMatching(/is not a world\.json this harness reads \(.*dir.*\).*npm run verify:world/s) },
     ]);
   });
 });
