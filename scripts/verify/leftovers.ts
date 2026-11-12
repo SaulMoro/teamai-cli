@@ -227,7 +227,6 @@ function otherWorlds(self: World | undefined, journalOf: ((home: string) => stri
   });
 }
 
-/** One line per finding and note of a row, and its LEAK lines: only a finding of this world's own is a LEAK. */
 /** A row's LEAK lines and notes in section (f), and `no <title> left` when it looked everywhere and found nothing. */
 export function linesOf(title: string, observed: readonly Observed[], mask: (text: string) => string) {
   const leaks: string[] = [];
