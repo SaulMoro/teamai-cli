@@ -7,7 +7,7 @@ import { answerCancel, answerQuestion, cancelAttempt, claimAttempt, expireClaim,
 import { startGroupedCommand } from '../workflow/shell-command.js';
 import { publishRun } from '../workflow/handoff.js';
 import { definitionHash } from '../workflow/snapshot.js';
-import { attemptDir, AttemptIdSchema, installOwner, readRun, RunIdSchema, takeRunLock, type AttemptId, type RunId } from '../workflow/store.js';
+import { attemptDir, AttemptIdSchema, installOwner, readRun, RunIdSchema, runScratchDir, takeRunLock, type AttemptId, type RunId } from '../workflow/store.js';
 import { memberPlace, takeFleetAttempt, type MemberPlace } from '../workflow/fleet/member.js';
 import type { OpenedDriver, OpenedRuntime } from '../workflow/runtimes/sources.js';
 import { CANCEL_WRITE_MS, cancelFleetAttempt, fleetStepRuntime, shadowedFleetEntries } from '../workflow/fleet/owner.js';
@@ -293,7 +293,7 @@ steps:
  * Alice starts workflow `mark` and offers its step with `forge` applied to the offer; Bob, with the team's workflows,
  * takes it. Answers what Bob's take answered, and the record Alice reads then.
  */
-async function takeForged(forge: (forged: Pick<Parameters<typeof offerAttempt>[1], 'lease' | 'definition' | 'values'>) => void, before?: (members: { alice: Member; bob: Member }) => Promise<void>, workflow: string | { folder: Record<string, string> } = MARK, place: MemberPlace = HERE, inputs: Record<string, string> = {}) {
+async function takeForged(forge: (forged: Pick<Parameters<typeof offerAttempt>[1], 'lease' | 'definition' | 'values'>, run: RunId) => void, before?: (members: { alice: Member; bob: Member }) => Promise<void>, workflow: string | { folder: Record<string, string> } = MARK, place: MemberPlace = HERE, inputs: Record<string, string> = {}) {
   const acme = typeof workflow === 'string' ? team({ mark: workflow }) : team({}, Object.fromEntries(Object.entries(workflow.folder).map(([file, text]) => [`workflows/mark/${file}`, text])));
   const [alice, bob] = [await acme.member('alice'), await acme.member('bob')];
   await before?.({ alice, bob });
@@ -309,7 +309,7 @@ async function takeForged(forge: (forged: Pick<Parameters<typeof offerAttempt>[1
     definition: { name: state.name, sourceHash: state.sourceHash, definitionHash: definitionHash(state.definition, state.workflows), teamRevision: state.teamRevision, origin: state.origin },
     values: { inputs: { mark: 'made.txt' } },
   };
-  forge(forged);
+  forge(forged, run);
   const offered = await offerAttempt(alice.config, {
     run, attempt: ATTEMPT, pool: 'default', repository: 'github.com/acme/business', owner: await installOwner(alice.config),
     start: startCommit, staleAfterMs: 60_000, secrets: {}, ...forged,
@@ -561,7 +561,7 @@ describe('a member taking an attempt', () => {
     expect(record).toMatchObject({ state: 'finished', result: { exitCode: 0, to: expect.any(String) } });
   });
 
-  it('gives the command the run\'s folder, the attempt\'s marker and the member\'s run mode, as the local driver does', async () => {
+  it('gives the command a run folder of its own, the attempt\'s marker and the member\'s run mode, and leaves the run\'s folder an owner on the same home keeps', async () => {
     vi.stubEnv('TEAMAI_MODE', 'unattended');
     const seen = 'printf "%s\\n" "$TEAMAI_WORKFLOW_ATTEMPT" "$TEAMAI_MODE" "$TEAMAI_RUN_DIR" > seen.txt; test -d "$TEAMAI_RUN_DIR" && echo made > "$TEAMAI_RUN_DIR/handed.txt"';
     const workflow = `schemaVersion: v1alpha1
@@ -574,9 +574,16 @@ steps:
     command: '${seen}'
 `;
 
-    const { record, alice } = await takeForged((forged) => {
+    let members: { alice: Member; bob: Member } | undefined;
+    let ownerLeft = '';
+    const { record, alice } = await takeForged((forged, run) => {
       forged.lease = { kind: 'command', step: 'write', command: seen, env: {} };
-    }, undefined, workflow);
+      // The member's home holds the run's folder with what an earlier step left there, as when its owner runs on that home.
+      if (members === undefined) throw new Error('the members are made before the offer is forged');
+      ownerLeft = path.join(runScratchDir(members.bob.config, run), 'earlier.txt');
+      fs.mkdirSync(path.dirname(ownerLeft), { recursive: true });
+      fs.writeFileSync(ownerLeft, 'left by an earlier step');
+    }, async (both) => { members = both; }, workflow);
 
     vi.unstubAllEnvs();
     expect(record).toMatchObject({ state: 'finished', result: { exitCode: 0 } });
@@ -585,9 +592,10 @@ steps:
     const [attempt, mode, runDir] = git(alice.checkout, 'show', `${to}:seen.txt`).split('\n');
     expect(attempt).toMatch(new RegExp(`^r[0-9a-f]+/${ATTEMPT}$`));
     expect(mode).toBe('unattended');
-    expect(runDir).toMatch(new RegExp(`/runs/${attempt?.split('/')[0] ?? ''}/scratch$`));
-    // The folder served this attempt alone, and is gone once it ended.
+    expect(runDir).not.toBe(path.dirname(ownerLeft));
+    // The folder served this attempt alone, and is gone once it ended; the run's folder keeps what was in it.
     expect(fs.existsSync(runDir ?? '')).toBe(false);
+    expect(fs.readFileSync(ownerLeft, 'utf8')).toBe('left by an earlier step');
   });
 
   it('runs the step on the step runtime of the member\'s own driver, with the step\'s env and the attempt\'s marker alone, and pushes what it wrote there', async () => {
@@ -602,7 +610,7 @@ steps:
     const { taken, record, alice } = await takeForged(() => undefined, undefined, MARK, { command: { kind: 'runtime', driver: 'bobs', use: 'box', runtime } });
 
     expect(taken).toMatchObject({ data: { ran: { step: 'write', exit_code: 0 } } });
-    expect(execs).toEqual([{ argv: expect.arrayContaining(['echo written > "$MARK"']), env: { MARK: 'made.txt', TEAMAI_WORKFLOW_ATTEMPT: expect.stringMatching(new RegExp(`/${ATTEMPT}$`)), TEAMAI_MODE: expect.any(String), TEAMAI_RUN_DIR: expect.stringMatching(/\/scratch$/) }, cwd: expect.stringMatching(/work$/) }]);
+    expect(execs).toEqual([{ argv: expect.arrayContaining(['echo written > "$MARK"']), env: { MARK: 'made.txt', TEAMAI_WORKFLOW_ATTEMPT: expect.stringMatching(new RegExp(`/${ATTEMPT}$`)), TEAMAI_MODE: expect.any(String), TEAMAI_RUN_DIR: expect.stringMatching(new RegExp(`/attempts/${ATTEMPT}/run$`)) }, cwd: expect.stringMatching(/work$/) }]);
     const to = record?.state === 'finished' ? record.result.to ?? '' : '';
     git(alice.checkout, 'fetch', '-q', 'origin', to);
     expect(git(alice.checkout, 'show', `${to}:made.txt`)).toBe('written');

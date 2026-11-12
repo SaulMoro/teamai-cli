@@ -16,6 +16,7 @@ import { attemptHoldingSession, attemptRun, attemptRuntimePath } from '../runtim
 import { stopCancelledAttempts, stopLeftAttempt, stopLeftInProcess } from '../runtimes/cancelled.js';
 import { isSkillRunnerHolding } from '../drivers/skill/skill-driver.js';
 import type { OpenedDriver } from '../runtimes/sources.js';
+import { RUN_DIR_ENV } from '@teamai/runtime-protocol';
 import type { StepRuntime } from '@teamai/runtime-protocol/step-runtime';
 import type { DriverCan } from '../requirements.js';
 import { teamCommitReach, type PinnedFolder } from '../cache.js';
@@ -40,7 +41,7 @@ import { z } from 'zod';
 import { commandOutputs } from '../protocol.js';
 import { parseStepPath } from '../step-path.js';
 import { attemptEnv } from '../attempt-marker.js';
-import { attemptDir, attemptOutDir, attemptResultPath, readRun, RunIdSchema, runScratchDir, takeRunLock, type AttemptId, type RunId, type RunLock } from '../store.js';
+import { attemptDir, attemptOutDir, attemptResultPath, readRun, RunIdSchema, takeRunLock, type AttemptId, type RunId, type RunLock } from '../store.js';
 import { isWorkflowFile, stepWorkflow, workflowRunBy, type RunState, type WorkflowDefinition, type WorkflowEnvelope, type WorkflowFailure, type WorkflowStep } from '../types.js';
 import { envAdvice, envScopeOf, lackedLabels, lacksTool, mergeRequirements, requiredEnvKeys, type EnvScope, type InEffect, type TurnLimits } from '../requirements.js';
 import { launchToolFor, promptOfferOf, promptRuntimeOn, runPromptStep, type PromptOffer, type StagedLease } from '../steps/prompt.js';
@@ -563,10 +564,12 @@ async function runClaim(config: LocalConfig, { lock, claim, root, secrets, membe
     }
   };
 
-  // A command step gets what the local driver gives it: the run's folder, made here for the attempt, its marker and the run mode.
-  const marked = ready.kind === 'command' ? attemptEnv(config, run, attempt, resolveRunMode(process.env)) : {};
+  // A command step gets what the local driver gives it: a run folder, its marker and the run mode. The folder is the
+  // attempt's own: the run's folder on this home may be its owner's, holding what earlier steps left for later ones.
+  const runDir = path.join(attemptDir(config, run, attempt), 'run');
+  const marked = ready.kind === 'command' ? { ...attemptEnv(config, run, attempt, resolveRunMode(process.env)), [RUN_DIR_ENV]: runDir } : {};
 
-  if (ready.kind === 'command') await fs.mkdir(runScratchDir(config, run), { recursive: true });
+  if (ready.kind === 'command') await fs.mkdir(runDir, { recursive: true });
 
   try {
     const command = ready.kind === 'workflow'
@@ -574,7 +577,7 @@ async function runClaim(config: LocalConfig, { lock, claim, root, secrets, membe
       : ready.kind === 'prompt'
       ? promptRun(config, { lock, claim, trusted: ready, place: place.prompt ?? { kind: 'here' }, work, root, secrets })
       : commandRun(place.command?.kind === 'runtime'
-        ? runtimeCommand(config, { run, attempt, place: place.command, work, command: ready.command, env: { ...providedEnv(ready.scoped), ...ready.env, ...marked }, unset: ready.scoped.scope?.withhold ?? [] })
+        ? runtimeCommand(config, { run, attempt, place: place.command, work, runDir, command: ready.command, env: { ...providedEnv(ready.scoped), ...ready.env, ...marked }, unset: ready.scoped.scope?.withhold ?? [] })
         : startGroupedCommand({ command: ready.command, cwd: work, env: { ...ready.scoped.env, ...ready.env, ...marked }, detached: process.platform !== 'win32', group: dir }));
 
     stopCommand = command.stop;
@@ -617,8 +620,7 @@ async function runClaim(config: LocalConfig, { lock, claim, root, secrets, membe
     // A restarted member goes on from work its killed run pushed, which is the step's work even when this run adds none.
     return finish(saved.to === claim.start ? ran : { ...ran, to: saved.to });
   } finally {
-    // The run's folder here serves this attempt alone: the run lock keeps another of the run from sharing it.
-    await Promise.all([fs.rm(work, { recursive: true, force: true }), fs.rm(runScratchDir(config, run), { recursive: true, force: true })]);
+    await Promise.all([fs.rm(work, { recursive: true, force: true }), fs.rm(runDir, { recursive: true, force: true })]);
   }
 }
 
@@ -899,7 +901,7 @@ async function archiveSession(config: LocalConfig, { run, attempt, root, session
  * bring the place's work back into `work`, close it. The runtime gets the step's env alone, never this process's. A
  * failure of the runtime ends it as a failed command whose stderr says why, so the member writes it as the step's end.
  */
-function runtimeCommand(config: LocalConfig, { run, attempt, place, work, command, env, unset }: { run: RunId; attempt: AttemptId; place: RuntimePlace; work: string; command: string; env: Record<string, string>; unset: readonly string[] }): GroupedCommand {
+function runtimeCommand(config: LocalConfig, { run, attempt, place, work, runDir, command, env, unset }: { run: RunId; attempt: AttemptId; place: RuntimePlace; work: string; runDir: string; command: string; env: Record<string, string>; unset: readonly string[] }): GroupedCommand {
   const running = attemptRun({ config, run, attempt, runtime: place.runtime, driver: place.driver });
   let output = '';
   let stderr = '';
@@ -909,7 +911,6 @@ function runtimeCommand(config: LocalConfig, { run, attempt, place, work, comman
 
   const exit = (async (): Promise<GroupedCommandExit> => {
     const result = path.dirname(attemptResultPath(config, run, attempt));
-    const runDir = runScratchDir(config, run);
     await Promise.all([fs.mkdir(result, { recursive: true }), fs.mkdir(runDir, { recursive: true })]);
     const folder = WorkflowFolder.named(config, env[WORKFLOW_DIR_ENV]);
     const opened = await running.open({ worktree: work, readonly: [path.join(work, '.git'), ...folder === undefined ? [] : [folder]], result, runDir, toolHome: {} });
