@@ -34,6 +34,24 @@ export function parseLsofCwd(stdout: string): Map<number, string> {
   return cwds;
 }
 
+/** What a command printed on a machine of the world (`captureOn`). */
+type Captured = ReturnType<typeof captureOn>;
+
+/**
+ * The processes `ps` printed on macOS (`ps`, its stdout), each with the working directory `lsof` gives it, and what
+ * of them could not be looked at: an lsof that did not end with 0, on a timeout too, listed only part of them.
+ */
+export function readDarwinTable({ label, ps, lsof }: { label: string; ps: string; lsof: Captured }): { procs: Proc[]; unseen: Observed[] } {
+  const cwdOf = parseLsofCwd(lsof.stdout);
+  const what = `working directories on ${label}`;
+
+  const unseen: Observed[] = lsof.stdout === ''
+    ? [{ kind: 'not_observed', what, why: `lsof listed none (${lsof.why})` }]
+    : lsof.code === 0 ? [] : [{ kind: 'not_observed', what, why: `lsof ended with ${lsof.code ?? 'no exit code'} after listing ${cwdOf.size} (${lsof.why}), so a process it missed may be the world's` }];
+
+  return { procs: parsePs(ps).map((proc) => ({ ...proc, cwd: cwdOf.get(proc.pid) })), unseen };
+}
+
 /** One line per process from /proc: pid, ppid, cwd and the arguments joined by spaces, tab-separated. Reads no environ. */
 const PROC_SCRIPT = `for d in /proc/[0-9]*; do p=\${d#/proc/}; pp=$(sed 's/.*) //' "$d/stat" 2>/dev/null | cut -d' ' -f2); [ -n "$pp" ] || continue; c=$(readlink "$d/cwd" 2>/dev/null); a=$(tr '\\0' ' ' < "$d/cmdline" 2>/dev/null); printf '%s\\t%s\\t%s\\t%s\\n' "$p" "$pp" "$c" "$a"; done`;
 
@@ -70,15 +88,12 @@ export const processes: LeftoverKind = {
       const unobserved: Observed[] = [];
 
       if (machine.platform === 'darwin') {
-        const listed = captureOn(world, machine.target, ['ps', '-axo', 'pid=,ppid=,command=']);
+        const ps = captureOn(world, machine.target, ['ps', '-axo', 'pid=,ppid=,command=']);
 
-        if (listed.code !== 0) return [{ kind: 'not_observed', what: `processes on ${machine.label}`, why: `ps failed: ${listed.why}` }];
-        const cwds = captureOn(world, machine.target, ['lsof', '-a', '-d', 'cwd', '-Fpn']);
-
-        // lsof exits 1 when one process it could not read, and still lists the rest.
-        if (cwds.stdout === '') unobserved.push({ kind: 'not_observed', what: `working directories on ${machine.label}`, why: `lsof listed none (${cwds.why})` });
-        const cwdOf = parseLsofCwd(cwds.stdout);
-        procs = parsePs(listed.stdout).map((proc) => ({ ...proc, cwd: cwdOf.get(proc.pid) }));
+        if (ps.code !== 0) return [{ kind: 'not_observed', what: `processes on ${machine.label}`, why: `ps failed: ${ps.why}` }];
+        const table = readDarwinTable({ label: machine.label, ps: ps.stdout, lsof: captureOn(world, machine.target, ['lsof', '-a', '-d', 'cwd', '-Fpn']) });
+        procs = table.procs;
+        unobserved.push(...table.unseen);
       } else {
         const listed = captureOn(world, machine.target, ['sh', '-c', PROC_SCRIPT]);
 
