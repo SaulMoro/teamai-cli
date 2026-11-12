@@ -23,10 +23,11 @@ const CLI = path.join(ROOT, 'dist', 'index.js');
  * Starts a child that holds none of its output, so only a group kill stops it, then writes both pids to `<argv[2]>.pids`
  * and waits. With `ignore-hangup` as argv[3] the child ignores SIGHUP, as a command under nohup does.
  */
+// The pids are written once the child says it is ready, so a test that signals on seeing them never beats its handler.
 const HOLD = `const { spawn } = require('child_process');
-const hold = process.argv[3] === 'ignore-hangup' ? 'process.on("SIGHUP", () => {}); setInterval(() => {}, 1000)' : 'setInterval(() => {}, 1000)';
-const child = spawn(process.execPath, ['-e', hold], { stdio: 'ignore' });
-require('fs').writeFileSync(process.argv[2] + '.pids', process.pid + ' ' + child.pid);
+const ignore = process.argv[3] === 'ignore-hangup' ? 'process.on("SIGHUP", () => {}); ' : '';
+const child = spawn(process.execPath, ['-e', ignore + 'process.stdout.write("ready"); setInterval(() => {}, 1000)'], { stdio: ['ignore', 'pipe', 'ignore'] });
+child.stdout.once('data', () => require('fs').writeFileSync(process.argv[2] + '.pids', process.pid + ' ' + child.pid));
 setInterval(() => {}, 1000);
 `;
 
