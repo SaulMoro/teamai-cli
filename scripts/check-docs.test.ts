@@ -28,10 +28,10 @@ const LINT_README = 'oxlint-plugin-teamai/README.md';
 function checkout(): string {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-docs-command-'));
   dirs.push(root);
-  // The shipped driver definitions are checked against the guide blocks that show them.
+  // The shipped driver definitions and sandbox profiles are checked against the guide blocks that show them.
   // package.json's `bin` lists the runtimes teamai ships, whose options the guide examples are checked against.
   // workflow-engine.md names the keys DriverCan declares in requirements.ts, and the lint README each rule index.js registers.
-  for (const name of ['docs', 'skill-data', 'skills', 'drivers', 'package.json', 'AGENTS.md', '.github', TOOL_IDS, DRIVER_CAN, LINT_RULES, LINT_README, ...fs.readdirSync(ROOT).filter((file) => /^README.*\.md$/.test(file))]) {
+  for (const name of ['docs', 'skill-data', 'skills', 'drivers', 'sandboxes', 'package.json', 'AGENTS.md', '.github', TOOL_IDS, DRIVER_CAN, LINT_RULES, LINT_README, ...fs.readdirSync(ROOT).filter((file) => /^README.*\.md$/.test(file))]) {
     fs.cpSync(path.join(ROOT, name), path.join(root, name), { recursive: true });
   }
   return root;
