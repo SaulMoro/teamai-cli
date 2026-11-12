@@ -101,6 +101,8 @@
     "teamai/process-reads": "error",
     // A ChildProcess built with new backs no process, and its kill signals pid 0: the process group of the whole run.
     "teamai/unspawned-child": "error",
+    // process.kill(0) signals the caller's own process group, -1 every process it may signal: a signal goes through process-group.
+    "teamai/signal-owner": "error",
     // A step writes the paths the engine reads; a FIFO it leaves there would block a plain read past every deadline.
     "teamai/regular-file-reads": "error",
     // Opening a FIFO for writing blocks until a reader comes, as a read blocks until a writer does.

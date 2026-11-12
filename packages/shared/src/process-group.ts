@@ -4,7 +4,7 @@
 //  descendants, through a child handle while its starter lives, or through the record it left once its starter died.
 //  It also owns process identity, how a recorded pid is told from a later process given it, which the locks judge
 //  their holders by as well, and every signal teamai sends by pid: `signalPid` and `signalGroup`, which send nothing to
-//  a pid below 2.
+//  a pid below 2 (`teamai/signal-owner` keeps every other module off `process.kill`).
 //
 
 import { execFile, type ChildProcess } from 'node:child_process';

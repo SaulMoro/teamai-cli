@@ -1,0 +1,121 @@
+import { execFileSync } from 'node:child_process';
+import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { expect, it } from 'vitest';
+import { z } from 'zod';
+import { ruleHarness } from '../test/harness.ts';
+import { OWNER, RUN_AS_IS, SCRIPT_TEXT } from './signal-owner.js';
+
+const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
+
+const rule = ruleHarness('teamai/signal-owner', { filename: 'src/__tests__/helpers/stop.ts' });
+
+const reports = (output: string): number => output.match(/signalPid or signalGroup from @teamai\/shared\/process-group, not process\.kill/g)?.length ?? 0;
+
+rule.invalid('rejects process.kill in a test helper, as a group of 0 its pid can be', `export function stop(pid: number): void {
+  process.kill(-pid, 'SIGKILL');
+}`, (output) => {
+  expect(reports(output)).toBe(1);
+});
+
+rule.invalid('rejects a probe in production source', `export const isAlive = (pid: number): boolean => { try { process.kill(pid, 0); return true; } catch { return false; } };`, undefined, { filename: 'packages/runtime-kit/src/alive.ts' });
+
+rule.invalid('rejects process.kill reached through an alias of process or of kill', `const { kill } = process;
+const { kill: end } = globalThis.process;
+const node = process;
+let other: { kill?: unknown } = {};
+({ kill: other.kill } = process);
+kill(2, 0);
+end(2, 0);
+node.kill(2, 0);
+process['kill'](2, 0);
+Reflect.apply(process.kill, process, [2, 0]);
+export const bound = process.kill.bind(process);
+export const read = Reflect.get(process, 'kill');`, (output) => {
+  expect(reports(output)).toBe(8);
+});
+
+rule.invalid('rejects kill of the process module, imported or required', `import { kill as end } from 'node:process';
+import proc from 'process';
+import * as nodeProcess from 'node:process';
+const required = require('node:process');
+proc.kill(2, 0);
+nodeProcess.kill(2, 0);
+required.kill(2, 0);
+(await import('node:process')).default.kill(2, 0);
+end(2, 0);`, (output) => {
+  expect(reports(output)).toBe(5);
+});
+
+rule.invalid('rejects the kill executables, which signal the pid they are given', `import { execFile, execSync, spawnSync } from 'node:child_process';
+spawnSync('kill', ['-KILL', '2']);
+execFile('pkill', ['-f', 'node']);
+execSync('kill -9 2');`, (output) => {
+  expect(reports(output)).toBe(3);
+});
+
+rule.invalid('rejects process.kill in the text of a program a test runs, in a file not named for it', `import { spawnSync } from 'node:child_process';
+spawnSync(process.execPath, ['-e', "process.kill(process.ppid, 'SIGKILL')"]);
+spawnSync(process.execPath, ['-e', \`process.kill(\${2}, 0)\`]);`, (output) => {
+  expect(output.match(/This text calls process\.kill in a program a test runs/g)).toHaveLength(2);
+});
+
+rule.invalid('rejects one in a folder and package no rule names, with no rule edit', `export const stop = (pid: number): boolean => process.kill(pid, 'SIGTERM');`, undefined, { filename: 'packages/runtime-new/src/testing/stop.ts' });
+
+rule.invalid('rejects one in a program node runs as it is, unless the rule names it', `process.kill(-Number(process.argv[2]), 'SIGKILL');`, undefined, { filename: 'src/__tests__/fixtures/runtime-new/runtime.mjs' });
+
+rule.valid('allows the owner, which every signal goes through', `export const signal = (pid: number): boolean => process.kill(pid, 0);`, { filename: 'packages/shared/src/process-group.ts' });
+
+rule.valid('allows the program node runs as it is that the rule names, which keeps the check inline', `process.kill(-Number(process.argv[2]), 'SIGKILL');`, { filename: 'packages/runtime-sandbox/src/testing/fake-engine.mjs' });
+
+rule.valid('allows the text of a program in a file the rule names for it', `export const script = "process.kill(process.ppid, 'SIGKILL')";`, { filename: 'src/__tests__/env-exec.test.ts' });
+
+rule.valid('allows the owner\'s calls, a spy on process.kill, a child\'s kill, and a process of its own', `import { spawn } from 'node:child_process';
+import { signalGroup, signalPid } from '@teamai/shared/process-group';
+import { vi } from 'vitest';
+const spy = vi.spyOn(process, 'kill').mockReturnValue(true);
+const child = spawn('true');
+child.kill('SIGTERM');
+signalPid(2, 0);
+signalGroup(2, 'SIGKILL');
+const local = { kill: (pid: number) => pid };
+local.kill(2);
+function stop(process: { kill(): void }): void { process.kill(); }
+export { spy, stop };`);
+
+const Config = z.object({
+  ignorePatterns: z.array(z.string()),
+  rules: z.record(z.string(), z.unknown()),
+  overrides: z.array(z.object({ rules: z.record(z.string(), z.unknown()) })),
+});
+
+const config = Config.parse(JSON.parse(fs.readFileSync(path.join(REPO, '.oxlintrc.json'), 'utf8').replace(/^\s*\/\/.*$/gm, '')));
+
+it('is an error in this checkout, with no file let off', () => {
+  expect(config.rules['teamai/signal-owner']).toBe('error');
+  expect(config.overrides.filter((override) => 'teamai/signal-owner' in override.rules)).toEqual([]);
+});
+
+it('names only files that exist and still need what the rule lets them do', () => {
+  const read = (file: string): string => fs.readFileSync(path.join(REPO, file), 'utf8');
+
+  expect(OWNER).toEqual(['packages/shared/src/process-group.ts']);
+
+  for (const file of [...OWNER, ...RUN_AS_IS, ...SCRIPT_TEXT]) expect(fs.existsSync(path.join(REPO, file)), file).toBe(true);
+
+  for (const file of [...OWNER, ...RUN_AS_IS, ...SCRIPT_TEXT]) expect(read(file), file).toMatch(/\bprocess\.kill\(/);
+});
+
+it('holds every source file lint reads in this checkout, the packages\' and the scripts\' included', () => {
+  // Each ignore pattern is a folder and all under it, so a file is linted unless it sits under one of those folders.
+  const ignored = config.ignorePatterns.map((pattern) => /^(.+)\/\*\*$/.exec(pattern)?.[1]);
+  expect(ignored).not.toContain(undefined);
+  const files = execFileSync('git', ['ls-files', '*.ts', '*.js', '*.mjs', '*.cjs'], { cwd: REPO, encoding: 'utf8' }).split('\n')
+    .filter((file) => file !== '' && !ignored.some((folder) => file.startsWith(`${folder}/`)));
+
+  expect(files.filter((file) => file.startsWith('src/')).length).toBeGreaterThan(1000);
+  expect(files.filter((file) => file.startsWith('packages/')).length).toBeGreaterThan(300);
+  expect(files.filter((file) => file.startsWith('scripts/')).length).toBeGreaterThan(20);
+  expect(files.filter((file) => file.endsWith('.mjs')).length).toBeGreaterThan(5);
+});
