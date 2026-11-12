@@ -11,7 +11,9 @@ vi.mock('node:child_process', () => ({
   spawnSync: vi.fn(),
 }));
 
-vi.mock('node:fs', () => ({
+// Partial: the launcher's module graph reads fs as it loads.
+vi.mock('node:fs', async (importOriginal) => ({
+  ...await importOriginal<typeof import('node:fs')>(),
   existsSync: vi.fn(),
 }));
 
