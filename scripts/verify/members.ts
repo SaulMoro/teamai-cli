@@ -182,6 +182,16 @@ export function addMember(world: World, { name, machine = 'host' }: { name: stri
   const hostEnv = { ...frozenEnv(withOrigin), HOME: layout.home, USERPROFILE: layout.home, TMPDIR: layout.tmp };
   const container = machineName(withOrigin, name);
 
+  // Made alone, so of two commands adding the same member at once, the second neither uses nor undoes the first's.
+  fs.mkdirSync(path.dirname(layout.root), { recursive: true });
+
+  try {
+    fs.mkdirSync(layout.root);
+  } catch (error) {
+    if (errnoCode(error) !== 'EEXIST') throw error;
+    throw new Error(`Another command of the world is adding member ${name}, or added it since this command started: run this again once it ends. If no command of the world runs, remove ${layout.root} first.`, { cause: error });
+  }
+
   try {
     fs.mkdirSync(layout.home, { recursive: true });
     fs.mkdirSync(layout.tmp, { recursive: true, mode: 0o700 });

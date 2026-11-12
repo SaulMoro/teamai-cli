@@ -112,4 +112,16 @@ describe("a world's origin", () => {
     expect(fs.existsSync(path.join(bare, 'HEAD'))).toBe(true);
     expect(execFileSync('git', ['remote'], { cwd: project, env, encoding: 'utf8' }).trim()).toBe('origin');
   });
+
+  it('leaves alone the member another command of the world is adding under the same name, and says so', () => {
+    const { world, dir } = originWorld();
+    const withOrigin = ensureOrigin(world);
+    // Another `member <run> bob`, halfway through its clone: its folder is there, world.json says nothing yet.
+    const theirs = path.join(dir, 'members', 'bob', 'project', 'cloning');
+    fs.mkdirSync(path.dirname(theirs), { recursive: true });
+    fs.writeFileSync(theirs, '');
+
+    expect(() => addMember(withOrigin, { name: 'bob' })).toThrow('Another command of the world is adding member bob');
+    expect(fs.existsSync(theirs)).toBe(true);
+  });
 });
