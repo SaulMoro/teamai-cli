@@ -87,7 +87,6 @@ async function listedHere(argv: readonly string[]): Promise<string | undefined> 
 
 const SbxListedSchema = z.array(z.looseObject({ name: z.string(), status: z.string().optional() }));
 
-/** Starts watching; `stop` takes a last look and answers the lines to show, and has written them to observed.jsonl. */
 /** A process as /proc lists it: its pid, its parent's, and its arguments. */
 export interface ProcEntry {
   readonly pid: string;
@@ -117,6 +116,7 @@ export function bwrapSteps(procs: readonly ProcEntry[], roots: readonly string[]
   });
 }
 
+/** Starts watching; `stop` takes a last look and answers the lines to show, and has written them to observed.jsonl. */
 export function startObserver(world: World, { pass, label, listed = listedHere }: { pass: ReadonlyMap<string, string>; label: string; listed?: (argv: readonly string[]) => Promise<string | undefined> }) {
   const canary = world.env?.[CANARY_NAME] ?? '';
   const secrets = new Map([...Object.entries(collectEnvSecrets(process.env)), ...pass]);

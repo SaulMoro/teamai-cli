@@ -1,6 +1,7 @@
 /**
- * `doctor --drivers`: what a driver claim needs on this machine, read-only. Each sandbox provider's readiness, the driver
- * host command each step runtime declares, each tool's cheapest model, and the keys present, by name. Loaded only for `--drivers`.
+ * `doctor --drivers`: what a driver claim needs on this machine, read-only but for `sbx ls` in a world named, whose
+ * writes are recorded as sbx's. Each sandbox provider's readiness, the driver host command each step runtime declares,
+ * each tool's cheapest model, and the keys present, by name. Loaded only for `--drivers`.
  */
 import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';

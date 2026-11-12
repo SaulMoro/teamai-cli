@@ -9,10 +9,10 @@ import { attributeLeftover, tiesOnThisMachine, type Attribution, type WorldTies 
 import { journalOfSbxName } from './leftovers/sbx.js';
 import type { World } from './world.js';
 
-/** `reap [<run>] [--delete] [vercel:<name>…]`. */
 /** The start of every name teamai gives a Vercel sandbox, the only ones reap lists. */
 const NAME_PREFIX = 'teamai-';
 
+/** `reap [<run>] [--delete] [vercel:<name>…]`. */
 export function parseReapArgs(args: readonly string[]): { ok: true; run: string | undefined; isDeleting: boolean; named: string[] } | { ok: false; message: string } {
   let run: string | undefined;
   const named: string[] = [];
