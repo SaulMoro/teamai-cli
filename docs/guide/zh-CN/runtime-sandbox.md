@@ -83,7 +83,7 @@ teamai-r7c41d09e2b6a5f13-a3e9b0c51  ghcr.io/acme/agent:1  Up 41 seconds
 
 ## Sandbox 档案
 
-sandbox 档案写明沙箱从什么构建：它的 provider 和该 provider 的选项。团队把它放成 `sandboxes/<name>.yaml`，或者放成文件夹 `sandboxes/<name>/`，里面有 `SANDBOX.yaml` 和它构建时用的文件，比如 `Containerfile`。`use: sandbox`（或 `through: sandbox`）的条目用 `sandbox: <name>` 指定它，不写时运行档案 `default`。teamai 先在你的 `~/.teamai/sandboxes/` 里找这个名字，再到团队仓库里找，最后在它自带的档案里找，那里 `<name>` 也会按 `teamai-<name>` 找到：`default` 是 teamai 的 `teamai-default`，一个 sbx microVM；`sbx`、`docker`、`podman`、`seatbelt`、`bwrap` 和 `vercel` 各有一个，可以直接指定或复制（`teamai-docker` 和 `teamai-podman` 没写镜像，复制后要设上）。你或团队的档案和 teamai 的某个档案同名时，运行开始时会提示一次。每次尝试的记录都写明它运行的档案、来自哪里、它的修订、它的 provider，以及沙箱是否隔离了步骤。
+sandbox 档案写明沙箱从什么构建：它的 provider 和该 provider 的选项。团队把它放成 `sandboxes/<name>.yaml`，或者放成文件夹 `sandboxes/<name>/`，里面有 `SANDBOX.yaml` 和它构建时用的文件，比如 `Containerfile`。`use: sandbox`（或 `through: sandbox`）的条目用 `sandbox: <name>` 指定它，不写时运行档案 `default`。teamai 先在你的 `~/.teamai/sandboxes/` 里找这个名字，再到团队仓库里找，最后在它自带的档案里找，那里 `<name>` 也会按 `teamai-<name>` 找到：`default` 是 teamai 的 `teamai-default`，一个 sbx microVM；`sbx`、`docker`、`podman`、`seatbelt`、`bwrap` 和 `vercel` 各有一个，可以直接指定或复制（`teamai-docker` 和 `teamai-podman` 没写镜像，复制后要设上）。你或团队的档案和 teamai 的某个档案同名时，运行开始时会提示一次。每次尝试的记录都写明它运行的档案、来自哪里、它的修订、它的 provider，以及 sandbox 运行时说它在那里强制执行的内容：隔离级别，以及是否守住网络、token 和轮次限制。
 
 条目的 `options` 只保留 teamai 自己读取的 `credentials` 和 `max_parallel`；写在那里的其他键会在任何步骤运行之前失败，并说明要把它移到哪个档案文件。读不了的档案、写了未知 provider 的档案，或者含有链接的档案文件夹，同样会失败并指出它的文件。
 
@@ -130,13 +130,15 @@ runtimes:
 
 第一个打开的步骤会制作它：teamai 把 `cache` 里的文件复制到检出目录之外的临时目录，在一个不带任何凭据的 `image` 容器里于该目录运行 `prepare`，再把结果保存为 `teamai-warm:<key>`。key 由镜像在本机的状态（它的 id，所以拉取了同一标签的新推送也算变化）、配方和 `cache` 文件的内容算出，所以 lockfile 一变就会做新镜像，不变就复用，本次运行和以后的运行都是如此。指向检出目录之外文件的 `cache` 链接会被拒绝。同时打开的步骤只等一次构建。镜像只保留 `prepare` 在该目录之外留下的东西，比如主目录里的缓存（`~/.npm`）或它安装的工具：该目录本身，连同在其中生成的 `node_modules`，都不在镜像里，检出目录的任何文件也不在。setup 照常安装（`npm ci --prefer-offline`），会从缓存取包。用 `docker image ls teamai-warm` 列出，用 `docker image rm` 删除。步骤的运行详情会显示它的容器实际运行的镜像 `teamai-warm:<key>`、基础镜像，以及 sandbox 档案和它的修订。
 
-在 `docker` 和 `podman` 上，`containerfile: ci/deps.Containerfile` 会构建这个文件而不是运行 `prepare`，构建上下文里只有 `cache` 文件；镜像里会有该文件复制进去的内容。档案放成文件夹时，`containerfile: ./Containerfile` 指的是文件夹自己里面的文件，不能是链接，也不能指到文件夹外面；key 还包含文件夹的修订，所以推送到文件夹的任何改动都会做出新镜像：
+在 `docker` 和 `podman` 上，`containerfile: ci/deps.Containerfile` 会构建这个文件而不是运行 `prepare`，构建上下文里只有 `cache` 文件；镜像里会有该文件复制进去的内容。在 `sbx` 上，`warm` 只接受 `prepare`，并保存为模板（`sbx template ls`），key 由模板和 sbx 的版本算出。在 `vercel` 上，`warm` 接受 `prepare` 和可选的 `expiration`（`30d`、`12h`；至少 `1h`，不写则为 30 天）：`prepare` 在一个 `runtime` 的临时沙箱里运行，结果保存为 Vercel 快照，每次尝试的沙箱都从它启动。Vercel 在最后一次使用后保留它 `expiration` 这么久，快照没了之后，下一次打开会重新制作。`prepare` 失败时，步骤以 `sandbox_failed` 失败并给出最后几行输出；修好之前不会运行任何步骤。
+
+档案放成文件夹时，`containerfile: ./Containerfile` 指的是文件夹自己里面的文件，不能是链接，也不能指到文件夹外面。构建或 `prepare` 会在其目录顶层看到文件夹里的文件，与 `cache` 文件放在一起，所以 `prepare: ./prepare.sh` 运行的是文件夹里的脚本；含有链接的文件夹会被拒绝。key 还包含文件夹的修订，所以推送到文件夹的任何改动都会做出新镜像：
 
 ```text
 sandboxes/node-deps/
   SANDBOX.yaml       provider: docker, image: ghcr.io/acme/agent:1, warm: { containerfile: ./Containerfile, cache: [package-lock.json] }
   Containerfile      FROM ghcr.io/acme/agent:1，然后 COPY package-lock.json 并 RUN npm ci
-```在 `sbx` 上，`warm` 只接受 `prepare`，并保存为模板（`sbx template ls`），key 由模板和 sbx 的版本算出。在 `vercel` 上，`warm` 接受 `prepare` 和可选的 `expiration`（`30d`、`12h`；至少 `1h`，不写则为 30 天）：`prepare` 在一个 `runtime` 的临时沙箱里运行，结果保存为 Vercel 快照，每次尝试的沙箱都从它启动。Vercel 在最后一次使用后保留它 `expiration` 这么久，快照没了之后，下一次打开会重新制作。`prepare` 失败时，步骤以 `sandbox_failed` 失败并给出最后几行输出；修好之前不会运行任何步骤。
+```
 
 ## 步骤能看到什么
 

@@ -371,7 +371,11 @@ export function sbxProvider({ agent, owner, env, warm, profile }: { agent: strin
       if (template === undefined) return { ok: true };
       const from = await warmFrom(template, view.worktree);
 
-      return from.ok ? { ok: true } : from;
+      if (!from.ok) return from;
+      // create works the template out again; the open's display names the one made here.
+      const [, tag] = from.args;
+
+      return tag === undefined ? { ok: true } : { ok: true, warmed: { image: tag } };
     },
 
     async create(key, view, tool) {
@@ -442,7 +446,7 @@ export function sbxProvider({ agent, owner, env, warm, profile }: { agent: strin
     destroy: remove,
 
     name: nameOf,
-    display: (key) => ({ label: `${nameOf(key)} (sbx)`, fields: { sandbox: nameOf(key), ...(agent !== undefined && { agent: path.basename(agent) }) } }),
+    display: (key, warmed) => ({ label: `${nameOf(key)} (sbx)`, fields: { sandbox: nameOf(key), ...(agent !== undefined && { agent: path.basename(agent) }), ...(warmed && { template: warmed.image }) } }),
 
     removal: (place) => `remove it with \`sbx rm --force ${nameOf(place)}\``,
   };

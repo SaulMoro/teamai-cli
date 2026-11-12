@@ -2779,10 +2779,11 @@ describe('a warm image', () => {
     await init(connection, { ...options, warm: WARM });
     const at = checkout();
 
-    expect(await openAttempt(connection, at, ATTEMPT)).toMatchObject({ event: 'ready' });
+    const ready = await openAttempt(connection, at, ATTEMPT);
     const [tag] = engine.savedImages();
     expect(tag).toMatch(/^teamai-warm:[0-9a-f]{16}$/);
-    // The attempt's sandbox starts from it, and sees the store prepare filled.
+    // The attempt's sandbox starts from it, says so, and sees the store prepare filled.
+    expect(ready).toMatchObject({ event: 'ready', display: { fields: options.provider === 'sbx' ? { template: tag } : { image: tag, base: IMAGE } } });
     expect(engine.calls().find((call) => call.includes(String(tag)) && (call[1] === 'run' || call[1] === 'create'))).toBeDefined();
     const { end, output } = await exec(connection, { argv: ['/bin/sh', '-c', 'cat "$HOME/.store/ready"'], cwd: at.worktree });
     expect(end).toMatchObject({ event: 'exited', code: 0 });
@@ -3013,15 +3014,19 @@ describe('a warm image', () => {
     expect(engine.calls().find(([, command, ...rest]) => command === 'run' && rest.includes(HANDLE))).toContain(tag);
   });
 
-  it('builds the Containerfile of a sandbox profile folder, keyed by the folder\'s revision, and refuses one that leaves the folder or is a link', async () => {
+  it('builds the Containerfile of a sandbox profile folder with the folder\'s files, keyed by the folder\'s revision, and refuses one that leaves the folder or a folder holding a link', async () => {
     const folder = path.join(dir, 'profile-gpu');
     fs.mkdirSync(folder);
-    fs.writeFileSync(path.join(folder, 'Containerfile'), `FROM ${IMAGE}\nRUN npm ci\n`);
+    fs.writeFileSync(path.join(folder, 'Containerfile'), `FROM ${IMAGE}\nCOPY prepare.sh package.json ./\nRUN ./prepare.sh\n`);
+    fs.writeFileSync(path.join(folder, 'prepare.sh'), '#!/bin/sh\nnpm ci\n', { mode: 0o755 });
     fs.writeFileSync(path.join(dir, 'Containerfile.outside'), `FROM ${IMAGE}\n`);
-    fs.symlinkSync(path.join(dir, 'Containerfile.outside'), path.join(folder, 'Linked'));
-    const opened = async (containerfile: string, revision: string, attempt: string): Promise<Message> => {
+    const linked = path.join(dir, 'profile-linked');
+    fs.mkdirSync(linked);
+    fs.writeFileSync(path.join(linked, 'Containerfile'), `FROM ${IMAGE}\n`);
+    fs.symlinkSync(path.join(dir, 'Containerfile.outside'), path.join(linked, 'Linked'));
+    const opened = async (containerfile: string, revision: string, attempt: string, at = folder): Promise<Message> => {
       const connection = start();
-      await init(connection, { provider: 'docker', image: IMAGE, warm: { containerfile, cache: ['package.json'] }, profile: { name: 'gpu', revision, folder } });
+      await init(connection, { provider: 'docker', image: IMAGE, warm: { containerfile, cache: ['package.json'] }, profile: { name: 'gpu', revision, folder: at } });
       return openAttempt(connection, checkout(), attempt);
     };
 
@@ -3031,11 +3036,13 @@ describe('a warm image', () => {
     // The container ran the warm image, not the base the profile names, and says which profile at which revision.
     expect(tag).toMatch(/^teamai-warm:[0-9a-f]{16}$/);
     expect(first).toMatchObject({ event: 'ready', display: { fields: { container: expect.stringContaining('a0123abc1'), image: tag, profile: 'gpu, revision rev-1' } } });
+    // The build sees the cache files at their paths in the checkout, and the folder's own files at its top.
+    expect(Object.keys(engine.savedFiles(String(tag)).context).sort()).toEqual(['Containerfile', 'package.json', 'prepare.sh']);
     expect(await opened('./Containerfile', 'rev-1', 'a0123abc2')).toMatchObject({ event: 'ready' });
     expect(await opened('./Containerfile', 'rev-2', 'a0123abc3')).toMatchObject({ event: 'ready' });
     expect(builds().saves).toHaveLength(2);
     expect(await opened('../Containerfile.outside', 'rev-2', 'a0123abc4')).toMatchObject({ event: 'failed', failure: { code: 'bad_option', key: 'warm.containerfile', message: '../Containerfile.outside is not a path inside the folder of sandbox profile "gpu". Give it relative to the folder, for example ./Containerfile' } });
-    expect(await opened('./Linked', 'rev-2', 'a0123abc5')).toMatchObject({ event: 'failed', failure: { code: 'bad_option', key: 'warm.containerfile', message: './Linked is a link, and a sandbox profile builds only from the files its folder holds. Replace it with the file itself' } });
+    expect(await opened('./Containerfile', 'rev-3', 'a0123abc5', linked)).toMatchObject({ event: 'failed', failure: { code: 'bad_option', key: 'warm', message: 'Linked is a link, and a sandbox profile builds only from the files its folder holds. Replace it with the file itself' } });
     expect(builds().saves).toHaveLength(2);
   });
 

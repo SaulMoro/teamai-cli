@@ -8,6 +8,7 @@ import { folderRevision } from '../workflow/runtimes/resource-folder.js';
 import { locateSandboxProfile } from '../workflow/runtimes/sandbox-profiles.js';
 import { getTeamaiHomeDir, type LocalConfig } from '../types.js';
 import { buildSandboxProfileChecks } from '../doctor-sandboxes.js';
+import { disposeDriver, openDriver } from '../workflow/runtimes/sources.js';
 
 /**
  * A sandbox profile as a resource: `sandboxes/<name>.yaml`, or a folder `sandboxes/<name>/` with its `SANDBOX.yaml` and
@@ -181,5 +182,47 @@ describe('what doctor says of the sandbox profiles of the drivers in use', () =>
         fix: undefined,
       },
     ]);
+  });
+});
+
+describe('a sandbox entry that gives its provider inline', () => {
+  it('fails a start naming the profile to move it to, and still stops what an attempt it started left running', async () => {
+    const { config } = await teamWith({ 'drivers/boxed.yaml': `schemaVersion: v1alpha1\nname: boxed\nruntimes:\n  - use: sandbox\n    options: { provider: docker, image: ghcr.io/acme/agent:1 }\n` });
+    const runtime = path.join(getTeamaiHomeDir(), 'runtimes', 'sandbox');
+    fs.mkdirSync(runtime, { recursive: true });
+    fs.writeFileSync(path.join(runtime, 'RUNTIME.yaml'), 'protocol: 1\nentry: ./runtime\n');
+    // Stands in for the sandbox runtime: in recover mode it opens on the options the attempt was started with.
+    fs.writeFileSync(path.join(runtime, 'runtime'), [
+      '#!/bin/sh',
+      'read -r line',
+      'case "$line" in',
+      '  *\'"mode":"recover"\'*\'"provider":"docker"\'*|*\'"provider":"docker"\'*\'"mode":"recover"\'*) echo \'{"type":"init","ok":true,"can":{}}\' ;;',
+      '  *) echo \'{"type":"init","ok":false,"error":{"code":"bad_option","key":"provider","message":"not in recover mode"}}\' ;;',
+      'esac',
+      'cat > /dev/null',
+      '',
+    ].join('\n'), { mode: 0o755 });
+    const open = (purpose: 'run' | 'stop') => openDriver(config, 'boxed', { personal: true, mode: 'unattended', canAsk: false, purpose, checkout: config.repo.localPath });
+
+    expect(await open('run')).toEqual({ ok: false, failure: { code: 'bad_option', message: expect.stringContaining('a sandbox\'s options live in a sandbox profile: move them to sandboxes/boxed.yaml') } });
+    const stopping = await open('stop');
+    expect(stopping).toMatchObject({ ok: true });
+    if (stopping.ok) await disposeDriver(stopping.opened);
+  });
+});
+
+describe('a profile teamai ships as an example to copy', () => {
+  it('says to add the team\'s or the member\'s own profile when the sandbox runtime refuses one of its options', async () => {
+    const { config } = await teamWith({ 'drivers/boxed.yaml': 'schemaVersion: v1alpha1\nname: boxed\nruntimes:\n  - use: sandbox\n    sandbox: docker\n' });
+    const runtime = path.join(getTeamaiHomeDir(), 'runtimes', 'sandbox');
+    fs.mkdirSync(runtime, { recursive: true });
+    fs.writeFileSync(path.join(runtime, 'RUNTIME.yaml'), 'protocol: 1\nentry: ./runtime\n');
+    // Stands in for the sandbox runtime, which refuses a docker profile that names no image.
+    fs.writeFileSync(path.join(runtime, 'runtime'), '#!/bin/sh\nread -r line\necho \'{"type":"init","ok":false,"error":{"code":"bad_option","key":"image","message":"Name the prebuilt image that holds the tools"}}\'\n', { mode: 0o755 });
+
+    expect(await openDriver(config, 'boxed', { personal: true, mode: 'unattended', canAsk: false, purpose: 'run', checkout: config.repo.localPath })).toEqual({ ok: false, failure: {
+      code: 'bad_option',
+      message: 'Sandbox profile teamai\'s sandboxes/teamai-docker.yaml refused option "image": Name the prebuilt image that holds the tools. teamai ships it as an example: add sandboxes/docker.yaml to the team repo with image set and run teamai pull, or add ~/.teamai/sandboxes/docker.yaml for yourself, and start again.',
+    } });
   });
 });

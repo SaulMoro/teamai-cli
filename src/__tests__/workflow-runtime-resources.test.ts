@@ -173,11 +173,28 @@ describe('a selected runtime that cannot run', () => {
     failure: { code: 'runtime_not_found', message: `Driver "acme" uses runtime "acme", and ${location} cannot run it: ${reason}. Fix it, push it, run teamai pull, and start again.` },
   });
 
-  it('fails the run on a marker that does not parse, and never falls through to another layer', async () => {
+  it('fails the run on a marker that does not parse or a folder with none, and never falls through to another layer', async () => {
     expect(await opened({ 'runtimes/acme/RUNTIME.yaml': 'protocol: 1\nentry: ./runtime\nexec: no-commands\n', 'runtimes/acme/runtime': '#!/bin/sh\n' }))
       .toMatchObject({ ok: false, failure: { code: 'runtime_not_found', message: expect.stringMatching(/^Driver "acme" uses runtime "acme", and runtimes\/acme\/ cannot run it: exec: .*; a runtime sets protocol, entry and optionally exec\. Fix it, push it, run teamai pull, and start again\.$/) } });
     expect(await opened({ 'runtimes/acme.yaml': 'protocol: 1\nentry: { command: [acme-runtime\n' }))
       .toMatchObject({ ok: false, failure: { message: expect.stringContaining('runtimes/acme.yaml cannot run it: it is not YAML') } });
+    // The layout before RUNTIME.yaml: the folder holds the code, and nothing that says it is a runtime.
+    expect(await opened({ 'runtimes/acme/runtime': '#!/bin/sh\n' }))
+      .toEqual(refused('runtimes/acme/', 'it holds no RUNTIME.yaml, the marker that names its protocol and its code, such as protocol: 1 and entry: ./runtime'));
+  });
+
+  it.skipIf(process.platform === 'win32' || process.getuid?.() === 0)('fails the run on a team runtime folder it cannot read all of, rather than taking it as holding no link', async () => {
+    onPath('acme-runtime');
+    personal({ 'runtimes/teamai-acme.yaml': COMMAND_RUNTIME });
+    const team = teamWith({ 'runtimes/acme/RUNTIME.yaml': 'protocol: 1\nentry: ./runtime\n', 'runtimes/acme/runtime': '#!/bin/sh\n', 'runtimes/acme/lib/a.sh': '' });
+    const closed = path.join(team.repo.localPath, 'runtimes', 'acme', 'lib');
+    fs.chmodSync(closed, 0o000);
+
+    try {
+      expect(await open(team)).toEqual({ ok: false, failure: { code: 'runtime_not_found', message: expect.stringMatching(/^Driver "acme" uses runtime "acme", and runtimes\/acme\/ cannot run it: its folder cannot be read \(.*\)\. Fix it, push it, run teamai pull, and start again\.$/) } });
+    } finally {
+      fs.chmodSync(closed, 0o755);
+    }
   });
 
   it('fails the run on an entry that is not there', async () => {

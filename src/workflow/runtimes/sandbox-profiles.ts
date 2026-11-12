@@ -105,7 +105,13 @@ async function readProfile(driver: ResolvedDriver, asked: string, definition: De
   if (entryKey !== undefined) return refuse(`it sets ${entryKey}, which the driver definition's entry sets, as its options: { ${entryKey}: ${JSON.stringify(options[entryKey])} }`);
 
   if (PROFILE_OPTION in options) return refuse(`it sets ${PROFILE_OPTION}, which teamai gives the sandbox runtime itself`);
-  const revision = definition.form === 'folder' ? await folderRevision(definition.at) : createHash('sha256').update(text).digest('hex');
+  let revision: string;
+
+  try {
+    revision = definition.form === 'folder' ? await folderRevision(definition.at) : createHash('sha256').update(text).digest('hex');
+  } catch (error) {
+    return refuse(`its folder cannot be read (${error instanceof Error ? error.message : String(error)})`);
+  }
 
   return {
     kind: 'found',
@@ -159,7 +165,10 @@ async function fromTeam(driver: ResolvedDriver, asked: string, name: string): Pr
   const { source } = resolution.item;
 
   if (source.kind === 'folder') {
-    const link = await firstLink(source.full);
+    const found = await firstLink(source.full);
+
+    if (!found.ok) return invalid({ driver, asked, location: source.path, layer: 'team' }, found.reason);
+    const { link } = found;
 
     if (link !== undefined) return invalid({ driver, asked, location: source.path, layer: 'team' }, `it holds the link ${link}, and teamai builds a sandbox only from what the folder itself holds`);
   }

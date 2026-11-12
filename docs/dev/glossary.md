@@ -81,7 +81,7 @@ Where a definition comes from. Resolution order: `teamai` (**teamai default**), 
 _Avoid_: level, source, scope (that is a **scope**)
 
 **teamai default**:
-A **resource** teamai ships, named `teamai-<name>`. A team replaces it with the same name at the **team root**. A **driver definition** or **step runtime** looked up by name is taken by the exact name in every **layer** first, then as `teamai-<name>`, so a team's `t3` replaces `teamai-t3`. Short form: default, as in default workflow or default scorer.
+A **resource** teamai ships, named `teamai-<name>`. A team replaces it with the same name at the **team root**. A **driver definition**, **step runtime** or **sandbox profile** looked up by name is taken by the exact name in every **layer** first, then as `teamai-<name>`, so a team's `t3` replaces `teamai-t3`. Short form: default, as in default workflow or default scorer.
 _Avoid_: built-in, shipped, preset
 
 **Team root**:

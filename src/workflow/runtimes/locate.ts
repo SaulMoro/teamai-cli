@@ -169,7 +169,13 @@ async function readDefinition(driver: ResolvedDriver, use: string, definition: D
   const launched = await launchOf(definition, marker.entry);
 
   if (!launched.ok) return unusable(launched.reason);
-  const revision = definition.form === 'folder' ? await folderRevision(definition.at) : sha256(text);
+  let revision: string;
+
+  try {
+    revision = definition.form === 'folder' ? await folderRevision(definition.at) : sha256(text);
+  } catch (error) {
+    return unusable(`its folder cannot be read (${error instanceof Error ? error.message : String(error)})`);
+  }
 
   return {
     kind: 'found',
@@ -269,7 +275,16 @@ async function fromTeam(driver: ResolvedDriver, use: string, name: string): Prom
 
   const resolution = resolutions.find((candidate) => candidate.name === name);
 
-  if (resolution === undefined) return { kind: 'missing' };
+  if (resolution === undefined) {
+    // A folder in the layout before the marker holds its code and nothing that says it is a runtime, which the resolver
+    // reads as a namespace: it fails rather than lets another layer's runtime of that name run.
+    const folder = path.join(base, RESOURCE_LAYOUTS.runtimes.dir, name);
+    const isOldLayout = (await fs.lstat(path.join(folder, 'runtime')).catch(() => undefined))?.isFile() === true;
+
+    if (!isOldLayout) return { kind: 'missing' };
+
+    return { kind: 'refused', failure: { code: 'runtime_not_found', message: `Driver "${driver.name}" uses runtime "${use}", and ${RESOURCE_LAYOUTS.runtimes.dir}/${name}/ cannot run it: it holds no ${RUNTIME_MARKER}, the marker that names its protocol and its code, such as protocol: 1 and entry: ./runtime. ${fixOf('team')}` } };
+  }
 
   if (resolution.kind === 'conflict') {
     const where = resolution.reason === 'duplicate' ? 'twice in one place' : 'in two active namespaces';
@@ -280,7 +295,10 @@ async function fromTeam(driver: ResolvedDriver, use: string, name: string): Prom
   const { source } = resolution.item;
 
   if (source.kind === 'folder') {
-    const link = await firstLink(source.full);
+    const found = await firstLink(source.full);
+
+    if (!found.ok) return refused(`Driver "${driver.name}" uses runtime "${use}", and ${source.path} cannot run it: ${found.reason}. ${fixOf('team')}`);
+    const { link } = found;
 
     if (link !== undefined) {
       return refused(`Driver "${driver.name}" uses runtime "${use}", whose folder ${source.path.slice(0, -1)} in the team repo holds the link ${link}, and teamai runs a team runtime only when its folder holds no link, so the revision you accept is all it runs. Replace the link with what it names, push it, run teamai pull, and start again.`);

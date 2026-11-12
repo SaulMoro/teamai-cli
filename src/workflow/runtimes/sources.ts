@@ -223,12 +223,20 @@ function optionsSource(driver: ResolvedDriver, use: string): string {
 
 /** What the sandbox runtime refused of the profile its options came from, naming the profile's file. */
 function profileRefused(profile: SandboxProfile, key: string, message: string): WorkflowFailure {
-  return { code: 'bad_option', message: `Sandbox profile ${profile.location} refused option "${key}": ${message}. ${fixOf(profile.layer)}` };
+  // teamai's own profiles are examples to name or copy, so the fix is the member's or the team's profile, not teamai.
+  const fix = profile.layer === 'teamai'
+    ? `teamai ships it as an example: add sandboxes/${profile.asked}.yaml to the team repo with ${key} set and run teamai pull, or add ~/.teamai/sandboxes/${profile.asked}.yaml for yourself, and start again.`
+    : fixOf(profile.layer);
+
+  return { code: 'bad_option', message: `Sandbox profile ${profile.location} refused option "${key}": ${message}. ${fix}` };
 }
 
-/** What an attempt's record says of the sandbox profile its sandbox runtime ran, and whether its init offered isolation. */
+/** What an attempt's record says of the sandbox profile its sandbox runtime ran, and what its init said it enforces. */
 function sandboxRecord(profile: SandboxProfile, can: DriverCan): NonNullable<RuntimeOrigin['sandbox']> {
-  return { profile: profile.resource, layer: profile.layer, location: profile.location, revision: profile.revision, provider: String(profile.options['provider']), enforced: can.isolation === 'sandbox' };
+  const { isolation, network, tokens, max_turns: maxTurns } = can;
+  const enforces = { ...(isolation !== undefined && { isolation }), ...(network !== undefined && { network }), ...(tokens !== undefined && { tokens }), ...(maxTurns !== undefined && { max_turns: maxTurns }) };
+
+  return { profile: profile.resource, layer: profile.layer, location: profile.location, revision: profile.revision, provider: String(profile.options['provider']), enforces };
 }
 
 function badOption(driver: ResolvedDriver, use: string, key: string, message: string): WorkflowFailure {
@@ -293,6 +301,9 @@ async function fleetRuntime(driver: ResolvedDriver, split: Extract<ReturnType<ty
   return { ok: true, opened: { kind: 'external', use: 'fleet', runtime, can: ready.can, launchesAgents: ready.launchesAgents, engine: split.engine, credentials: {}, found: [], masks, optionsFrom: optionsSource(driver, 'fleet') } };
 }
 
+/** What a runtime answers a check it cannot settle without starting something, as the sandbox runtime does once its provider answers. */
+const CANNOT_TELL = 'check_unsupported';
+
 /** Opens one runtime of `driver`: finds it, refuses a team runtime no one accepted here, starts it and passes its options. */
 async function openRuntime(driver: ResolvedDriver, { use, options, sandbox }: { use: string; options: RuntimeOptions; sandbox?: string }, { mode, canAsk, purpose, checkout }: { mode: RunMode; canAsk: boolean; purpose: DriverPurpose; checkout: string }): Promise<{ ok: true; opened: OpenedRuntime } | { ok: false; failure: WorkflowFailure }> {
   const split = engineOptions(options);
@@ -324,8 +335,10 @@ async function openRuntime(driver: ResolvedDriver, { use, options, sandbox }: { 
   const accepted = await acceptRuntime(source, purpose === 'check' ? { mode: 'unattended', canAsk: false } : { mode, canAsk });
 
   if (!accepted.ok) return accepted;
-  // The sandbox runtime takes its provider's options from the sandbox profile the entry names.
-  const profiled = use === SANDBOX_RUNTIME ? await sandboxOptions({ driver, named: sandbox, given: split.runtime, from: optionsSource(driver, use) }) : undefined;
+  // The sandbox runtime takes its provider's options from the sandbox profile the entry names. A stop of what an attempt
+  // started on options given inline, by a teamai that took them, reaches its sandbox on those options.
+  const isStoppingInline = purpose === 'stop' && Object.keys(split.runtime).length > 0;
+  const profiled = use === SANDBOX_RUNTIME && !isStoppingInline ? await sandboxOptions({ driver, named: sandbox, given: split.runtime, from: optionsSource(driver, use) }) : undefined;
 
   if (profiled?.ok === false) return profiled;
   const initOptions = profiled?.options ?? split.runtime;
@@ -434,8 +447,8 @@ async function openRuntime(driver: ResolvedDriver, { use, options, sandbox }: { 
 
   const notStarted = failure.code === 'bad_option'
     ? (profile ? profileRefused(profile, failure.key ?? '?', failure.message) : badOption(driver, use, failure.key ?? '?', failure.message))
-    // A check keeps the runtime's own code, which says whether it could tell at all.
-    : { code: purpose === 'check' ? failure.code : 'runtime_failed', message: `Runtime "${source.name}" of driver "${driver.name}" did not start (${failure.code}): ${failure.message}` };
+    // A check says apart a runtime that could not tell from one that said why a run could not start.
+    : { code: purpose === 'check' && failure.code === CANNOT_TELL ? CANNOT_TELL : 'runtime_failed', message: `Runtime "${source.name}" of driver "${driver.name}" did not start (${failure.code}): ${failure.message}` };
 
   if (notRecovered === undefined) return { ok: false, failure: notStarted };
 
@@ -569,8 +582,6 @@ export async function openDriver(
   return { ok: true, opened: { driver, asked: name, runtimes: opened } };
 }
 
-/** What the sandbox runtime answers a check once its provider answers: it cannot tell more without starting a sandbox. */
-const SANDBOX_CANNOT_TELL = 'check_unsupported';
 
 /** One sandbox entry of a driver: the profile it names, found or why not, and whether this machine can start it. */
 export interface SandboxEntryCheck {
@@ -609,7 +620,7 @@ export async function sandboxEntryChecks(config: LocalConfig, name: string, chec
         return { ok: true };
       }
 
-      return opened.failure.code === SANDBOX_CANNOT_TELL ? { ok: true } : opened;
+      return opened.failure.code === CANNOT_TELL ? { ok: true } : opened;
     },
   })));
 }

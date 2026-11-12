@@ -29,7 +29,7 @@ export async function buildSandboxProfileChecks({ localConfig, teamConfig }: { l
     const started = await canStart();
 
     return {
-      name: `Sandbox profile "${asked}" of driver ${driver} (${profile.location}, revision ${profile.revision.slice(0, 12)}, provider ${String(profile.options['provider'])}) can start here`,
+      name: `Sandbox profile "${asked}" of driver ${driver} (${profile.location}, revision ${profile.revision.slice(0, 12)}, provider ${typeof profile.options['provider'] === 'string' ? profile.options['provider'] : 'unset'}) can start here`,
       source: 'local',
       check: async () => started.ok,
       ...(!started.ok && { fix: started.failure.message }),

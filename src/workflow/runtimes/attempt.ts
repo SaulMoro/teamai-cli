@@ -19,7 +19,7 @@ import type { SessionRef } from '../workspace.js';
 import { redact } from '@teamai/shared/redact';
 import { AttemptResult } from '../attempt-result.js';
 import { loginFileOf } from './login.js';
-import { CANCEL_FAILED, OpIdSchema, RuntimeDisplaySchema, RuntimeFailureSchema, type OpId, type OpState, type PlaceView, type RuntimeDisplay, type RuntimeFailure } from '@teamai/runtime-protocol';
+import { CANCEL_FAILED, CanSchema, OpIdSchema, RuntimeDisplaySchema, RuntimeFailureSchema, type OpId, type OpState, type PlaceView, type RuntimeDisplay, type RuntimeFailure } from '@teamai/runtime-protocol';
 import { isUnansweredFailure, newOpId, type Accepted, type ExecEnd, type ExecEvents, type ExecKind, type ExecRequest, type Lost, type PromptEnd, type PromptRequest, type StepRuntime } from '@teamai/runtime-protocol/step-runtime';
 import type { DriverCan } from '../requirements.js';
 import { copyRegularTree, readRegularFile } from '@teamai/shared/regular-file';
@@ -69,8 +69,11 @@ const ToolHomeSchema = z.object({ tool: z.string(), dir: z.string() });
  */
 const RuntimeOriginSchema = z.object({
   runtime: z.string(), layer: z.enum(['personal', 'team', 'teamai']), location: z.string(), revision: z.string(),
-  /** For the sandbox runtime: the sandbox profile it ran, as the runtime is named, its provider, and whether its init offered isolation. */
-  sandbox: z.object({ profile: z.string(), layer: z.enum(['personal', 'team', 'teamai']), location: z.string(), revision: z.string(), provider: z.string(), enforced: z.boolean() }).optional(),
+  /** For the sandbox runtime: the sandbox profile it ran, as the runtime is named, its provider, and what its init said it enforces. */
+  sandbox: z.object({
+    profile: z.string(), layer: z.enum(['personal', 'team', 'teamai']), location: z.string(), revision: z.string(), provider: z.string(),
+    enforces: CanSchema.pick({ isolation: true, network: true, tokens: true, max_turns: true }),
+  }).optional(),
 });
 
 export type RuntimeOrigin = z.infer<typeof RuntimeOriginSchema>;

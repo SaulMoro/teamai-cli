@@ -26,13 +26,17 @@ export async function folderEntries(dir: string): Promise<string[]> {
   return found.sort();
 }
 
-/** The first link a resource folder holds, by relative path, or none. */
-export async function firstLink(dir: string): Promise<string | undefined> {
-  for (const relative of await folderEntries(dir).catch(() => [])) {
-    if ((await fs.lstat(path.join(dir, relative)).catch(() => undefined))?.isSymbolicLink() === true) return relative.split(path.sep).join('/');
+/** The first link a resource folder holds, by relative path, or none; a folder it cannot read is not taken as holding none. */
+export async function firstLink(dir: string): Promise<{ ok: true; link?: string } | { ok: false; reason: string }> {
+  try {
+    for (const relative of await folderEntries(dir)) {
+      if ((await fs.lstat(path.join(dir, relative))).isSymbolicLink()) return { ok: true, link: relative.split(path.sep).join('/') };
+    }
+  } catch (error) {
+    return { ok: false, reason: `its folder cannot be read (${error instanceof Error ? error.message : String(error)})` };
   }
 
-  return undefined;
+  return { ok: true };
 }
 
 /**

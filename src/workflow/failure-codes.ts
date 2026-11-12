@@ -97,6 +97,8 @@ export const FAILURE_CODES = [
   'driver_not_found', 'driver_invalid', 'driver_namespace_conflict', 'runtime_not_found', 'runtime_namespace_conflict', 'runtime_not_accepted',
   // Why the sandbox profile a driver's sandbox entry names cannot be used: none is declared, or it does not parse or is reached through a link.
   'sandbox_profile_not_found', 'sandbox_profile_invalid',
+  // A runtime that answers a check only that it cannot tell more without starting something.
+  'check_unsupported',
   'bad_option', 'credential_missing', 'runtime_exited', 'runtime_not_sent', 'runtime_unanswered', 'runtime_protocol', 'runtime_gone', 'exec_failed',
   // Why a step runtime could not wake a fleet member: it has no machine to wake one on.
   'wake_unavailable',

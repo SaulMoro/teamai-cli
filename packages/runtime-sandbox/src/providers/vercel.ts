@@ -577,7 +577,7 @@ export function vercelProvider({ options, owner, state, env, home }: { options: 
     },
 
     name: nameOf,
-    display: (key) => ({ label: `${nameOf(key)} (vercel)`, fields: { sandbox: nameOf(key), ...(options.runtime !== undefined && { runtime: options.runtime }) } }),
+    display: (key, warmed) => ({ label: `${nameOf(key)} (vercel)`, fields: { sandbox: nameOf(key), ...(options.runtime !== undefined && { runtime: options.runtime }), ...(warmed && { snapshot: warmed.image }) } }),
 
     removal: (place) => removeBy(nameOf(place)),
   };
