@@ -83,6 +83,9 @@ export const processes: LeftoverKind = {
 
         if (listed.code !== 0 || listed.stdout === '') return { kind: 'not_observed', what: `processes on ${machine.label}`, why: `/proc could not be read: ${listed.why}` };
         procs = parseProcLines(listed.stdout);
+
+        // A container's table is not this machine's: say it was read, so a clean section still shows it was looked at.
+        if (machine.target.kind === 'member') notes.push(`${procs.length} processes read on ${machine.label} from /proc`);
       }
 
       const harness = machine.target.kind === 'world' ? lineageOf(process.pid, procs) : new Set<number>();

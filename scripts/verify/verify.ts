@@ -4,7 +4,7 @@ import path from 'node:path';
 import { runLedger } from './ledger.js';
 import { planCleanup } from './leftovers.js';
 import { passedKeys, splitPassOption } from './secrets.js';
-import { addMember, ensureOrigin, memberLayout } from './members.js';
+import { addMember, ensureOrigin, memberLayout, parseMachine } from './members.js';
 import { memberOf, parseTarget, runOn } from './target.js';
 import { checkoutStatus, createWorld, git, liveWorlds, loadWorld, REPO_ROOT, saveWorld, TEAM_URL, TOOL_COMMANDS, type World } from './world.js';
 
@@ -92,6 +92,19 @@ async function cleanup(world: World): Promise<boolean> {
     console.log(`Removed ${removal.what}`);
   }
 
+  for (const member of world.members ?? []) {
+    if (member.machine !== 'container') continue;
+    const removed = spawnSync('docker', ['rm', '-f', member.container], { encoding: 'utf8' });
+
+    if (removed.status !== 0 && !/No such container/i.test(removed.stderr)) {
+      console.error(`Not cleaning ${world.runId}: removing @${member.name}'s container ${member.container} failed (${removed.stderr.trim()}).`);
+
+      return false;
+    }
+
+    console.log(`@${member.name}'s container ${member.container} is gone`);
+  }
+
   const keep = new Set(['world.json', 'logs', 'observed.jsonl']);
 
   for (const name of fs.readdirSync(world.dir)) {
@@ -143,10 +156,7 @@ async function main(): Promise<number> {
       const [run, name, ...flags] = rest;
 
       if (name === undefined) throw new Error('member needs a run id and a name, such as `member <run> bob`.');
-      const unknown = flags.filter((flag) => flag !== '--machine' && flag !== 'host');
-
-      if (unknown.length > 0) throw new Error(`member does not take ${unknown.join(' ')}.`);
-      const world = addMember(loadWorld(parseTarget(run).runId), { name });
+      const world = addMember(loadWorld(parseTarget(run).runId), { name, machine: parseMachine(flags) });
       console.log(memberOf(world, name).project);
 
       return 0;

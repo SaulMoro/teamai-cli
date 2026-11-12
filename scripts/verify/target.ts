@@ -39,14 +39,23 @@ export function memberOf(world: World, name: string): Member {
   return member;
 }
 
-/** The HOME, project, env and writers a target's commands run with. */
+/** The machine a place's commands run on: this one, or a member's container, reached through docker exec. */
+type Machine = { kind: 'host' } | { kind: 'container'; container: string };
+
+/** The HOME, project, env, writers and machine a target's commands run with. */
 function placeOf(world: World, target: Target) {
   switch (target.kind) {
-    case 'world': return { home: world.home, project: world.project, env: world.env, writers: worldWritersFile(world) };
-    case 'member': {
-      const { home, project, env, writers } = memberOf(world, target.name);
+    case 'world': {
+      const machine: Machine = { kind: 'host' };
 
-      return { home, project, env, writers };
+      return { home: world.home, project: world.project, env: world.env, writers: worldWritersFile(world), machine };
+    }
+
+    case 'member': {
+      const member = memberOf(world, target.name);
+      const machine: Machine = member.machine === 'container' ? { kind: 'container', container: member.container } : { kind: 'host' };
+
+      return { home: member.home, project: member.project, env: member.env, writers: member.writers, machine };
     }
 
     default: {
@@ -57,12 +66,42 @@ function placeOf(world: World, target: Target) {
   }
 }
 
-/** What a host process gets to run `argv`: the place's frozen env, or bin/run in a world made before it was kept. */
-function hostCommand(world: World, place: ReturnType<typeof placeOf>, argv: readonly string[]) {
-  if (place.env === undefined) return { command: path.join(world.bin, 'run'), args: [...argv], env: {} satisfies NodeJS.ProcessEnv, cwd: place.project };
-  const [command = 'true', ...args] = argv;
+/**
+ * What runs `argv` in a member's container: docker exec, each variable given by name only so no value is in an argument,
+ * the container's PATH aside, and the docker CLI's own config kept where the harness has it, never under the member's HOME.
+ */
+export function containerCommand({ container, env, pass, cwd, argv, harnessEnv }: { container: string; env: Readonly<Record<string, string>>; pass: ReadonlyMap<string, string>; cwd: string; argv: readonly string[]; harnessEnv: NodeJS.ProcessEnv }) {
+  const { PATH: inside = '', ...named } = { ...env, ...Object.fromEntries(pass) };
+  const engine = Object.fromEntries(['DOCKER_HOST', 'DOCKER_CONTEXT'].flatMap((name) => (harnessEnv[name] === undefined ? [] : [[name, harnessEnv[name]]])));
 
-  return { command, args, env: place.env, cwd: place.project };
+  return {
+    command: 'docker',
+    args: ['exec', '-i', '-w', cwd, '-e', `PATH=${inside}`, ...Object.keys(named).flatMap((name) => ['-e', name]), container, ...argv],
+    env: { ...named, ...engine, PATH: harnessEnv.PATH ?? '', DOCKER_CONFIG: harnessEnv.DOCKER_CONFIG ?? path.join(harnessEnv.HOME ?? '', '.docker') },
+    cwd: '/',
+  };
+}
+
+/** What a process gets to run `argv` on its place: the frozen env (bin/run in a world made before it was kept), on the place's machine. */
+function commandOf(world: World, place: ReturnType<typeof placeOf>, argv: readonly string[], { pass, cwd = place.project }: { pass: ReadonlyMap<string, string>; cwd?: string }) {
+  const { machine } = place;
+
+  switch (machine.kind) {
+    case 'host': {
+      if (place.env === undefined) return { command: path.join(world.bin, 'run'), args: [...argv], env: {} satisfies NodeJS.ProcessEnv, cwd };
+      const [command = 'true', ...args] = argv;
+
+      return { command, args, env: { ...place.env, ...Object.fromEntries(pass) }, cwd };
+    }
+
+    case 'container':
+      return containerCommand({ container: machine.container, env: place.env ?? {}, pass, cwd, argv, harnessEnv: process.env });
+    default: {
+      const unknown: never = machine;
+
+      return unknown;
+    }
+  }
 }
 
 /**
@@ -76,8 +115,8 @@ export async function runOn(world: World, target: Target, argv: readonly string[
   if (pass.size > 0 && place.env === undefined) throw new Error(`World ${world.runId} was made before --pass, and its commands run with what bin/run sets. Make a new world.`);
   const mask = worldRedactor({ passed: pass, harnessEnv: process.env });
   const before = worldFiles(place);
-  const { command, args, env, cwd } = hostCommand(world, place, argv);
-  const child = spawn(command, args, { cwd, env: { ...env, ...Object.fromEntries(pass) }, stdio: ['inherit', 'pipe', 'pipe'] });
+  const { command, args, env, cwd } = commandOf(world, place, argv, { pass });
+  const child = spawn(command, args, { cwd, env, stdio: ['inherit', 'pipe', 'pipe'] });
   const watching = watchSandboxes(world, { pass, label: argv.slice(0, 3).map(mask).join(' ') });
   let output = '';
 
@@ -155,8 +194,9 @@ function watchSandboxes(world: World, { pass, label }: { pass: ReadonlyMap<strin
 /** Runs a probe `argv` on `target` and answers what it printed, unlogged: how the ledger reads a machine. */
 export function captureOn(world: World, target: Target, argv: readonly string[], { timeoutMs = 30_000 }: { timeoutMs?: number } = {}) {
   const place = placeOf(world, target);
-  const [command = 'true', ...args] = argv;
-  const ran = spawnSync(command, args, { cwd: place.project, env: place.env ?? process.env, encoding: 'utf8', timeout: timeoutMs, maxBuffer: 256 * 1024 ** 2 });
+  // From /, so the probe's own processes name no path of the world.
+  const { command, args, env } = commandOf(world, { ...place, env: place.env ?? Object.fromEntries(Object.entries(process.env).flatMap(([name, value]) => (value === undefined ? [] : [[name, value]]))) }, argv, { pass: new Map(), cwd: '/' });
+  const ran = spawnSync(command, args, { cwd: '/', env, encoding: 'utf8', timeout: timeoutMs, maxBuffer: 256 * 1024 ** 2 });
 
   return { code: ran.error === undefined ? ran.status : null, stdout: ran.stdout ?? '', why: ran.error?.message ?? ran.stderr?.trim().split('\n').at(-1) ?? '' };
 }
