@@ -2,6 +2,7 @@ import { execFileSync, spawn } from 'node:child_process';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
+import { signalGroup } from '@teamai/shared/process-group';
 import { z } from 'zod';
 
 // ─── A stand-in `@vercel/sandbox`, for tests only ───
@@ -85,28 +86,20 @@ export class Command {
       const { pid, exitCode } = CommandSchema.parse(JSON.parse(fs.readFileSync(this.file(), 'utf8')));
 
       if (exitCode !== null) return { exitCode };
+      const probe = signalGroup(pid, 0);
 
-      try {
-        process.kill(-pid, 0);
-      } catch {
-        return { exitCode: 143 };
-      }
+      if (probe !== 'sent' && probe !== 'denied') return { exitCode: 143 };
 
       await new Promise((resolve) => { setTimeout(resolve, 50); });
     }
   }
 
-  async kill(signal: NodeJS.Signals | number = 'SIGTERM'): Promise<void> {
+  async kill(signal: NodeJS.Signals = 'SIGTERM'): Promise<void> {
     log('kill', { sandbox: this.sandbox, cmdId: this.cmdId, signal });
     const { pid, exitCode } = CommandSchema.parse(JSON.parse(fs.readFileSync(this.file(), 'utf8')));
 
-    if (exitCode !== null) return;
-
-    try {
-      process.kill(-pid, signal);
-    } catch {
-      // Ended meanwhile.
-    }
+    // A command whose spawn has not failed yet records no process: 0, which signalGroup refuses.
+    if (exitCode === null) signalGroup(pid, signal);
   }
 }
 
@@ -228,6 +221,8 @@ export class Sandbox {
     const done = new Promise<number>((resolve) => {
       child.on('error', () => { isClosed = true; wake?.(); fs.writeFileSync(file, JSON.stringify({ pid: 0, exitCode: 127 })); resolve(127); });
       child.on('close', (code, signal) => {
+        // A spawn that failed closes after its error, which recorded its end already.
+        if (isClosed) return;
         const exitCode = code ?? (signal === 'SIGKILL' ? 137 : 143);
         isClosed = true;
         wake?.();
@@ -265,13 +260,7 @@ export class Sandbox {
     for (const name of fs.existsSync(path.join(sandboxDir(this.name), 'commands')) ? fs.readdirSync(path.join(sandboxDir(this.name), 'commands')) : []) {
       const { pid, exitCode } = CommandSchema.parse(JSON.parse(fs.readFileSync(path.join(sandboxDir(this.name), 'commands', name), 'utf8')));
 
-      if (exitCode === null) {
-        try {
-          process.kill(-pid, 'SIGKILL');
-        } catch {
-          // Ended meanwhile.
-        }
-      }
+      if (exitCode === null) signalGroup(pid, 'SIGKILL');
     }
 
     // The git paths were made read-only inside; a hosted sandbox's deletion ignores modes.
