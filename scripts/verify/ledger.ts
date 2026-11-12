@@ -254,13 +254,18 @@ const TOOL_STATE_FILES = new Map(TOOL_ORDER.flatMap((tool) => {
   return (home.stateFiles ?? []).map((file): [string, string | undefined] => [`home/${file}`, servers]);
 }));
 
+/** Whether `text` names teamai beyond the harness's own paths: every world's directory and TMPDIR hold `teamai-verify`. */
+function mentionsTeamai(text: string): boolean {
+  return /teamai/i.test(text.replaceAll(/teamai-verify[\w.-]*/g, ''));
+}
+
 /**
  * Whether `text`, the file at `entry`, is a tool's own state file (`home.stateFiles`) holding nothing of teamai's: no
  * name of teamai, and no non-empty object under the key the tool's MCP servers sit under, at any depth, where a server
  * teamai wrote would be. Text that is not JSON holds something of teamai's, as far as the ledger can tell.
  */
 export function isToolOwnState(entry: string, text: string): boolean {
-  if (!TOOL_STATE_FILES.has(entry) || /teamai/i.test(text)) return false;
+  if (!TOOL_STATE_FILES.has(entry) || mentionsTeamai(text)) return false;
   const servers = TOOL_STATE_FILES.get(entry);
 
   if (servers === undefined) return true;
@@ -408,7 +413,7 @@ async function reverseOf(world: World, place: LedgerPlace): Promise<{ leaks: str
   };
 
   const repository = repositoryView(place.project);
-  const namesTeamai = (entry: string): boolean => /teamai/i.test(fs.readFileSync(entryPath(place, entry), 'utf8'));
+  const namesTeamai = (entry: string): boolean => mentionsTeamai(fs.readFileSync(entryPath(place, entry), 'utf8'));
   const remoteTips = new Set(Object.entries(after).flatMap(([entry, value]) => (REMOTE_REF.test(entry) && value !== 'dir' ? [value] : [])));
 
   for (const entry of [...new Set([...Object.keys(before), ...Object.keys(after)])].sort()) {

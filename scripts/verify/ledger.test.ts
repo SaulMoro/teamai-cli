@@ -28,6 +28,7 @@ describe("a tool's own state file in a ledger's section (e)", () => {
   it.each([
     ['home/.claude.json', '{"numStartups":1,"projects":{"/w/project":{"allowedTools":[]}}}', true],
     ['home/.claude.json', '{"mcpServers":{}}', true],
+    ['home/.claude.json', '{"projects":{"/private/var/folders/x/T/teamai-verify/20261112T120000-aaaaaa/project":{"allowedTools":[]}}}', true],
     ['home/.claude.json', '{"mcpServers":{"docs":{"command":"node"}}}', false],
     ['home/.claude.json', '{"projects":{"/w/project":{"mcpServers":{"docs":{"command":"node"}}}}}', false],
     ['home/.claude.json', '{"hooks":"teamai hook"}', false],
