@@ -91,7 +91,7 @@ sandbox 档案写明沙箱从什么构建：它的 provider 和该 provider 的�
 | --- | --- | --- |
 | `provider` | `docker` | `sbx`、`docker`、`podman`、`seatbelt`、`bwrap` 或 `vercel` |
 | `agent` | `claude` | 仅 `sbx`：每个沙箱从哪个 agent 模板启动，`claude` 或 `codex`，或者一个自带工具的 kit 引用。不写时，每次尝试从它自己工具的模板启动：Claude 步骤用 `claude`，Codex 步骤用 `codex`，命令步骤用裸的 `shell`。`agent: shell` 会被拒绝，因为那个模板里没有 agent。 |
-| `image` | `ghcr.io/acme/agent:1` | 仅 `docker` 和 `podman`：预先构建的镜像。它需要 `/bin/sh` 以及步骤要运行的工具：`claude`、`codex` 或 `codebuddy`。需要读取历史的步骤还要装 `git`。 |
+| `image` | `ghcr.io/acme/agent:1` | 仅 `docker` 和 `podman`：预先构建的镜像。它需要 `/bin/sh` 以及步骤要运行的工具：`claude`、`codex` 或 `codebuddy`。需要读取历史的步骤还要装 `git`。步骤运行时 `TZ` 设为你的时区，镜像只有带 zoneinfo（`tzdata`）才会应用它，这样工具给出的“请在 <时间> 后重试”才按你的时区读取：快速开始里基于 Debian `node:22-bookworm-slim` 的镜像自带它，Alpine 镜像需要 `apk add tzdata`。 |
 | `warm` | `prepare: npm ci --ignore-scripts` | 包管理器缓存已填好的镜像，只做一次，每次尝试都用它。见[预热镜像](#预热镜像)。 |
 | `credentials`（写在条目上） | `CLAUDE_CODE_OAUTH_TOKEN: env:CLAUDE_CODE_OAUTH_TOKEN` | 由 teamai 在运行开始时从你的环境里读取，只交给步骤的工具，从不交给命令步骤。见[来自你环境的凭据](workflow-advanced.md#来自你环境的凭据)。 |
 

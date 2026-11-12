@@ -91,7 +91,7 @@ The entry keeps what teamai reads itself, `credentials` and `max_parallel`, in i
 | --- | --- | --- |
 | `provider` | `docker` | `sbx`, `docker`, `podman`, `seatbelt`, `bwrap` or `vercel` |
 | `agent` | `claude` | `sbx` only: the agent template each sandbox starts from, `claude` or `codex`, or a kit reference that brings the tools. Leave it out to start each attempt from its own tool's template: a Claude step from `claude`, a Codex step from `codex`, a command step from the bare `shell`. `agent: shell` is refused, since that template holds no agent. |
-| `image` | `ghcr.io/acme/agent:1` | `docker` and `podman` only: the prebuilt image. It needs `/bin/sh` and the tools your steps run: `claude`, `codex` or `codebuddy`. Add `git` for steps that read history. |
+| `image` | `ghcr.io/acme/agent:1` | `docker` and `podman` only: the prebuilt image. It needs `/bin/sh` and the tools your steps run: `claude`, `codex` or `codebuddy`. Add `git` for steps that read history. A step runs with `TZ` set to your time zone, which the image applies only with its zoneinfo (`tzdata`), so that a tool's "try again at <time>" is read in your zone: the quick start's image, on Debian's `node:22-bookworm-slim`, has it, and an Alpine image needs `apk add tzdata`. |
 | `warm` | `prepare: npm ci --ignore-scripts` | An image with your package manager's store filled, made once and used by every attempt. See [A warm image](#a-warm-image). |
 | `credentials` (on the entry) | `CLAUDE_CODE_OAUTH_TOKEN: env:CLAUDE_CODE_OAUTH_TOKEN` | Read by teamai from your environment when the run starts, and given only to the step's tool, never to a command step. See [Credentials from your environment](workflow-advanced.md#credentials-from-your-environment). |
 
