@@ -4,7 +4,6 @@ import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { journal } from '../../../packages/runtime-sandbox/src/journal.js';
 import { sandboxJournalRoot } from '../../../packages/runtime-sandbox/src/journal-root.js';
-import { projectSlug, projectsRootDir } from '../../../src/utils/partition.js';
 import { cleanupPlan, type LeftoverContext } from '../leftovers.js';
 import { startObserver } from '../observer.js';
 import type { World } from '../world.js';
@@ -68,9 +67,8 @@ function dockerListing(world: World, containers: readonly string[]) {
 const RUN = '20261112T120000-aaaaaa';
 
 /** A world whose HOME and member bob's HOME are under `root`, and a T3 attempt record of run r1 in `home`, at `phase`. */
-/** A T3 attempt record of run r1 at `phase`, in the partition of `checkout` under `home`, where a run started there keeps it. */
-function openT3Record(root: string, home: string, phase: string, checkout = path.join(path.dirname(home), 'project')): string {
-  const file = path.join(projectsRootDir(home), projectSlug(checkout), 'workflows', 'runs', 'r1', 'attempts', 'a1', 'runtime.json');
+function openT3Record(root: string, home: string, phase: string): string {
+  const file = path.join(home, '.teamai', 'runs', 'r1', 'attempts', 'a1', 'runtime.json');
   fs.mkdirSync(path.dirname(file), { recursive: true });
   fs.writeFileSync(file, phase === 'garbled' ? '{' : JSON.stringify({ runtime: 't3', driver: 'teamai-t3', phase, open: { op: 'op-0123abcd', handle: 'thread-1' } }));
 
@@ -78,10 +76,9 @@ function openT3Record(root: string, home: string, phase: string, checkout = path
 }
 
 function worldWithBob(): { root: string; context: (files: string[]) => LeftoverContext } {
-  // As world.json names it: its real path, which the records teamai keeps are found under.
-  const root = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'places-')));
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'places-'));
   roots.push(root);
-  const world = { runId: RUN, home: path.join(root, 'home'), project: path.join(root, 'project'), members: [{ name: 'bob', home: path.join(root, 'members', 'bob', 'home'), project: path.join(root, 'members', 'bob', 'project') }] } as World;
+  const world = { runId: RUN, home: path.join(root, 'home'), members: [{ name: 'bob', home: path.join(root, 'members', 'bob', 'home') }] } as World;
 
   return { root, context: (files) => ({ world, self: { runId: RUN, paths: [], journals: [], runs: [] }, others: [], records: { files, runs: ['r1'], runtimeJournals: 0 } }) };
 }
@@ -102,18 +99,6 @@ describe('cleanup while an attempt place is still open', () => {
         ],
       }],
     });
-  });
-
-  it('says to cancel from the checkout that started the run when its records are not in the install\'s own project', async () => {
-    const { root, context } = worldWithBob();
-    const file = openT3Record(root, path.join(root, 'home'), 'running', path.join(root, 'second-checkout'));
-    const runs = path.dirname(path.dirname(path.dirname(path.dirname(file))));
-
-    const plan = cleanupPlan([{ onCleanup: places.onCleanup, observed: await places.observe(context([file])) }]);
-
-    expect(plan.kind === 'refuse' ? plan.refusals.flatMap((refusal) => refusal.items) : []).toEqual([
-      `run r1 attempt a1's place on teamai-t3/t3 (thread-1), running: close it with \`npm run -s verify -- sh ${RUN} sh -c 'cd <the checkout that started run r1> && teamai workflow cancel r1'\`, since its records are in ${runs}, not in the project of this install`,
-    ]);
   });
 
   it('refuses while a record cannot be read, since its place may be open, as uninstall does', async () => {

@@ -7,8 +7,6 @@
  */
 import path from 'node:path';
 import { isPlaceLeftOpen, readAttemptPlacementAt, type AttemptPlacement } from '../../../src/workflow/runtimes/attempt.js';
-import { projectSlug, projectsRootDir } from '../../../src/utils/partition.js';
-import { runsDirIn } from '../../../src/workflow/store.js';
 import type { LeftoverKind } from '../leftovers.js';
 import type { World } from '../world.js';
 
@@ -30,20 +28,11 @@ function keyOf(file: string) {
   return { run: path.basename(path.dirname(path.dirname(attempt))), attempt: path.basename(attempt) };
 }
 
-/**
- * The verb that cancels the run of record `file`, from the install whose HOME holds it, the world's own or a member's:
- * from that install's project when the run's records are in its partition, and else from the checkout that started it.
- */
-function cancelOf(world: Pick<World, 'runId' | 'home' | 'project' | 'members'>, file: string): string {
+/** The verb that cancels the run of record `file` from the install whose HOME holds it: the world's own or a member's. */
+function cancelOf(world: Pick<World, 'runId' | 'home' | 'members'>, file: string): string {
   const member = (world.members ?? []).find((each) => file.startsWith(`${each.home}${path.sep}`));
-  const target = `${world.runId}${member === undefined ? '' : `@${member.name}`}`;
-  const { run } = keyOf(file);
-  const runs = path.dirname(path.dirname(path.dirname(path.dirname(file))));
-  const own = runsDirIn(path.join(projectsRootDir(member?.home ?? world.home), projectSlug(member?.project ?? world.project)));
 
-  if (runs === own) return `\`npm run -s verify -- teamai ${target} workflow cancel ${run}\``;
-
-  return `\`npm run -s verify -- sh ${target} sh -c 'cd <the checkout that started run ${run}> && teamai workflow cancel ${run}'\`, since its records are in ${runs}, not in the project of this install`;
+  return `\`npm run -s verify -- teamai ${world.runId}${member === undefined ? '' : `@${member.name}`} workflow cancel ${keyOf(file).run}\``;
 }
 
 export const places: LeftoverKind = {
