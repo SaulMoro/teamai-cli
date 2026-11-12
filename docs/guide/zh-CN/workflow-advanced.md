@@ -1732,7 +1732,7 @@ teamai 先打开外层，再打开内层。它先停止并关闭内层；内层�
 | `use: t3`，`through: sandbox` | 一个 T3 Code 线程 | Claude，在这次尝试的沙箱里 | [T3](runtime-t3.md)、[通过应用运行](runtime-sandbox.md#通过应用运行teamai-sandbox-tool) |
 | `use: paseo`，`through: sandbox` | 一个 Paseo 智能体 | 在这次尝试的沙箱里 | [Paseo](runtime-paseo.md#通过沙箱运行) |
 
-沙箱的提供方必须提供这次尝试的套接字：`docker`、`podman`、`sbx` 或 `bwrap`。
+沙箱的提供方必须提供这次尝试的套接字：`sbx`，或 Docker Desktop 上、这台 Linux 机器上 26.0.0 或更高（25.0.5、23.0.11）且镜像里有 `node` 的 `docker`，它们让工具连不到这台机器的端口（[步骤能连到什么](runtime-sandbox.md#步骤能连到这台机器的什么)）。
 
 [协议](runtime-protocol.md#协议)说明内层和外层的请求各带什么。
 

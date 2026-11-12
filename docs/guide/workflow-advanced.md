@@ -1738,7 +1738,7 @@ A runtime takes part only when it supports it. Of the runtimes teamai ships, the
 | `use: t3`, `through: sandbox` | a T3 Code thread | Claude, in the attempt's sandbox | [T3](runtime-t3.md), [Through an app](runtime-sandbox.md#through-an-app-teamai-sandbox-tool) |
 | `use: paseo`, `through: sandbox` | a Paseo agent | in the attempt's sandbox | [Paseo](runtime-paseo.md#through-a-sandbox) |
 
-The sandbox's provider must serve the attempt's socket: `docker`, `podman`, `sbx` or `bwrap`.
+The sandbox's provider must serve the attempt's socket: `sbx`, or `docker` on Docker Desktop or on this Linux machine, 26.0.0 or later (25.0.5, 23.0.11), with `node` in the image, which keep the tool from this machine's ports ([what a step reaches](runtime-sandbox.md#what-a-step-reaches-of-this-machine)).
 
 [The runtime protocol](runtime-protocol.md#the-protocol) says what the inner's and the outer's requests carry.
 
