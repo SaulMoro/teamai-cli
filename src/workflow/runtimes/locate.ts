@@ -122,7 +122,7 @@ async function readDefinition(driver: ResolvedDriver, use: string, definition: L
   const unusable = (reason: string): DefinitionRead => refuse(definition.location, reason);
   const badMarker = (reason: string): DefinitionRead => refuse(markerLocation, reason);
 
-  let text = definition.text;
+  let text = definition.layer === 'teamai' ? definition.text : undefined;
 
   if (text === undefined && definition.form === 'file' && await isSymlink(markerFile)) return unusable(`it is a link, and teamai reads a runtime only from a file ${definition.layer === 'team' ? 'the team repo' : 'your directory'} holds`);
 

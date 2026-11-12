@@ -234,7 +234,7 @@ export async function resolveDriver(config: LocalConfig, name: string, { persona
   switch (found.kind) {
     case 'found': {
       const { item } = found;
-      const read = await readDefinition(definitionFile(item), SOURCE_OF[item.layer], item.config ?? config);
+      const read = await readDefinition(definitionFile(item), SOURCE_OF[item.layer], item.layer === 'team' ? item.config : config);
 
       return read.ok ? { ok: true, driver: read.driver } : read;
     }

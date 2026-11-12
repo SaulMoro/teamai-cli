@@ -43,9 +43,7 @@ export function namesOf(asked: string): string[] {
   return asked.startsWith(SHIPPED_PREFIX) ? [asked] : [asked, `${SHIPPED_PREFIX}${asked}`];
 }
 
-/** A definition found, before its caller reads it. */
-export interface LayerItem {
-  readonly layer: Layer;
+interface FoundAt {
   /** The name it was found by: the name asked, or `teamai-<name>`. */
   readonly resource: string;
   readonly form: 'file' | 'folder';
@@ -53,11 +51,13 @@ export interface LayerItem {
   readonly at: string;
   /** Where a message names it: its path in the team repo (`runtimes/t3/`), the member's file or folder, or teamai's. */
   readonly location: string;
-  /** The marker's text, as teamai's layer holds it read; read from `at` otherwise. */
-  readonly text?: string;
-  /** The config whose team repo holds it, for the team layer. */
-  readonly config?: LocalConfig;
 }
+
+/** A definition found, before its caller reads it: teamai's with its marker's text read, the team's with its config. */
+export type LayerItem =
+  | FoundAt & { readonly layer: 'personal' }
+  | FoundAt & { readonly layer: 'team'; readonly config: LocalConfig }
+  | FoundAt & { readonly layer: 'teamai'; readonly text: string };
 
 /** Why the first layer that holds a name cannot give it. */
 export type LayerRefusal =
@@ -158,9 +158,7 @@ async function fromTeam(kind: LayeredKind, config: LocalConfig, name: string): P
   }
 
   if (resolution.kind === 'conflict') {
-    const refusal = resolution.reason === 'duplicate' ? 'duplicate' : 'two-namespaces';
-
-    return refused(resolution.first.source.path, { kind: refusal, first: resolution.first.source.path, second: resolution.second.source.path });
+    return refused(resolution.first.source.path, { kind: resolution.reason, first: resolution.first.source.path, second: resolution.second.source.path });
   }
 
   const { source } = resolution.item;

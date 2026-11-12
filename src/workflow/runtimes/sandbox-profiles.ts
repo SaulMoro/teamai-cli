@@ -71,8 +71,8 @@ async function readProfile(driver: ResolvedDriver, asked: string, definition: La
   const badMarker = (reason: string): ProfileRead => invalid({ driver, asked, location: markerLocation, layer: definition.layer }, reason);
   const file = definition.form === 'folder' ? path.join(definition.at, SANDBOX_MARKER) : definition.at;
 
-  if (definition.text === undefined && definition.form === 'file' && definition.layer === 'team' && await isSymlink(file)) return refuse('it is a link, and teamai reads a profile only from a file the team repo holds');
-  let text = definition.text;
+  if (definition.form === 'file' && definition.layer === 'team' && await isSymlink(file)) return refuse('it is a link, and teamai reads a profile only from a file the team repo holds');
+  let text = definition.layer === 'teamai' ? definition.text : undefined;
 
   if (text === undefined) {
     try {
