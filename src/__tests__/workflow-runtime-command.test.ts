@@ -5,9 +5,10 @@ import { describe, expect, it, onTestFinished, vi } from 'vitest';
 import { runtimeCommand, runtimeLauncher } from '../workflow/steps/runtime-steps.js';
 import { stepLauncher } from '@teamai/runtime-tools';
 import { toolsLaunchDeps } from '../workflow/runtimes/sources.js';
-import { attemptRun, type AttemptRun } from '../workflow/runtimes/attempt.js';
+import { attemptRun, attemptRuntimePath, placesLockIn, type AttemptRun } from '../workflow/runtimes/attempt.js';
+import { acquireLock, releaseLock } from '../update.js';
 import type { DriverCan } from '../workflow/requirements.js';
-import type { LocalConfig } from '../types.js';
+import { getDataHome, type LocalConfig } from '../types.js';
 import { AttemptIdSchema, attemptResultPath, RunIdSchema } from '../workflow/store.js';
 import type { StepRuntime } from '@teamai/runtime-protocol/step-runtime';
 import type { OpId } from '@teamai/runtime-protocol';
@@ -262,7 +263,7 @@ describe('the idle limit of a prompt\'s tool exec\'d on a step runtime', () => {
 
 describe('an attempt\'s operations on a step runtime', () => {
   /** A step runtime that counts the execs it is sent, through the attempt's run as the driver builds it. */
-  function counted(): { run: AttemptRun; execs: () => number; done: () => void } {
+  function counted(): { run: AttemptRun; config: LocalConfig; execs: () => number; done: () => void } {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-attempt-ops-'));
     const config: LocalConfig = { repo: { localPath: root, remote: 'local', kind: 'self' }, username: 'tester', scope: 'project', additionalRoles: [], projectRoot: root, dataHome: path.join(root, 'data') };
     let execs = 0;
@@ -288,8 +289,25 @@ describe('an attempt\'s operations on a step runtime', () => {
     };
     const run = attemptRun({ config, run: RunIdSchema.parse('r0123abcd'), attempt: AttemptIdSchema.parse('a00000001'), runtime, driver: 'counted' });
 
-    return { run, execs: () => execs, done: () => fs.rmSync(root, { recursive: true, force: true }) };
+    return { run, config, execs: () => execs, done: () => fs.rmSync(root, { recursive: true, force: true }) };
   }
+
+  it('records the place it opens only once an uninstall beside it lets go of the places lock', async () => {
+    const { run, config, done } = counted();
+    onTestFinished(done);
+    const lock = placesLockIn(getDataHome(config));
+    expect(await acquireLock(lock)).toBe(true);
+    const record = attemptRuntimePath(config, RunIdSchema.parse('r0123abcd'), AttemptIdSchema.parse('a00000001'));
+
+    const opened = run.open({ worktree: '/work', readonly: [], result: '/work/out', runDir: '/work/scratch', toolHome: {} });
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    const recordedWhileHeld = fs.existsSync(record);
+    await releaseLock(lock);
+
+    expect(recordedWhileHeld).toBe(false);
+    await expect(opened).resolves.toEqual({ ok: true, handle: 'h-1' });
+    expect(fs.existsSync(record)).toBe(true);
+  });
 
   it('sends no exec when the step is stopped while the attempt records the exec it is about to send', async () => {
     const { run, execs, done } = counted();

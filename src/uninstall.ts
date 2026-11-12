@@ -3678,9 +3678,13 @@ export async function uninstall(opts: UninstallOptions): Promise<void> {
     }
 
     try {
+      const removeAll = (): Promise<void> => removeConfirmed(localConfig, teamConfig, plan, agentKey, !!exclusionOnly);
+
       // Again once confirmed: a run may have opened a place while the person answered.
-      if (plan.includeShared && await refusedForHeldPlaces(async () => [getDataHome(localConfig)])) return;
-      await removeConfirmed(localConfig, teamConfig, plan, agentKey, !!exclusionOnly);
+      if (!plan.includeShared) await removeAll();
+      else await whilePlacesLocked([getDataHome(localConfig)], async () => {
+        if (!await refusedForHeldPlaces(async () => [getDataHome(localConfig)])) await removeAll();
+      });
     } finally {
       if (syncLock) {
         const { releaseLock } = await import('./update.js');
@@ -3729,6 +3733,43 @@ async function refusedForHeldPlaces(dataHomes: () => Promise<readonly string[]>,
   process.exitCode = 1;
 
   return true;
+}
+
+/**
+ * Runs `body` holding the places lock of each of `dataHomes`, the one an attempt holds while it records the place it
+ * opens, so no place opens between `body`'s check that none is open and its removal of the runs. Refuses when one stays
+ * taken.
+ */
+async function whilePlacesLocked(dataHomes: readonly string[], body: () => Promise<void>): Promise<void> {
+  const { acquireLock, releaseLock } = await import('./update.js');
+  const { PLACES_LOCK_WAIT, placesLockIn } = await import('./workflow/runtimes/attempt.js');
+  const held: string[] = [];
+
+  try {
+    for (const dataHome of dataHomes) {
+      const lock = placesLockIn(dataHome);
+      let isHeld = false;
+
+      for (let attempt = 0; attempt < PLACES_LOCK_WAIT.attempts && !isHeld; attempt++) {
+        isHeld = await acquireLock(lock);
+
+        if (!isHeld) await new Promise((resolve) => setTimeout(resolve, PLACES_LOCK_WAIT.delayMs));
+      }
+
+      if (!isHeld) {
+        log.error(`Cannot uninstall: a step runtime is opening a place of a run in ${dataHome}, as ${lock} stays taken. Run \`teamai uninstall\` again once the run has its place.`);
+        process.exitCode = 1;
+
+        return;
+      }
+
+      held.push(lock);
+    }
+
+    await body();
+  } finally {
+    for (const lock of held) await releaseLock(lock);
+  }
 }
 
 /** The data homes an uninstall with no configuration removes under `home`: the user scope's and each project's not kept. */
@@ -4101,8 +4142,24 @@ async function uninstallHomeOnly(opts: UninstallOptions): Promise<void> {
     }
   }
 
-  if (await refusedForHeldPlaces(() => removedDataHomes(home, kept))) return;
+  let dataHomes: string[];
 
+  try {
+    dataHomes = await removedDataHomes(home, kept);
+  } catch (e) {
+    // The check says why it cannot tell whether a place is open, and refuses.
+    await refusedForHeldPlaces(() => Promise.reject(e));
+
+    return;
+  }
+
+  await whilePlacesLocked(dataHomes, async () => {
+    if (!await refusedForHeldPlaces(async () => dataHomes)) await removeHome(home, kept, keptOwn);
+  });
+}
+
+/** Removes TeamAI's home `home` but what `kept` and `keptOwn` keep, once no step runtime holds a place of its runs. */
+async function removeHome(home: string, kept: KeptForProjects, keptOwn: string[]): Promise<void> {
   try {
     try {
       const { ALL_MODEL_AGENTS, restoreModelProfiles } = await import('./models/switch.js');

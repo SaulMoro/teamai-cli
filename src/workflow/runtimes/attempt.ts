@@ -11,7 +11,8 @@ import { baseToolOf, isToolId } from '../../tool-registry.js';
 import { isRecord } from '../expression.js';
 import { log } from '@teamai/shared/log';
 import type { LaunchTool } from '../../launch-registry.js';
-import type { LocalConfig } from '../../types.js';
+import { getDataHome, type LocalConfig } from '../../types.js';
+import { withFileLock } from '../../update.js';
 import { errnoCode, writeJsonAtomic } from '../../utils/fs.js';
 import { attemptDir, AttemptIdSchema, attemptResultPath, attemptsDir, RunIdSchema, type AttemptId, type RunId } from '../store.js';
 import type { WorkflowFailure } from '../types.js';
@@ -164,6 +165,16 @@ export type AttemptPlacement =
   | { kind: 'in_process'; runtime: string; sessionHome?: z.infer<typeof ToolHomeSchema> }
   | { kind: 'unrecorded' }
   | { kind: 'unreadable'; why: string };
+
+/**
+ * The lock of data home `dataHome` an attempt holds while it records the place it opens, and an uninstall holds from
+ * its check that no place is open until it has removed the runs: so no place opens between the two.
+ */
+export function placesLockIn(dataHome: string): string {
+  return path.join(dataHome, '.places-lock');
+}
+
+export const PLACES_LOCK_WAIT = { attempts: 50, delayMs: 200 } as const;
 
 /** Records that attempt `attempt` of run `run` runs in teamai's process, on `runtime` of driver `driver`. */
 export async function recordInProcessAttempt(config: LocalConfig, run: RunId, attempt: AttemptId, { runtime, driver }: { runtime: string; driver: string }): Promise<void> {
@@ -850,7 +861,11 @@ function attemptThrough({ config, run, attempt, sends, driver, sources, deadline
       if (before?.display) opening.display = before.display;
 
       if (before?.closeFailed) opening.closeFailed = before.closeFailed;
-      await save(opening);
+      const lock = placesLockIn(getDataHome(config));
+      // An uninstall holds this lock from its check that no place is open until it has removed the runs.
+      const recorded = await withFileLock(lock, PLACES_LOCK_WAIT, () => save(opening));
+
+      if (!recorded.held) return { ok: false, failure: runtimeFailure(runtime.name, `could not open attempt ${attempt}: ${lock} stays taken, as an uninstall of this scope holds it while it removes the runs. Run the step again once the uninstall ends.`) };
 
       // A place opened again keeps the handle it recorded until it is ready: one made in steps (a runtime through
       // another) is accepted first with part of its handle, which must not replace the whole one if the rest fails.

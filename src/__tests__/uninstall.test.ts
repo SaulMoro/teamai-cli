@@ -69,6 +69,7 @@ import { type HookAdapterId } from '@teamai/tool-core/definition';
 import { TOOLS } from '../tools.js';
 import { renderWorkflowSkill } from '../workflow/discovery/render.js';
 import { newOpId } from '@teamai/runtime-protocol/step-runtime';
+import { placesLockIn } from '../workflow/runtimes/attempt.js';
 
 // ─── Helpers ───────────────────────────────────────────
 
@@ -594,6 +595,35 @@ describe('uninstall', () => {
     expect(log.error).toHaveBeenCalledWith(expect.stringContaining('`teamai workflow cancel r0123456789abcdef`'));
     expect(await fse.pathExists(record), 'run record').toBe(true);
     expect(await fse.pathExists(path.join(homeDir, '.claude', 'skills', 'team-skill')), 'delivered skill').toBe(true);
+  });
+
+  it('keeps a step runtime from recording a place it opens between its last check that none is open and its removal', async () => {
+    const { homeDir, repoPath, teamaiHome } = await setupFixture(tmpDir);
+    vi.stubEnv('HOME', homeDir);
+    const dataHome = path.join(teamaiHome, 'projects', 'current');
+    const record = path.join(dataHome, 'workflows', 'runs', 'r0123456789abcdef', 'attempts', 'a01234567', 'runtime.json');
+    mockAutoDetectInit.mockResolvedValue({
+      localConfig: makeLocalConfig(homeDir, repoPath, { scope: 'project', projectRoot: homeDir, dataHome }),
+      teamConfig: makeTeamConfig(),
+    });
+    const { withFileLock } = await import('../update.js');
+    const cancelled = await import('../workflow/runtimes/cancelled.js');
+    const { placesMaybeHeld } = cancelled;
+    let checks = 0;
+    let opening: { held: boolean } | undefined;
+    // An attempt opens a place right after the check uninstall makes once it is confirmed, as a driver beside it would.
+    vi.spyOn(cancelled, 'placesMaybeHeld').mockImplementation(async (runs) => {
+      const held = await placesMaybeHeld(runs);
+
+      if (++checks === 2) opening = await withFileLock(placesLockIn(dataHome), { attempts: 2, delayMs: 20 }, () => fse.outputJson(record, { runtime: 'box', driver: 'box', phase: 'opening', open: { op: newOpId() } }));
+
+      return held;
+    });
+
+    await uninstall({ force: true });
+
+    expect(checks).toBe(2);
+    expect(opening).toEqual({ held: false });
   });
 
   it('previews what it would remove in a dry run while a step runtime holds a place, warning that the uninstall would refuse', async () => {
