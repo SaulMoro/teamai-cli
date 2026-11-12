@@ -1545,7 +1545,7 @@ teamai 按下面的顺序查找 `<name>.yaml`，使用找到的第一个：
 | --- | --- |
 | 内置：`host` | 没有文件定义或替换它，下面各处的 `host.yaml` 都不会被读取，并给出警告。它在下文所述的 `host` 槽位上运行每个步骤，因此只运行命令、关卡，以及步骤都不需要 AI 工具的工作流。`workflow start` 以 `requirement_unmet` 拒绝 prompt、`interactive`、`answer:` 或列出评分器的步骤，并指出该步骤和 `--driver local`。`workflow: { from }` 步骤生成的工作流中若有这类步骤，该步骤也以同样方式失败，且该工作流的任何步骤都不会开始。 |
 | `~/.teamai/drivers/` | 只属于你自己。`resume --next` 从不读取它。 |
-| 团队仓库的 `drivers/` 和 `drivers/<namespace>/` | 两个生效的命名空间定义同一个名字时，失败为 `driver_namespace_conflict`。 |
+| 团队仓库的 `drivers/`（self 模式下是 `.teamai/drivers/`），以及你的角色或项目为 workflows 激活的每个 `drivers/<namespace>/` | 两个生效的命名空间定义同一个名字时，失败为 `driver_namespace_conflict`。`drivers` 文件夹是链接时失败为 `driver_invalid`，不会经由它读取任何内容。 |
 | 用户作用域的团队仓库 | 只在项目里启动时查找。 |
 | teamai 自带的定义 | 每个都命名为 `teamai-<name>`。 |
 

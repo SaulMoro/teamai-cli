@@ -5,7 +5,8 @@ import { loadLocalConfigForScope } from '../../config.js';
 import { shippedDriverFile } from '../../default-drivers.js';
 import { isSafeNamespaceSegment } from '../../manifest-schema.js';
 import { resolveNamespacedItems, type NamespaceCandidate } from '../../namespace-resolver.js';
-import { resolveResourceNamespaces } from '../../resource-namespaces.js';
+import { resolveResourceNamespaces, workflowNamespacesOf } from '../../resource-namespaces.js';
+import { isSymlink, RESOURCE_LAYOUTS, Resources, type TeamTree } from '../../resources/resolver.js';
 import { getKnowledgeDir, getTeamaiHomeDir, type LocalConfig } from '../../types.js';
 import { JsonValueSchema } from '@teamai/shared/json';
 import { parseYaml } from '@teamai/shared/yaml';
@@ -205,16 +206,54 @@ async function read(file: string, source: DefinitionSource, config: LocalConfig)
   return parsed.ok ? { kind: 'found', driver: { name: parsed.definition.name, definition: parsed.definition, source, file, config } } : { kind: 'failed', failure: parsed.failure };
 }
 
-async function fromTeam(config: LocalConfig, name: string): Promise<Lookup> {
-  const found = await teamItem(config, path.join(getKnowledgeDir(config), 'drivers'), name, '.yaml');
+/** The definitions of `config`'s team tree, as the resolver reads them: the root's, and those of each namespace active for the member. */
+function teamDrivers(config: LocalConfig): TeamTree {
+  return { root: getKnowledgeDir(config), namespaces: () => workflowNamespacesOf(config) };
+}
 
-  if (found.kind === 'missing') return found;
+/**
+ * The one team definition named `name` in `config`'s team tree, by its file; the two active namespaces that both define
+ * it; or `linked` when the tree's `drivers` folder is a link, whose definitions are not the team repo's.
+ */
+async function teamDefinition(config: LocalConfig, name: string): Promise<{ kind: 'found'; file: string } | { kind: 'missing' } | { kind: 'conflict'; first: string; second: string } | { kind: 'linked' }> {
+  const tree = teamDrivers(config);
 
-  if (found.kind === 'conflict') {
-    return { kind: 'failed', failure: { code: 'driver_namespace_conflict', message: `Driver "${name}" is defined in two active namespaces (${found.first} and ${found.second}). Keep it in one namespace, push it, run teamai pull, and start again.` } };
+  if (await isSymlink(path.join(tree.root, RESOURCE_LAYOUTS.drivers.dir))) return { kind: 'linked' };
+  const resolution = await Resources.resolve(RESOURCE_LAYOUTS.drivers, name, { team: tree });
+
+  switch (resolution.kind) {
+    case 'missing':
+      return resolution;
+    case 'conflict':
+      return { kind: 'conflict', first: resolution.first.source.path, second: resolution.second.source.path };
+    case 'resolved':
+      return { kind: 'found', file: resolution.item.source.full };
+    default: {
+      const unhandled: never = resolution;
+
+      return unhandled;
+    }
   }
+}
 
-  return read(found.at, 'team', config);
+async function fromTeam(config: LocalConfig, name: string): Promise<Lookup> {
+  const found = await teamDefinition(config, name);
+
+  switch (found.kind) {
+    case 'missing':
+      return found;
+    case 'linked':
+      return { kind: 'failed', failure: { code: 'driver_invalid', message: 'drivers in the team repo is a link, and teamai reads the team\'s driver definitions only from a folder the team repo holds, so it reads none of them. Replace the link with the folder, push it, run teamai pull, and start again.' } };
+    case 'conflict':
+      return { kind: 'failed', failure: { code: 'driver_namespace_conflict', message: `Driver "${name}" is defined in two active namespaces (${found.first} and ${found.second}). Keep it in one namespace, push it, run teamai pull, and start again.` } };
+    case 'found':
+      return read(found.file, 'team', config);
+    default: {
+      const unhandled: never = found;
+
+      return unhandled;
+    }
+  }
 }
 
 /** `host`: the definition teamai builds in, with no runtime, so only the host slot runs. */
@@ -234,9 +273,9 @@ async function hostDriver(config: LocalConfig, { personal, user }: { personal: b
   const own = personal && await fs.lstat(mine).then(() => true, () => false) ? [mine] : [];
 
   const teams = await Promise.all([config, ...(user ? [user] : [])].map(async (scope) => {
-    const found = await teamItem(scope, path.join(getKnowledgeDir(scope), 'drivers'), HOST_DRIVER, '.yaml');
+    const found = await teamDefinition(scope, HOST_DRIVER);
 
-    return found.kind === 'found' ? [found.at] : found.kind === 'conflict' ? [found.first, found.second] : [];
+    return found.kind === 'found' ? [found.file] : found.kind === 'conflict' ? [found.first, found.second] : [];
   }));
 
   return { name: HOST_DRIVER, definition: HOST_DEFINITION, source: 'builtin', file: 'teamai\'s built-in host driver', config, unread: [...own, ...teams.flat()] };

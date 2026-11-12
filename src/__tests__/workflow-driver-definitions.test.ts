@@ -57,6 +57,50 @@ describe('driver definition names', () => {
     } });
   });
 
+  it('loads a definition in a namespace only for a member whose project selects it for workflows, and refuses two active namespaces that define one name', async () => {
+    const team = { ...teamWith([]), projects: ['checkout'] };
+    const at = (file: string): string => path.join(team.repo.localPath, file);
+    fs.mkdirSync(at('manifest'));
+    fs.writeFileSync(at('manifest/projects.yaml'), 'version: 1\nprojects:\n  - id: checkout\n    resources: { workflows: [web, ops] }\n  - id: billing\n    resources: { workflows: [mobile] }\n');
+    for (const file of ['drivers/web/web-box.yaml', 'drivers/mobile/mobile-box.yaml', 'drivers/web/twice.yaml', 'drivers/ops/twice.yaml']) {
+      fs.mkdirSync(path.dirname(at(file)), { recursive: true });
+      fs.writeFileSync(at(file), definition(path.basename(file, '.yaml')));
+    }
+
+    expect(await resolveDriver(team, 'web-box', { personal: true })).toMatchObject({ ok: true, driver: { name: 'web-box', source: 'team', file: at('drivers/web/web-box.yaml') } });
+    expect(await resolveDriver(team, 'mobile-box', { personal: true })).toMatchObject({ ok: false, failure: { code: 'driver_not_found' } });
+    expect(await resolveDriver(team, 'twice', { personal: true })).toEqual({ ok: false, failure: {
+      code: 'driver_namespace_conflict',
+      message: 'Driver "twice" is defined in two active namespaces (drivers/web/twice.yaml and drivers/ops/twice.yaml). Keep it in one namespace, push it, run teamai pull, and start again.',
+    } });
+  });
+
+  it('loads a definition of a self-mode team tree, from .teamai/drivers/', async () => {
+    const business = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-driver-self-')));
+    dirs.push(business);
+    fs.mkdirSync(path.join(business, '.teamai', 'drivers'), { recursive: true });
+    fs.writeFileSync(path.join(business, '.teamai', 'drivers', 'self-box.yaml'), definition('self-box'));
+    const self: LocalConfig = { repo: { localPath: path.join(business, '.teamai'), remote: 'origin', kind: 'self', businessRepoRoot: business }, username: 'tester', scope: 'project', additionalRoles: [], projectRoot: business };
+
+    expect(await resolveDriver(self, 'self-box', { personal: true })).toMatchObject({ ok: true, driver: { source: 'team', file: path.join(business, '.teamai', 'drivers', 'self-box.yaml') } });
+  });
+
+  it('refuses the definitions of a team repo whose drivers folder is a link, reads nothing through it, and runs no teamai default in their place', async () => {
+    const team = teamWith([]);
+    const outside = fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-drivers-outside-'));
+    dirs.push(outside);
+    fs.writeFileSync(path.join(outside, 'mine.yaml'), definition('mine'));
+    fs.rmSync(path.join(team.repo.localPath, 'drivers'), { recursive: true });
+    fs.symlinkSync(outside, path.join(team.repo.localPath, 'drivers'));
+    const refused = { ok: false, failure: {
+      code: 'driver_invalid',
+      message: 'drivers in the team repo is a link, and teamai reads the team\'s driver definitions only from a folder the team repo holds, so it reads none of them. Replace the link with the folder, push it, run teamai pull, and start again.',
+    } };
+
+    expect(await resolveDriver(team, 'mine', { personal: true })).toEqual(refused);
+    expect(await resolveDriver(team, 'local', { personal: true })).toEqual(refused);
+  });
+
   it.each(Object.values(RESERVED_DRIVERS).filter((name) => name !== 'local' && name !== 'host'))('refuses a definition named %s, a name teamai keeps for its own driver', async (name) => {
     const team = teamWith([name]);
 
