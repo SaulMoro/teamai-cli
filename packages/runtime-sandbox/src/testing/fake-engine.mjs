@@ -328,7 +328,7 @@ function docker() {
     }
 
     case 'run': {
-      const { found, rest: positional } = options(rest, ['--name', '--label', '--user', '--userns', '--env', '-v', '--entrypoint', '--network', '--cap-drop', '--security-opt'], ['-d', '--rm']);
+      const { found, rest: positional } = options(rest, ['--name', '--label', '--user', '--userns', '--env', '-v', '--entrypoint', '--network', '--cap-drop', '--security-opt', '--add-host'], ['-d', '--rm']);
       const [image, ...entry] = positional;
 
       if (!pulled(image)) fail(`Unable to find image '${image}' locally`, 125);

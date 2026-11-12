@@ -62,6 +62,9 @@ export const IDLE = `mkdir -p "$HOME"; trap 'exit 0' TERM INT; while :; do sleep
 /** The engine CLI's own settings: an exec's names never replace them, so a step cannot point the CLI at another daemon. */
 const ENGINE_SETTINGS = ['DOCKER_HOST', 'DOCKER_CONTEXT', 'DOCKER_CONFIG', 'DOCKER_CERT_PATH', 'DOCKER_TLS_VERIFY', 'CONTAINER_HOST', 'CONTAINER_CONNECTION', 'CONTAINERS_CONF'];
 
+/** The filter always resolves host.docker.internal, to the address the engine reaches this machine by, so it refuses it. */
+const HOST_GATEWAY = ['--add-host', 'host.docker.internal:host-gateway'];
+
 /** What a judge's container and its filter run with: no capability, and no way to gain one. */
 const LOCKED = ['--cap-drop', 'ALL', '--security-opt', 'no-new-privileges'];
 
@@ -235,7 +238,7 @@ export function containerProvider({ engine, image, owner, host, warm, profile, s
       watchThisMachine(filters);
     }
 
-    const filter = await cli(['run', '-d', '--name', filterOf(key), '--label', `teamai.run=${key.run}`, '--label', `teamai.filter=${key.attempt}`, '--label', `teamai.owner=${owner}`, ...user(), ...LOCKED, ...own, '--entrypoint', 'node', image, '-e', FILTER_SCRIPT, String(FILTER_PORT), ...rules, ...(isStep ? [thisMachineFileRule(`${THIS_MACHINE_DIR}/${THIS_MACHINE_FILE}`)] : [])]);
+    const filter = await cli(['run', '-d', '--name', filterOf(key), '--label', `teamai.run=${key.run}`, '--label', `teamai.filter=${key.attempt}`, '--label', `teamai.owner=${owner}`, ...user(), ...LOCKED, ...own, ...HOST_GATEWAY, '--entrypoint', 'node', image, '-e', FILTER_SCRIPT, String(FILTER_PORT), ...rules, ...(isStep ? [thisMachineFileRule(`${THIS_MACHINE_DIR}/${THIS_MACHINE_FILE}`)] : [])]);
 
     const joined = filter.kind === 'ran' && (filter.code === 0 || said(filter, /already in use/i)) ? await cli(['network', 'connect', networkOf(key), filterOf(key)]) : undefined;
 

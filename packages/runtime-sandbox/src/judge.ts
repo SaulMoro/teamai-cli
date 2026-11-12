@@ -290,8 +290,8 @@ export const thisMachineFileRule = (file: string): string => `@${file}`;
  *   host:port     let through as named: a judge's model provider, or a step's credential on this machine at the name
  *                 the engine gives it (host.docker.internal:8317)
  *   *             every other host, once it resolves only to addresses that are not this machine's: loopback,
- *                 link-local, the engine's names for this machine, the networks of the filter's own container (the
- *                 engine's VM, other containers), and each `!address` given
+ *                 link-local, the network around each of the engine's names for this machine (its VM's other
+ *                 addresses), the networks of the filter's own container (other containers), and each `!address` given
  *   !address      an address of this machine as the runtime sees it, such as its LAN address
  *   @file         and every address `file` lists, read again for each connection, which the runtime keeps current
  *
@@ -344,5 +344,7 @@ server.on('connect', (request, socket, head) => {
   });
 });
 const names = isOpen ? ['host.docker.internal', 'gateway.docker.internal', 'host.containers.internal'] : [];
-Promise.all(names.map((name) => new Promise((resolve) => { dns.lookup(name, { all: true }, (error, found) => { for (const one of error ? [] : found) block(one.address); resolve(); }); }))).then(() => server.listen(Number(port), '0.0.0.0'));
+// The network around each name's address too: the engine's VM has other addresses there, where other containers' ports listen.
+const blockAround = (address) => { if (net.isIPv4(address)) blocked.addSubnet(address, 24, 'ipv4'); else if (net.isIPv6(address)) blocked.addSubnet(address, 64, 'ipv6'); };
+Promise.all(names.map((name) => new Promise((resolve) => { dns.lookup(name, { all: true }, (error, found) => { for (const one of error ? [] : found) blockAround(one.address); resolve(); }); }))).then(() => server.listen(Number(port), '0.0.0.0'));
 process.on('SIGTERM', () => process.exit(0));`;

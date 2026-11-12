@@ -104,12 +104,12 @@ const TARGETS: Target[] = [fakeTarget('docker'), fakeTarget('podman'), fakeTarge
  * fetches its credential's gateway through the proxy, printing what each got.
  */
 const REACH = String.raw`const net = require('node:net'); const http = require('node:http');
-const port = process.argv[2];
+const [port, neighbour] = process.argv.slice(2);
 const direct = () => new Promise((resolve) => { const socket = net.connect(Number(port), 'host.docker.internal'); socket.setTimeout(5000, () => { socket.destroy(); resolve('timeout'); }); socket.on('data', (data) => { resolve(String(data)); socket.destroy(); }); socket.on('error', (error) => resolve(error.code)); });
 const proxy = () => new URL(process.env.HTTP_PROXY || 'http://no-proxy.invalid:1');
-const tunnel = () => new Promise((resolve) => { const request = http.request({ host: proxy().hostname, port: proxy().port, method: 'CONNECT', path: 'host.docker.internal:' + port, timeout: 5000 }); request.on('connect', (response, socket) => { socket.destroy(); resolve(String(response.statusCode)); }); request.on('response', (response) => resolve(String(response.statusCode))); request.on('timeout', () => { request.destroy(); resolve('timeout'); }); request.on('error', (error) => resolve(error.code)); request.end(); });
+const tunnel = (host = 'host.docker.internal') => new Promise((resolve) => { const request = http.request({ host: proxy().hostname, port: proxy().port, method: 'CONNECT', path: host + ':' + port, timeout: 5000 }); request.on('connect', (response, socket) => { socket.destroy(); resolve(String(response.statusCode)); }); request.on('response', (response) => resolve(String(response.statusCode))); request.on('timeout', () => { request.destroy(); resolve('timeout'); }); request.on('error', (error) => resolve(error.code)); request.end(); });
 const fetched = () => new Promise((resolve) => { const request = http.request({ host: proxy().hostname, port: proxy().port, path: process.env.ANTHROPIC_BASE_URL, timeout: 5000 }, (response) => { let body = ''; response.on('data', (data) => { body += data; }); response.on('end', () => resolve(response.statusCode + ' ' + body)); }); request.on('timeout', () => { request.destroy(); resolve('timeout'); }); request.on('error', (error) => resolve(error.code)); request.end(); });
-(async () => { console.log(JSON.stringify({ direct: await direct(), tunnel: await tunnel(), gateway: await fetched() })); })();`;
+(async () => { console.log(JSON.stringify({ direct: await direct(), tunnel: await tunnel(), neighbour: await tunnel(neighbour), gateway: await fetched() })); })();`;
 
 /** A command that waits until `file` exists, at most 20 s. */
 const waitFor = (file: string): string => `i=0; while [ ! -e '${file}' ] && [ $i -lt 200 ]; do sleep 0.1; i=$((i+1)); done`;
@@ -273,19 +273,25 @@ for (const target of TARGETS) {
         return z.object({ port: z.number() }).parse(server.address()).port;
       };
 
+      let place: Opened | undefined;
+
       try {
         const [daemonPort, gatewayPort] = [await portOf(daemon), await portOf(gateway)];
         const credentials = { ANTHROPIC_BASE_URL: `http://127.0.0.1:${gatewayPort}/v1` };
-        const place = await opened({}, credentials);
+        place = await opened({}, credentials);
+        // Another address of the engine's VM, beside the one it names this machine by, as its own services listen on.
+        const nameAddress = execFileSync('docker', ['exec', `${place.handle}-proxy`, 'node', '-e', "require('node:dns').lookup('host.docker.internal', (error, address) => console.log(error ? '' : address))"], { encoding: 'utf8' }).trim();
+        const neighbour = nameAddress.replace(/\.(\d+)$/, (_all, last: string) => `.${Number(last) === 1 ? 2 : Number(last) - 1}`);
         fs.writeFileSync(path.join(place.worktree, 'probe.js'), REACH);
-        const { end, stdout } = await exec(place, { script: `node probe.js ${daemonPort}`, cwd: place.worktree, credentials });
+        const { end, stdout } = await exec(place, { script: `node probe.js ${daemonPort} ${neighbour}`, cwd: place.worktree, credentials });
 
         expect(end).toMatchObject({ event: 'exited', code: 0 });
-        const reached = z.object({ direct: z.string(), tunnel: z.string(), gateway: z.string() }).parse(JSON.parse(stdout));
+        const reached = z.object({ direct: z.string(), tunnel: z.string(), neighbour: z.string(), gateway: z.string() }).parse(JSON.parse(stdout));
         expect(reached.direct).not.toBe('daemon');
-        expect(reached).toMatchObject({ tunnel: '403', gateway: '200 gateway' });
-        await close(place);
+        expect(net.isIPv4(neighbour)).toBe(true);
+        expect(reached).toMatchObject({ tunnel: '403', neighbour: '403', gateway: '200 gateway' });
       } finally {
+        if (place) await close(place);
         daemon.close();
         gateway.close();
       }
