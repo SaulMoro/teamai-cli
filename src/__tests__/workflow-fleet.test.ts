@@ -665,6 +665,27 @@ describe('a member taking an attempt', () => {
     }
   });
 
+  it('finishes the step it ran when its stdout.log cannot be written, and says why the lines are not kept', async () => {
+    const command = 'echo built 3 files; echo written > "$MARK"';
+    const workflow = MARK.replace('command: echo written > "$MARK"', `command: ${command}`);
+    const warn = vi.spyOn(log, 'warn').mockImplementation(() => {});
+    let member: Member | undefined;
+
+    try {
+      const { taken, record } = await takeForged((forged, run) => {
+        forged.lease = { ...forged.lease, command } as typeof forged.lease;
+        // A folder where the file goes, so writing it fails.
+        if (member) fs.mkdirSync(path.join(attemptDir(member.config, run, ATTEMPT), 'stdout.log'), { recursive: true });
+      }, async ({ bob }) => { member = bob; }, workflow);
+
+      expect(taken).toMatchObject({ data: { ran: { step: 'write', exit_code: 0 } } });
+      expect(record).toMatchObject({ state: 'finished', result: { exitCode: 0 } });
+      expect(warn).toHaveBeenCalledWith(expect.stringMatching(/^Could not keep the lines attempt a0123abcd printed on stdout in .*stdout\.log: .*EISDIR.*\. The step's result stands; only those lines are not kept\.$/));
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
   it('gives the command a run folder of its own, the attempt\'s marker and the member\'s run mode, and leaves the run\'s folder an owner on the same home keeps', async () => {
     vi.stubEnv('TEAMAI_MODE', 'unattended');
     const seen = 'printf "%s\\n" "$TEAMAI_WORKFLOW_ATTEMPT" "$TEAMAI_MODE" "$TEAMAI_RUN_DIR" > seen.txt; test -d "$TEAMAI_RUN_DIR" && echo made > "$TEAMAI_RUN_DIR/handed.txt"';

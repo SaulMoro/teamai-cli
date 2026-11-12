@@ -14,6 +14,7 @@ import type { HandoffOwner } from './snapshot.js';
 import { uniqueOutcomes, WorkOutcomeSchema, type WorkOutcome } from '../outcomes.js';
 import type { DriveOptions, RunState } from './types.js';
 import { appendRegularFile, readRegularFile, writeRegularFile } from '@teamai/shared/regular-file';
+import { log } from '@teamai/shared/log';
 
 /**
  * Run ids: `r` + 16 hex digits. Records are a team-wide key on the reports
@@ -133,14 +134,22 @@ const STDOUT_LINES = 200;
 /**
  * Keeps the last non-empty lines of `stdout`, which a command step printed and which are not its outputs, in the
  * attempt's `stdout.log` (mode 0600), masked whole with `secrets` so a secret over lines is too. Answers the file, or
- * undefined when the command printed nothing.
+ * undefined when the command printed nothing or the file could not be written, which it warns of: the step's result
+ * does not depend on it.
  */
 export async function keepAttemptStdout(config: LocalConfig, { run, attempt, stdout, secrets }: { run: RunId; attempt: AttemptId; stdout: string; secrets: Record<string, string> }): Promise<string | undefined> {
   const printed = redact(stdout, { envSecrets: secrets, patterns: false }).split(/\r?\n/).filter((line) => line.trim() !== '').slice(-STDOUT_LINES);
 
   if (printed.length === 0) return undefined;
   const file = attemptStdoutPath(config, run, attempt);
-  await writeRegularFile(file, `${printed.join('\n')}\n`, { mode: 0o600 });
+
+  try {
+    await writeRegularFile(file, `${printed.join('\n')}\n`, { mode: 0o600 });
+  } catch (error) {
+    log.warn(`Could not keep the lines attempt ${attempt} printed on stdout in ${file}: ${error instanceof Error ? error.message : String(error)}. The step's result stands; only those lines are not kept.`);
+
+    return undefined;
+  }
 
   return file;
 }
