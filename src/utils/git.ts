@@ -329,18 +329,33 @@ export function createGitWithBlockTimeout(basePath?: string, abort?: AbortSignal
     lastChildProcess = undefined;
 
     if (child?.stdout !== stdout) return;
-    // simple-git ends git through this kill on both the timeout and the abort.
-    child.kill = (signal) => {
-      if (!abort?.aborted) stalled = gitCommandLine(args);
-      // The handle's own kill again: endProcessTree signals git through it, and so does a later kill of simple-git's.
-      Reflect.deleteProperty(child, 'kill');
 
-      if (child.pid === undefined || child.exitCode !== null || child.signalCode !== null) return signalChild(child, signal) === 'sent';
+    // What the stop signals git through: the handle's own kill again, from the moment git is signalled.
+    const handle = {
+      pid: child.pid,
+      kill: (signal?: NodeJS.Signals | number): boolean => {
+        Reflect.deleteProperty(child, 'kill');
+
+        return signalChild(child, signal) === 'sent';
+      },
+    };
+
+    let isStopping = false;
+
+    // simple-git ends git through this kill on both the timeout and the abort, the second while the first one's stop
+    // may still list the tree: that call joins the stop, or git would end first and the processes under it escape it.
+    child.kill = (signal) => {
+      if (isStopping) return true;
+      isStopping = true;
+
+      if (!abort?.aborted) stalled = gitCommandLine(args);
+
+      if (child.pid === undefined || child.exitCode !== null || child.signalCode !== null) return signalChild(handle, signal) === 'sent';
 
       // git is signalled once its tree is listed: the processes under a git that ended move to init, out of its tree.
-      const end = (): void => { signalChild(child, signal); };
+      const end = (): void => { signalChild(handle, signal); };
 
-      void endProcessTree(child).then(end, end);
+      void endProcessTree(handle).then(end, end);
 
       return true;
     };
@@ -397,7 +412,7 @@ function watchChildProcesses(): void {
  * its pid, and each process under it only while it is still the one listed.
  * When `ps` cannot list the tree, or read it again, only `child` is signalled.
  */
-export async function endProcessTree(child: ChildProcess): Promise<void> {
+export async function endProcessTree(child: Pick<ChildProcess, 'pid' | 'kill'>): Promise<void> {
   // A spawn that failed has no pid, and no tree.
   if (child.pid === undefined) return;
 
