@@ -12,6 +12,7 @@ import type { ToolId } from '../../src/tools.js';
 import { z } from 'zod';
 import { defaultToolHome, envToolHome, toolHome } from '../../src/tool-home.js';
 import { detectToolRoot, RELOCATABLE_TOOLS, TeamaiConfigBaseSchema } from '../../src/types.js';
+import { PERSONAL_DIRS } from '../../src/workflow/runtimes/layers.js';
 import { checkoutStatus, git, loadWriters, REPO_ROOT, runInWorld, teamRefs, worldFiles, type World } from './world.js';
 
 interface Section {
@@ -243,6 +244,9 @@ const REMOTE_REF = /^project\/\.git\/refs\/remotes(\/|$)/;
 /** teamai's own directories: whatever wrote last there, it is teamai's to remove. */
 const TEAMAI_ROOTS = ['home/.teamai', 'project/.teamai'];
 
+/** The member's own folders in ~/.teamai, which teamai reads and never writes, so uninstall keeps them. */
+const MEMBERS_OWN = Object.values(PERSONAL_DIRS).map((dir) => `home/.teamai/${dir}`);
+
 /** Each project path teamai delivers a tool's resources to, and those TOOLS says a tool reads there. */
 const TEAMAI_PROJECT_WRITES = [...new Set([
   ...Object.values(TeamaiConfigBaseSchema.shape.toolPaths.parse(undefined)).flatMap((paths) =>
@@ -310,6 +314,11 @@ function reverseState(world: World): Section {
     if (before[entry] === after[entry] || under(entry, [...leaked, ...KNOWN_LEFTOVER_DIRS])) continue;
     const change = before[entry] === undefined ? 'left behind' : after[entry] === undefined ? 'removed' : 'changed';
     const writer = writers[entry];
+
+    if (change === 'left behind' && MEMBERS_OWN.some((dir) => entry === dir || entry.startsWith(`${dir}/`)) && writer !== undefined && writer.value === after[entry]) {
+      excuse(`the member's own, put there by ${writer.program}, which uninstall keeps`, entry);
+      continue;
+    }
 
     // A tool's sessions, or a member's own commit: left as a member's program left it, whatever teamai did in between.
     if (writer !== undefined && writer.value === (after[entry] ?? null) && !teamaiPlace(entry, after[entry])) {
