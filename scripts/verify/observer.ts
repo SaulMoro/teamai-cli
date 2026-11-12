@@ -114,7 +114,7 @@ interface Seen {
   readonly what: string;
   read: number;
   names: Set<string>;
-  /** Why the last read of its environments failed, when one did. */
+  /** Why the last look failed to read its environments, while no look has read one. */
   failed?: string;
 }
 
@@ -251,11 +251,12 @@ export function startObserver(world: World, { pass, label, listed = listedHere }
     return entry;
   };
 
-  /** Judges what `ENVIRONS` answered in sandbox `what`, keeping why it failed when it did. */
+  /** Judges what `ENVIRONS` answered in sandbox `what`, keeping why it failed while no look has read an environment. */
   const judge = (what: string, read: Listed): void => {
     const entry = judgeEnvirons(what, read.kind === 'ran' ? environsOf(read.stdout) : []);
 
-    if (read.kind !== 'ran') entry.failed = read.kind === 'failed' ? read.why : 'its command is not installed here';
+    if (read.kind === 'ran' || entry.read > 0) delete entry.failed;
+    else entry.failed = read.kind === 'failed' ? read.why : 'its command is not installed here';
   };
 
   const containers = (): Promise<void[]> => Promise.all(CONTAINER_ENGINES.map(async (engine) => {

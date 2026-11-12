@@ -121,6 +121,31 @@ describe('the sandbox observer', () => {
     expect(await noSbx.stop()).toEqual([]);
   });
 
+  it('forgets why a read of a sandbox failed once a later look reads it', async () => {
+    vi.useFakeTimers();
+    const world = worldIn();
+    const owner = journal(sandboxJournalRoot(world.home)).owner;
+    let execs = 0;
+    const observer = startObserver(world, {
+      pass: new Map(),
+      label: 'teamai workflow start',
+      listed: ([command = '', verb = '']) => {
+        if (command !== 'docker') return Promise.resolve(missing);
+
+        if (verb === 'info') return Promise.resolve(printed('29.0.0\n'));
+
+        if (verb === 'ps') return Promise.resolve(printed(`c0ffee\tteamai-r0123abcd-a0123abcd\t${owner}\n`));
+
+        return Promise.resolve((execs += 1) === 1 ? failed : printed('PATH=/usr/bin\0\0'));
+      },
+    });
+
+    await vi.advanceTimersByTimeAsync(500);
+
+    expect(await observer.stop()).toEqual(['[verify] observed docker:teamai-r0123abcd-a0123abcd: env ok']);
+    expect(JSON.parse(fs.readFileSync(path.join(world.dir, 'observed.jsonl'), 'utf8'))).not.toHaveProperty('failed');
+  });
+
   it('asks no more, and says so, an engine whose `info` took past its time', async () => {
     vi.useFakeTimers();
     const world = worldIn();
