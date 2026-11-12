@@ -40,8 +40,9 @@ export async function firstLink(dir: string): Promise<{ ok: true; link?: string 
 }
 
 /**
- * A resource folder's revision: a hash of every file under it, by relative path, executable bit and content, with a link
- * hashed as the path it names, never what it points to. Any change a teammate pushes there is a new revision.
+ * A resource folder's revision: a hash of every file under it, by relative path, kind, executable bit and content, with
+ * a link hashed as the path it names, never what it points to. Each file's header gives its content's length, so no
+ * content can stand in for the next file's header: any change a teammate pushes there is a new revision.
  */
 export async function folderRevision(dir: string): Promise<string> {
   const hash = createHash('sha256');
@@ -51,8 +52,9 @@ export async function folderRevision(dir: string): Promise<string> {
     const stat = await fs.lstat(at);
 
     if (stat.isDirectory()) continue;
-    const body = stat.isSymbolicLink() ? `link:${await fs.readlink(at)}` : await readRegularFileNoLink(at);
-    hash.update(`${relative.split(path.sep).join('/')}\0${stat.mode & 0o111 ? 'x' : '-'}\0`).update(body).update('\0');
+    const isLink = stat.isSymbolicLink();
+    const body = isLink ? Buffer.from(await fs.readlink(at)) : await readRegularFileNoLink(at);
+    hash.update(`${JSON.stringify([relative.split(path.sep).join('/'), isLink ? 'link' : 'file', stat.mode & 0o111 ? 'x' : '-', body.byteLength])}\n`).update(body);
   }
 
   return hash.digest('hex');
