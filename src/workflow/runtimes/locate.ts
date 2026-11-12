@@ -129,11 +129,16 @@ export function fixOf(layer: RuntimeLayer): string {
  */
 async function readDefinition(driver: ResolvedDriver, use: string, definition: Definition): Promise<LayerLookup> {
   const markerFile = definition.form === 'folder' ? path.join(definition.at, RUNTIME_MARKER) : definition.at;
+  // What the marker itself says wrong names the marker; what the folder holds names the folder.
+  const markerLocation = definition.form === 'folder' && /[\\/]$/.test(definition.location) ? `${definition.location}${RUNTIME_MARKER}` : definition.location;
 
-  const unusable = (reason: string): LayerLookup => ({
+  const refuse = (at: string, reason: string): LayerLookup => ({
     kind: 'unusable',
-    failure: { code: 'runtime_not_found', message: `Driver "${driver.name}" uses runtime "${use}", and ${definition.location} cannot run it: ${reason}. ${fixOf(definition.layer)}` },
+    failure: { code: 'runtime_not_found', message: `Driver "${driver.name}" uses runtime "${use}", and ${at} cannot run it: ${reason}. ${fixOf(definition.layer)}` },
   });
+
+  const unusable = (reason: string): LayerLookup => refuse(definition.location, reason);
+  const badMarker = (reason: string): LayerLookup => refuse(markerLocation, reason);
 
   let text = definition.text;
 
@@ -143,7 +148,7 @@ async function readDefinition(driver: ResolvedDriver, use: string, definition: D
     try {
       text = await readRegularFileNoLink(markerFile, 'utf8');
     } catch (error) {
-      return unusable(`${definition.form === 'folder' ? RUNTIME_MARKER : 'the file'} cannot be read (${error instanceof Error ? error.message : String(error)})`);
+      return badMarker(`it cannot be read (${error instanceof Error ? error.message : String(error)})`);
     }
   }
 
@@ -152,7 +157,7 @@ async function readDefinition(driver: ResolvedDriver, use: string, definition: D
   try {
     raw = parseYaml(text);
   } catch (error) {
-    return unusable(`it is not YAML (${error instanceof Error ? error.message : String(error)})`);
+    return badMarker(`it is not YAML (${error instanceof Error ? error.message : String(error)})`);
   }
 
   const parsed = RuntimeMarkerSchema.safeParse(raw);
@@ -160,12 +165,12 @@ async function readDefinition(driver: ResolvedDriver, use: string, definition: D
   if (!parsed.success) {
     const [issue] = parsed.error.issues;
 
-    return unusable(`${issue?.path.join('.') || '(root)'}: ${issue?.message ?? 'not valid'}; a runtime sets protocol, entry and optionally exec`);
+    return badMarker(`${issue?.path.join('.') || '(root)'}: ${issue?.message ?? 'not valid'}; a runtime sets protocol, entry and optionally exec`);
   }
 
   const marker = parsed.data;
 
-  if (marker.protocol !== RUNTIME_PROTOCOL) return unusable(`it declares protocol ${marker.protocol}, and this teamai speaks protocol ${RUNTIME_PROTOCOL}`);
+  if (marker.protocol !== RUNTIME_PROTOCOL) return badMarker(`it declares protocol ${marker.protocol}, and this teamai speaks protocol ${RUNTIME_PROTOCOL}`);
   const launched = await launchOf(definition, marker.entry);
 
   if (!launched.ok) return unusable(launched.reason);

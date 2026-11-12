@@ -48,6 +48,8 @@ export interface SandboxProfile {
   /** The sha256 of a file's content, or the folder's revision (`folderRevision`). */
   readonly revision: string;
   readonly options: Readonly<Record<string, z.infer<typeof JsonValueSchema>>>;
+  /** The provider its options name, which the sandbox runtime checks; unset when they name none. */
+  readonly provider?: string;
   /** The profile of teamai's own this one of the member or the team stands in for. */
   readonly replaces?: string;
 }
@@ -67,6 +69,7 @@ interface Definition {
 }
 
 const ProfileOptionsSchema = z.record(z.string(), JsonValueSchema);
+const ProviderSchema = z.object({ provider: z.string() });
 
 function invalid({ driver, asked, location, layer }: { driver: ResolvedDriver; asked: string; location: string; layer: RuntimeLayer }, reason: string): LayerLookup {
   return { kind: 'refused', failure: { code: 'sandbox_profile_invalid', message: `Driver "${driver.name}" runs its sandbox with profile "${asked}", and ${location} cannot be used: ${reason}. ${fixOf(layer)}` } };
@@ -74,7 +77,10 @@ function invalid({ driver, asked, location, layer }: { driver: ResolvedDriver; a
 
 /** The profile `definition` holds, or why it cannot be used. */
 async function readProfile(driver: ResolvedDriver, asked: string, definition: Definition): Promise<LayerLookup> {
+  // What the marker itself says wrong names the marker; what the folder holds names the folder.
+  const markerLocation = definition.form === 'folder' && /[\\/]$/.test(definition.location) ? `${definition.location}${SANDBOX_MARKER}` : definition.location;
   const refuse = (reason: string): LayerLookup => invalid({ driver, asked, location: definition.location, layer: definition.layer }, reason);
+  const badMarker = (reason: string): LayerLookup => invalid({ driver, asked, location: markerLocation, layer: definition.layer }, reason);
   const file = definition.form === 'folder' ? path.join(definition.at, SANDBOX_MARKER) : definition.at;
 
   if (definition.text === undefined && definition.form === 'file' && definition.layer === 'team' && await isSymlink(file)) return refuse('it is a link, and teamai reads a profile only from a file the team repo holds');
@@ -84,7 +90,7 @@ async function readProfile(driver: ResolvedDriver, asked: string, definition: De
     try {
       text = await readRegularFileNoLink(file, 'utf8');
     } catch (error) {
-      return refuse(`${definition.form === 'folder' ? SANDBOX_MARKER : 'the file'} cannot be read (${error instanceof Error ? error.message : String(error)})`);
+      return badMarker(`it cannot be read (${error instanceof Error ? error.message : String(error)})`);
     }
   }
 
@@ -93,18 +99,18 @@ async function readProfile(driver: ResolvedDriver, asked: string, definition: De
   try {
     raw = parseYaml(text);
   } catch (error) {
-    return refuse(`it is not YAML (${error instanceof Error ? error.message : String(error)})`);
+    return badMarker(`it is not YAML (${error instanceof Error ? error.message : String(error)})`);
   }
 
   const parsed = ProfileOptionsSchema.safeParse(raw);
 
-  if (!parsed.success) return refuse('it sets no options, and a profile is a mapping such as provider: docker');
+  if (!parsed.success) return badMarker('it sets no options, and a profile is a mapping such as provider: docker');
   const options = parsed.data;
   const entryKey = ENTRY_KEYS.find((key) => key in options);
 
-  if (entryKey !== undefined) return refuse(`it sets ${entryKey}, which the driver definition's entry sets, as its options: { ${entryKey}: ${JSON.stringify(options[entryKey])} }`);
+  if (entryKey !== undefined) return badMarker(`it sets ${entryKey}, which the driver definition's entry sets, as its options: { ${entryKey}: ${JSON.stringify(options[entryKey])} }`);
 
-  if (PROFILE_OPTION in options) return refuse(`it sets ${PROFILE_OPTION}, which teamai gives the sandbox runtime itself`);
+  if (PROFILE_OPTION in options) return badMarker(`it sets ${PROFILE_OPTION}, which teamai gives the sandbox runtime itself`);
   let revision: string;
 
   try {
@@ -113,9 +119,14 @@ async function readProfile(driver: ResolvedDriver, asked: string, definition: De
     return refuse(`its folder cannot be read (${error instanceof Error ? error.message : String(error)})`);
   }
 
+  const named = ProviderSchema.safeParse(options);
+
   return {
     kind: 'found',
-    profile: { asked, resource: definition.resource, layer: definition.layer, location: definition.location, ...(definition.form === 'folder' && { folder: definition.at }), revision, options },
+    profile: {
+      asked, resource: definition.resource, layer: definition.layer, location: definition.location, ...(definition.form === 'folder' && { folder: definition.at }), revision, options,
+      ...(named.success && { provider: named.data.provider }),
+    },
   };
 }
 

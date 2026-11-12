@@ -175,7 +175,7 @@ describe('a selected runtime that cannot run', () => {
 
   it('fails the run on a marker that does not parse or a folder with none, and never falls through to another layer', async () => {
     expect(await opened({ 'runtimes/acme/RUNTIME.yaml': 'protocol: 1\nentry: ./runtime\nexec: no-commands\n', 'runtimes/acme/runtime': '#!/bin/sh\n' }))
-      .toMatchObject({ ok: false, failure: { code: 'runtime_not_found', message: expect.stringMatching(/^Driver "acme" uses runtime "acme", and runtimes\/acme\/ cannot run it: exec: .*; a runtime sets protocol, entry and optionally exec\. Fix it, push it, run teamai pull, and start again\.$/) } });
+      .toMatchObject({ ok: false, failure: { code: 'runtime_not_found', message: expect.stringMatching(/^Driver "acme" uses runtime "acme", and runtimes\/acme\/RUNTIME\.yaml cannot run it: exec: .*; a runtime sets protocol, entry and optionally exec\. Fix it, push it, run teamai pull, and start again\.$/) } });
     expect(await opened({ 'runtimes/acme.yaml': 'protocol: 1\nentry: { command: [acme-runtime\n' }))
       .toMatchObject({ ok: false, failure: { message: expect.stringContaining('runtimes/acme.yaml cannot run it: it is not YAML') } });
     // The layout before RUNTIME.yaml: the folder holds the code, and nothing that says it is a runtime.
@@ -210,7 +210,7 @@ describe('a selected runtime that cannot run', () => {
     expect(await opened({ 'elsewhere.yaml': COMMAND_RUNTIME, 'runtimes/.keep': '' })).toEqual(refused('runtimes/acme.yaml', 'it is a link, and teamai reads a runtime only from a file the team repo holds'));
   });
 
-  it('fails the run on a marker of another protocol, before anything is spawned', async () => {
-    expect(await opened({ 'runtimes/acme/RUNTIME.yaml': 'protocol: 0\nentry: ./runtime\n', 'runtimes/acme/runtime': '#!/bin/sh\n' })).toEqual(refused('runtimes/acme/', 'it declares protocol 0, and this teamai speaks protocol 1'));
+  it('fails the run on a marker of another protocol, naming the marker, before anything is spawned', async () => {
+    expect(await opened({ 'runtimes/acme/RUNTIME.yaml': 'protocol: 0\nentry: ./runtime\n', 'runtimes/acme/runtime': '#!/bin/sh\n' })).toEqual(refused('runtimes/acme/RUNTIME.yaml', 'it declares protocol 0, and this teamai speaks protocol 1'));
   });
 });

@@ -46,7 +46,7 @@ describe('which sandbox profile a name finds', () => {
   it('reads a team sandboxes/<name>.yaml at its content', async () => {
     const { locate } = await teamWith({ 'sandboxes/gpu.yaml': DOCKER });
 
-    expect(await locate('gpu')).toEqual({ ok: true, profile: { asked: 'gpu', resource: 'gpu', layer: 'team', location: 'sandboxes/gpu.yaml', revision: sha(DOCKER), options: { provider: 'docker', image: 'ghcr.io/acme/agent:1' } } });
+    expect(await locate('gpu')).toEqual({ ok: true, profile: { asked: 'gpu', resource: 'gpu', layer: 'team', location: 'sandboxes/gpu.yaml', revision: sha(DOCKER), options: { provider: 'docker', image: 'ghcr.io/acme/agent:1' }, provider: 'docker' } });
   });
 
   it('reads a team folder sandboxes/<name>/SANDBOX.yaml at the folder\'s revision, and gives the folder its paths are inside', async () => {
@@ -57,6 +57,7 @@ describe('which sandbox profile a name finds', () => {
       profile: {
         asked: 'gpu', resource: 'gpu', layer: 'team', location: 'sandboxes/gpu/', folder: at('sandboxes/gpu'), revision: await folderRevision(at('sandboxes/gpu')),
         options: { provider: 'docker', image: 'ghcr.io/acme/agent:1', warm: { containerfile: './Containerfile', cache: ['package.json'] } },
+        provider: 'docker',
       },
     });
   });
@@ -93,12 +94,13 @@ describe('a sandbox profile that cannot be used', () => {
     message: `Driver "boxed" runs its sandbox with profile "gpu", and ${location} cannot be used: ${reason}. Fix it, push it, run teamai pull, and start again.`,
   } });
 
-  it('fails on a profile that is not YAML or not a mapping, and never takes another layer\'s', async () => {
+  it('fails on a profile that is not YAML or not a mapping, naming its file, and never takes another layer\'s', async () => {
     fs.mkdirSync(path.join(getTeamaiHomeDir(), 'sandboxes'), { recursive: true });
     fs.writeFileSync(path.join(getTeamaiHomeDir(), 'sandboxes', 'teamai-gpu.yaml'), DOCKER);
 
     expect(await (await teamWith({ 'sandboxes/gpu.yaml': 'provider: [docker\n' })).locate('gpu')).toMatchObject({ ok: false, failure: { code: 'sandbox_profile_invalid', message: expect.stringContaining('sandboxes/gpu.yaml cannot be used: it is not YAML') } });
     expect(await (await teamWith({ 'sandboxes/gpu.yaml': '- docker\n' })).locate('gpu')).toEqual(refused('sandboxes/gpu.yaml', 'it sets no options, and a profile is a mapping such as provider: docker'));
+    expect(await (await teamWith({ 'sandboxes/gpu/SANDBOX.yaml': '- docker\n' })).locate('gpu')).toEqual(refused('sandboxes/gpu/SANDBOX.yaml', 'it sets no options, and a profile is a mapping such as provider: docker'));
   });
 
   it('fails on a profile that sets max_parallel or credentials, which stay on the driver\'s entry', async () => {
