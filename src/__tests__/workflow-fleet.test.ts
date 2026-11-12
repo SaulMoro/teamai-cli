@@ -1680,6 +1680,28 @@ describe('a cancel the owner cannot write into the attempt\'s record at once', (
     await cancelled;
   }, 60_000);
 
+  it('ends the owner\'s cancel cancel_failed past stale_after, naming the record, when the record is no longer on teamai-reports after the cancel of a claim landed', async () => {
+    const { bob, run, attempt, open, origin } = await ownerOffering(opened, undefined, { staleAfter: '20s' });
+    const { runtime, exec } = await open();
+    const op = newOpId();
+    const ended = exec(op);
+    const offered = await recordIn(bob, run, attempt, 'offered');
+    if (offered.state !== 'offered') throw new Error(`no offer: ${offered.state}`);
+    const claimed = await claimAttempt(bob.config, offered, await installOwner(bob.config));
+    if (!claimed.ok) throw new Error(claimed.error.message);
+    await recordIn(bob, run, attempt, 'claimed');
+    // Once the cancel landed, teamai-reports loses the branch, so every read after it finds no record.
+    fs.writeFileSync(path.join(origin, 'hooks', 'post-receive'), `#!/bin/sh\nwhile read old new ref; do subjects=$(git log --format=%s "$old..$new") || exit 0; echo "$subjects" | grep -q "^\\[teamai\\] Cancel attempt" && git update-ref -d "$ref"; done; exit 0\n`, { mode: 0o755 });
+    vi.useFakeTimers({ toFake: ['Date'], shouldAdvanceTime: true });
+    const cancelled = runtime.cancel(op);
+    await eventually(async () => (git(origin, 'branch', '--list', 'teamai-reports') === '' ? true : undefined));
+
+    expect(await within(ended, 3_000)).toBe('waiting');
+    vi.setSystemTime(Date.now() + 21_000);
+    expect(await within(ended, 15_000)).toMatchObject({ kind: 'failed', failure: { code: 'cancel_failed', message: expect.stringMatching(new RegExp(`its member bob was asked to stop it, and the record of attempt ${attempt} is no longer on teamai-reports, so whether the member stopped is not known\\. The attempt's place and records are kept\\.`)) } });
+    await cancelled;
+  }, 60_000);
+
   it('ends the owner\'s cancel cancel_failed past stale_after, keeping the place, when origin cannot be read before any cancel write', async () => {
     const { bob, run, attempt, open, origin } = await ownerOffering(opened, undefined, { staleAfter: '20s' });
     const { runtime, exec } = await open();

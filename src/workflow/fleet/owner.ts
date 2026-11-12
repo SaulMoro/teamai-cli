@@ -707,8 +707,15 @@ async function waitOnOffer(input: WaitInput, { cancel, leave }: { cancel: AbortS
 
     // A cancel that landed waits for its member's answer as long as for its progress: past stale_after with no read of
     // the record, whether the member stopped is not known, so the wait ends and keeps the place for `workflow cancel`.
-    if (cancelling !== undefined && !read.ok && lastSeen !== undefined && Date.now() - lastSeen.at > staleAfterMs) {
-      return failed({ code: CANCEL_FAILED, message: `Step "${step}" was cancelled: its member ${safeText(cancelling.member.user)} was asked to stop it, and the record of attempt ${attempt} on teamai-reports could not be read for ${staleAfterMs / 1_000} s since, so whether the member stopped is not known. ${cancelWriteCause(read.error)} The attempt's place and records are kept. Once origin can be read, run teamai workflow cancel ${run} again.` });
+    if (cancelling !== undefined && record === undefined && lastSeen !== undefined && Date.now() - lastSeen.at > staleAfterMs) {
+      const stopAsked = `Step "${step}" was cancelled: its member ${safeText(cancelling.member.user)} was asked to stop it, and the record of attempt ${attempt}`;
+
+      return failed({
+        code: CANCEL_FAILED,
+        message: read.ok
+          ? `${stopAsked} is no longer on teamai-reports, so whether the member stopped is not known. The attempt's place and records are kept. Run teamai workflow cancel ${run} again once its member stopped.`
+          : `${stopAsked} on teamai-reports could not be read for ${staleAfterMs / 1_000} s since, so whether the member stopped is not known. ${cancelWriteCause(read.error)} The attempt's place and records are kept. Once origin can be read, run teamai workflow cancel ${run} again.`,
+      });
     }
 
     if (cancel.aborted && cancelling === undefined) {
