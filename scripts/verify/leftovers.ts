@@ -12,7 +12,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { z } from 'zod';
 import { worldRedactor } from './secrets.js';
-import { runtimeStateDirs, WORLDS_ROOT, type World } from './world.js';
+import { markDriverSeen, runtimeStateDirs, WORLDS_ROOT, type World } from './world.js';
 
 /** Whose a leftover is: this world's (a LEAK), another world's, teamai's but no world's, or nothing of teamai's. */
 export type Attribution =
@@ -73,11 +73,13 @@ export interface TierEvidence {
   /** Folders under a HOME's ~/.teamai/runtime-state: a runtime outside teamai's process ran there. */
   readonly runtimeJournals: number;
   readonly containerMembers: number;
+  /** An earlier look saw a runtime outside teamai's process run here (world.json), whatever uninstall has removed since. */
+  readonly driverSeen?: boolean;
 }
 
 /** basic: no step runtime ran; middle: only teamai's own process ran steps; driver: a runtime outside it, or a container member. */
 export function worldTier(evidence: TierEvidence): Tier {
-  if (evidence.externalRecords > 0 || evidence.runtimeJournals > 0 || evidence.containerMembers > 0) return 'driver';
+  if (evidence.driverSeen === true || evidence.externalRecords > 0 || evidence.runtimeJournals > 0 || evidence.containerMembers > 0) return 'driver';
 
   return evidence.inProcessRecords > 0 ? 'middle' : 'basic';
 }
@@ -290,7 +292,10 @@ async function contextOf(world: World): Promise<{ context: LeftoverContext; tier
     externalRecords: placements.filter((placement) => placement.kind !== 'in_process').length,
     runtimeJournals: records.runtimeJournals,
     containerMembers: (world.members ?? []).filter((member) => member.machine === 'container').length,
+    driverSeen: world.driverSeen === true,
   });
+
+  if (tier === 'driver') markDriverSeen(world);
 
   const journalOf = tier === 'driver' ? await sandboxJournalIds() : undefined;
 

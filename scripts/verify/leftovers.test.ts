@@ -34,6 +34,8 @@ describe("a world's tier", () => {
     expect(worldTier({ inProcessRecords: 2, externalRecords: 1, runtimeJournals: 0, containerMembers: 0 })).toBe('driver');
     expect(worldTier({ inProcessRecords: 0, externalRecords: 0, runtimeJournals: 1, containerMembers: 0 })).toBe('driver');
     expect(worldTier({ inProcessRecords: 0, externalRecords: 0, runtimeJournals: 0, containerMembers: 1 })).toBe('driver');
+    // After uninstall took the records away, a world a runtime outside teamai's process ran in keeps every check.
+    expect(worldTier({ inProcessRecords: 0, externalRecords: 0, runtimeJournals: 0, containerMembers: 0, driverSeen: true })).toBe('driver');
   });
 });
 

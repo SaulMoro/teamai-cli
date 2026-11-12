@@ -8,7 +8,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { lineRedactor, worldRedactor } from './secrets.js';
 import { MEMBER_NAME } from './members.js';
-import { recordWriters, runtimeStateDirs, worldFiles, worldWritersFile, writeCommandLog, type Member, type World } from './world.js';
+import { markDriverSeen, recordWriters, runtimeStateDirs, worldFiles, worldWritersFile, writeCommandLog, type Member, type World } from './world.js';
 
 export type Target = { kind: 'world' } | { kind: 'member'; name: string };
 
@@ -157,6 +157,8 @@ export async function runOn(world: World, target: Target, argv: readonly string[
 
   const log = writeCommandLog(world, argv.map(mask), output, status);
   recordWriters(place.writers, argv, before, worldFiles(place));
+
+  if (hasRuntimeState(world)) markDriverSeen(world);
 
   return { exit: status ?? 1, log };
 }

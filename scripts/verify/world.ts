@@ -65,6 +65,8 @@ const WorldSchema = z.object({
   /** The project's bare origin behind a fake https URL, made on first need, and its refs once the harness set it up. */
   origin: z.object({ bare: z.string(), url: z.string(), refs: z.record(z.string(), z.string()) }).optional(),
   members: z.array(MemberSchema).optional(),
+  // Once a runtime outside teamai's process ran in the world: what uninstall deletes cannot lower the ledger's checks after it.
+  driverSeen: z.literal(true).optional(),
   cleanedAt: z.string().optional(),
 });
 
@@ -335,6 +337,14 @@ function buildWorld(runId: string, dir: string, tmp: string): World {
 
 export function saveWorld(world: World): void {
   fs.writeFileSync(path.join(world.dir, 'world.json'), `${JSON.stringify(world, null, 2)}\n`);
+}
+
+/** Records, once, that a runtime outside teamai's process ran in `world`, read fresh so no other change to world.json is lost. */
+export function markDriverSeen(world: Pick<World, 'runId' | 'driverSeen'>): void {
+  if (world.driverSeen === true) return;
+  const fresh = loadWorld(world.runId);
+
+  if (fresh.driverSeen !== true) saveWorld({ ...fresh, driverSeen: true });
 }
 
 export function loadWorld(runId: string | undefined): World {
