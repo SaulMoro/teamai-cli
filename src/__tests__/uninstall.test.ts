@@ -568,6 +568,22 @@ describe('uninstall', () => {
     expect(await fse.pathExists(path.join(homeDir, '.claude', 'skills', 'team-skill')), 'delivered skill').toBe(true);
   });
 
+  it('refuses with no valid configuration too, while a step runtime holds a place of a run in the home it removes', async () => {
+    const { homeDir, teamaiHome } = await setupFixture(tmpDir);
+    vi.stubEnv('HOME', homeDir);
+    const record = path.join(teamaiHome, 'projects', 'gone-checkout', 'workflows', 'runs', 'r0123456789abcdef', 'attempts', 'a01234567', 'runtime.json');
+    await fse.outputJson(record, { runtime: 'box', driver: 'box', phase: 'running', open: { op: newOpId(), handle: 'teamai-r0123456789abcdef-a01234567' } });
+    mockAutoDetectInit.mockRejectedValue(new Error('no configuration'));
+    const previousExitCode = process.exitCode;
+
+    await uninstall({ force: true });
+
+    expect(process.exitCode).toBe(1);
+    process.exitCode = previousExitCode;
+    expect(log.error).toHaveBeenCalledWith(expect.stringContaining('`teamai workflow cancel r0123456789abcdef`'));
+    expect(await fse.pathExists(record), 'run record').toBe(true);
+  });
+
   // A workspace-scope uninstall used to see no kept projects at all, because that
   // list is filled for the user scope only, so it took the wrapper another
   // checkout's hooks still run (#1808 review).

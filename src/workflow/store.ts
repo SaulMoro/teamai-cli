@@ -47,7 +47,12 @@ export function generateRunId(): string {
  * process of a run names the run's files alike, whatever spelling of HOME each one was given.
  */
 export function runsDir(config: LocalConfig): string {
-  return path.join(resolveReal(getDataHome(config)), 'workflows', 'runs');
+  return runsDirIn(getDataHome(config));
+}
+
+/** `runsDir` of the scope whose data home is `dataHome`, for a caller that has a data home and no config of it. */
+export function runsDirIn(dataHome: string): string {
+  return path.join(resolveReal(dataHome), 'workflows', 'runs');
 }
 
 export function runFilePath(config: LocalConfig, runId: string): string {
@@ -94,7 +99,12 @@ export function runScratchDir(config: LocalConfig, run: string): string {
 
 /** `runs/<run>/attempts/`: a directory for each attempt of the run. */
 export function attemptsDir(config: LocalConfig, run: RunId): string {
-  return path.join(runsDir(config), run, 'attempts');
+  return attemptsDirIn(runsDir(config), run);
+}
+
+/** `attemptsDir` of run `run` in the runs directory `runs`. */
+export function attemptsDirIn(runs: string, run: RunId): string {
+  return path.join(runs, run, 'attempts');
 }
 
 /** `runs/<run>/attempts/<attempt>/`: what a driver keeps for one attempt. */

@@ -97,6 +97,7 @@ import {
   listFilesRecursive,
   pruneEmptyDirs,
   stagingLeftIn,
+  errnoCode,
 } from './utils/fs.js';
 import { installationsPath } from './installations.js';
 import { listQueuesIn } from './utils/pending-learnings.js';
@@ -3628,7 +3629,7 @@ export async function uninstall(opts: UninstallOptions): Promise<void> {
       return;
     }
 
-    if (plan.includeShared && await refusedForHeldPlaces(localConfig)) return;
+    if (plan.includeShared && await refusedForHeldPlaces(async () => [getDataHome(localConfig)])) return;
 
     printSummary(plan, agentKey);
 
@@ -3678,16 +3679,17 @@ export async function uninstall(opts: UninstallOptions): Promise<void> {
 }
 
 /**
- * Refuses an uninstall that takes this scope's workflow runs while a step runtime may still hold a place of one: those
- * records, and what the runtime keeps of the place, are what `teamai workflow cancel` closes it with. Answers whether it
- * refused.
+ * Refuses an uninstall that removes the workflow runs of the data homes `dataHomes` lists while a step runtime may still hold a place of one:
+ * those records, and what the runtime keeps of the place, are what `teamai workflow cancel` closes it with. Answers
+ * whether it refused.
  */
-async function refusedForHeldPlaces(localConfig: LocalConfig): Promise<boolean> {
+async function refusedForHeldPlaces(dataHomes: () => Promise<readonly string[]>): Promise<boolean> {
   const { placesMaybeHeld } = await import('./workflow/runtimes/cancelled.js');
-  let held: Awaited<ReturnType<typeof placesMaybeHeld>>;
+  const { runsDirIn } = await import('./workflow/store.js');
+  const held: Awaited<ReturnType<typeof placesMaybeHeld>> = [];
 
   try {
-    held = await placesMaybeHeld(localConfig);
+    for (const dataHome of await dataHomes()) held.push(...await placesMaybeHeld(runsDirIn(dataHome)));
   } catch (e) {
     log.error(`Cannot uninstall: teamai could not read this scope's workflow runs (${e instanceof Error ? e.message : String(e)}), so it cannot tell whether a step runtime still holds a place of one. Fix what keeps it from being read, then run \`teamai uninstall\` again.`);
     process.exitCode = 1;
@@ -3710,6 +3712,21 @@ async function refusedForHeldPlaces(localConfig: LocalConfig): Promise<boolean> 
   process.exitCode = 1;
 
   return true;
+}
+
+/** The data homes an uninstall with no configuration removes under `home`: the user scope's and each project's not kept. */
+async function removedDataHomes(home: string, kept: KeptForProjects): Promise<string[]> {
+  const { projectsRootDir } = await import('./utils/partition.js');
+  let partitions: string[];
+
+  try {
+    partitions = (await readdir(projectsRootDir())).map((name) => path.join(projectsRootDir(), name));
+  } catch (e) {
+    if (errnoCode(e) !== 'ENOENT') throw e;
+    partitions = [];
+  }
+
+  return [home, ...partitions.filter((dataHome) => !kept.paths.includes(dataHome))];
 }
 
 /** Uninstall what `plan` names, once the member confirmed it, under the partition's sync lock. */
@@ -4065,6 +4082,8 @@ async function uninstallHomeOnly(opts: UninstallOptions): Promise<void> {
       return;
     }
   }
+
+  if (await refusedForHeldPlaces(() => removedDataHomes(home, kept))) return;
 
   try {
     try {

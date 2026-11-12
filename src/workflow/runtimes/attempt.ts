@@ -127,7 +127,12 @@ export type AttemptRuntimeRecord = z.infer<typeof AttemptRuntimeRecordSchema>;
 
 /** Where attempt `attempt` of run `run` records its runtime (`AttemptRuntimeRecord`). */
 export function attemptRuntimePath(config: LocalConfig, run: RunId, attempt: AttemptId): string {
-  return path.join(attemptDir(config, run, attempt), 'runtime.json');
+  return attemptRuntimeFile(attemptDir(config, run, attempt));
+}
+
+/** The runtime record of the attempt whose directory is `dir`. */
+export function attemptRuntimeFile(dir: string): string {
+  return path.join(dir, 'runtime.json');
 }
 
 /**

@@ -1,13 +1,14 @@
 import fs from 'node:fs/promises';
+import path from 'node:path';
 import { resolveRunMode } from '../../launch-context.js';
 import type { LocalConfig } from '../../types.js';
 import { log } from '@teamai/shared/log';
 import type { RunStatus, WorkflowFailure } from '../types.js';
 import { existingCheckout } from '../run-location.js';
 import { errnoCode } from '../../utils/fs.js';
-import { attemptDir, AttemptIdSchema, attemptsDir, readRun, RunIdSchema, runsDir, type AttemptId, type RunId, type RunLock } from '../store.js';
+import { attemptDir, AttemptIdSchema, attemptsDir, attemptsDirIn, readRun, RunIdSchema, type AttemptId, type RunId, type RunLock } from '../store.js';
 import { knownSecrets } from '../../env-resolution.js';
-import { attemptRun, attemptRuntimePath, attemptToolHome, isPlaceLeftOpen, maskAttemptResults, readAttemptPlacement, releaseAttemptRuntime, type AttemptRuntimeRecord } from './attempt.js';
+import { attemptRun, attemptRuntimeFile, attemptRuntimePath, attemptToolHome, isPlaceLeftOpen, maskAttemptResults, readAttemptPlacement, readAttemptPlacementAt, releaseAttemptRuntime, type AttemptRuntimeRecord } from './attempt.js';
 import { endLogin, LOGIN_TOOLS, loginHolder, type LoginTool } from './login.js';
 import { disposeDriver, openDriver } from './sources.js';
 import { retryCommand } from './retry-command.js';
@@ -131,27 +132,28 @@ type AttemptStop = 'closed' | 'released' | 'none' | 'running';
 /** How `stopAttempt` ended: still `running`, with why, or done; `masked` holds the values its runtime's messages are masked with. */
 type Stopped = ({ ended: Exclude<AttemptStop, 'running'> } | { ended: 'running'; why: string }) & { masked?: Record<string, string> };
 
-/** An attempt of `config`'s scope whose place a step runtime may still hold: its record says `open`, or cannot be read. */
+/** An attempt whose place a step runtime may still hold: its record says `open`, or cannot be read. */
 export type PlaceMaybeHeld = { run: RunId; attempt: AttemptId } & ({ held: 'open' } | { held: 'unreadable'; why: string });
 
 /**
- * Each attempt of `config`'s scope whose place a step runtime may still hold, whether its run still goes or was left:
- * `teamai workflow cancel <run>` closes them, and only while the run's records are there. Fails closed: a folder there
- * but unreadable throws, and an unreadable record is listed.
+ * Each attempt of the runs directory `runs` (`runsDir`, or `runsDirIn` of a data home) whose place a step runtime may
+ * still hold, whether its run still goes or was left: `teamai workflow cancel <run>` closes them, and only while the
+ * run's records are there. Fails closed: a folder there but unreadable throws, and an unreadable record is listed.
  */
-export async function placesMaybeHeld(config: LocalConfig): Promise<PlaceMaybeHeld[]> {
+export async function placesMaybeHeld(runs: string): Promise<PlaceMaybeHeld[]> {
   const held: PlaceMaybeHeld[] = [];
 
-  for (const name of await namesIn(runsDir(config))) {
+  for (const name of await namesIn(runs)) {
     const run = RunIdSchema.safeParse(name);
 
     if (!run.success) continue;
+    const attempts = attemptsDirIn(runs, run.data);
 
-    for (const entry of await namesIn(attemptsDir(config, run.data))) {
+    for (const entry of await namesIn(attempts)) {
       const attempt = AttemptIdSchema.safeParse(entry);
 
       if (!attempt.success) continue;
-      const placement = await readAttemptPlacement(config, run.data, attempt.data);
+      const placement = await readAttemptPlacementAt(attemptRuntimeFile(path.join(attempts, attempt.data)));
 
       if (isPlaceLeftOpen(placement)) held.push({ run: run.data, attempt: attempt.data, held: 'open' });
       else if (placement.kind === 'unreadable') held.push({ run: run.data, attempt: attempt.data, held: 'unreadable', why: placement.why });
