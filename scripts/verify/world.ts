@@ -8,11 +8,11 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
-import { pathToFileURL } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { z } from 'zod';
 import { runtimeStateRoot } from '@teamai/runtime-protocol/state-root';
 import { signalPid } from '@teamai/shared/process-group';
+import { errnoCode } from '../../src/utils/fs.js';
 
 export const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 export const WORLDS_ROOT = path.join(os.tmpdir(), 'teamai-verify');
@@ -412,12 +412,14 @@ export function updateWorld(world: Pick<World, 'dir'>, change: (fresh: World) =>
       fs.writeFileSync(lock, String(process.pid), { flag: 'wx' });
       break;
     } catch (error) {
-      if (!(error instanceof Error && 'code' in error && error.code === 'EEXIST')) throw error;
-      const holder = Number(fs.readFileSync(lock, 'utf8'));
+      if (errnoCode(error) !== 'EEXIST') throw error;
+      const holder = lockHolder(lock);
+
+      if (holder === undefined) continue;
 
       // A holder that died leaves its lock: no write of it can still come.
-      if (Number.isInteger(holder) && signalPid(holder, 0) === 'gone') fs.rmSync(lock, { force: true });
-      else if (waited >= 30_000) throw new Error(`${lock} is held by process ${holder} for 30 s. If no command of the world runs, remove that file.`, { cause: error });
+      if (Number.isInteger(holder) && signalPid(holder, 0) === 'gone') breakDeadLock(lock, holder);
+      else if (waited >= 30_000) throw new Error(`${lock} is held by process ${holder} for 30 s. If no command of the world runs, remove that file and ${lock}.break if it is there.`, { cause: error });
       else pause(20);
     }
   }
@@ -431,6 +433,39 @@ export function updateWorld(world: Pick<World, 'dir'>, change: (fresh: World) =>
     return next;
   } finally {
     fs.rmSync(lock, { force: true });
+  }
+}
+
+/** The process `lock` names, or undefined once its holder let it go. */
+function lockHolder(lock: string): number | undefined {
+  try {
+    return Number(fs.readFileSync(lock, 'utf8'));
+  } catch (error) {
+    if (errnoCode(error) === 'ENOENT') return undefined;
+    throw error;
+  }
+}
+
+/**
+ * Removes `lock` while it still names `dead`, under `<lock>.break`, so of two commands that saw the same dead holder,
+ * the second never removes the lock the first took since.
+ */
+function breakDeadLock(lock: string, dead: number): void {
+  const breaking = `${lock}.break`;
+
+  try {
+    fs.writeFileSync(breaking, String(process.pid), { flag: 'wx' });
+  } catch (error) {
+    if (errnoCode(error) !== 'EEXIST') throw error;
+    pause(20);
+
+    return;
+  }
+
+  try {
+    if (lockHolder(lock) === dead) fs.rmSync(lock, { force: true });
+  } finally {
+    fs.rmSync(breaking, { force: true });
   }
 }
 
@@ -527,7 +562,7 @@ export function writeCommandLog(world: Pick<World, 'logs'>, args: readonly strin
   const name = path.basename(args[0] ?? 'command').replace(/[^\w.-]/g, '_');
   const taken = new Set(fs.readdirSync(world.logs).map((log) => /^(\d+)-/.exec(log)?.[1]));
 
-  // Two commands ending together count the same logs: the one that loses the number takes the next free one.
+  // Two commands ending together count the same logs; no log overwrites another, though two of different names may share a number.
   for (let n = taken.size + 1; ; n += 1) {
     if (taken.has(String(n))) continue;
     const file = path.join(world.logs, `${n}-${name}.log`);
@@ -537,7 +572,7 @@ export function writeCommandLog(world: Pick<World, 'logs'>, args: readonly strin
 
       return file;
     } catch (error) {
-      if (!(error instanceof Error && 'code' in error && error.code === 'EEXIST')) throw error;
+      if (errnoCode(error) !== 'EEXIST') throw error;
     }
   }
 }

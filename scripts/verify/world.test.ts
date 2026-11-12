@@ -122,6 +122,48 @@ describe("a world's world.json", () => {
     expect(JSON.parse(fs.readFileSync(path.join(loaded.dir, 'world.json'), 'utf8'))).toMatchObject({ driverSeen: true, cleanedAt: '2026-11-12T12:00:00.000Z' });
   });
 
+  it('never removes the lock of a command that took it over from a dead holder, and waits through its release', () => {
+    const loaded = writtenWorld();
+    const lock = path.join(loaded.dir, 'world.json.lock');
+    const dead = spawnSync('true').pid ?? 0;
+    const live = String(process.ppid);
+    fs.writeFileSync(lock, String(dead));
+    const read = fs.readFileSync.bind(fs);
+    const rm = fs.rmSync.bind(fs);
+    let reads = 0;
+    let removedLive = false;
+
+    vi.spyOn(fs, 'readFileSync').mockImplementation(((file: fs.PathOrFileDescriptor, options?: unknown) => {
+      if (file !== lock) return read(file, options as BufferEncoding);
+      reads += 1;
+
+      // Another waiter saw the same dead holder, broke its lock and took it, right after this read.
+      if (reads === 1) {
+        fs.writeFileSync(lock, live);
+
+        return String(dead);
+      }
+
+      // That command ends between this one's try to take the lock and its read of the holder.
+      if (reads === 4) {
+        rm(lock);
+        throw Object.assign(new Error(`ENOENT: no such file or directory, open '${lock}'`), { code: 'ENOENT' });
+      }
+
+      return read(file, 'utf8');
+    }) as typeof fs.readFileSync);
+    vi.spyOn(fs, 'rmSync').mockImplementation((file, options) => {
+      if (file === lock && fs.existsSync(lock) && read(lock, 'utf8') === live) removedLive = true;
+      rm(file, options);
+    });
+
+    updateWorld(loaded, (fresh) => ({ ...fresh, driverSeen: true }));
+    vi.restoreAllMocks();
+
+    expect(removedLive).toBe(false);
+    expect(JSON.parse(fs.readFileSync(path.join(loaded.dir, 'world.json'), 'utf8'))).toMatchObject({ driverSeen: true });
+  });
+
   it("keeps each command's log when another command of the world took the next number first", () => {
     const { logs } = writtenWorld();
     fs.mkdirSync(logs);
