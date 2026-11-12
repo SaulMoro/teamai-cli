@@ -95,4 +95,21 @@ describe('syncTeamUpdatesToLocal — a skill copy that fails partway', () => {
     expect(await fse.readFile(path.join(localSkillDir, 'notes.md'), 'utf-8')).toBe('v1 notes');
     expect(await fse.readdir(skillsDir)).toEqual(['my-skill']);
   });
+
+  it('leaves a skill the team keeps as one file as it was, and nothing beside it, when its copy fails', async () => {
+    await fse.outputFile(path.join(repoPath, 'skills', 'my-skill.md'), 'v2 skill');
+    const skillsDir = path.join(homeDir, '.claude', 'skills');
+    const localSkillDir = path.join(skillsDir, 'my-skill');
+    await fse.outputFile(path.join(localSkillDir, 'SKILL.md'), 'v1 skill');
+    await fse.outputFile(path.join(localSkillDir, 'notes.md'), 'mine');
+    // The staged copy keeps this mode, so writing the team's version into it fails.
+    await fse.chmod(path.join(localSkillDir, 'SKILL.md'), 0o444);
+    mockGetFileContentAtRev.mockImplementation(async (_repo, _rev, file) => (file === './skills/my-skill.md' ? Buffer.from('v1 skill') : null));
+
+    await expect(syncTeamUpdatesToLocal(teamConfig, localConfig, 'rev1')).rejects.toThrow('EACCES');
+
+    expect(await fse.readFile(path.join(localSkillDir, 'SKILL.md'), 'utf-8')).toBe('v1 skill');
+    expect(await fse.readFile(path.join(localSkillDir, 'notes.md'), 'utf-8')).toBe('mine');
+    expect(await fse.readdir(skillsDir)).toEqual(['my-skill']);
+  });
 });
