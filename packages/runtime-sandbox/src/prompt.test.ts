@@ -220,6 +220,26 @@ describe('the limits a prompt lease names', () => {
     expect(await prompt(connection, at, { prompt: 'hang on', limits: { timeoutMs: 800 } })).toMatchObject({ event: 'finished', stopped: 'timeout', session: { tool: 'claude' } });
   });
 
+  it('fails a tool it could not stop at the timeout, naming what still runs and how to remove it, rather than letting it run on', async () => {
+    const connection = start();
+    await init(connection);
+    const at = await openPlace(connection);
+    const op = newOp();
+    const ending = prompt(connection, at, { prompt: 'hang on', limits: { timeoutMs: 1_500 } }, {}, op);
+    await vi.waitFor(() => { expect(fs.existsSync(path.join(at.toolHome, 'launch.json'))).toBe(true); }, { timeout: 10_000 });
+    // The engine stops answering while the tool runs, so the stop at the timeout fails.
+    engine.daemon(false);
+
+    expect(await ending).toMatchObject({
+      event: 'failed',
+      failure: { code: 'sandbox_failed', message: expect.stringMatching(/claude reached a limit of its step and could not be stopped: docker could not stop the processes in container .*docker rm --force/) },
+    });
+    // teamai closes the place of a failed step, which removes what still ran there.
+    engine.daemon(true);
+    connection.send({ type: 'close', handle: HANDLE });
+    expect(await connection.next((message) => message.event === 'closed' || message.event === 'close_failed', 30_000)).toEqual({ event: 'closed', handle: HANDLE });
+  });
+
   it('fails a tool that prints nothing for longer than the idle limit, naming the limit', async () => {
     const connection = start();
     await init(connection);

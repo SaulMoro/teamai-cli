@@ -55,8 +55,9 @@ const IN_SANDBOX: StepLaunchHost = {
 /**
  * The process port of a step's tool in sandbox `id`: the provider's exec, with the environment the launch gives and the
  * names `unset` withholds. Its stop stops every process in the sandbox, as a cancel's does, and the sandbox stays. It
- * calls `onStdout` only once `start` returned, so a budget stop finds its process. `stderr` gives the end of what the
- * tool printed there, from its first whole line.
+ * calls `onStdout` only once `start` returned, so a budget stop finds its process. A stop the provider could not make
+ * ends the tool's run failed with why, though it may still run there. `stderr` gives the end of what the tool printed
+ * there, from its first whole line.
  */
 export function sandboxProcess(provider: Provider, id: string, unset: string[]) {
   const stderr = boundedTail(STDERR_CHARS);
@@ -64,8 +65,11 @@ export function sandboxProcess(provider: Provider, id: string, unset: string[]) 
 
   const start: ToolLauncher = ({ executable, args, cwd, env, onStart, onStdout }) => {
     let started = false;
+    /** Settles with a stop that failed: the tool then still runs, and the launch ends on that rather than waiting for it. */
+    let unstoppable: (closed: ToolClosed) => void = () => {};
+    const stopFailed = new Promise<ToolClosed>((resolve) => { unstoppable = resolve; });
 
-    const closed = (async (): Promise<ToolClosed> => {
+    const ran = (async (): Promise<ToolClosed> => {
       // After `start` returned: the launch holds the process before its first output.
       await Promise.resolve();
       started = true;
@@ -73,7 +77,7 @@ export function sandboxProcess(provider: Provider, id: string, unset: string[]) 
       let stdout = '';
       const given = Object.fromEntries(Object.entries(env).flatMap(([name, value]) => (value === undefined ? [] : [[name, value]])));
 
-      const ran = await provider.exec(id, { argv: [executable, ...args], env: given, unset, cwd }, (stream, data) => {
+      const ended = await provider.exec(id, { argv: [executable, ...args], env: given, unset, cwd }, (stream, data) => {
         if (stream === 'stderr') {
           stderr.push(data);
           printed += data.length;
@@ -85,7 +89,7 @@ export function sandboxProcess(provider: Provider, id: string, unset: string[]) 
         onStdout(data);
       });
 
-      if (ran.kind === 'failed') return { failure: ran.failure };
+      if (ended.kind === 'failed') return { failure: ended.failure };
 
       // A copy provider's work, the result file and the session among it, reaches its host paths only once copied back.
       if (provider.family === 'copy') {
@@ -94,14 +98,18 @@ export function sandboxProcess(provider: Provider, id: string, unset: string[]) 
         if (!collected.ok) return { failure: collected.failure };
       }
 
-      return { exitCode: ran.code, stdout };
+      return { exitCode: ended.code, stdout };
     })();
 
     return {
-      closed,
+      closed: Promise.race([ran, stopFailed]),
       started: () => started,
+      // The launch stops the tool only at a limit of its step (its budget, timeout or idle limit). The port's stop never
+      // rejects, so a stop the provider could not make ends the tool's run with why, naming what still runs.
       stop: async () => {
-        await provider.stop(id);
+        const stopped = await provider.stop(id);
+
+        if (!stopped.ok) unstoppable({ failure: { code: stopped.failure.code, message: `${executable} reached a limit of its step and could not be stopped: ${stopped.failure.message}` } });
       },
     };
   };
