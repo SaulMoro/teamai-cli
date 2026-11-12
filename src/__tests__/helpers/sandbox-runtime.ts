@@ -20,8 +20,11 @@ export async function sandboxOnFake(provider: 'docker' | 'sbx'): Promise<{ comma
   const bin = path.join(dir, 'bin');
   fs.mkdirSync(bin);
   fs.writeFileSync(path.join(bin, provider), `#!/bin/sh\nFAKE_ENGINE_NAME=${provider} exec "${process.execPath}" "${path.join(PACKAGE, 'testing', 'fake-engine.mjs')}" "$@"\n`, { mode: 0o755 });
-  // The fake docker's image, or the fake sbx's agent template: either holds the tools in `bin`.
+  // The fake docker's image, or the fake sbx's agent template: either holds the tools in `bin`. The image holds node, as
+  // a docker step's network filter needs to keep the step from this machine; without it the sandbox offers worktree.
   const template = provider === 'docker' ? 'scenario/agent:1' : 'claude';
+
+  if (provider === 'docker') fs.symlinkSync(process.execPath, path.join(bin, 'node'));
 
   const env = (state: string): string[] => [
     `PATH=${bin}${path.delimiter}/usr/bin${path.delimiter}/bin`, `HOME=${path.join(state, 'home')}`, `FAKE_ENGINE_STATE=${path.join(state, 'engine')}`,
