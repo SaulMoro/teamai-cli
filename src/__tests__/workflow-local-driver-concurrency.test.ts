@@ -668,6 +668,43 @@ steps:
     expect({ daily: JSON.parse(fs.readFileSync(path.join(daily, 'auth.json'), 'utf8')).tokens.refresh_token, holder: await loginHolder('codex') }).toEqual({ daily: 'refresh-2', holder: undefined });
   });
 
+  it('answers that cancel --release of a failed run released the login its attempt kept, and does not say there was nothing to release', async () => {
+    const { config, workspace, runId } = await workflowFixture(`schemaVersion: v1alpha1
+name: build
+description: A step whose earlier driver was killed while its Codex judge held the member's login.
+steps:
+  - id: check
+    command: "touch ran"
+`);
+    const leased = await leaseNext(config, runId, driverIdentity('local', workspace));
+    if (!('data' in leased)) throw new Error(leased.error.message);
+    const run = RunIdSchema.parse(runId);
+    const attempt = LeaseIdSchema.parse(leased.data.lease).attempt;
+    const daily = path.join(path.dirname(workspace), 'codex');
+    const login = (refresh: string): string => JSON.stringify({ auth_mode: 'chatgpt', tokens: { account_id: 'acct-1', refresh_token: refresh } });
+    fs.mkdirSync(daily);
+    fs.writeFileSync(path.join(daily, 'auth.json'), login('refresh-1'), { mode: 0o600 });
+    const toolHome = attemptToolHome(config, run, attempt, 'codex');
+    expect((await holdLoginFrom({ tool: 'codex', executable: 'codex', from: daily, toolHome, run, attempt, signal: new AbortController().signal })).ok).toBe(true);
+    fs.writeFileSync(path.join(toolHome, 'auth.json'), login('refresh-2'));
+    // A group another pid namespace started, which no stop here can reach or tell ended: its Codex may still run.
+    fs.writeFileSync(path.join(attemptDir(config, run, attempt), 'group-424242.json'), JSON.stringify({ pid: 424242, spawnedAt: Date.now(), pidNamespace: 'pid:[1]' }));
+    const warn = vi.spyOn(log, 'warn').mockImplementation(() => undefined);
+    const info = vi.spyOn(log, 'info').mockImplementation(() => undefined);
+    onTestFinished(() => { fs.rmSync(loginLockFile('codex'), { force: true }); });
+    await runLocalDriver(config, runId, workspace);
+    expect(await readRun(config, runId)).toMatchObject({ status: 'failed' });
+    warn.mockClear();
+
+    // The person checked that process 424242 ended.
+    const released = await takeRunLock(config, run, (lock) => stopCancelledAttempts(config, lock, { isRunnerHolding: isSkillRunnerHolding, release: attempt }), { waitMs: 0 });
+
+    expect(released).toMatchObject({ kind: 'held', value: { status: 'failed', closed: [], released: [attempt] } });
+    expect(warn.mock.calls.flat().filter((line) => String(line).includes('nothing to release'))).toEqual([]);
+    expect(info).toHaveBeenCalledWith(`Released the codex login teamai keeps, which attempt ${attempt} of run ${run} held.`);
+    expect({ daily: JSON.parse(fs.readFileSync(path.join(daily, 'auth.json'), 'utf8')).tokens.refresh_token, holder: await loginHolder('codex') }).toEqual({ daily: 'refresh-2', holder: undefined });
+  });
+
   // Codex rotates its refresh token on a refresh and refuses the old one after (refresh_token_reused).
   it.each([
     ['whose lease the next driver takes back', '', undefined],

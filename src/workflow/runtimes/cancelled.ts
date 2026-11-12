@@ -73,8 +73,6 @@ export async function stopCancelledAttempts(config: LocalConfig, lock: RunLock, 
 
   const left = new Set([...cancelled, ...await placesLeftOpen(config, run, leased)].filter((attempt) => !runnerOwned.has(attempt)));
 
-  if (release !== undefined && !left.has(release) && !runnerOwned.has(release)) log.warn(`Attempt ${release} of run ${run} holds no place on a step runtime, so there is nothing to release.`);
-
   const stopped: StoppedAttempts = { status: state.status, closed: [], released: [] };
   // Each runtime starts in the run's checkout, or, once that folder is gone, where this cancel runs.
   const checkout = await existingCheckout(state) ?? process.cwd();
@@ -111,8 +109,10 @@ export async function stopCancelledAttempts(config: LocalConfig, lock: RunLock, 
     }
 
     // An attempt no longer open holds a login only because nothing ended it, as one whose record cannot be read.
-    await endLeftLogin(config, tool, { run, attempt: holder.attempt });
+    if (await endLeftLogin(config, tool, { run, attempt: holder.attempt }) && holder.attempt === release && !stopped.released.includes(release)) stopped.released.push(release);
   }
+
+  if (release !== undefined && !left.has(release) && !runnerOwned.has(release) && !stopped.released.includes(release)) log.warn(`Attempt ${release} of run ${run} holds no place on a step runtime and no login, so there is nothing to release.`);
 
   return stopped;
 }
@@ -192,13 +192,16 @@ export async function endLeftLogins(config: LocalConfig, run: RunId, attempt: At
   for (const tool of LOGIN_TOOLS) await endLeftLogin(config, tool, { run, attempt, ...placed });
 }
 
-async function endLeftLogin(config: LocalConfig, tool: LoginTool, { run, attempt, toolHome, isCollected = true }: { run: RunId; attempt: AttemptId; toolHome?: AttemptRuntimeRecord['toolHome']; isCollected?: boolean }): Promise<void> {
+/** Ends the `tool` login attempt `attempt` of run `run` held, if it held one: answers whether it did. */
+async function endLeftLogin(config: LocalConfig, tool: LoginTool, { run, attempt, toolHome, isCollected = true }: { run: RunId; attempt: AttemptId; toolHome?: AttemptRuntimeRecord['toolHome']; isCollected?: boolean }): Promise<boolean> {
   const ended = await endLogin(tool, { run, attempt, toolHome: toolHome?.tool === tool ? toolHome.dir : attemptToolHome(config, run, attempt, tool), isCollected });
 
-  if (!ended.wasHeld) return;
+  if (!ended.wasHeld) return false;
 
   if (ended.notBack) log.warn(ended.notBack.message);
   log.info(`Released the ${tool} login teamai keeps, which attempt ${attempt} of run ${run} held.`);
+
+  return true;
 }
 
 /**
