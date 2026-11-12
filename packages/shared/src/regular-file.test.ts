@@ -148,7 +148,7 @@ describe.skipIf(process.platform === 'win32')('writing to a file a step may have
     expect(settled).toMatchObject({ rejected: { kind: 'a pipe', message: `${at} is a pipe, not a regular file, so teamai does not write it` } });
   });
 
-  it('copies a regular file over another with its bytes and its mode, as a plain copy does, and refuses a FIFO to copy', async () => {
+  it('copies a regular file over another with its bytes and its mode, as a plain copy does, replaces a link there instead of writing through it, and refuses a FIFO to copy', async () => {
     const dir = scratch();
     const from = path.join(dir, 'hook.sh');
     const to = path.join(dir, 'copy.sh');
@@ -161,6 +161,15 @@ describe.skipIf(process.platform === 'win32')('writing to a file a step may have
     expect(fs.readFileSync(to).equals(Buffer.from([0x89, 0x50, 0x0a]))).toBe(true);
     expect(fs.statSync(to).mode & 0o777).toBe(0o755);
     expect(await settledSoon(at, () => copyRegularFile(at, to))).toMatchObject({ rejected: { kind: 'a pipe' } });
+
+    const linked = path.join(dir, 'linked.sh');
+    const target = path.join(dir, 'dotfile.sh');
+    fs.writeFileSync(target, 'mine\n');
+    fs.symlinkSync(target, linked);
+
+    await copyRegularFile(from, linked);
+
+    expect([fs.lstatSync(linked).isSymbolicLink(), fs.readFileSync(linked).equals(Buffer.from([0x89, 0x50, 0x0a])), fs.readFileSync(target, 'utf8')]).toEqual([false, true, 'mine\n']);
   });
 
   it('refuses a FIFO another process holds open for reading, which a plain open would write into', async () => {

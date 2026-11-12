@@ -207,13 +207,16 @@ const COPY_CHUNK = 1024 * 1024;
 
 /**
  * Copies `from`, a regular file as `openRegularFile` checks, over `to`, a regular file or none yet as
- * `openRegularFileForWrite` checks, keeping `from`'s mode as `fs.copyFile` does.
+ * `openRegularFileForWrite` checks, keeping `from`'s mode as `fs.copyFile` does. A link at `to` is replaced, as
+ * `copyRegularTree` replaces one, never written through.
  */
 export async function copyRegularFile(from: string, to: string): Promise<void> {
   const source = await openRegularFile(from);
 
   try {
     const { mode } = await source.stat();
+
+    if ((await lstatOrMissing(to))?.isSymbolicLink() === true) await fs.promises.unlink(to);
     const target = await openRegularFileForWrite(to, { append: false, mode });
 
     try {

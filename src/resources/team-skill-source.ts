@@ -48,11 +48,7 @@ async function copyTo(source: TeamSkillSource, dest: string, onLink?: (relativeP
 
   if (isDraft(source) || skip.includes(SKILL_MD)) return;
   await fse.ensureDir(dest);
-  const target = path.join(dest, SKILL_MD);
-
-  // A link there is the member's: replaced, as copyDir replaces one, never written through.
-  if ((await fse.lstat(target).catch(() => null))?.isSymbolicLink()) await fse.unlink(target);
-  await copyRegularFile(source, target);
+  await copyRegularFile(source, path.join(dest, SKILL_MD));
 }
 
 /** Whether the skill directory `copy` holds exactly the team skill at `source`, as `dirContentEqual` compares two folders. */
