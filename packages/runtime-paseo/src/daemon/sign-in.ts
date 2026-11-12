@@ -62,10 +62,12 @@ export function codexLoginStatus(codex: string, env?: NodeJS.ProcessEnv): Promis
     let answer = '';
 
     const timer = setTimeout(() => {
+      const { pid } = child;
+
       try {
         // A taskkill that cannot run leaves the process teamai started to be killed on its own, as on POSIX.
-        if (isWindows && child.pid !== undefined) execFile('taskkill', ['/pid', String(child.pid), '/T', '/F'], { windowsHide: true }, (error) => { if (error) signalChild(child, 'SIGKILL'); });
-        else if (child.pid !== undefined) signalGroup(child.pid, 'SIGKILL');
+        if (pid !== undefined && isWindows) execFile('taskkill', ['/pid', String(pid), '/T', '/F'], { windowsHide: true }, (error) => { if (error) signalChild(child, 'SIGKILL'); });
+        else if (pid !== undefined && signalGroup(pid, 'SIGKILL') !== 'sent') signalChild(child, 'SIGKILL');
       } catch {
         signalChild(child, 'SIGKILL');
       }
