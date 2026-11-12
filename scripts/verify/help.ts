@@ -9,15 +9,9 @@ const BASIC = `Verify a teamai change end to end: the real CLI, packed and insta
   npm run -s verify -- teamai <run> <args>    the world's installed teamai, in its project
   npm run -s verify -- sh <run> <cmd> [args]  any command in the world (git, claude -p, a second checkout)
   npm run -s verify -- ledger <run>           uninstall teamai in the world, then what is left, in LEDGER-<n>.md; exit 1 on any LEAK
-  npm run -s verify -- cleanup <run>|--all    remove the world and the containers and sandboxes its runs left, keeping world.json,
+  npm run -s verify -- cleanup <run>|--all    remove the world and the containers and sandboxes it left, keeping world.json,
                                               logs/ and every ledger; refuses while a process of the world runs
   npm run -s verify -- dir <run>|--all        the world's directory, or every live world
-  npm run -s verify -- member <run> <name> [--machine container]
-                                              a second install with its own HOME, TMPDIR and clone; <run>@<name> acts as it
-  npm run -s verify -- origin <run>           give the world's project a bare origin at ${ORIGIN_URL}
-  npm run -s verify -- reap [run] [--delete] [vercel:<name>...]
-                                              the Vercel sandboxes teamai left alive; exit 1 while one of the world's is
-  teamai and sh take --pass NAME[,NAME...] right after the run, and doctor takes --drivers.
 
 A world holds a project repo with one commit, a bare team repo at ${TEAM_URL}, the npm pack tarball of
 this checkout installed on its own, a HOME and TMPDIR of its own, and a fake gh first on PATH: \`gh pr list\`
@@ -41,9 +35,10 @@ Run ledger after the last run, before cleanup. Paste the verdict, the commands, 
 first output, and the ledger's last line into the PR's real-CLI record.
 
 More:
-  npm run -s verify -- help drivers           where a step runs: each driver's entry point and the end state that proves it
-  npm run -s verify -- help fleet             two members, an origin, and a member on another machine
-  npm run -s verify -- help keys              passing a key to one command without it reaching a log`;
+  npm run -s verify -- help drivers           where a step runs: each driver's entry point and the end state that proves
+                                              it; doctor --drivers, and reap for the Vercel sandboxes teamai left alive
+  npm run -s verify -- help fleet             two members, an origin, and a member on another machine: member, origin
+  npm run -s verify -- help keys              passing a key to one command without it reaching a log: --pass`;
 
 const DRIVERS = `Where a step runs. A driver claim names the driver and proves its end state below, with the ledger CLEAN.
 A ledger section or an observer line that says NOT OBSERVED proves nothing for that part: the claim is UNVERIFIABLE there.
@@ -67,8 +62,9 @@ A ledger section or an observer line that says NOT OBSERVED proves nothing for t
                     step reach what it needs; ends: env ok, (f) no teamai sbx sandbox left
     bwrap           Linux only; the observer reads the first process under bwrap; ends: env ok, no world process left
     seatbelt        macOS; no observer reads a seatbelt step's environment, so the env part proves nothing for it
-    vercel          remote; the ledger never asks it: run \`reap <run>\` with the key, which exits 0 once none of the
-                    world's is alive, and UNVERIFIABLE without a key
+    vercel          remote; the ledger never asks it: \`reap [run] [--delete] [vercel:<name>...]\` with the key lists
+                    each sandbox teamai made there and whose it is, deletes the world's own or a named one on --delete,
+                    exits 0 once none is alive, and says UNVERIFIABLE without a key
 
 The observer: once a HOME of the world holds a runtime's state, each teamai or sh command ends with one line per sandbox
 it saw, \`[verify] observed <sandbox>: env ok\` or \`ENV LEAK <names>\`, kept in observed.jsonl. A leak is the world's
@@ -81,15 +77,20 @@ members on one Mac share a hostname and a process table.
 Platforms: macOS and Linux. Windows has no world; WSL2 counts as Linux and is the way to run one from a Windows machine,
 UNVERIFIED until someone runs it there.`;
 
-const FLEET = `Two members and an origin. \`member <run> bob\` adds bob, with a HOME, a TMPDIR and a clone of their own, and gives the world's
-project a bare origin at ${ORIGIN_URL} the first time (\`origin <run>\` does that alone).
+const FLEET = `Two members and an origin.
+
+  npm run -s verify -- member <run> <name> [--machine container]
+                                              a second install with its own HOME, TMPDIR and clone
+  npm run -s verify -- origin <run>           give the world's project a bare origin at ${ORIGIN_URL}
+
+\`member <run> bob\` gives the world's project its origin the first time; \`origin <run>\` does that alone.
 <run>@bob acts as bob in every verb: teamai, sh, dir, ledger and cleanup cover every member whichever one names the world.
 
   owner     teamai <run> workflow start <wf> --driver <a driver whose entry is use: fleet>
   member    teamai <run>@bob workflow resume --next --pool <pool>
   cancel    teamai <run>@bob workflow cancel <run id>, or from the owner
-  ends:     the attempt finished or cancelled in teamai-reports; the ledger CLEAN for every member; a branch teamai
-            pushed to the origin is a note, a LEAK when it is not a run's branch
+  ends:     the attempt finished or cancelled in teamai-reports; the ledger CLEAN for every member, with each ref
+            teamai moved on the origin listed as a note
 
 A member on another machine: \`member <run> carol --machine container\` runs carol in a Linux container of their own, with
 a hostname and process table of their own and the world's packed teamai installed in it. Carol's verbs go through docker exec with
@@ -101,7 +102,8 @@ const KEYS = `A key reaches one command only when you pass it, by name: \`sh <ru
 Its output in the terminal and in logs/ shows each passed value, and each secret-looking value of your shell, as
 <REDACTED:NAME>. A value typed on the command line is not passed: it lands in logs/ as typed.
 \`doctor --drivers\` lists the keys your shell holds, by name.
-Prove a run kept a key out: grep -rF -c with a dummy value you made counts 0 under the world's directory.`;
+Prove a run kept a key out: \`grep -rF -c "$VALUE" <world> /tmp/teamai-verify-<run>*\` with a dummy value you made counts
+0 under the world's directory and each TMPDIR of the world. Count before cleanup: it removes the TMPDIRs.`;
 
 const TOPICS = { drivers: DRIVERS, fleet: FLEET, keys: KEYS } as const;
 
