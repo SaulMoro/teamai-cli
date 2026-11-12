@@ -10,6 +10,7 @@ import { EXITED_STDOUT_CHARS, STDOUT_CUT, UNAVAILABLE_REASON_MAX, type InitCrede
 import { BUILT_IN_TOOLS } from '@teamai/tool-definitions';
 import { bundleRuntime, connect, fakeEngine, tempDir, type Connection, type FakeEngine, type Message } from './testing/harness.js';
 import { closeLeftovers, expectNothingLeft } from './testing/leaks.js';
+import { signalPid } from '@teamai/shared/process-group';
 
 // The runtime through its stdio entry point, as teamai spawns it, on a fake docker / podman (testing/fake-engine.mjs).
 
@@ -736,13 +737,7 @@ describe('a prompt attempt in a container', () => {
 
   /** Whether the step's process still runs. */
   function isRunning(pid: number): boolean {
-    try {
-      process.kill(pid, 0);
-
-      return true;
-    } catch {
-      return false;
-    }
+    return signalPid(pid, 0) === 'sent';
   }
 
   /** The pids of `parent`'s children, as `pgrep -P` lists them. */
@@ -772,7 +767,7 @@ describe('a prompt attempt in a container', () => {
     second.child.kill('SIGKILL');
     await second.end();
 
-    for (const child of stopping) process.kill(child, 'SIGKILL');
+    for (const child of stopping) signalPid(child, 'SIGKILL');
     engine.stopDelay(0);
     expect(isRunning(pid)).toBe(true);
 

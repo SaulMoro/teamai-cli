@@ -6,7 +6,7 @@ import { afterEach, expect, it, vi } from 'vitest';
 import { z } from 'zod';
 import { parse as parseToml } from 'smol-toml';
 import { installedConfinedTools, runConfined, type ConfinedInput } from '../workflow/confined-launch.js';
-import { stopRecordedGroup } from '@teamai/shared/process-group';
+import { signalPid, stopRecordedGroup } from '@teamai/shared/process-group';
 
 let root = '';
 afterEach(async () => { vi.unstubAllEnvs(); if (root) await fs.rm(root, { recursive: true, force: true }); });
@@ -654,7 +654,7 @@ setInterval(() => {}, 1000);
   const judged = judge({ tool: 'claude', evidence, schema: { type: 'object' }, group }, { resolveTool: () => executable });
   for (let wait = 0; wait < 100 && !await fs.access(pidFile).then(() => true, () => false); wait += 1) await new Promise((resolve) => { setTimeout(resolve, 50); });
   const pid = Number(await fs.readFile(pidFile, 'utf8'));
-  const alive = (): boolean => { try { return process.kill(pid, 0); } catch { return false; } };
+  const alive = (): boolean => signalPid(pid, 0) === 'sent';
   expect(alive()).toBe(true);
 
   await stopRecordedGroup(group);

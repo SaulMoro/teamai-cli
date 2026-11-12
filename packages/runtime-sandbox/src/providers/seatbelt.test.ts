@@ -6,6 +6,7 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { bundleRuntime, tempDir, type Connection, type Message } from '../testing/harness.js';
 import { exec, failStandIn, HANDLE, init, nativeHost, openPlace, placeIn, startOn, type NativeHost } from '../testing/native-harness.js';
 import { closeLeftovers, expectNothingLeft } from '../testing/leaks.js';
+import { signalGroup } from '@teamai/shared/process-group';
 
 // The seatbelt provider through the runtime's stdio entry point: on a stand-in sandbox-exec that records the profile and
 // runs the command, and, on macOS, on the real one, which alone proves what the profile hides.
@@ -193,7 +194,7 @@ describe('seatbelt: lifecycle', () => {
     second.send({ type: 'cancel', op });
 
     expect(await second.next((message) => message.op === op && ['cancelled', 'failed'].includes(String(message.event)))).toMatchObject({ event: 'cancelled' });
-    expect(() => process.kill(-Number(pgid), 0)).toThrow();
+    expect(signalGroup(Number(pgid), 0)).toBe('gone');
   });
 
   it('leaves alone a process group whose number a step held before this machine started, at close', async () => {
@@ -212,7 +213,7 @@ describe('seatbelt: lifecycle', () => {
       connection.send({ type: 'close', handle: HANDLE });
       await connection.next((message) => message.event === 'closed' && message.handle === HANDLE);
 
-      expect(() => process.kill(-Number(theirs.pid), 0)).not.toThrow();
+      expect(signalGroup(Number(theirs.pid), 0)).toBe('sent');
     } finally {
       theirs.kill('SIGKILL');
     }

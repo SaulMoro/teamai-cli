@@ -1,16 +1,12 @@
 import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
 import { expect, it } from 'vitest';
 import { stopLeftChildren } from './helpers/left-children.js';
+import { signalPid } from '@teamai/shared/process-group';
 
 const IDLE = 'setInterval(() => {}, 1000)';
 
 function isAlive(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-    return !(spawnSync('ps', ['-o', 'stat=', '-p', String(pid)], { encoding: 'utf8' }).stdout ?? '').trim().startsWith('Z');
-  } catch {
-    return false;
-  }
+  return signalPid(pid, 0) === 'sent' && !(spawnSync('ps', ['-o', 'stat=', '-p', String(pid)], { encoding: 'utf8' }).stdout ?? '').trim().startsWith('Z');
 }
 
 /** The pid of `child`, which a spawn that started nothing has not: never 0, which signals the whole process group. */
@@ -34,7 +30,7 @@ it.skipIf(process.platform === 'win32')('stops a child the test left running and
     expect(isAlive(under), 'the process the child started was stopped too').toBe(false);
   } finally {
     for (const at of [pid, under]) {
-      try { process.kill(at, 'SIGKILL'); } catch { /* already gone */ }
+      signalPid(at, 'SIGKILL');
     }
   }
 });

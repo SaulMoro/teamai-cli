@@ -28,6 +28,7 @@ import { log } from '@teamai/shared/log';
 import { CODEX_TOOL_ID } from '../types.js';
 import type { HookDef, LocalConfig, TeamaiConfig } from '../types.js';
 import { fakeCodexVersionRuns, installFakeCodex, readFakeCodexState, writeFakeCodexOptions } from '@teamai/tool-codex/testing';
+import { signalPid } from '@teamai/shared/process-group';
 
 let home: string;
 let repo: string;
@@ -426,12 +427,12 @@ describe('Codex hook trust — user scope', () => {
     expect(result.codexTrust).toEqual({ kind: 'failed', reason: 'initialize: fake failure' });
     const pid = readFakeCodexState(codexHome()).pid!;
     const running = () => {
-      try { process.kill(pid, 0); return true; } catch { return false; }
+      return signalPid(pid, 0) === 'sent';
     };
     try {
       await expect.poll(running, { timeout: 1000 }).toBe(false);
     } finally {
-      if (running()) process.kill(pid);
+      if (running()) signalPid(pid, 'SIGTERM');
     }
   });
 

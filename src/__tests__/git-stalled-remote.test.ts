@@ -12,19 +12,14 @@ import { simpleGit } from 'simple-git';
 
 import { createGitWithBlockTimeout, GitStalledError, pullRepo } from '../utils/git.js';
 import { fetchTrackingRef } from '../utils/branch-worktree.js';
+import { signalPid } from '@teamai/shared/process-group';
 
 let tmp: string;
 let pidFile: string;
 let stallFlag: string;
 
 function alive(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-
-    return true;
-  } catch {
-    return false;
-  }
+  return signalPid(pid, 0) === 'sent';
 }
 
 /** The stand-in ssh and the git that started it, once the stand-in ran. */

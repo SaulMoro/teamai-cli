@@ -5,6 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { trackDetachedProcesses } from './helpers/detached-processes.js';
 import { groupRunning } from './helpers/skill-runners.js';
+import { signalGroup } from '@teamai/shared/process-group';
 
 it('waits for a detached writer after its spawning parent has exited', async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-detached-fixture-'));
@@ -69,7 +70,7 @@ it.skipIf(process.platform === 'win32')('stops a skill runner it waited on, and 
     expect(groupRunning(step), 'the command the runner started was stopped').toBe(false);
   } finally {
     for (const pid of [left, step]) {
-      try { process.kill(-pid, 'SIGKILL'); } catch { /* already gone */ }
+      signalGroup(pid, 'SIGKILL');
     }
     fs.rmSync(root, { recursive: true, force: true });
   }

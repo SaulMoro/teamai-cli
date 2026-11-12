@@ -5,6 +5,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { hasPython, TYPED_TERMINAL } from '../helpers/in-terminal.js';
+import { signalPid } from '@teamai/shared/process-group';
 
 /**
  * A team adds its internal Claude build as a tool instance in the team repo: `pull` delivers to its paths, a workflow
@@ -121,7 +122,7 @@ describe.skipIf(process.platform === 'win32')('tool instances through the CLI', 
       ended,
       stop: () => {
         const pid = path.join(dir, 'pid');
-        if (wrapper.exitCode === null && fs.existsSync(pid)) process.kill(Number(fs.readFileSync(pid, 'utf8')), 'SIGKILL');
+        if (wrapper.exitCode === null && fs.existsSync(pid)) signalPid(Number(fs.readFileSync(pid, 'utf8')), 'SIGKILL');
       },
     };
   }

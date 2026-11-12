@@ -1,19 +1,13 @@
 import { spawn } from 'node:child_process';
 import diagnostics from 'node:diagnostics_channel';
 import { once } from 'node:events';
-import { PROCESS_READ_CHANNEL } from '@teamai/shared/process-group';
+import { PROCESS_READ_CHANNEL, signalPid } from '@teamai/shared/process-group';
 import { describe, expect, it, vi } from 'vitest';
 
 import { endProcessTree } from '../utils/git.js';
 
 function alive(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-
-    return true;
-  } catch {
-    return false;
-  }
+  return signalPid(pid, 0) === 'sent';
 }
 
 describe('endProcessTree', () => {

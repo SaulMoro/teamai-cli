@@ -1,6 +1,7 @@
 import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
+import { signalGroup } from '@teamai/shared/process-group';
 
 // A runner notices a reported or cancelled attempt at its next check, every RUNNER_POLL_MS (10 s), given twice that
 // for a check a busy machine slows. A test may not import the skill driver's tick (teamai/workflow-boundaries); a
@@ -134,12 +135,4 @@ export function groupRunning(pgid: number): boolean {
 
 function pause(ms: number): void {
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
-}
-
-function signalGroup(pid: number, signal: NodeJS.Signals): void {
-  try {
-    process.kill(-pid, signal);
-  } catch {
-    // The group ended on its own meanwhile.
-  }
 }

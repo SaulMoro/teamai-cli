@@ -12,6 +12,7 @@ import { attemptOf, CLAUDE_SESSIONS, CLI, codexOnPath, envelope, fakeTool, ROOT,
 import { hasPython, TYPED_TERMINAL } from '../helpers/in-terminal.js';
 import { TOY_RUNTIME } from '../helpers/toy-runtime.js';
 import { t3OnFakeServer } from '../helpers/t3-runtime.js';
+import { signalPid } from '@teamai/shared/process-group';
 
 // A driver definition that lists several runtimes: each `next` offers one runtime's `can`, in definition order, and a
 // step goes to the first that can take it. The toy runtime is the member's own here, and `local` runs on the host.
@@ -376,11 +377,7 @@ steps:
       child.kill('SIGKILL');
       await closed;
       onTestFinished(() => {
-        try {
-          process.kill(pid, 'SIGKILL');
-        } catch {
-          // Already stopped.
-        }
+        signalPid(pid, 'SIGKILL');
       });
 
       return { runId: /Run (r[0-9a-f]+) started/.exec(stderr)?.[1] ?? '', pid, options };
@@ -394,7 +391,7 @@ steps:
       expect(readRunState(runId).steps, resumed.stderr).toMatchObject([{ id: 'review', status: 'succeeded' }]);
       // Stopped first, it wrote nothing into the place prepared again, so the step committed nothing of it.
       expect(execFileSync('git', ['log', '--all', '--name-only', '--format='], { cwd: repo, encoding: 'utf8' })).not.toContain('left-by-old-setup');
-      expect(() => process.kill(pid, 0)).toThrow();
+      expect(signalPid(pid, 0)).toBe('gone');
     });
 
     it('fails the step runtime_lost and keeps the place when the runtime cannot stop the setup a killed driver left', async () => {
@@ -439,7 +436,7 @@ steps:
       expect(review, resumed.stderr).toMatchObject({ status: 'succeeded' });
       expect(resumed.stderr).toContain(`Stopped attempt ${attemptOf(review)} of run ${runId} on step runtime "toy" and closed its place.`);
       // Stopped first, through the driver it was left on, it wrote nothing into the place prepared again.
-      expect(() => process.kill(pid, 0)).toThrow();
+      expect(signalPid(pid, 0)).toBe('gone');
       expect(execFileSync('git', ['log', '--all', '--name-only', '--format='], { cwd: repo, encoding: 'utf8' })).not.toContain('left-by-old-setup');
       expect(runtimeRecord(runId, attemptOf(review))).toMatchObject({ runtime: 'othertoy', driver: 'othertoysetup', phase: 'closed' });
     });
@@ -453,7 +450,7 @@ steps:
       // Setup runs on this machine now, where toy-setup is not found: the step fails on that, not on the left setup.
       expect(review, resumed.stderr).toMatchObject({ status: 'failed', failure: { code: 'setup_failed' } });
       expect(resumed.stderr).toContain(`Stopped attempt ${attemptOf(review)} of run ${runId} on step runtime "toy" and closed its place.`);
-      expect(() => process.kill(pid, 0)).toThrow();
+      expect(signalPid(pid, 0)).toBe('gone');
     });
 
     it('fails the step runtime_lost and keeps the place when the driver recorded for a setup a killed driver left cannot stop it', async () => {
@@ -2411,12 +2408,7 @@ span('end');
     };
 
     const pidAlive = (pid: number): boolean => {
-      try {
-        process.kill(pid, 0);
-        return true;
-      } catch {
-        return false;
-      }
+      return signalPid(pid, 0) === 'sent';
     };
 
     const lockFile = (): string => path.join(os.homedir(), '.teamai', 'logins', 'codex.lock');
@@ -2678,7 +2670,7 @@ span('end');
         expect(cancelled.stderr).toContain(`The codex login teamai keeps stays held by attempt ${attempt} of run ${run}, whose tool may still run. Stop that tool on its step runtime, then run teamai workflow cancel ${run} --release ${attempt}, which lets the attempt go and ends its login.`);
         expect(JSON.parse(fs.readFileSync(lockFile(), 'utf8'))).toMatchObject({ run, attempt });
       } finally {
-        process.kill(pid, 'SIGKILL');
+        signalPid(pid, 'SIGKILL');
         fs.rmSync(lockFile(), { force: true });
       }
     });
@@ -2777,7 +2769,7 @@ span('end');
         // It was opened only to stop what it ran, never asked to start for new work.
         expect(initModes(state).slice(before)).toEqual(['recover']);
       } finally {
-        if (pidAlive(pid)) process.kill(pid, 'SIGKILL');
+        if (pidAlive(pid)) signalPid(pid, 'SIGKILL');
         fs.rmSync(lockFile(), { force: true });
       }
     });
@@ -2802,7 +2794,7 @@ span('end');
         expect(initModes(state).slice(before)).toEqual(['recover']);
       } finally {
         cancel.kill();
-        if (pidAlive(pid)) process.kill(pid, 'SIGKILL');
+        if (pidAlive(pid)) signalPid(pid, 'SIGKILL');
         fs.rmSync(lockFile(), { force: true });
       }
     });
@@ -2824,7 +2816,7 @@ span('end');
         expect(runtimeRecord(run, attemptOf(readRunState(run).steps[0]))).toMatchObject({ runtime: 'toy', phase: 'closed' });
         expect(initModes(state).slice(before)).toEqual(['recover', expect.not.stringMatching(/^recover$/)]);
       } finally {
-        if (pidAlive(pid)) process.kill(pid, 'SIGKILL');
+        if (pidAlive(pid)) signalPid(pid, 'SIGKILL');
         fs.rmSync(lockFile(), { force: true });
       }
     });
@@ -2856,7 +2848,7 @@ span('end');
         expect(runtimeRecord(run, attempt)).toMatchObject({ phase: 'closed' });
         expect(fs.existsSync(lockFile())).toBe(false);
       } finally {
-        if (pidAlive(pid)) process.kill(pid, 'SIGKILL');
+        if (pidAlive(pid)) signalPid(pid, 'SIGKILL');
         fs.rmSync(lockFile(), { force: true });
       }
     });
@@ -2885,7 +2877,7 @@ span('end');
         expect(runtimeRecord(run, attempt)).toMatchObject({ phase: 'closed' });
         expect(fs.existsSync(lockFile())).toBe(false);
       } finally {
-        if (pidAlive(pid)) process.kill(pid, 'SIGKILL');
+        if (pidAlive(pid)) signalPid(pid, 'SIGKILL');
         fs.rmSync(lockFile(), { force: true });
       }
     });
@@ -2911,7 +2903,7 @@ span('end');
         expect(runtimeRecord(run, attempt)).toMatchObject({ phase: 'closed' });
         expect(fs.existsSync(lockFile())).toBe(false);
       } finally {
-        if (pidAlive(pid)) process.kill(pid, 'SIGKILL');
+        if (pidAlive(pid)) signalPid(pid, 'SIGKILL');
         fs.rmSync(lockFile(), { force: true });
       }
     });
@@ -2931,7 +2923,7 @@ span('end');
         expect(JSON.parse(fs.readFileSync(lockFile(), 'utf8'))).toMatchObject({ run, attempt });
         expect(pidAlive(pid)).toBe(true);
       } finally {
-        process.kill(pid, 'SIGKILL');
+        signalPid(pid, 'SIGKILL');
         fs.rmSync(lockFile(), { force: true });
       }
     });
@@ -2964,7 +2956,7 @@ span('end');
         expect(pidAlive(pid)).toBe(false);
         expect(dedicatedTokens().refresh_token).toBe('r2');
       } finally {
-        if (pidAlive(pid)) process.kill(pid, 'SIGKILL');
+        if (pidAlive(pid)) signalPid(pid, 'SIGKILL');
         fs.rmSync(lockFile(), { force: true });
       }
     });
@@ -2998,7 +2990,7 @@ span('end');
         // The other runtime never saw the first one's place.
         expect(fs.existsSync(path.join(otherState, 'closes.jsonl'))).toBe(false);
       } finally {
-        if (pidAlive(pid)) process.kill(pid, 'SIGKILL');
+        if (pidAlive(pid)) signalPid(pid, 'SIGKILL');
         fs.rmSync(lockFile(), { force: true });
         fs.rmSync(otherDir, { recursive: true, force: true });
       }
@@ -3042,7 +3034,7 @@ span('end');
         expect(pidAlive(pid)).toBe(false);
         expect(runtimeRecord(run, attempt)).toMatchObject({ phase: 'closed' });
       } finally {
-        if (pidAlive(pid)) process.kill(pid, 'SIGKILL');
+        if (pidAlive(pid)) signalPid(pid, 'SIGKILL');
         fs.rmSync(lockFile(), { force: true });
       }
     });
@@ -3083,7 +3075,7 @@ span('end');
         expect(runtimeRecord(run, attempt)).toMatchObject({ phase: 'closed' });
         expect(fs.existsSync(lockFile())).toBe(false);
       } finally {
-        if (pidAlive(pid)) process.kill(pid, 'SIGKILL');
+        if (pidAlive(pid)) signalPid(pid, 'SIGKILL');
         fs.rmSync(lockFile(), { force: true });
       }
     });
@@ -3107,7 +3099,7 @@ span('end');
         expect(ran.stderr).toContain(`The codex login teamai keeps stays held by attempt ${attempt} of run ${run}, whose tool may still run. Stop that tool on its step runtime; once run ${run} has ended, run teamai workflow cancel ${run} --release ${attempt}, which lets the attempt go and ends its login.`);
         expect(runtimeRecord(run, attempt)).toMatchObject({ phase: 'running', closeFailed: { code: 'runtime_exited' } });
       } finally {
-        if (fs.existsSync(pidFile)) process.kill(Number(fs.readFileSync(pidFile, 'utf8')), 'SIGKILL');
+        if (fs.existsSync(pidFile)) signalPid(Number(fs.readFileSync(pidFile, 'utf8')), 'SIGKILL');
         fs.rmSync(lockFile(), { force: true });
       }
     });

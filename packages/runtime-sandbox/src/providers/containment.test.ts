@@ -6,6 +6,7 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vite
 import { bundleRuntime, tempDir, type Connection } from '../testing/harness.js';
 import { exec, HANDLE, init, nativeHost, newOp, openPlace, placeIn, startOn, type NativeHost, type Place } from '../testing/native-harness.js';
 import { closeLeftovers, expectNothingLeft } from '../testing/leaks.js';
+import { signalPid } from '@teamai/shared/process-group';
 
 // What a native sandbox keeps a step from, on the real sandbox-exec (macOS) or bwrap (Linux), through the runtime's
 // stdio entry point: one probe set for both, after sandcastle's tests/containment.test.ts.
@@ -288,7 +289,7 @@ for (const native of NATIVE) {
           await vi.waitFor(() => {
             const left = processesWith(marker);
 
-            for (const line of left) spawnSync('kill', ['-KILL', line.trim().split(/\s+/)[0] ?? '']);
+            for (const line of left) signalPid(Number(line.trim().split(/\s+/)[0]), 'SIGKILL');
             expect(left).toEqual([]);
           }, { timeout: 5_000, interval: 100 });
         }

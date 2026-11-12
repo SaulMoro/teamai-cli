@@ -8,6 +8,7 @@ import type { RunState } from '../../workflow/types.js';
 import { hasPython, TYPED_TERMINAL } from '../helpers/in-terminal.js';
 import { TOY_RUNTIME } from '../helpers/toy-runtime.js';
 import { attemptOf, CLAUDE_SESSIONS, CLI, CODEBUDDY_SESSIONS, envelope, fakeTool, runCLI, type Ran } from '../helpers/step-runtime-e2e.js';
+import { signalPid } from '@teamai/shared/process-group';
 
 /** Whether `record`, an attempt's runtime.json, says the attempt ran in teamai's process. */
 const isInProcessRecord = (record: unknown): boolean => typeof record === 'object' && record !== null && 'inProcess' in record && record.inProcess === true;
@@ -572,7 +573,7 @@ Judge the review.
 
     const ended = await running;
     expect(envelope(ended), ended.stderr).toMatchObject({ data: { done: { outcome: 'cancelled' } } });
-    expect(() => process.kill(child, 0)).toThrow();
+    expect(signalPid(child, 0)).toBe('gone');
   });
 
   it('does not spawn a team runtime at a revision no one accepted here, and runs it once a person accepts it at the terminal', async () => {

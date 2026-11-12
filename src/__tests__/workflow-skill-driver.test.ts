@@ -18,6 +18,7 @@ import { cancelRun } from '../workflow/run-controls.js';
 import { knownSecrets } from '../env-resolution.js';
 import { log } from '@teamai/shared/log';
 import { Crash, fakeConfinedClaude, fakeJudge, githubOrigin, LABEL_PASS, scoringStarted, skillHarness, untilStopped } from './helpers/skill-harness.js';
+import { signalPid } from '@teamai/shared/process-group';
 
 const CHECK = `schemaVersion: v1alpha1
 name: check
@@ -1217,7 +1218,7 @@ steps:
       else await new Promise((resolve) => { setTimeout(resolve, 50); });
     }
     expect(pid).toBeGreaterThan(0);
-    const alive = (): boolean => { try { return process.kill(pid, 0); } catch { return false; } };
+    const alive = (): boolean => signalPid(pid, 0) === 'sent';
     expect(alive()).toBe(true);
 
     const { runners } = await skillContext({ config: harness.config, toolPaths: harness.context.toolPaths, env: harness.context.env, cwd: harness.work, aiTools: [] });

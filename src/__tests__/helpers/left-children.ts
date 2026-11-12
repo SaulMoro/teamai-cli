@@ -1,5 +1,6 @@
 import { setTimeout as pause } from 'node:timers/promises';
 import { descends, processTable } from './skill-runners.js';
+import { signalPid } from '@teamai/shared/process-group';
 
 // A child a test leaves running, such as a CLI a timed-out test never saw end, outlives the test and keeps its home
 // and checkout busy. The setup file every config loads hands the children each test started to stopLeftChildren.
@@ -42,18 +43,9 @@ function treeOf(roots: readonly number[]): number[] {
 }
 
 function isAlive(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch {
-    return false;
-  }
+  return signalPid(pid, 0) === 'sent';
 }
 
 function signal(pid: number, name: NodeJS.Signals): void {
-  try {
-    process.kill(pid, name);
-  } catch {
-    // It ended on its own meanwhile.
-  }
+  signalPid(pid, name);
 }

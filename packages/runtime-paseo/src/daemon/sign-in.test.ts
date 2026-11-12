@@ -3,6 +3,7 @@ import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { isCodexExecutable } from './sign-in.js';
 import { dir, daemon, behave, start, ready, cannotRun, useRuntimeSuite } from '../testing/suite.js';
+import { signalPid } from '@teamai/shared/process-group';
 
 describe('the Codex the daemon resolves', () => {
   it.each([
@@ -89,15 +90,7 @@ describe('teamai-runtime-paseo', () => {
 
     expect(await ready(start())).toMatchObject({ ok: true, unavailable: { codex: expect.stringContaining('login status` did not answer') } });
     const pid = Number(fs.readFileSync(native, 'utf8'));
-    await expect.poll(() => {
-      try {
-        process.kill(pid, 0);
-
-        return 'running';
-      } catch {
-        return 'gone';
-      }
-    }, { timeout: 3_000 }).toBe('gone');
+    await expect.poll(() => signalPid(pid, 0), { timeout: 3_000 }).toBe('gone');
   }, 20_000);
 
   it('says it cannot tell, rather than signed out, when `codex login status` gives neither answer', async () => {

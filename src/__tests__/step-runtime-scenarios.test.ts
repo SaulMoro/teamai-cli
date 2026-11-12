@@ -36,6 +36,7 @@ import { acquireLock, releaseLock } from '../update.js';
 import { getWorktreeDir, REPORTS_LOCK_FILENAME, REPORTS_WORKTREE_DIRNAME } from '../types.js';
 import { shellArgv } from '../workflow/shell-command.js';
 import { getRepoIdentity } from '../session-flow/sync.js';
+import { signalPid } from '@teamai/shared/process-group';
 
 /**
  * One scenario suite every step runtime passes, through the `StepRuntime` interface alone. `retains` says whether the
@@ -101,13 +102,7 @@ const SUBJECTS: Subject[] = [
 ];
 
 function pidAlive(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-
-    return true;
-  } catch {
-    return false;
-  }
+  return signalPid(pid, 0) === 'sent';
 }
 
 /** Sets the mode of `root` and of every directory under it: 0o500 keeps a runtime from writing a record there. */
@@ -1703,7 +1698,7 @@ describe('a driver whose runtime stopped on a line it could not read', () => {
 
     if (fs.existsSync(strayPid)) {
       try {
-        process.kill(Number(fs.readFileSync(strayPid, 'utf8')), 'SIGKILL');
+        signalPid(Number(fs.readFileSync(strayPid, 'utf8')), 'SIGKILL');
       } catch {
         // It already ended.
       }

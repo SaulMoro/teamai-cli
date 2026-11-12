@@ -11,6 +11,7 @@ import { projectDataHome } from '../utils/partition.js';
 import { readEnvShExports } from '../env-sh-exports.js';
 import { getDataHome, getEnvBackupPath, type LocalConfig, type TeamaiConfig } from '../types.js';
 import { resolveConfigForDir, saveLocalConfigForScope } from '../config.js';
+import { signalGroup } from '@teamai/shared/process-group';
 
 vi.mock('@teamai/shared/log', () => ({
   log: { info: vi.fn(), success: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn(), dim: vi.fn(), persist: vi.fn() },
@@ -795,7 +796,7 @@ describe('team env by directory (#1018)', () => {
 
       const run = await new Promise<{ stdout: string; timedOut: boolean }>((resolve) => {
         const child = spawn(shell, ['-c', 'printf "%s" "${MARKER-unset}"'], { cwd: a.projectRoot, env, detached: true, stdio: ['ignore', 'pipe', 'ignore'] });
-        const killGroup = (): void => { try { if (child.pid) process.kill(-child.pid, 'SIGKILL'); } catch { /* already gone */ } };
+        const killGroup = (): void => { if (child.pid) signalGroup(child.pid, 'SIGKILL'); };
         let stdout = '';
         let timedOut = false;
         const timer = setTimeout(() => { timedOut = true; killGroup(); }, 10_000);
