@@ -37,6 +37,13 @@ export function handleOf({ run, attempt }: PlaceKey): string {
   return `teamai-${run}-${attempt}`;
 }
 
+/** The place `handleOf` named, or undefined for a name it did not make: another's, or a step's network or filter. */
+export function placeKeyOfHandle(handle: string): PlaceKey | undefined {
+  const [prefix, run = '', attempt = '', ...rest] = handle.split('-');
+
+  return prefix === 'teamai' && rest.length === 0 && RUN_ID.test(run) && ATTEMPT_ID.test(attempt) ? { run, attempt } : undefined;
+}
+
 /**
  * The provider of a runtime that could not start one: `init` failed, or never came. teamai still sends a restarted
  * runtime its cancel, reattach, collect and close, so each is answered: a lookup fails with `failure`, and a sandbox

@@ -51,7 +51,7 @@ import { cliOf, commandsOf, definedOnly, heldProbe, signalled, LAUNCHABLE, mount
 const CONTAINER_HOME = '/tmp/teamai-home';
 
 /** PID 1 of every attempt container: idle, and gone at once on a stop. */
-const IDLE = `mkdir -p "$HOME"; trap 'exit 0' TERM INT; while :; do sleep 3600 & wait $!; done`;
+export const IDLE = `mkdir -p "$HOME"; trap 'exit 0' TERM INT; while :; do sleep 3600 & wait $!; done`;
 
 /** The engine CLI's own settings: an exec's names never replace them, so a step cannot point the CLI at another daemon. */
 const ENGINE_SETTINGS = ['DOCKER_HOST', 'DOCKER_CONTEXT', 'DOCKER_CONFIG', 'DOCKER_CERT_PATH', 'DOCKER_TLS_VERIFY', 'CONTAINER_HOST', 'CONTAINER_CONNECTION', 'CONTAINERS_CONF'];
