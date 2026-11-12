@@ -375,7 +375,8 @@ async function commandReport(config: LocalConfig, lock: RunLock, driver: DriverI
   const result = { ...exited, stderr: withoutStreamMarks(exited.stderr) };
   const end = lease.workflow ? wholeReport(result) : commandEnd(result);
   await AttemptResult.write(attemptResultPath(config, lock.run, lease.attempt), end.outputs !== undefined ? { output: end.outputs } : {}, secrets);
-  const printed = end.outputs === undefined ? result.stdout.split(/\r?\n/).filter((line) => line.trim() !== '').slice(-STDOUT_LINES) : [];
+  // A whole workflow answers on stdout, which is never text it printed.
+  const printed = !lease.workflow && end.outputs === undefined ? result.stdout.split(/\r?\n/).filter((line) => line.trim() !== '').slice(-STDOUT_LINES) : [];
   const attempt = AttemptIdSchema.safeParse(lease.attempt);
 
   if (printed.length > 0 && attempt.success) {
