@@ -20,7 +20,7 @@ import path from 'node:path';
 import { mayBeRunning } from '@teamai/shared/process-group';
 import { z } from 'zod';
 import { runLedger } from './verify/ledger.js';
-import { createWorld, REPO_ROOT, runInWorld, saveWorld, TEAM_URL, worldFiles, type World } from './verify/world.js';
+import { createWorld, REPO_ROOT, runInWorld, TEAM_URL, updateWorld, worldFiles, type World } from './verify/world.js';
 
 const PRELOAD = path.join(REPO_ROOT, 'scripts', 'agent-wait-preload.cjs');
 
@@ -699,7 +699,7 @@ function cleanupWorld(world: World): void {
     fs.rmSync(path.join(world.dir, name), { recursive: true, force: true });
   }
 
-  saveWorld({ ...world, cleanedAt: new Date().toISOString() });
+  updateWorld(world, (fresh) => ({ ...fresh, cleanedAt: new Date().toISOString() }));
 }
 
 function checkInvariants(measured: ReadonlyMap<string, Measured>, world: World, worktrees: readonly string[]): string[] {

@@ -5,7 +5,7 @@ import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { socketPathOf } from '../../packages/runtime-sandbox/src/attempt-socket.js';
-import { REPO_ROOT, worldCommandNames, worldEnv, worldTmpDir } from './world.js';
+import { REPO_ROOT, updateWorld, worldCommandNames, worldEnv, worldTmpDir, type World } from './world.js';
 
 const roots: string[] = [];
 
@@ -94,5 +94,31 @@ describe("a world's TMPDIR", () => {
 
     expect(new Set([worldTmpDir({ root: '/tmp', runId }), worldTmpDir({ root: '/tmp', runId, member: 'bob' }), worldTmpDir({ root: '/tmp', runId: '20261112T113044-000000' })]).size).toBe(3);
     expect(worldTmpDir({ root: '/tmp', runId })).toContain(runId);
+  });
+});
+
+describe("a world's world.json", () => {
+  /** A world whose world.json is written in a folder of its own, as `createWorld` leaves it. */
+  function writtenWorld(): World {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'world-json-'));
+    roots.push(dir);
+    const world: World = {
+      runId: '20261112T113044-479be0', dir, project: `${dir}/project`, team: `${dir}/team.git`, home: `${dir}/home`, tmp: `${dir}/tmp`, logs: `${dir}/logs`, bin: `${dir}/bin`,
+      build: { commit: 'c', dirty: false, version: '0.0.0', tarball: 't.tgz', sha256: 's', node: 'v20' },
+      createdAt: '2026-11-12T11:30:44.000Z',
+      baseline: { teamRefs: {}, checkoutStatus: [] },
+    };
+    fs.writeFileSync(path.join(dir, 'world.json'), JSON.stringify(world));
+
+    return world;
+  }
+
+  it('keeps a change another command of the world wrote since this one loaded it', () => {
+    const loaded = writtenWorld();
+
+    updateWorld(loaded, (fresh) => ({ ...fresh, driverSeen: true }));
+    updateWorld(loaded, (fresh) => ({ ...fresh, cleanedAt: '2026-11-12T12:00:00.000Z' }));
+
+    expect(JSON.parse(fs.readFileSync(path.join(loaded.dir, 'world.json'), 'utf8'))).toMatchObject({ driverSeen: true, cleanedAt: '2026-11-12T12:00:00.000Z' });
   });
 });

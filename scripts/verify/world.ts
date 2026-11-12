@@ -387,16 +387,65 @@ async function buildWorld(runId: string, dir: string, tmp: string): Promise<Worl
   return world;
 }
 
-export function saveWorld(world: World): void {
+function saveWorld(world: World): void {
   fs.writeFileSync(path.join(world.dir, 'world.json'), `${JSON.stringify(world, null, 2)}\n`);
+}
+
+/** Waits about `ms` milliseconds, synchronously: world.json's lock is held for one read and one write only. */
+function pause(ms: number): void {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+
+/**
+ * Writes `change` of world.json as it is on disk now, under world.json.lock, so a change another command of the world
+ * wrote since this one loaded it is kept; answers the world written. Every write after `createWorld` goes through it.
+ */
+export function updateWorld(world: Pick<World, 'dir'>, change: (fresh: World) => World): World {
+  const file = path.join(world.dir, 'world.json');
+  const lock = `${file}.lock`;
+
+  for (let waited = 0; ; waited += 20) {
+    try {
+      fs.writeFileSync(lock, String(process.pid), { flag: 'wx' });
+      break;
+    } catch (error) {
+      if (!(error instanceof Error && 'code' in error && error.code === 'EEXIST')) throw error;
+      const holder = Number(fs.readFileSync(lock, 'utf8'));
+
+      // A holder that died leaves its lock: no write of it can still come.
+      if (Number.isInteger(holder) && holder > 0 && !isAlive(holder)) fs.rmSync(lock, { force: true });
+      else if (waited >= 30_000) throw new Error(`${lock} is held by process ${holder} for 30 s. If no command of the world runs, remove that file.`);
+      else pause(20);
+    }
+  }
+
+  try {
+    const next = change(WorldSchema.parse(JSON.parse(fs.readFileSync(file, 'utf8'))));
+    const written = `${file}.${process.pid}.tmp`;
+    fs.writeFileSync(written, `${JSON.stringify(next, null, 2)}\n`);
+    fs.renameSync(written, file);
+
+    return next;
+  } finally {
+    fs.rmSync(lock, { force: true });
+  }
+}
+
+/** Whether process `pid` still runs on this machine. */
+function isAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+
+    return true;
+  } catch (error) {
+    return !(error instanceof Error && 'code' in error && error.code === 'ESRCH');
+  }
 }
 
 /** Records, once, that a runtime outside teamai's process ran in `world`, read fresh so no other change to world.json is lost. */
 export function markDriverSeen(world: Pick<World, 'runId' | 'driverSeen'>): void {
   if (world.driverSeen === true) return;
-  const fresh = loadWorld(world.runId);
-
-  if (fresh.driverSeen !== true) saveWorld({ ...fresh, driverSeen: true });
+  updateWorld(loadWorld(world.runId), (fresh) => ({ ...fresh, driverSeen: true }));
 }
 
 export function loadWorld(runId: string | undefined): World {

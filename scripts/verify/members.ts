@@ -6,7 +6,7 @@
 import { execFileSync, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
-import { gitconfigText, saveWorld, shortTmpRoot, TEAM_URL, teamRefs, worldFiles, worldTmpDir, type Member, type World } from './world.js';
+import { gitconfigText, shortTmpRoot, TEAM_URL, teamRefs, updateWorld, worldFiles, worldTmpDir, type Member, type World } from './world.js';
 
 /** A member's name: a path segment, a hostname and a container name alike. */
 export const MEMBER_NAME = /^[a-z][a-z0-9-]{0,11}$/;
@@ -34,12 +34,18 @@ export function memberLayout(world: Pick<World, 'dir' | 'runId'>, { name, tmpRoo
   return { root, home: path.join(root, 'home'), project: path.join(root, 'project'), writers: path.join(root, 'writers.json'), tmp: worldTmpDir({ root: tmpRoot, runId: world.runId, member: name }) };
 }
 
-/** `baseline` with every entry the harness's own setup changed between `before` and `after` taken as it left it. */
+/**
+ * What the origin's setup writes itself: the URL mapping in ~/.gitconfig, the project's remote and main's upstream, and
+ * the remote's refs. A change to anything else while it ran is a command of the world's, and stays a change.
+ */
+const ORIGIN_SETUP_WRITES = /^(home\/\.gitconfig(#url\.|$)|project\/\.git\/config#(remote\.origin\.|branch\.main\.)|project\/\.git\/refs\/remotes(\/origin(\/main)?)?$)/;
+
+/** `baseline` with every entry the origin's own setup changed between `before` and `after` taken as it left it. */
 export function setupBaseline(baseline: Readonly<Record<string, string>>, before: Readonly<Record<string, string>>, after: Readonly<Record<string, string>>) {
   const next = Object.fromEntries(Object.entries(baseline));
 
   for (const entry of new Set([...Object.keys(before), ...Object.keys(after)])) {
-    if (before[entry] === after[entry]) continue;
+    if (before[entry] === after[entry] || !ORIGIN_SETUP_WRITES.test(entry)) continue;
     const value = after[entry];
 
     if (value === undefined) delete next[entry];
@@ -83,11 +89,10 @@ export function ensureOrigin(world: World): World {
     throw error;
   }
 
-  const files = setupBaseline(world.baseline.files ?? before, before, worldFiles(world));
-  const next: World = { ...world, origin: { bare, url: ORIGIN_URL, refs: teamRefs(bare) }, baseline: { ...world.baseline, files } };
-  saveWorld(next);
+  const after = worldFiles(world);
+  const refs = teamRefs(bare);
 
-  return next;
+  return updateWorld(world, (fresh) => ({ ...fresh, origin: { bare, url: ORIGIN_URL, refs }, baseline: { ...fresh.baseline, files: setupBaseline(fresh.baseline.files ?? before, before, after) } }));
 }
 
 /** The image a container member runs: Node as on this machine, with git, procps and bubblewrap, as the Linux kit's base. */
@@ -184,8 +189,5 @@ export function addMember(world: World, { name, machine = 'host' }: { name: stri
   const { root: _root, ...own } = layout;
   const place = { name, ...own, env, baseline: { files: worldFiles(layout) } };
   const member: Member = machine === 'container' ? { machine: 'container', container, ...place } : { machine: 'host', ...place };
-  const next: World = { ...withOrigin, members: [...withOrigin.members ?? [], member] };
-  saveWorld(next);
-
-  return next;
+  return updateWorld(withOrigin, (fresh) => ({ ...fresh, members: [...fresh.members ?? [], member] }));
 }

@@ -28,15 +28,18 @@ describe("a member's layout", () => {
 });
 
 describe("the harness's own setup", () => {
-  it('moves into the baseline only what it changed itself, so what teamai changed before stays a change', () => {
+  it('moves into the baseline only what it changed itself, so what teamai changed before or meanwhile stays a change', () => {
     const baseline = { 'home/.gitconfig': 'a', 'project/.git/config': 'git config', 'project/.git/config#core.bare': 'false' };
     const before = { ...baseline, 'home/.teamai/state.json': 'teamai-wrote', 'project/.git/config#teamai.x': '1' };
-    const after = { ...before, 'home/.gitconfig': 'b', 'project/.git/config#remote.origin.url': 'https://teamai.test/world/project.git', 'project/.git/refs/remotes/origin/main': 'c1' };
+    // A command of the world that ran beside the setup wrote the last two.
+    const after = { ...before, 'home/.gitconfig': 'b', 'project/.git/config#remote.origin.url': 'https://teamai.test/world/project.git', 'project/.git/refs/remotes/origin/main': 'c1', 'home/.teamai/state.json': 'teamai-wrote-again', 'project/.git/config#teamai.y': '2' };
 
     expect(setupBaseline(baseline, before, after)).toEqual({ ...baseline, 'home/.gitconfig': 'b', 'project/.git/config#remote.origin.url': 'https://teamai.test/world/project.git', 'project/.git/refs/remotes/origin/main': 'c1' });
   });
 
   it('drops from the baseline what its setup removed', () => {
-    expect(setupBaseline({ x: '1', y: '2' }, { x: '1', y: '2' }, { x: '1' })).toEqual({ x: '1' });
+    const kept = { 'home/.gitconfig': 'git config', 'project/.git/refs/remotes/origin/main': 'c1' };
+
+    expect(setupBaseline(kept, kept, { 'home/.gitconfig': 'git config' })).toEqual({ 'home/.gitconfig': 'git config' });
   });
 });
