@@ -37,7 +37,7 @@ export const DEFAULT_FLEET_POOL = 'default';
 /** Where the records of every offered attempt live on `teamai-reports`. */
 const ATTEMPTS_DIR = 'workflows/attempts';
 
-const OwnerSchema = z.strictObject({ id: z.string().min(1), user: z.string() });
+const OwnerSchema = z.object({ id: z.string().min(1), user: z.string() });
 
 /** A full commit id, never a name git would resolve on the reading machine, such as a branch or `stash@{0}`, or read as an option. */
 const CommitSchema = z.string().regex(/^[0-9a-f]{40}([0-9a-f]{24})?$/, 'must be a full commit id');
@@ -47,14 +47,14 @@ const CommitSchema = z.string().regex(/^[0-9a-f]{40}([0-9a-f]{24})?$/, 'must be 
  * `env` is the step's rendered `env`. A command step carries its command; a prompt step its rendered prompt, and the
  * limits its turn ends at, which the member keeps on the tool it picks.
  */
-const CommandLeaseSchema = z.strictObject({
+const CommandLeaseSchema = z.object({
   kind: z.literal('command'),
   step: z.string().min(1),
   command: z.string().min(1),
   env: z.record(z.string(), z.string()),
 });
 
-const PromptLeaseSchema = z.strictObject({
+const PromptLeaseSchema = z.object({
   kind: z.literal('prompt'),
   step: z.string().min(1),
   prompt: z.string(),
@@ -68,12 +68,12 @@ const PromptLeaseSchema = z.strictObject({
  * own: the record names none of its steps. `budget` is what the budgets around the step had left when it was offered,
  * past which the member stops its steps, as the owner stops the steps it runs.
  */
-const WorkflowLeaseSchema = z.strictObject({
+const WorkflowLeaseSchema = z.object({
   kind: z.literal('workflow'),
   step: z.string().min(1),
   inputs: JsonValueSchema,
   env: z.record(z.string(), z.string()),
-  budget: z.strictObject({ tokens: z.number().int().min(0) }).optional(),
+  budget: z.object({ tokens: z.number().int().min(0) }).optional(),
 });
 
 /** What a member runs, told apart by `kind`: a command step, a prompt step, or a `workflow:` step whole. */
@@ -100,7 +100,7 @@ function leaseText(lease: FleetLease): { field: 'command' | 'prompt'; text: stri
  * name, the outputs of the steps it reads, by step id, and the item. Values only: the command and the env's templates
  * come from the team's workflow, never from the record.
  */
-const LeaseValuesSchema = z.strictObject({
+const LeaseValuesSchema = z.object({
   inputs: JsonValueSchema.optional(),
   outputs: z.record(z.string(), JsonValueSchema).optional(),
   item: JsonValueSchema.optional(),
@@ -113,7 +113,7 @@ export type LeaseValues = z.infer<typeof LeaseValuesSchema>;
  * as the local loop reports a command (`commandEnd`); the whole stdout stays on the member. `to`: the commit it pushed
  * to the attempt's ref, absent when it pushed none.
  */
-const FleetResultSchema = z.strictObject({
+const FleetResultSchema = z.object({
   exitCode: z.number().int(),
   outputs: JsonValueSchema.optional(),
   stderr: z.string(),
@@ -126,7 +126,7 @@ const FleetResultSchema = z.strictObject({
   session: z.string().min(1).optional(),
   model: z.string().min(1).optional(),
   tokens: TokenUsageSchema.optional(),
-  failure: z.strictObject({ code: z.string().min(1), message: z.string() }).optional(),
+  failure: z.object({ code: z.string().min(1), message: z.string() }).optional(),
   /** A whole workflow's: the end its nested run reached. */
   end: z.string().min(1).optional(),
 });
@@ -135,13 +135,17 @@ export type FleetResult = z.infer<typeof FleetResultSchema>;
 
 /**
  * The format of the attempt records this teamai writes and reads. 2: prompt leases, a prompt's session, whole
- * workflow leases and their gates, and an offer's `left`. Every object of a record is strict, so a field this format does not name makes the record
- * unreadable rather than read without it: a newer format bumps this, and a teamai that reads it refuses it by version.
+ * workflow leases and their gates, and an offer's `left`. A record is must-understand: a reader ignores a field it does
+ * not know unless the record's `critical` names it, by dotted path from the record's top, an array's elements under the
+ * array's own key; then it refuses the record as one a newer teamai wrote. A writer names in `critical` each field that
+ * changes what a reader must do, and only a format a reader cannot read at all bumps this. A rewrite keeps only the
+ * fields its writer knows. The run's `definition` and a prompt's `limits` stay strict: an unknown key there is another
+ * workflow, or a limit nobody would hold the tool to.
  */
 const RECORD_VERSION = 2;
 
 /** What any teamai's record says of its format, whatever else it holds. */
-const RecordFormatSchema = z.object({ version: z.number(), teamai: z.string().optional().catch(undefined) });
+const RecordFormatSchema = z.object({ version: z.number(), teamai: z.string().optional().catch(undefined), critical: z.array(z.string()).optional().catch(undefined) });
 
 /** What a member's reason for leaving an offer keeps, and how many members' reasons an offer keeps, the newest. */
 const LEFT_WHY_MAX = 400;
@@ -151,13 +155,15 @@ const LEFT_MAX = 16;
 const UNPUBLISHED_WHY = 'this member lacks what the step needs, and its reason names a path or a value of its machine, so only its own log says it';
 
 /** Why `member` left an offer, which the owner's wait shows. */
-const LeftSchema = z.strictObject({ member: OwnerSchema, why: z.string().max(LEFT_WHY_MAX), at: z.string() });
+const LeftSchema = z.object({ member: OwnerSchema, why: z.string().max(LEFT_WHY_MAX), at: z.string() });
 
-const OfferedSchema = z.strictObject({
+const OfferedSchema = z.object({
   /** The record's format. A teamai that reads a newer one refuses it, naming the teamai that wrote it (`teamai`). */
   version: z.literal(RECORD_VERSION),
   /** The version of the teamai that wrote the record. */
   teamai: z.string().optional(),
+  /** The fields, by dotted path, a reader must know to read the record (`RECORD_VERSION`). */
+  critical: z.array(z.string().min(1)).optional(),
   run: RunIdSchema,
   attempt: AttemptIdSchema,
   pool: z.string().min(1),
@@ -198,12 +204,15 @@ const ExpiredSchema = ClaimedSchema.extend({ state: z.literal('expired'), expire
 const WithdrawnSchema = OfferedSchema.extend({ state: z.literal('withdrawn'), withdrawnAt: z.string() });
 
 /** A gate a whole workflow reached on the member, as the owner's person sees it. */
-const QuestionSchema = z.strictObject({
+const QuestionSchema = z.object({
   step: z.string().min(1), kind: z.enum(['approve', 'choose']), message: z.string(), options: z.array(z.string()), required: z.boolean(), default: z.string().optional(),
 }) satisfies z.ZodType<ExecQuestion>;
 
 /** The owner's answer: the choice and note its person gave, or why none comes. */
-const AnswerSchema = z.union([z.strictObject({ choice: z.string().min(1), note: z.string().optional() }), z.strictObject({ refused: z.string().min(1) })]) satisfies z.ZodType<ExecAnswer>;
+const AnswerSchema = z.union([
+  z.object({ choice: z.string().min(1), note: z.string().optional(), refused: z.never().optional() }),
+  z.object({ refused: z.string().min(1), choice: z.never().optional() }),
+]) satisfies z.ZodType<ExecAnswer>;
 
 /**
  * A claim whose whole workflow waits at a gate: the member asks the owner `question`, and keeps asking in its progress
@@ -224,6 +233,21 @@ const CancellingSchema = ClaimedSchema.extend({ state: z.literal('cancelling'), 
 const CancelledSchema = CancellingSchema.extend({ state: z.literal('cancelled'), cancelledAt: z.string(), tokens: TokenUsageSchema.optional() });
 
 export const FleetRecordSchema = z.discriminatedUnion('state', [OfferedSchema, ClaimedSchema, AskingSchema, AnsweredSchema, FinishedSchema, ExpiredSchema, WithdrawnSchema, CancellingSchema, CancelledSchema]);
+
+/** Each field a record of this format may hold, as `critical` names it. */
+const KNOWN_FIELDS: ReadonlySet<string> = new Set(fieldPaths(FleetRecordSchema, ''));
+
+function fieldPaths(schema: z.core.$ZodType, prefix: string): string[] {
+  if (schema instanceof z.ZodOptional) return fieldPaths(schema.unwrap(), prefix);
+
+  if (schema instanceof z.ZodArray) return fieldPaths(schema.element, prefix);
+
+  if (schema instanceof z.ZodUnion) return schema.options.flatMap((option) => fieldPaths(option, prefix));
+
+  if (!(schema instanceof z.ZodObject)) return [];
+
+  return Object.entries(schema.shape).flatMap(([key, field]) => [`${prefix}${key}`, ...fieldPaths(field, `${prefix}${key}.`)]);
+}
 
 export type FleetRecord = z.infer<typeof FleetRecordSchema>;
 
@@ -651,6 +675,14 @@ function parseRecord(text: string, run: string, attempt: string): Written<FleetR
     return { ok: false, error: { code: 'fleet_record_unreadable', message: `The record of attempt ${attempt} of run ${run} on teamai-reports was written by teamai ${format.data.teamai ?? 'older than this one'}, in an older format this teamai does not read. Upgrade teamai on the install that offered it.` } };
   }
 
+  const unknownFields = format.success ? (format.data.critical ?? []).filter((field) => !KNOWN_FIELDS.has(field)) : [];
+
+  if (format.success && unknownFields.length > 0) {
+    const by = format.data.teamai;
+
+    return { ok: false, error: { code: 'fleet_record_newer', message: `The record of attempt ${attempt} of run ${run} on teamai-reports was written by teamai ${by ?? 'newer than this one'}, and needs ${unknownFields.map((field) => `"${field}"`).join(', ')}, which this teamai does not know. Upgrade teamai${by === undefined ? '' : ` to ${by} or later`}.` } };
+  }
+
   const parsed = FleetRecordSchema.safeParse(raw);
 
   if (!parsed.success || parsed.data.run !== run || parsed.data.attempt !== attempt) {
@@ -678,8 +710,8 @@ async function listRecords(config: LocalConfig, run?: RunId): Promise<FleetRecor
       const parsed = parseRecord(text, name, file.slice(0, -'.json'.length));
 
       if (parsed.ok) records.push(parsed.value);
-      // Another teamai's format is worth saying: one of the two installs is to upgrade.
-      else if (isOtherFormat(text)) log.warn(`Skipped an attempt: ${parsed.error.message}`);
+      // Another teamai's format, or a field it needs, is worth saying: one of the two installs is to upgrade.
+      else if (parsed.error.code === 'fleet_record_newer' || isOtherFormat(text)) log.warn(`Skipped an attempt: ${parsed.error.message}`);
     }
   }
 
@@ -914,7 +946,7 @@ export async function heldFolders(config: LocalConfig): Promise<{ ok: true; fold
  * The wake an owner sent for an offer: its op, noted before it is sent, so a restarted owner sends none again; and once
  * the runtime launched a member, where, with what it shows of it.
  */
-const WakeNoteSchema = z.object({ op: OpIdSchema, where: z.string().optional(), display: RuntimeDisplaySchema.optional() }).strict();
+const WakeNoteSchema = z.object({ op: OpIdSchema, where: z.string().optional(), display: RuntimeDisplaySchema.optional() });
 
 export type WakeNote = z.infer<typeof WakeNoteSchema>;
 
