@@ -24,6 +24,22 @@ export const fakes = [new Child(), new cp.ChildProcess(), new childProcess.Child
   expect(output.match(/its kill\(\) signals pid 0/g)).toHaveLength(3);
 });
 
+rule.invalid('rejects a class that extends it, whose super() builds the same handle', `import { ChildProcess } from 'node:child_process';
+class FakeChild extends ChildProcess {}
+export const Fake = class extends ChildProcess {};
+export const child = new FakeChild();`, (output) => {
+  expect(output.match(/its kill\(\) signals pid 0/g)).toHaveLength(2);
+});
+
+rule.invalid('rejects it called as a function on an object, which installs the same handle with no new', `import { ChildProcess } from 'node:child_process';
+const child: ChildProcess = Object.create(ChildProcess.prototype);
+ChildProcess.call(child);
+ChildProcess.apply(child, []);
+Reflect.apply(ChildProcess, child, []);
+export const built = Reflect.construct(ChildProcess, []);`, (output) => {
+  expect(output.match(/its kill\(\) signals pid 0/g)).toHaveLength(4);
+});
+
 rule.invalid('rejects one in production source', `import { ChildProcess } from 'node:child_process';
 export const placeholder = new ChildProcess();`, undefined, { filename: 'src/launch.ts' });
 
