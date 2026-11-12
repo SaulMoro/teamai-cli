@@ -101,7 +101,8 @@ const FLEET = `Two members and an origin.
 A member on another machine: \`member <run> carol --machine container\` runs carol in a Linux container of their own, with
 a hostname and process table of their own and the world's packed teamai installed in it. Carol's verbs go through docker exec with
 each variable by name; the ledger reads carol's processes from /proc, and cleanup removes the container by name. Docker
-must be up; the first one builds the image teamai-verify-machine:node<major>.`;
+must be up; the first one builds the image teamai-verify-machine:node<major>, which every world shares, so cleanup keeps
+it: \`docker image rm teamai-verify-machine:node<major>\` removes it once no world has a container member.`;
 
 const KEYS = `A key reaches one command only when you pass it, by name: \`sh <run> --pass NAME[,NAME...] <cmd>\` or
 \`teamai <run> --pass NAME ...\` copies those variables from your shell into that command's environment.
