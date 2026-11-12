@@ -35,37 +35,24 @@ function writing(resultPath: string, body: unknown, spawned: () => ReturnType<ty
 }
 
 /**
- * A child that prints `lines` and then works on until it is stopped, as a tool in the middle of its work does. It takes
- * `closesAfterMs` to close once stopped, and with `exitsAfterMs` it exits on its own then.
+ * A tool that prints `lines` and then works on until it is stopped, as a tool in the middle of its work does: a real
+ * process, started with the options the launcher starts a tool with (in a process group of its own), so the launcher's
+ * stop reaches it as it reaches a tool. Stopped, it takes `closesAfterMs` to close.
  */
-function workingChild(lines: string[], { closesAfterMs, exitsAfterMs }: { closesAfterMs?: number; exitsAfterMs?: number } = {}) {
-  const stdoutEmitter = new EventEmitter();
-  const stderr = Object.assign(new EventEmitter(), { resume: () => undefined });
-  let running = true;
-  const close = (code: number | null): void => {
-    if (closesAfterMs === undefined) queueMicrotask(() => childProcess.emit('close', code));
-    else setTimeout(() => childProcess.emit('close', code), closesAfterMs);
-  };
-  const childProcess = Object.assign(new EventEmitter(), {
-    stdout: stdoutEmitter,
-    stderr,
-    kill: (signal?: NodeJS.Signals | number): boolean => {
-      if (!running || signal === 0) return running;
-      running = false;
-      close(null);
-      return true;
-    },
-  });
-  if (exitsAfterMs !== undefined) {
-    setTimeout(() => {
-      running = false;
-      childProcess.emit('close', 0);
-    }, exitsAfterMs);
-  }
-  queueMicrotask(() => {
-    childProcess.emit('spawn');
-    for (const line of lines) stdoutEmitter.emit('data', Buffer.from(`${line}\n`));
-  });
+function workingTool(lines: readonly string[], { closesAfterMs = 0 }: { closesAfterMs?: number } = {}): ToolSpawn {
+  const script = `for (const line of JSON.parse(process.argv[1])) process.stdout.write(line + '\\n');
+const closesAfterMs = Number(process.argv[2]);
+if (closesAfterMs > 0) process.on('SIGTERM', () => setTimeout(() => process.exit(143), closesAfterMs));
+setInterval(() => {}, 1000);`;
+
+  return (_command, _args, options) => spawn(process.execPath, ['-e', script, JSON.stringify(lines), String(closesAfterMs)], options);
+}
+
+/** A tool that prints nothing and exits on its own after `exitsAfterMs`, which needs no stop. */
+function exitingChild(exitsAfterMs: number) {
+  const childProcess = Object.assign(new EventEmitter(), { stdout: new EventEmitter(), stderr: Object.assign(new EventEmitter(), { resume: () => undefined }) });
+  queueMicrotask(() => childProcess.emit('spawn'));
+  setTimeout(() => childProcess.emit('close', 0), exitsAfterMs);
   return childProcess;
 }
 
@@ -361,7 +348,7 @@ describe('the tools launcher', () => {
   ] as const)('stops %s, once the tokens its stdout states pass the budget, and reports them', async (_, tool, lines) => {
     const resultPath = path.join(os.tmpdir(), `teamai-workflow-budget-${tool}-${Date.now()}.json`);
     files.push(resultPath);
-    const adapter = hostLauncher(() => workingChild([...lines]) as unknown as ReturnType<ToolSpawn>, () => tool);
+    const adapter = hostLauncher(workingTool(lines), () => tool);
 
     const result = await adapter.run(tool, { prompt: 'Fix it.', expected, cwd: os.tmpdir(), resultPath, secrets: {}, budget: 100 });
 
@@ -371,7 +358,7 @@ describe('the tools launcher', () => {
   it('stops a tool still running at its timeout, and says the timeout stopped it', async () => {
     const resultPath = path.join(os.tmpdir(), `teamai-workflow-timeout-${Date.now()}.json`);
     files.push(resultPath);
-    const adapter = hostLauncher(() => workingChild([]) as unknown as ReturnType<ToolSpawn>, () => 'codex');
+    const adapter = hostLauncher(workingTool([]), () => 'codex');
 
     const result = await adapter.run('codex', { prompt: 'Fix it.', expected, cwd: os.tmpdir(), resultPath, secrets: {}, timeoutMs: 20 });
 
@@ -382,9 +369,10 @@ describe('the tools launcher', () => {
     const resultPath = path.join(os.tmpdir(), `teamai-workflow-timeout-init-${Date.now()}.json`);
     files.push(resultPath);
     const init = JSON.stringify({ type: 'system', subtype: 'init', session_id: 'session-1', model: 'claude-sonnet' });
-    const adapter = hostLauncher(() => workingChild([init]) as unknown as ReturnType<ToolSpawn>, () => 'claude');
+    const adapter = hostLauncher(workingTool([init]), () => 'claude');
 
-    const result = await adapter.run('claude', { prompt: 'Fix it.', expected, cwd: os.tmpdir(), resultPath, secrets: {}, timeoutMs: 20 });
+    // Long enough for a started process to print its init event first.
+    const result = await adapter.run('claude', { prompt: 'Fix it.', expected, cwd: os.tmpdir(), resultPath, secrets: {}, timeoutMs: 2_000 });
 
     expect(result).toMatchObject({ started: true, stoppedBy: 'timeout', model: 'claude-sonnet', session: 'session-1' });
     expect(result.started && result.tokens).toBeUndefined();
@@ -420,9 +408,10 @@ describe('the tools launcher', () => {
     const resultPath = path.join(os.tmpdir(), `teamai-workflow-budget-slow-${Date.now()}.json`);
     files.push(resultPath);
     const over = JSON.stringify({ type: 'step_finish', part: { type: 'step-finish', tokens: { input: 60, output: 60 } } });
-    const adapter = hostLauncher(() => workingChild([over], { closesAfterMs: 80 }) as unknown as ReturnType<ToolSpawn>, () => 'opencode');
+    // The timeout comes after the line that passes the budget, and before the tool, stopped for it, closes.
+    const adapter = hostLauncher(workingTool([over], { closesAfterMs: 3_000 }), () => 'opencode');
 
-    const result = await adapter.run('opencode', { prompt: 'Fix it.', expected, cwd: os.tmpdir(), resultPath, secrets: {}, budget: 100, timeoutMs: 20 });
+    const result = await adapter.run('opencode', { prompt: 'Fix it.', expected, cwd: os.tmpdir(), resultPath, secrets: {}, budget: 100, timeoutMs: 2_000 });
 
     expect(result).toMatchObject({ started: true, stoppedBy: 'budget' });
   });
@@ -430,7 +419,7 @@ describe('the tools launcher', () => {
   it('names no stop for a tool that exited on its own as its timeout came', async () => {
     const resultPath = path.join(os.tmpdir(), `teamai-workflow-timeout-exit-${Date.now()}.json`);
     files.push(resultPath);
-    const adapter = hostLauncher(() => workingChild([], { exitsAfterMs: 30 }) as unknown as ReturnType<ToolSpawn>, () => 'codex');
+    const adapter = hostLauncher(() => exitingChild(30) as unknown as ReturnType<ToolSpawn>, () => 'codex');
 
     const result = await adapter.run('codex', { prompt: 'Fix it.', expected, cwd: os.tmpdir(), resultPath, secrets: {}, timeoutMs: 30 });
 
