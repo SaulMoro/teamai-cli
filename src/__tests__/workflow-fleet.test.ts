@@ -113,25 +113,28 @@ describe('fleet attempts on teamai-reports', () => {
     expect(await readAttemptRecord(bob.config, RUN, ATTEMPT)).toMatchObject({ ok: false, error: { code: 'fleet_record_unreadable' } });
   });
 
-  it('reads a record that holds a field its format does not name, without that field, at the top or nested', async () => {
+  it('takes a record that holds a field its format does not name, at the top, nested or in a list, and keeps one outside a list when it writes the record again', async () => {
     const acme = team();
     const [alice, bob] = [await acme.member('alice'), await acme.member('bob')];
     const offered = await offer(alice);
     if (!offered.ok) throw new Error(offered.error.message);
     const rel = `workflows/attempts/${RUN}/${ATTEMPT}.json`;
+    const newer = { hint: 'a note for people', lease: { ...offered.value.lease, workflow: true }, owner: { ...offered.value.owner, host: 'ci-7' } };
+    const left = [{ member: { id: 'm1', user: 'carol', host: 'ci-8' }, why: 'no gpu', at: '2026-11-12T00:00:00.000Z', seen: 2 }];
     await updateReports(alice.config, async (worktree) => {
-      fs.writeFileSync(path.join(worktree, rel), JSON.stringify({
-        ...offered.value, teamai: '9.1.0', hint: 'a note for people', lease: { ...offered.value.lease, workflow: true },
-        owner: { ...offered.value.owner, host: 'ci-7' }, left: [{ member: { id: 'm1', user: 'carol', host: 'ci-8' }, why: 'no gpu', at: '2026-11-12T00:00:00.000Z', seen: 2 }],
-      }));
+      fs.writeFileSync(path.join(worktree, rel), JSON.stringify({ ...offered.value, teamai: '9.1.0', ...newer, left }));
 
       return { value: undefined, write: { files: [rel], message: 'a record with fields of a newer teamai' } };
     });
     await readableReportsWorktree(bob.config);
 
-    const read = await readAttemptRecord(bob.config, RUN, ATTEMPT);
-    expect(read).toEqual({ ok: true, value: { ...offered.value, teamai: '9.1.0', left: [{ member: { id: 'm1', user: 'carol' }, why: 'no gpu', at: '2026-11-12T00:00:00.000Z' }] } });
-    expect(await listOffers(bob.config, { pool: 'default', repository: 'github.com/acme/business' })).toMatchObject([{ attempt: ATTEMPT }]);
+    const [taken] = await listOffers(bob.config, { pool: 'default', repository: 'github.com/acme/business' });
+    if (taken === undefined) throw new Error('bob read no offer');
+    const claimed = await claimAttempt(bob.config, taken, await installOwner(bob.config));
+
+    expect(claimed).toMatchObject({ ok: true });
+    const published: unknown = JSON.parse(fs.readFileSync(path.join(await readableReportsWorktree(alice.config), rel), 'utf8'));
+    expect(published).toMatchObject({ state: 'claimed', ...newer, left: [{ member: { id: 'm1', user: 'carol' }, why: 'no gpu' }] });
   });
 
   it('refuses a record that names a field this teamai does not know among those its reader must understand, naming the teamai that wrote it', async () => {

@@ -18,7 +18,7 @@ import { log } from '@teamai/shared/log';
 import { writeJsonAtomic } from '../../utils/fs.js';
 import { getCurrentVersion } from '../../package-info.js';
 import { fetchReportsOriginFile, updateReports, type ReportsChange } from '../../utils/reports-branch.js';
-import { JsonValueSchema, parseJson, type JsonValue, isJsonObject } from '@teamai/shared/json';
+import { JsonValueSchema, parseJson, type JsonObject, type JsonValue, isJsonObject } from '@teamai/shared/json';
 import { TurnLimitsSchema } from '../requirements.js';
 import { TokenUsageSchema } from '../step-state.js';
 import type { TokenUsage } from '@teamai/tool-core/stdout';
@@ -138,9 +138,9 @@ export type FleetResult = z.infer<typeof FleetResultSchema>;
  * workflow leases and their gates, and an offer's `left`. A record is must-understand: a reader ignores a field it does
  * not know unless the record's `critical` names it, by dotted path from the record's top, an array's elements under the
  * array's own key; then it refuses the record as one a newer teamai wrote. A writer names in `critical` each field that
- * changes what a reader must do, and only a format a reader cannot read at all bumps this. A rewrite keeps only the
- * fields its writer knows. The run's `definition` and a prompt's `limits` stay strict: an unknown key there is another
- * workflow, or a limit nobody would hold the tool to.
+ * changes what a reader must do, and only a format a reader cannot read at all bumps this. A rewrite keeps the fields
+ * its writer does not know as it read them, outside a list's elements. The run's `definition` and a prompt's `limits`
+ * stay strict: an unknown key there is another workflow, or a limit nobody would hold the tool to.
  */
 const RECORD_VERSION = 2;
 
@@ -237,6 +237,9 @@ export const FleetRecordSchema = z.discriminatedUnion('state', [OfferedSchema, C
 /** Each field a record of this format may hold, as `critical` names it. */
 const KNOWN_FIELDS: ReadonlySet<string> = new Set(fieldPaths(FleetRecordSchema, ''));
 
+/** Each known field that holds an object of known fields, as `lease` does and a JSON value such as `values.inputs` does not. */
+const KNOWN_OBJECTS: ReadonlySet<string> = new Set([...KNOWN_FIELDS].flatMap((field) => (field.includes('.') ? [field.slice(0, field.lastIndexOf('.'))] : [])));
+
 function fieldPaths(schema: z.core.$ZodType, prefix: string): string[] {
   if (schema instanceof z.ZodOptional) return fieldPaths(schema.unwrap(), prefix);
 
@@ -307,8 +310,29 @@ function recordPath(run: RunId, attempt: AttemptId): string {
   return `${ATTEMPTS_DIR}/${run}/${attempt}.json`;
 }
 
-function recordText(record: FleetRecord): string {
-  return `${JSON.stringify(record, null, 2)}\n`;
+function recordText(record: FleetRecord, held?: JsonValue): string {
+  const text = `${JSON.stringify(record, null, 2)}\n`;
+  const written = held === undefined ? undefined : jsonOf(text);
+
+  return written === undefined || held === undefined ? text : `${JSON.stringify(withUnknownFields(held, written, ''), null, 2)}\n`;
+}
+
+/**
+ * `written` with each field of `held`, the record it replaces, that this teamai does not know, beside its known fields
+ * at `prefix`: a newer teamai's field outlives an older one's write. An array's elements keep only the fields it knows.
+ */
+function withUnknownFields(held: JsonValue, written: JsonValue, prefix: string): JsonValue {
+  if (!isJsonObject(held) || !isJsonObject(written)) return written;
+  const merged: JsonObject = { ...written };
+
+  for (const [key, value] of Object.entries(held)) {
+    const at = `${prefix}${key}`;
+
+    if (!KNOWN_FIELDS.has(at)) merged[key] ??= value;
+    else if (merged[key] !== undefined && KNOWN_OBJECTS.has(at)) merged[key] = withUnknownFields(value, merged[key], `${at}.`);
+  }
+
+  return merged;
 }
 
 /**
@@ -827,7 +851,7 @@ async function writeRecord(config: LocalConfig, record: FleetRecord, { replaces,
 
     if ((held?.value.write) !== replaces) return { value: { ok: false, error: moved }, write: null };
     await fs.mkdir(path.join(worktree, path.dirname(rel)), { recursive: true });
-    await writeRegularFile(path.join(worktree, rel), recordText({ ...record, teamai: getCurrentVersion() }));
+    await writeRegularFile(path.join(worktree, rel), recordText({ ...record, teamai: getCurrentVersion() }, read.status === 'found' ? jsonOf(read.text) : undefined));
 
     return { value: { ok: true, value: undefined }, write: { files: [rel], message } };
   });
@@ -946,7 +970,7 @@ export async function heldFolders(config: LocalConfig): Promise<{ ok: true; fold
  * The wake an owner sent for an offer: its op, noted before it is sent, so a restarted owner sends none again; and once
  * the runtime launched a member, where, with what it shows of it.
  */
-const WakeNoteSchema = z.object({ op: OpIdSchema, where: z.string().optional(), display: RuntimeDisplaySchema.optional() });
+const WakeNoteSchema = z.object({ op: OpIdSchema, where: z.string().optional(), display: RuntimeDisplaySchema.optional() }).strict();
 
 export type WakeNote = z.infer<typeof WakeNoteSchema>;
 
