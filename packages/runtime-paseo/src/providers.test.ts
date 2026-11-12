@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import type { InitInstance, RuntimeMessage, RuntimeOptions } from '@teamai/runtime-protocol';
 import { describe, expect, it } from 'vitest';
+import { daemonRuns } from './providers.js';
 import { type Behaviour } from './testing/fake-daemon.js';
 import { type Runtime } from './testing/harness.js';
 import { dir, daemonState, daemon, ATTEMPT, behave, received, start, isOp, isEnd, ready, openRequest, opened, delay, cannotRun, until, promptRequest, useRuntimeSuite } from './testing/suite.js';
@@ -51,6 +52,14 @@ describe('teamai-runtime-paseo', () => {
       behave({ custom_providers: { 'claude-acme': { extends: 'claude', command: [command] } } });
 
       expect(await ready(start(), { options: { url: daemon.url }, instances: [ACME] })).toMatchObject({ type: 'init', ok: true, can: { tools: ['claude', 'opencode', 'acme-claude'] } });
+    });
+
+    it.each([
+      ['a daemon on this Windows machine, a bare name in another case', 'Acme-Claude', 'win32', true],
+      ['a daemon elsewhere, a bare name in another case, which says nothing of its host', 'Acme-Claude', undefined, false],
+      ['a daemon on this Linux machine, a bare name in another case', 'Acme-Claude', 'linux', false],
+    ] satisfies Array<[string, string, NodeJS.Platform | undefined, boolean]>)('matches a provider command with the platform of the daemon\'s host where it is known: %s', (_case, executable, hostPlatform, runs) => {
+      expect(daemonRuns({ executable, command: 'acme-claude', hostPlatform })).toBe(runs);
     });
 
     /** `name` as an executable on the runtime's PATH, as a member installs a team tool, and the env a runtime finds it with. */
