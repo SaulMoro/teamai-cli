@@ -84,15 +84,11 @@ describe('what each row reads from what an engine or the process table printed',
     expect(listed({ code: 0, stdout: 'p500\nfcwd\nn/w\n', why: '' }).procs.map((proc) => proc.cwd)).toEqual(['/w', undefined]);
   });
 
-  it('reads containers with their owner, run and mounts, and sbx names with the journal teamai gave them', async () => {
+  it('reads containers with their owner, run and mounts', async () => {
     const { parseContainers, parseMounts } = await import('./leftovers/containers.js');
-    const { journalOfSbxName } = await import('./leftovers/sbx.js');
 
     expect(parseContainers('abc123\tteamai-r1-a1\t0123456789abcdef\tr1\trunning\n')).toEqual([{ id: 'abc123', name: 'teamai-r1-a1', owner: '0123456789abcdef', run: 'r1', state: 'running' }]);
     expect(parseMounts('abc123abc123ffff\t/w/20261112T120000-aaaaaa/project\t/tmp/x\n')).toEqual(new Map([['abc123abc123', ['/w/20261112T120000-aaaaaa/project', '/tmp/x']]]));
-    expect(journalOfSbxName('teamai-0123456789abcdef-r1-a1')).toBe('0123456789abcdef');
-    expect(journalOfSbxName('teamai-0123456789abcdef-warm-42-x')).toBe('0123456789abcdef');
-    expect(journalOfSbxName('my-sandbox')).toBeUndefined();
   });
 });
 

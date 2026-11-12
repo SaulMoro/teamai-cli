@@ -5,6 +5,7 @@ import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { journal } from '../../packages/runtime-sandbox/src/journal.js';
 import { sandboxJournalRoot } from '../../packages/runtime-sandbox/src/journal-root.js';
+import { IDLE } from '../../packages/runtime-sandbox/src/providers/container.js';
 import { bwrapSteps, startObserver } from './observer.js';
 import type { World } from './world.js';
 
@@ -67,13 +68,14 @@ describe('the sandbox observer', () => {
     const owner = journal(sandboxJournalRoot(world.home)).owner;
     const proc = path.join(world.dir, 'fake-proc');
     /** A process in the fake /proc: its parent and its environment. */
-    const process_ = (pid: number, ppid: number, env: string): void => {
+    const process_ = (pid: number, ppid: number, env: string, argv: readonly string[] = ['sleep', '3600']): void => {
       fs.mkdirSync(path.join(proc, String(pid)), { recursive: true });
       fs.writeFileSync(path.join(proc, String(pid), 'stat'), `${pid} (sh) S ${ppid} ${pid} ${pid} 0 -1\n`);
       fs.writeFileSync(path.join(proc, String(pid), 'environ'), `${env}\0`);
+      fs.writeFileSync(path.join(proc, String(pid), 'cmdline'), `${argv.join('\0')}\0`);
     };
     // The container's idle loop and its sleep, as teamai starts every container: the shell hands its sleep PWD and SHLVL.
-    process_(1, 0, 'PATH=/usr/bin\0HOME=/tmp/teamai-home');
+    process_(1, 0, 'PATH=/usr/bin\0HOME=/tmp/teamai-home', ['/bin/sh', '-c', IDLE]);
     process_(7, 1, 'SHLVL=1\0HOME=/tmp/teamai-home\0PATH=/usr/bin\0PWD=/');
     const observe = async (): Promise<string[]> => startObserver(world, {
       pass: new Map(),
@@ -106,6 +108,13 @@ describe('the sandbox observer', () => {
     process_(42, 0, `HOME=/tmp/teamai-home\0VERIFY_WORLD_CANARY=${world.env?.VERIFY_WORLD_CANARY ?? ''}`);
 
     expect(await observe()).toEqual(['[verify] observed docker:teamai-r0123abcd-a0123abcd: ENV LEAK VERIFY_WORLD_CANARY']);
+    fs.rmSync(path.join(proc, '42'), { recursive: true });
+
+    // A container whose first process is not the idle loop teamai starts, such as a step's filter: a child of it with
+    // its environment is no idle sleep, so it is read.
+    process_(1, 0, 'PATH=/usr/bin\0HOME=/tmp/teamai-home', ['node', '-e', 'filter']);
+
+    expect(await observe()).toEqual(['[verify] observed docker:teamai-r0123abcd-a0123abcd: env ok']);
   });
 
   it('says it could not list the sbx sandboxes when `sbx ls` fails, and nothing when sbx is not installed', async () => {

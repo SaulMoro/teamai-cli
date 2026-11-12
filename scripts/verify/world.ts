@@ -154,7 +154,8 @@ export function teamRefs(team: string) {
   );
 }
 
-const quote = (value: string): string => `'${value.replace(/'/g, `'\\''`)}'`;
+/** `value` as one word of a POSIX shell command line. */
+export const quote = (value: string): string => `'${value.replace(/'/g, `'\\''`)}'`;
 
 export const TOOL_COMMANDS = ['claude', 'codex', 'codebuddy', 'opencode'] as const;
 

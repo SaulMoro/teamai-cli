@@ -10,7 +10,7 @@ import { readRegularFileSync } from '@teamai/shared/regular-file';
 import { boundedTail, STDERR_CHARS } from '../bounded-tail.js';
 import type { JournalId } from '../journal.js';
 import type { ProfileOption, VercelOptions } from '../options.js';
-import { COMMAND_MS, type ExecEnd, type PlaceKey, type Provider } from '../provider.js';
+import { COMMAND_MS, journalPrefixOf, journalSandboxName, placeOfJournalSandbox, type ExecEnd, type PlaceKey, type Provider } from '../provider.js';
 import { offerSignedIn } from '../sign-in.js';
 import { oneBuildPerKey, planWarm, warmFailed, type WarmPlan } from '../warm.js';
 import { WORKSPACES } from './cli.js';
@@ -151,7 +151,7 @@ export function lifetimeOf(timeoutMs: number | undefined, deadline: string | und
 }
 
 export function vercelProvider({ options, owner, state, env, home }: { options: VercelOptions & { readonly profile?: ProfileOption }; owner: JournalId; state: string; env: NodeJS.ProcessEnv; home: string }): Provider {
-  const nameOf = ({ run, attempt }: PlaceKey): string => `teamai-${owner}-${run}-${attempt}`;
+  const nameOf = (key: PlaceKey): string => journalSandboxName(owner, key);
   const dirOf = (id: string): string => path.join(state, id);
   const commandsOf = (id: string): string => path.join(dirOf(id), 'commands');
   const failed = (message: string) => ({ ok: false, failure: { code: 'sandbox_failed', message } }) satisfies { ok: false; failure: RuntimeFailure };
@@ -278,7 +278,7 @@ export function vercelProvider({ options, owner, state, env, home }: { options: 
 
   /** Makes the warm snapshot of `plan`: `prepare` run in a scratch sandbox on copies of its `cache` files, which go first. */
   const makeWarm = async (plan: WarmPlan, warm: NonNullable<VercelOptions['warm']>, credentials: Credentials): Promise<{ ok: true; snapshotId: string } | { ok: false; failure: RuntimeFailure }> => {
-    const name = `teamai-${owner}-warm-${process.pid}-${crypto.randomBytes(3).toString('hex')}`;
+    const name = `${journalPrefixOf(owner)}warm-${process.pid}-${crypto.randomBytes(3).toString('hex')}`;
     let sandbox: Sandbox;
 
     try {
@@ -375,7 +375,7 @@ export function vercelProvider({ options, owner, state, env, home }: { options: 
       const auth = signedIn();
 
       if (!auth.ok) return { ok: false, failure: { code: 'sandbox_failed', message: auth.message } };
-      const prefix = `teamai-${owner}-`;
+      const prefix = journalPrefixOf(owner);
 
       try {
         const listed = await (await (await sdk()).Sandbox.list({ namePrefix: prefix, ...auth.credentials })).toArray();
@@ -383,9 +383,9 @@ export function vercelProvider({ options, owner, state, env, home }: { options: 
         return {
           ok: true,
           sandboxes: listed.flatMap(({ name }) => {
-            const [runId, attempt, ...more] = name.startsWith(prefix) ? name.slice(prefix.length).split('-') : [];
+            const place = placeOfJournalSandbox(name);
 
-            return runId && attempt && more.length === 0 ? [{ id: name, run: runId, attempt }] : [];
+            return place?.owner === owner ? [{ id: name, ...place.key }] : [];
           }),
           // A scratch sandbox's name carries this journal, so its pid is of this machine.
           leftWarm: listed.flatMap(({ name }) => {

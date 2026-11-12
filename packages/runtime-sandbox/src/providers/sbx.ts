@@ -7,7 +7,7 @@ import type { JournalId } from '../journal.js';
 import type { ProfileOption, WarmOptions } from '../options.js';
 import { PROVIDER_COMMANDS } from '../provider-commands.js';
 import { oneBuildPerKey, planWarm, scratchOf, WARM_REPOSITORY, warmFailed, type WarmPlan } from '../warm.js';
-import { COMMAND_MS, type ExecEnd, type ExecSpec, type PlaceKey, type Provider } from '../provider.js';
+import { COMMAND_MS, journalPrefixOf, journalSandboxName, placeOfJournalSandbox, type ExecEnd, type ExecSpec, type PlaceKey, type Provider } from '../provider.js';
 import { offerSignedIn, type MissingCommand } from '../sign-in.js';
 import { cliOf, commandsOf, definedOnly, heldProbe, signalled, LAUNCHABLE, mountsOf, WORKSPACES, type Ran } from './cli.js';
 
@@ -108,10 +108,10 @@ export function sbxProvider({ agent, owner, env, warm, profile }: { agent: strin
   };
 
   /** What starts the name of every sandbox of this journal. */
-  const journalPrefix = `teamai-${owner}-`;
+  const journalPrefix = journalPrefixOf(owner);
 
   /** An attempt's sandbox name, which is also its id: `teamai-<journal>-<run>-<attempt>`. */
-  const nameOf = ({ run, attempt }: PlaceKey): string => `${journalPrefix}${run}-${attempt}`;
+  const nameOf = (key: PlaceKey): string => journalSandboxName(owner, key);
 
   /** What sbx said: its `error: …` line and the `try: …` hint it adds, on one line. */
   const messageOf = (ran: Ran): string => (ran.kind !== 'ran' ? ran.message : ran.stderr.trim().split('\n').map((line) => line.trim()).filter((line) => line !== '' && !line.startsWith('✓')).slice(-2).join('; '));
@@ -353,9 +353,9 @@ export function sbxProvider({ agent, owner, env, warm, profile }: { agent: strin
       return {
         ok: true,
         sandboxes: listed.names.flatMap((name) => {
-          const [run, attempt, ...more] = name.startsWith(journalPrefix) ? name.slice(journalPrefix.length).split('-') : [];
+          const place = placeOfJournalSandbox(name);
 
-          return run && attempt && more.length === 0 ? [{ id: name, run, attempt }] : [];
+          return place?.owner === owner ? [{ id: name, ...place.key }] : [];
         }),
         // sbx runs here, so a scratch sandbox's pid is of this machine.
         leftWarm: listed.names.filter((name) => {

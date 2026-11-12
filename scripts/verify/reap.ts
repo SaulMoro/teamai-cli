@@ -6,7 +6,7 @@
 import { VERCEL_AUTH } from '../../packages/runtime-sandbox/src/providers/vercel.js';
 import { z } from 'zod';
 import { attributeLeftover, tiesOnThisMachine, type Attribution, type WorldTies } from './leftovers.js';
-import { journalOfSbxName } from './leftovers/sbx.js';
+import { journalOfSandboxName } from '../../packages/runtime-sandbox/src/provider.js';
 import type { World } from './world.js';
 
 /** The start of every name teamai gives a Vercel sandbox, the only ones reap lists. */
@@ -52,7 +52,7 @@ const NO_WORLD: WorldTies = { runId: '', paths: [], journals: [], runs: [] };
 /** Each teamai sandbox listed (by a name teamai gives, or named here), whose it is, whether it is alive and whether reap may delete it. */
 export function judgeRemote({ listed, self, others, named }: { listed: unknown; self: WorldTies | undefined; others: readonly WorldTies[]; named: readonly string[] }) {
   return ListedSchema.parse(listed).flatMap((sandbox) => {
-    const journal = journalOfSbxName(sandbox.name);
+    const journal = journalOfSandboxName(sandbox.name);
     const run = sandbox.tags?.['teamai-run'];
     const isNamed = named.includes(sandbox.name);
 

@@ -8,7 +8,7 @@ import { PROVIDER_COMMANDS } from '../provider-commands.js';
 import type { JournalId } from '../journal.js';
 import type { Can, ConfinedOffer, RuntimeFailure } from '@teamai/runtime-protocol';
 import { ANY_HOST, EVIDENCE_DIR, FILTER_PORT, FILTER_SCRIPT, judgeTool, thisMachineFileRule, thisMachineRule } from '../judge.js';
-import { COMMAND_MS, handleOf, type ExecEnd, type ExecSpec, type HostRoute, type PlaceKey, type Provider, type WarmedImage } from '../provider.js';
+import { COMMAND_MS, handleOf, placeKeyOfHandle, type ExecEnd, type ExecSpec, type HostRoute, type PlaceKey, type Provider, type WarmedImage } from '../provider.js';
 import { offerSignedIn } from '../sign-in.js';
 import { isLeftBehind, oneBuildPerKey, planWarm, scratchOf, WARM_BY, warmFailed, type WarmPlan } from '../warm.js';
 import { cliOf, commandsOf, definedOnly, heldProbe, signalled, LAUNCHABLE, mountsOf, unmountable, WORKSPACES, type Ran } from './cli.js';
@@ -68,9 +68,29 @@ const HOST_GATEWAY = ['--add-host', 'host.docker.internal:host-gateway'];
 /** What a judge's container and its filter run with: no capability, and no way to gain one. */
 const LOCKED = ['--cap-drop', 'ALL', '--security-opt', 'no-new-privileges'];
 
-const networkOf = (key: PlaceKey): string => `${handleOf(key)}-net`;
+/** What ends the name of an attempt's network, and of its filter, after the handle of its place. */
+const NETWORK_SUFFIX = '-net';
+const FILTER_SUFFIX = '-proxy';
 
-const filterOf = (key: PlaceKey): string => `${handleOf(key)}-proxy`;
+const networkOf = (key: PlaceKey): string => `${handleOf(key)}${NETWORK_SUFFIX}`;
+
+const filterOf = (key: PlaceKey): string => `${handleOf(key)}${FILTER_SUFFIX}`;
+
+/**
+ * What a container or network name teamai gave is of its attempt: the place, the filter in front of a step or a judge,
+ * or their network. Undefined for any other name.
+ */
+export function containerNamed(name: string): { kind: 'place' | 'filter' | 'network'; key: PlaceKey } | undefined {
+  for (const [kind, suffix] of [['network', NETWORK_SUFFIX], ['filter', FILTER_SUFFIX]] as const) {
+    const key = name.endsWith(suffix) ? placeKeyOfHandle(name.slice(0, -suffix.length)) : undefined;
+
+    if (key !== undefined) return { kind, key };
+  }
+
+  const key = placeKeyOfHandle(name);
+
+  return key === undefined ? undefined : { kind: 'place', key };
+}
 
 /** Where a sandbox behind the filter of `key` sends what it reaches out to: the filter, by its name on their network. */
 const proxyOf = (key: PlaceKey): string => `http://${filterOf(key)}:${FILTER_PORT}`;

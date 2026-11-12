@@ -19,11 +19,11 @@ import { journal } from '../../packages/runtime-sandbox/src/journal.js';
 import { sandboxJournalRoot } from '../../packages/runtime-sandbox/src/journal-root.js';
 import { CONTAINER_ENGINES } from '../../packages/runtime-sandbox/src/options.js';
 import { PROVIDER_COMMANDS } from '../../packages/runtime-sandbox/src/provider-commands.js';
-import { ATTEMPT_ID, RUN_ID } from '../../packages/runtime-sandbox/src/provider.js';
+import { journalOfSandboxName, placeKeyOfHandle, placeOfJournalSandbox } from '../../packages/runtime-sandbox/src/provider.js';
+import { containerNamed, IDLE } from '../../packages/runtime-sandbox/src/providers/container.js';
 import { errnoCode } from '../../src/utils/fs.js';
-import { journalOfSbxName } from './leftovers/sbx.js';
 import { declaredCredentialNames, judgeSandboxEnv, parseEnviron, type EnvVerdict } from './secrets.js';
-import { CANARY_NAME, worldHomes, type World } from './world.js';
+import { CANARY_NAME, quote, worldHomes, type World } from './world.js';
 
 const run = promisify(execFile);
 
@@ -33,14 +33,17 @@ const POLL_MS = 500;
 const OBSERVED_FILE = 'observed.jsonl';
 
 /**
- * The attempt `name` names as `<run>/<attempt>`: a sandbox's name or a path segment `teamai-<run>-<attempt>`, the
- * handle of its place (provider.ts `handleOf`), which sbx starts with its journal, `teamai-<journal>-<run>-<attempt>`.
+ * The attempt whose step ran in the sandbox an observer record names, `<provider>:<name>`, as `<run>/<attempt>`: by the
+ * name the runtime gave it (`handleOf`; sbx's with its journal; bwrap's by the place its arguments name). A step's
+ * filter, `<handle>-proxy`, is that attempt's too but runs none of its step, so reading it reads no step: undefined.
  */
-function attemptNamed(name: string): string | undefined {
-  const parts = name.split('-');
-  const [runId = '', attempt = ''] = parts.slice(-2);
+function attemptObserved(what: string): string | undefined {
+  const at = what.indexOf(':');
+  const [provider, name] = [what.slice(0, at), what.slice(at + 1)];
+  const named = provider === PROVIDER_COMMANDS.sbx ? placeOfJournalSandbox(name) : containerNamed(name);
+  const key = named === undefined || ('kind' in named && named.kind !== 'place') ? undefined : named.key;
 
-  return parts[0] === 'teamai' && parts.length >= 3 && RUN_ID.test(runId) && ATTEMPT_ID.test(attempt) ? `${runId}/${attempt}` : undefined;
+  return key === undefined ? undefined : `${key.run}/${key.attempt}`;
 }
 
 /**
@@ -80,7 +83,7 @@ export function attemptsObserved(world: Pick<World, 'dir'>): { kind: 'read'; att
       return [];
     }
 
-    const attempt = attemptNamed(record.what.slice(record.what.indexOf(':') + 1));
+    const attempt = attemptObserved(record.what);
 
     return attempt === undefined || record.read === 0 ? [] : [attempt];
   }));
@@ -93,15 +96,16 @@ const OBSERVER_MARK = 'VERIFY_OBSERVER_SHELL=1';
 
 /**
  * The environment of each process a step runs inside a sandbox, one block per process, blocks split by an empty entry.
- * Never printed. Not the first process, the loop a container idles in until teamai execs a step, nor a child of it whose
- * environment is its own but for what a shell adds (its sleep); a step's process it took over carries the step's. Nor
- * an observer's shell: an environment read is a step's.
+ * Never printed. Not the first process: in a container, the loop it idles in until teamai execs a step (`IDLE`) or a
+ * filter. Where that first process is `IDLE`, nor a child of it whose environment is its own but for what a shell adds
+ * (its sleep); a step's process it took over carries the step's. Nor an observer's shell: an environment read is a step's.
  */
 const ENVIRONS = [
   `n() { tr '\\0' '\\n' < "$1" 2>/dev/null | grep -v -E '^(PWD|OLDPWD|SHLVL|_)=' | sort; }; idle=$(n /proc/1/environ)`,
+  `[ "$(tr '\\0' '\\n' < /proc/1/cmdline 2>/dev/null | sed -n 3p)" = ${quote(IDLE)} ] && idles=1 || idles=0`,
   'for d in /proc/[0-9]*; do p=${d#/proc/}; s=$(cat "$d/stat" 2>/dev/null) || continue; s=${s##*) }; set -- $s',
   '[ "$p" = 1 ] && continue',
-  '[ "$2" = 1 ] && [ "$(n "$d/environ")" = "$idle" ] && continue',
+  '[ "$idles" = 1 ] && [ "$2" = 1 ] && [ "$(n "$d/environ")" = "$idle" ] && continue',
   `case "$(cat "$d/environ" 2>/dev/null)" in *${OBSERVER_MARK}*) continue ;; esac`,
   'cat "$d/environ" 2>/dev/null && printf "\\0\\0"; done',
 ].join('; ');
@@ -215,7 +219,7 @@ export function bwrapSteps(procs: readonly ProcEntry[], roots: readonly string[]
       const children = procs.filter((proc) => frontier.includes(proc.ppid));
       const first = children.filter((proc) => !isBwrap(proc.args));
 
-      if (first.length > 0) return [{ bwrap: outer.args.flatMap((arg) => arg.split('/')).find((segment) => attemptNamed(segment) !== undefined) ?? outer.pid, steps: first.map((proc) => proc.pid) }];
+      if (first.length > 0) return [{ bwrap: outer.args.flatMap((arg) => arg.split('/')).find((segment) => placeKeyOfHandle(segment) !== undefined) ?? outer.pid, steps: first.map((proc) => proc.pid) }];
       frontier = children.map((proc) => proc.pid);
     }
 
@@ -324,7 +328,7 @@ export function startObserver(world: World, { pass, label, listed = listedHere }
     }
 
     for (const sandbox of parsed.data) {
-      const owner = journalOfSbxName(sandbox.name);
+      const owner = journalOfSandboxName(sandbox.name);
 
       if (owner === undefined || !owners.has(owner)) continue;
 

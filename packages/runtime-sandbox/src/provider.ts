@@ -32,7 +32,7 @@ export interface PlaceKey {
 export const RUN_ID = /^r[0-9a-f]{8}(?:[0-9a-f]{8})?$/;
 export const ATTEMPT_ID = /^a[0-9a-f]{8}$/;
 
-/** An attempt's handle, `teamai-<run>-<attempt>`, which also names its container (sbx adds its journal: providers/sbx.ts). */
+/** An attempt's handle, `teamai-<run>-<attempt>`, which also names its container (sbx and Vercel add the journal: `journalSandboxName`). */
 export function handleOf({ run, attempt }: PlaceKey): string {
   return `teamai-${run}-${attempt}`;
 }
@@ -42,6 +42,32 @@ export function placeKeyOfHandle(handle: string): PlaceKey | undefined {
   const [prefix, run = '', attempt = '', ...rest] = handle.split('-');
 
   return prefix === 'teamai' && rest.length === 0 && RUN_ID.test(run) && ATTEMPT_ID.test(attempt) ? { run, attempt } : undefined;
+}
+
+/**
+ * What starts the name of every sandbox of journal `owner` on a provider whose names the member's whole account shares
+ * (sbx, Vercel): an attempt's, and a warm template's scratch one (`<prefix>warm-<pid>-<random>`).
+ */
+export function journalPrefixOf(owner: string): string {
+  return `teamai-${owner}-`;
+}
+
+/** An attempt's sandbox on such a provider: `teamai-<journal>-<run>-<attempt>`. */
+export function journalSandboxName(owner: string, { run, attempt }: PlaceKey): string {
+  return `${journalPrefixOf(owner)}${run}-${attempt}`;
+}
+
+/** The journal a sandbox name `journalPrefixOf` started belongs to, or undefined for a name teamai does not give. */
+export function journalOfSandboxName(name: string): string | undefined {
+  return /^teamai-([0-9a-f]{16})-/.exec(name)?.[1];
+}
+
+/** The journal and the place of the sandbox `journalSandboxName` named, or undefined for any other name, a warm one's too. */
+export function placeOfJournalSandbox(name: string): { owner: string; key: PlaceKey } | undefined {
+  const owner = journalOfSandboxName(name);
+  const key = owner === undefined ? undefined : placeKeyOfHandle(`teamai-${name.slice(journalPrefixOf(owner).length)}`);
+
+  return owner === undefined || key === undefined ? undefined : { owner, key };
 }
 
 /**
