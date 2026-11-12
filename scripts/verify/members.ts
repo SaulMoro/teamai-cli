@@ -67,10 +67,21 @@ export function ensureOrigin(world: World): World {
   const bare = path.join(world.dir, 'origin.git');
   const before = worldFiles(world);
 
-  setupGit(env, ['init', '--quiet', '--bare', bare], world.dir);
-  fs.writeFileSync(path.join(world.home, '.gitconfig'), gitconfigText({ name: 'TeamAI World', email: 'world@teamai.test', urls: [{ repo: world.team, url: TEAM_URL }, { repo: bare, url: ORIGIN_URL }] }));
-  setupGit(env, ['remote', 'add', 'origin', ORIGIN_URL], world.project);
-  setupGit(env, ['push', '--quiet', '-u', 'origin', 'HEAD:main'], world.project);
+  const gitconfig = path.join(world.home, '.gitconfig');
+  const gitconfigBefore = fs.readFileSync(gitconfig, 'utf8');
+
+  try {
+    setupGit(env, ['init', '--quiet', '--bare', bare], world.dir);
+    fs.writeFileSync(gitconfig, gitconfigText({ name: 'TeamAI World', email: 'world@teamai.test', urls: [{ repo: world.team, url: TEAM_URL }, { repo: bare, url: ORIGIN_URL }] }));
+    setupGit(env, ['remote', 'add', 'origin', ORIGIN_URL], world.project);
+    setupGit(env, ['push', '--quiet', '-u', 'origin', 'HEAD:main'], world.project);
+  } catch (error) {
+    // Undone, so the next try starts from the world as it was.
+    spawnSync('git', ['remote', 'remove', 'origin'], { cwd: world.project, env, stdio: 'ignore' });
+    fs.writeFileSync(gitconfig, gitconfigBefore);
+    fs.rmSync(bare, { recursive: true, force: true });
+    throw error;
+  }
 
   const files = setupBaseline(world.baseline.files ?? before, before, worldFiles(world));
   const next: World = { ...world, origin: { bare, url: ORIGIN_URL, refs: teamRefs(bare) }, baseline: { ...world.baseline, files } };
@@ -93,11 +104,35 @@ function machineImage(): string {
   return image;
 }
 
+/** The label on every container the harness makes for a world, by run id: how cleanup finds each one, recorded or not. */
+const MACHINE_LABEL = 'teamai.verify.world';
+
+/** Removes every container the harness made for `world`, by its label; names the ones removed, or why it could not. */
+export function removeMachines(world: Pick<World, 'runId' | 'members'>): { ok: true; removed: string[] } | { ok: false; why: string } {
+  const listed = spawnSync('docker', ['ps', '-a', '--filter', `label=${MACHINE_LABEL}=${world.runId}`, '--format', '{{.Names}}'], { encoding: 'utf8' });
+
+  if (listed.error !== undefined || listed.status !== 0) {
+    const hasMachines = world.members?.some((member) => member.machine === 'container') === true;
+
+    return hasMachines ? { ok: false, why: `docker could not list the world's containers (${listed.error?.message ?? listed.stderr.trim()})` } : { ok: true, removed: [] };
+  }
+
+  const names = listed.stdout.split('\n').filter((name) => name !== '');
+
+  for (const name of names) {
+    const removed = spawnSync('docker', ['rm', '-f', name], { encoding: 'utf8' });
+
+    if (removed.status !== 0) return { ok: false, why: `removing container ${name} failed (${removed.stderr.trim()})` };
+  }
+
+  return { ok: true, removed: names };
+}
+
 /** The world's packed teamai, installed in a Linux container named `container` that has the world's paths at the same place. */
 function startMachine(world: World, { container, hostname, tmp }: { container: string; hostname: string; tmp: string }): void {
   const uid = process.getuid?.() ?? 1000;
   const gid = process.getgid?.() ?? 1000;
-  const run = spawnSync('docker', ['run', '-d', '--name', container, '--hostname', hostname, '--label', `teamai.verify.world=${world.runId}`, '--user', `${uid}:${gid}`, '--init', '-v', `${world.dir}:${world.dir}`, '-v', `${tmp}:${tmp}`, '--entrypoint', 'sleep', machineImage(), 'infinity'], { encoding: 'utf8' });
+  const run = spawnSync('docker', ['run', '-d', '--name', container, '--hostname', hostname, '--label', `${MACHINE_LABEL}=${world.runId}`, '--user', `${uid}:${gid}`, '--init', '-v', `${world.dir}:${world.dir}`, '-v', `${tmp}:${tmp}`, '--entrypoint', 'sleep', machineImage(), 'infinity'], { encoding: 'utf8' });
 
   if (run.status !== 0) throw new Error(`The container member's container ${container} did not start: ${run.stderr.trim()}`);
   const install = spawnSync('docker', ['exec', '-u', '0', container, 'sh', '-c', `npm install --prefix ${CONTAINER_TEAMAI} --no-audit --no-fund --silent "$1" && chown -R ${uid}:${gid} ${CONTAINER_TEAMAI}`, 'sh', world.build.tarball], { encoding: 'utf8' });
@@ -126,14 +161,24 @@ export function addMember(world: World, { name, machine = 'host' }: { name: stri
 
   if (origin === undefined) throw new Error(`World ${world.runId} has no origin after it was made.`);
   const layout = memberLayout(withOrigin, { name, tmpRoot: shortTmpRoot() });
-  fs.mkdirSync(layout.home, { recursive: true });
-  fs.mkdirSync(layout.tmp, { recursive: true, mode: 0o700 });
-  fs.writeFileSync(path.join(layout.home, '.gitconfig'), gitconfigText({ name, email: `${name}@teamai.test`, urls: [{ repo: withOrigin.team, url: TEAM_URL }, { repo: origin.bare, url: ORIGIN_URL }] }));
   const hostEnv = { ...frozenEnv(withOrigin), HOME: layout.home, USERPROFILE: layout.home, TMPDIR: layout.tmp };
-  setupGit(hostEnv, ['clone', '--quiet', ORIGIN_URL, layout.project], layout.root);
   const container = machineName(withOrigin, name);
 
-  if (machine === 'container') startMachine(withOrigin, { container, hostname: name, tmp: layout.tmp });
+  try {
+    fs.mkdirSync(layout.home, { recursive: true });
+    fs.mkdirSync(layout.tmp, { recursive: true, mode: 0o700 });
+    fs.writeFileSync(path.join(layout.home, '.gitconfig'), gitconfigText({ name, email: `${name}@teamai.test`, urls: [{ repo: withOrigin.team, url: TEAM_URL }, { repo: origin.bare, url: ORIGIN_URL }] }));
+    setupGit(hostEnv, ['clone', '--quiet', ORIGIN_URL, layout.project], layout.root);
+
+    if (machine === 'container') startMachine(withOrigin, { container, hostname: name, tmp: layout.tmp });
+  } catch (error) {
+    // Undone, so nothing of a member world.json does not record is left, and the next try starts clean.
+    if (machine === 'container') spawnSync('docker', ['rm', '-f', container], { stdio: 'ignore' });
+    fs.rmSync(layout.root, { recursive: true, force: true });
+    fs.rmSync(layout.tmp, { recursive: true, force: true });
+    throw error;
+  }
+
   const env = machine === 'container' ? { ...hostEnv, PATH: `${CONTAINER_TEAMAI}/node_modules/.bin:/usr/local/bin:/usr/bin:/bin` } : hostEnv;
 
   const { root: _root, ...own } = layout;

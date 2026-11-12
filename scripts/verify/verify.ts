@@ -5,7 +5,7 @@ import { helpFor } from './help.js';
 import { runLedger } from './ledger.js';
 import { planCleanup } from './leftovers.js';
 import { passedKeys, splitPassOption } from './secrets.js';
-import { addMember, ensureOrigin, memberLayout, parseMachine } from './members.js';
+import { addMember, ensureOrigin, memberLayout, parseMachine, removeMachines } from './members.js';
 import { memberOf, parseTarget, runOn } from './target.js';
 import { checkoutStatus, createWorld, git, liveWorlds, loadWorld, REPO_ROOT, saveWorld, TOOL_COMMANDS, type World } from './world.js';
 
@@ -61,18 +61,15 @@ async function cleanup(world: World): Promise<boolean> {
     console.log(`Removed ${removal.what}`);
   }
 
-  for (const member of world.members ?? []) {
-    if (member.machine !== 'container') continue;
-    const removed = spawnSync('docker', ['rm', '-f', member.container], { encoding: 'utf8' });
+  const machines = removeMachines(world);
 
-    if (removed.status !== 0 && !/No such container/i.test(removed.stderr)) {
-      console.error(`Not cleaning ${world.runId}: removing @${member.name}'s container ${member.container} failed (${removed.stderr.trim()}).`);
+  if (!machines.ok) {
+    console.error(`Not cleaning ${world.runId}: ${machines.why}.`);
 
-      return false;
-    }
-
-    console.log(`@${member.name}'s container ${member.container} is gone`);
+    return false;
   }
+
+  for (const name of machines.removed) console.log(`Removed the harness's container ${name}`);
 
   const keep = new Set(['world.json', 'logs', 'observed.jsonl']);
 
