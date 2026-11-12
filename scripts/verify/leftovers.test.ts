@@ -1,5 +1,19 @@
-import { describe, expect, it } from 'vitest';
-import { attributeLeftover, cleanupPlan, linesOf, worldTier, type WorldTies } from './leftovers.js';
+import { spawn } from 'node:child_process';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { signalChild } from '@teamai/shared/process-group';
+import { attributeLeftover, cleanupPlan, linesOf, planCleanup, worldTier, type WorldTies } from './leftovers.js';
+import type { World } from './world.js';
+
+const roots: string[] = [];
+
+afterEach(() => {
+  vi.unstubAllEnvs();
+
+  for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true });
+});
 
 const SELF: WorldTies = { runId: '20261112T120000-aaaaaa', paths: ['/w/20261112T120000-aaaaaa', '/private/tmp/teamai-verify-20261112T120000-aaaaaa'], journals: ['0123456789abcdef'], runs: ['r00000000000000aa'] };
 const OTHER: WorldTies = { runId: '20261112T110000-bbbbbb', paths: ['/w/20261112T110000-bbbbbb'], journals: ['fedcba9876543210'], runs: ['r00000000000000bb'] };
@@ -135,5 +149,36 @@ describe('what cleanup does with what the rows found', () => {
     ]);
 
     expect(plan).toEqual({ kind: 'remove', removals: [{ what: 'docker container mine', command: ['docker', 'rm', '-f', 'mine'] }], unobserved: ['podman containers, podman info failed'] });
+  });
+});
+
+describe('what cleanup prints when it refuses', () => {
+  it("masks a passed key's value in the command line of the world process it names", async () => {
+    const dir = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-verify-planned-')));
+    roots.push(dir);
+    const world: World = {
+      runId: '20261112T180000-cccccc', dir, project: `${dir}/project`, team: `${dir}/team.git`, home: `${dir}/home`, tmp: `${dir}/tmp`, logs: `${dir}/logs`, bin: `${dir}/bin`,
+      build: { commit: 'c', dirty: false, version: '0.0.0', tarball: 't.tgz', sha256: 's', node: 'v20' },
+      createdAt: '2026-11-12T18:00:00.000Z',
+      baseline: { teamRefs: {}, checkoutStatus: [] },
+      passed: ['VERIFY_PLANNED_TOKEN'],
+    };
+    for (const folder of [world.project, world.home, world.tmp]) fs.mkdirSync(folder, { recursive: true });
+    fs.writeFileSync(path.join(dir, 'world.json'), JSON.stringify(world));
+    vi.stubEnv('VERIFY_PLANNED_TOKEN', 'pl4nned-s3cret');
+    const left = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)', 'pl4nned-s3cret', world.project], { cwd: world.project, stdio: 'ignore' });
+
+    try {
+      await new Promise((resolve) => left.once('spawn', resolve));
+      const plan = await planCleanup(world);
+
+      expect(plan.kind).toBe('refuse');
+      if (plan.kind !== 'refuse') return;
+      expect(plan.processes.join('\n')).toContain(String(left.pid));
+      expect(plan.processes.join('\n')).toContain('<REDACTED:VERIFY_PLANNED_TOKEN>');
+      expect(JSON.stringify(plan)).not.toContain('pl4nned-s3cret');
+    } finally {
+      signalChild(left, 'SIGKILL');
+    }
   });
 });
