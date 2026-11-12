@@ -2,7 +2,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { z } from 'zod';
-import { signalPid } from '@teamai/shared/process-group';
+import { mayBeRunning } from '@teamai/shared/process-group';
 import { readRegularFileSync } from '@teamai/shared/regular-file';
 
 // ─── What a runtime keeps across its own processes ───────
@@ -141,12 +141,6 @@ function releaseHold({ file, text }: { file: string; text: string }): void {
   }
 }
 
-/** Whether a process runs: one another user runs is alive though it cannot be signalled. */
-function isAlive(pid: number): boolean {
-  // A pid another user's process has is alive, and one that cannot be signalled is not taken for gone.
-  return signalPid(pid, 0) !== 'gone';
-}
-
 /** Holds `file` for one process at a time, waiting while a live one holds it, and taking it from one gone or stuck. */
 async function holdFile(dir: string, file: string): Promise<() => void> {
   fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
@@ -172,7 +166,7 @@ async function holdFile(dir: string, file: string): Promise<() => void> {
       // Released since the link failed: try again.
       if (held === undefined) continue;
 
-      if (held.pid !== undefined && held.pid !== process.pid && isAlive(held.pid) && Date.now() - held.takenAt < HOLD_STALE_MS) {
+      if (held.pid !== undefined && held.pid !== process.pid && mayBeRunning(held.pid) && Date.now() - held.takenAt < HOLD_STALE_MS) {
         await new Promise((resolve) => setTimeout(resolve, 50));
         continue;
       }

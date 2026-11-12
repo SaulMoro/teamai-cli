@@ -5,13 +5,14 @@ import path from 'node:path';
 import type { Command, Sandbox } from '@vercel/sandbox';
 import { z } from 'zod';
 import { PlaceViewSchema, type Can, type PlaceView, type RuntimeFailure } from '@teamai/runtime-protocol';
+import { mayBeRunning } from '@teamai/shared/process-group';
 import { readRegularFileSync } from '@teamai/shared/regular-file';
 import { boundedTail, STDERR_CHARS } from '../bounded-tail.js';
 import type { JournalId } from '../journal.js';
 import type { VercelOptions } from '../options.js';
 import { COMMAND_MS, type ExecEnd, type PlaceKey, type Provider } from '../provider.js';
 import { offerSignedIn } from '../sign-in.js';
-import { isRunning, oneBuildPerKey, planWarm, warmFailed, type WarmPlan } from '../warm.js';
+import { oneBuildPerKey, planWarm, warmFailed, type WarmPlan } from '../warm.js';
 import { WORKSPACES } from './cli.js';
 import { applyTar, fingerprintsOf, readTar } from './vercel-copy.js';
 
@@ -385,7 +386,7 @@ export function vercelProvider({ options, owner, state, env, home }: { options: 
           leftWarm: listed.flatMap(({ name }) => {
             const pid = name.startsWith(prefix) ? /^warm-(\d+)-[0-9a-f]+$/.exec(name.slice(prefix.length))?.[1] : undefined;
 
-            return pid !== undefined && !isRunning(Number(pid)) ? [name] : [];
+            return pid !== undefined && !mayBeRunning(Number(pid)) ? [name] : [];
           }),
         };
       } catch (error) {

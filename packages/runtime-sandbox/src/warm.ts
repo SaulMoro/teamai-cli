@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import type { RuntimeFailure } from '@teamai/runtime-protocol';
-import { signalPid } from '@teamai/shared/process-group';
+import { mayBeRunning } from '@teamai/shared/process-group';
 import { readRegularFileSync } from '@teamai/shared/regular-file';
 import type { WarmOptions } from './options.js';
 import type { Ran } from './providers/cli.js';
@@ -34,17 +34,11 @@ export const WARM_REPOSITORY = 'teamai-warm';
  */
 export const WARM_BY = `${os.hostname()}:${process.pid}`;
 
-/** Whether `pid` names a process that runs, or one this process may not signal; a pid it cannot read is taken as running. */
-export function isRunning(pid: number): boolean {
-  // `refused`: a pid that names no one process, which cannot be read.
-  return signalPid(pid, 0) !== 'gone';
-}
-
 /** Whether `by`, what a scratch sandbox's WARM_BY says, names a process of this machine that no longer runs. */
 export function isLeftBehind(by: string): boolean {
   const at = by.lastIndexOf(':');
 
-  return at > 0 && by.slice(0, at) === os.hostname() && !isRunning(Number(by.slice(at + 1)));
+  return at > 0 && by.slice(0, at) === os.hostname() && !mayBeRunning(Number(by.slice(at + 1)));
 }
 
 /**
@@ -58,7 +52,7 @@ export function removeLeftScratch(): void {
     const pid = /^teamai-warm-(\d+)-/.exec(name)?.[1];
     const dir = path.join(os.tmpdir(), name);
 
-    if (pid !== undefined && !isRunning(Number(pid)) && (uid === undefined || fs.statSync(dir, { throwIfNoEntry: false })?.uid === uid)) fs.rmSync(dir, { recursive: true, force: true });
+    if (pid !== undefined && !mayBeRunning(Number(pid)) && (uid === undefined || fs.statSync(dir, { throwIfNoEntry: false })?.uid === uid)) fs.rmSync(dir, { recursive: true, force: true });
   }
 }
 

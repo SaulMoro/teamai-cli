@@ -17,7 +17,7 @@
 import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
-import { signalPid } from '@teamai/shared/process-group';
+import { mayBeRunning } from '@teamai/shared/process-group';
 import { z } from 'zod';
 import { runLedger } from './verify/ledger.js';
 import { createWorld, REPO_ROOT, runInWorld, saveWorld, TEAM_URL, worldFiles, type World } from './verify/world.js';
@@ -193,11 +193,6 @@ function subcommand(argv: readonly string[]): string {
 
 const REMOTE_GIT = new Set(['fetch', 'pull', 'push', 'ls-remote', 'clone']);
 
-function isAlive(pid: number): boolean {
-  // A pid another user's process has is alive, and one that cannot be signalled is not taken for gone.
-  return signalPid(pid, 0) !== 'gone';
-}
-
 const sizeOf = (file: string): number => (fs.existsSync(file) ? fs.statSync(file).size : 0);
 
 /** Waits until every process the logs name has ended and the logs stopped growing for three polls. Ends nothing. */
@@ -212,7 +207,7 @@ function waitForBackground(files: readonly string[], logs: { node: string; trace
       ...gitProcesses(logs.trace2).map((git) => git.pid),
     ]);
 
-    const anyAlive = [...pids].some((pid) => Number.isInteger(pid) && isAlive(pid));
+    const anyAlive = [...pids].some((pid) => Number.isInteger(pid) && mayBeRunning(pid));
     const size = files.reduce((sum, file) => sum + sizeOf(file), 0);
     stable = !anyAlive && size === lastSize ? stable + 1 : 0;
     lastSize = size;

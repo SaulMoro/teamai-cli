@@ -3,8 +3,9 @@
 //  How teamai and the runtimes stop what they started: a detached process group, or an attached command with its
 //  descendants, through a child handle while its starter lives, or through the record it left once its starter died.
 //  It also owns process identity, how a recorded pid is told from a later process given it, which the locks judge
-//  their holders by as well, and every signal teamai sends by pid: `signalPid` and `signalGroup`, which send nothing to
-//  a pid below 2 (`teamai/signal-owner` keeps every other module off `process.kill`).
+//  their holders by as well, and every signal teamai sends: `signalPid` and `signalGroup`, which send nothing to a pid
+//  below 2, and `signalChild`, which sends nothing to a child that never spawned (`teamai/signal-owner` keeps every other
+//  module off `process.kill`, and production source off a child's own kill).
 //
 
 import { execFile, type ChildProcess } from 'node:child_process';
@@ -538,6 +539,14 @@ export function signalChild(child: Pick<ChildProcess, 'pid' | 'kill'>, name: Par
   return child.kill(name) ? 'sent' : 'gone';
 }
 
+/**
+ * Whether `pid` may name a process that runs: one another user runs counts, and so does a pid no probe may be sent to
+ * (below 2, or not an integer), so a lock or a record that names it is never taken for one whose process is gone.
+ */
+export function mayBeRunning(pid: number): boolean {
+  return signalPid(pid, 0) !== 'gone';
+}
+
 /** Sends `name` to every process of group `pgid`, or with signal 0 tells whether any runs. Sends nothing to a group below 2. */
 export function signalGroup(pgid: number, name: NodeJS.Signals | 0): SignalOutcome {
   return sendSignal(pgid, name, { isGroup: true });
@@ -730,7 +739,7 @@ async function endProcesses(found: FoundProcess[]): Promise<boolean> {
 export async function signalStillRunning(found: readonly FoundProcess[], name: NodeJS.Signals | 0): Promise<boolean | undefined> {
   const now = await runningProcesses();
 
-  return now === undefined ? undefined : found.filter((process) => isStillRunning(now, process)).reduce((reached, { pid }) => signalPid(pid, name) === 'sent' || reached, false);
+  return now === undefined ? undefined : found.filter((listed) => isStillRunning(now, listed)).reduce((reached, { pid }) => signalPid(pid, name) === 'sent' || reached, false);
 }
 
 /** Stops a detached process group or an attached process tree, with a five-second grace period before SIGKILL. */

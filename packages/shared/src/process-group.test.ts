@@ -5,7 +5,7 @@ import path from 'node:path';
 import { afterEach, expect, it, vi } from 'vitest';
 import { z } from 'zod';
 import diagnostics from 'node:diagnostics_channel';
-import { descendantsOf, identityOf, isSameProcess, ownGroups, PROCESS_READ_CHANNEL, recordGroup, signalChild, signalGroup, signalPid, signalStillRunning, stopGroup, stopProcess, stopRecordedGroup } from './process-group.js';
+import { descendantsOf, identityOf, isSameProcess, mayBeRunning, ownGroups, PROCESS_READ_CHANNEL, recordGroup, signalChild, signalGroup, signalPid, signalStillRunning, stopGroup, stopProcess, stopRecordedGroup } from './process-group.js';
 
 /** Whether this platform tells start times through ps rather than `/proc`, so a fake ps on PATH is what is read. */
 const READS_PS = process.platform !== 'win32' && process.platform !== 'linux';
@@ -39,6 +39,15 @@ it('tells a pid another user\'s process has from one no process has', () => {
 
   expect(signalPid(4242, 0)).toBe('denied');
   expect(signalPid(4242, 0)).toBe('gone');
+});
+
+it('takes for gone only a pid no process has, never one another user runs or one no probe may be sent to', () => {
+  vi.spyOn(process, 'kill').mockImplementationOnce(() => { throw Object.assign(new Error('kill EPERM'), { code: 'EPERM' }); })
+    .mockImplementationOnce(() => { throw Object.assign(new Error('kill ESRCH'), { code: 'ESRCH' }); });
+
+  expect([mayBeRunning(4242), mayBeRunning(4242)]).toEqual([true, false]);
+  // teamai may run as pid 1 in a container, and a corrupt record's pid cannot be read: neither is taken for gone.
+  expect([0, 1, Number.NaN, -4242, 2.5].map(mayBeRunning)).toEqual([true, true, true, true, true]);
 });
 
 it.skipIf(process.platform === 'win32')('signals the group it is given and no process outside it, then tells the group is gone', async () => {
