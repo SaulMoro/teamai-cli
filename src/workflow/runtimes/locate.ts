@@ -77,8 +77,8 @@ export interface ExternalRuntime {
 export type RuntimeSource = { readonly kind: 'builtin'; readonly name: 'tools' } | ExternalRuntime;
 
 /**
- * What one layer gives for one name: the runtime; nothing; a definition that cannot run (`unusable`), named in
- * `failure`; or a definition that refuses the run outright, such as one reached through a link.
+ * What one layer gives for one name: the runtime; nothing; a definition whose marker or entry cannot run (`unusable`);
+ * or one the run refuses outright, such as one reached through a link. Either of the last two fails the run.
  */
 type LayerLookup =
   | { readonly kind: 'found'; readonly source: ExternalRuntime }
@@ -133,6 +133,8 @@ async function readDefinition(driver: ResolvedDriver, use: string, definition: D
   });
 
   let text = definition.text;
+
+  if (text === undefined && definition.form === 'file' && await isSymlink(markerFile)) return unusable(`it is a link, and teamai reads a runtime only from a file ${definition.layer === 'team' ? 'the team repo' : 'your directory'} holds`);
 
   if (text === undefined) {
     try {
@@ -320,10 +322,11 @@ export async function locateRuntime(driver: ResolvedDriver, use: string): Promis
       switch (found.kind) {
         case 'found':
           return { ok: true, source: found.source };
+        // A definition that cannot run fails the run: another layer's never stands in for the one the member was given.
         case 'refused':
+        case 'unusable':
           return { ok: false, failure: found.failure };
         case 'missing':
-        case 'unusable':
           break;
         default: {
           const unhandled: never = found;

@@ -145,3 +145,46 @@ describe('which runtime a name finds', () => {
     expect(await located(team, 'other')).toMatchObject({ code: 'runtime_not_found' });
   });
 });
+
+describe('a selected runtime that cannot run', () => {
+  /** What `use: acme` of a team whose `files` define it opens to, with a working teamai-acme of the member's own to fall through to. */
+  async function opened(files: Record<string, string>): Promise<unknown> {
+    onPath('acme-runtime');
+    personal({ 'runtimes/teamai-acme.yaml': COMMAND_RUNTIME });
+    const team = teamWith(files);
+    for (const [file, target] of Object.entries(links)) fs.symlinkSync(path.join(team.repo.localPath, target), path.join(team.repo.localPath, file));
+    links = {};
+    return open(team);
+  }
+
+  let links: Record<string, string> = {};
+
+  const refused = (location: string, reason: string) => ({
+    ok: false,
+    failure: { code: 'runtime_not_found', message: `Driver "acme" uses runtime "acme", and ${location} cannot run it: ${reason}. Fix it, push it, run teamai pull, and start again.` },
+  });
+
+  it('fails the run on a marker that does not parse, and never falls through to another layer', async () => {
+    expect(await opened({ 'runtimes/acme/RUNTIME.yaml': 'protocol: 1\nentry: ./runtime\nexec: no-commands\n', 'runtimes/acme/runtime': '#!/bin/sh\n' }))
+      .toMatchObject({ ok: false, failure: { code: 'runtime_not_found', message: expect.stringMatching(/^Driver "acme" uses runtime "acme", and runtimes\/acme\/ cannot run it: exec: .*; a runtime sets protocol, entry and optionally exec\. Fix it, push it, run teamai pull, and start again\.$/) } });
+    expect(await opened({ 'runtimes/acme.yaml': 'protocol: 1\nentry: { command: [acme-runtime\n' }))
+      .toMatchObject({ ok: false, failure: { message: expect.stringContaining('runtimes/acme.yaml cannot run it: it is not YAML') } });
+  });
+
+  it('fails the run on an entry that is not there', async () => {
+    expect(await opened({ 'runtimes/acme/RUNTIME.yaml': 'protocol: 1\nentry: ./runtime\n' })).toEqual(refused('runtimes/acme/', 'entry: ./runtime names a file the folder does not hold'));
+    expect(await opened({ 'runtimes/acme.yaml': 'protocol: 1\nentry: { command: acme-missing }\n' })).toEqual(refused('runtimes/acme.yaml', 'entry: { command: acme-missing } names no executable on PATH, as a bare name such as acme-runtime'));
+    expect(await opened({ 'runtimes/acme/RUNTIME.yaml': 'protocol: 1\nentry: ../acme-runtime\n' })).toEqual(refused('runtimes/acme/', 'entry: ../acme-runtime leaves the folder, and its entry is a file inside it, such as ./runtime'));
+    expect(await opened({ 'runtimes/acme.yaml': 'protocol: 1\nentry: { bin: teamai-runtime-t3 }\n' })).toMatchObject({ ok: false, failure: { message: expect.stringContaining('entry: { bin: teamai-runtime-t3 } names a program of teamai\'s own package, which only teamai\'s runtimes use') } });
+  });
+
+  it('fails the run on a team runtime file that is a link', async () => {
+    links = { 'runtimes/acme.yaml': 'elsewhere.yaml' };
+
+    expect(await opened({ 'elsewhere.yaml': COMMAND_RUNTIME, 'runtimes/.keep': '' })).toEqual(refused('runtimes/acme.yaml', 'it is a link, and teamai reads a runtime only from a file the team repo holds'));
+  });
+
+  it('fails the run on a marker of another protocol, before anything is spawned', async () => {
+    expect(await opened({ 'runtimes/acme/RUNTIME.yaml': 'protocol: 0\nentry: ./runtime\n', 'runtimes/acme/runtime': '#!/bin/sh\n' })).toEqual(refused('runtimes/acme/', 'it declares protocol 0, and this teamai speaks protocol 1'));
+  });
+});

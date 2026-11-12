@@ -1624,7 +1624,7 @@ protocol: 1
 entry: { command: acme-runtime }     # an executable on PATH, by its bare name
 ```
 
-A team folder runs once you accept its revision, and a team file once you accept the file's content, as a tool instance's command. Yours and teamai's need no acceptance. A team runtime's folder must be a folder in the team repo that holds no link, so the revision you accept is all it runs: a folder that is a link, or holds one, or a `runtimes` folder that is a link, fails `runtime_not_found`.
+A team folder runs once you accept its revision, and a team file once you accept the file's content, as a tool instance's command. Yours and teamai's need no acceptance. A team runtime's folder must be a folder in the team repo that holds no link, so the revision you accept is all it runs: a folder that is a link, or holds one, or a `runtimes` folder that is a link, fails `runtime_not_found`. So does the runtime a name finds when it cannot run: a marker that does not parse, a `protocol` other than `1`, or an entry that is not there. The message names its file, and teamai never runs another layer's runtime in its place.
 
 teamai ships these definitions:
 
