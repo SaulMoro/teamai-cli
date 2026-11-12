@@ -1667,7 +1667,22 @@ tools/
 | 让 `sandbox` 运行时的步骤换一个 provider 或镜像运行 | sandbox 档案 | [sandbox 档案](runtime-sandbox.md#sandbox-档案) |
 | 用另一个命令或主目录运行某个工具 | 工具实例 | [团队工具](reference.md#团队工具tools) |
 
-每一种也可以放在你的角色或项目为 workflows 激活的命名空间下的 `<folder>/<namespace>/`，以及只给你自己用的 `~/.teamai/<folder>/`。驱动、运行时和 sandbox 档案的名字先在每个位置按完全相同的名字查找，再查找 `teamai-<name>`，所以团队的 `runtimes/t3/` 会替换 teamai 自带的 `teamai-t3` 运行。
+名字在三个位置查找，先在每个位置按完全相同的名字查找，再查找 `teamai-<name>`，所以团队的 `runtimes/t3/` 会替换 teamai 自带的 `teamai-t3` 运行：
+
+```text
+~/.teamai/<folder>/                     你自己的
+<folder>/<namespace>/, then <folder>/   团队仓库：先是你的角色或项目为 workflows 激活的命名空间，再是根目录
+<folder>/teamai-<name> in teamai        teamai 自带的，在它的包里
+```
+
+teamai 的某个功能如果自带多种资源，会用同一个名字提供它们：
+
+| 功能 | teamai 以其名字提供的资源 |
+| --- | --- |
+| Recall | `rules/teamai-recall/`、`agents/teamai-recall.md` |
+| T3 Code | `drivers/teamai-t3.yaml`、`runtimes/teamai-t3.yaml` |
+| Paseo | `drivers/teamai-paseo.yaml`、`runtimes/teamai-paseo.yaml` |
+| Sandbox | `drivers/teamai-sandbox.yaml`、`runtimes/teamai-sandbox.yaml`、`sandboxes/teamai-default.yaml`，以及每个 provider 一个 `sandboxes/teamai-<provider>.yaml` |
 
 ### 运行时选项
 

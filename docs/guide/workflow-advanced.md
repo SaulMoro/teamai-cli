@@ -1673,7 +1673,22 @@ tools/
 | Run the `sandbox` runtime's steps on another provider or image | a sandbox profile | [sandbox profiles](runtime-sandbox.md#sandbox-profiles) |
 | Run a tool under another command or home | a tool instance | [team tools](reference.md#team-tools-tools) |
 
-Each may also sit in `<folder>/<namespace>/` for a namespace your roles or projects activate for workflows, and in `~/.teamai/<folder>/` for yourself. A driver, runtime or sandbox profile name is looked up exactly in every place first, then as `teamai-<name>`, so a team's `runtimes/t3/` runs in place of teamai's `teamai-t3`.
+A name is looked up in three places, the exact name in each first, then as `teamai-<name>`, so a team's `runtimes/t3/` runs in place of teamai's `teamai-t3`:
+
+```text
+~/.teamai/<folder>/                     yours
+<folder>/<namespace>/, then <folder>/   the team repo: a namespace your roles or projects activate for workflows, then its root
+<folder>/teamai-<name> in teamai        teamai's own, in its package
+```
+
+A feature of teamai's that ships resources of more than one kind ships them under one name:
+
+| Feature | What teamai ships under its name |
+| --- | --- |
+| Recall | `rules/teamai-recall/`, `agents/teamai-recall.md` |
+| T3 Code | `drivers/teamai-t3.yaml`, `runtimes/teamai-t3.yaml` |
+| Paseo | `drivers/teamai-paseo.yaml`, `runtimes/teamai-paseo.yaml` |
+| Sandbox | `drivers/teamai-sandbox.yaml`, `runtimes/teamai-sandbox.yaml`, `sandboxes/teamai-default.yaml` and one `sandboxes/teamai-<provider>.yaml` per provider |
 
 ### Runtime options
 
