@@ -34,6 +34,7 @@ import { sessionArchiveRoot } from '../session-flow/session-cmd-shared.js';
 import { getRepoIdentity, SyncManager } from '../session-flow/sync.js';
 import { getDataHome } from '../types.js';
 import { sweepLeftovers } from '../workflow/leftovers.js';
+import { entriesUnder } from '@teamai/shared/entries-under';
 
 /** A member that runs every step here, as `--driver local` does. */
 const HERE: MemberPlace = { command: { kind: 'here' }, prompt: { kind: 'here' } };
@@ -843,7 +844,7 @@ steps:
     for (const name of folders()) fs.utimesSync(path.join(stored(), name), longAgo, longAgo);
     if (isNoteUnreadable) {
       const runs = path.join(getDataHome(bob.config), 'workflows', 'runs');
-      const notes = fs.readdirSync(runs, { recursive: true, encoding: 'utf8' }).filter((file) => path.basename(file) === 'fleet-folders.json');
+      const notes = entriesUnder(runs).map(({ relative }) => relative).filter((file) => path.basename(file) === 'fleet-folders.json');
       expect(notes).toHaveLength(1);
       const note = path.join(runs, notes[0] ?? '');
       fs.rmSync(note);

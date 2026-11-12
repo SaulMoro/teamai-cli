@@ -11,6 +11,7 @@ import { resolveProjectDataHome } from '../../config.js';
 import type { RunState } from '../../workflow/types.js';
 import { folderRevision } from '../../workflow/runtimes/resource-folder.js';
 import { CLAUDE_SESSIONS, envelope, ROOT, runCLI, type Ran } from '../helpers/step-runtime-e2e.js';
+import { entriesUnder } from '@teamai/shared/entries-under';
 
 // The sandbox runtime teamai ships, on a fake docker whose containers run on the host
 // (packages/runtime-sandbox/src/testing/fake-engine.mjs), driven by the built CLI.
@@ -223,7 +224,7 @@ it("runs a Claude prompt step's tool itself in the attempt's container, keeps it
   expect(launches[1]).toEqual(expect.arrayContaining(['--resume', session]));
   expect(JSON.stringify(engineCalls().slice(before))).not.toContain('oauth-value');
   // Its session is in the attempt's tool home, where teamai reads it, never in the member's own Claude home.
-  const transcripts = fs.readdirSync(dataHome, { recursive: true }).map(String).filter((file) => file.endsWith(`${session}.jsonl`));
+  const transcripts = entriesUnder(dataHome).map(({ relative }) => relative).filter((file) => file.endsWith(`${session}.jsonl`));
   expect(transcripts.length).toBeGreaterThan(0);
   expect(transcripts.every((file) => file.includes(`tool-home${path.sep}claude${path.sep}projects`))).toBe(true);
 });
@@ -288,7 +289,7 @@ it("signs a Claude prompt step in on the gateway the member's environment names,
   expect(envelope(ran), ran.stderr).toMatchObject({ data: { done: { outcome: 'succeeded' } } });
   const [review] = readRunState(ran).steps;
   const attempt = review !== undefined && 'attempt' in review ? String(review.attempt) : '';
-  const noted = fs.readdirSync(dataHome, { recursive: true }).map(String).filter((file) => file.includes(attempt) && file.endsWith('base-url.txt'));
+  const noted = entriesUnder(dataHome).map(({ relative }) => relative).filter((file) => file.includes(attempt) && file.endsWith('base-url.txt'));
   expect(noted.map((file) => fs.readFileSync(path.join(dataHome, file), 'utf8'))).toEqual(['http://host.docker.internal:8317']);
   expect(JSON.stringify(engineCalls())).not.toContain('gateway-token-5b1c');
 });

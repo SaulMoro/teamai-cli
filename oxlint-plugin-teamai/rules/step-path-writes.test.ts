@@ -3,6 +3,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { expect, it } from 'vitest';
 import { z } from 'zod';
+import { entriesUnder } from '@teamai/shared/entries-under';
 
 import { ruleHarness } from '../test/harness.ts';
 import { isWriteChecked } from './step-path-writes.js';
@@ -86,7 +87,7 @@ rule.valid('allows writes in tests', `import fs from 'node:fs/promises';
 export const add = (file: string) => fs.appendFile(file, 'x');`, { filename: 'src/workflow/steps/outcome.test.ts' });
 
 it('matches the production source of src/workflow in this checkout, and nothing outside it', () => {
-  const files = fs.readdirSync(path.join(REPO, 'src'), { recursive: true, encoding: 'utf8' }).map((file) => `src/${file.split(path.sep).join('/')}`);
+  const files = entriesUnder(path.join(REPO, 'src')).map(({ relative }) => `src/${relative.split(path.sep).join('/')}`);
   const matched = files.filter(isWriteChecked);
 
   expect(matched.length).toBeGreaterThan(100);

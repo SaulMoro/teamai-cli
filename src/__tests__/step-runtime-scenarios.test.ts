@@ -37,6 +37,7 @@ import { getWorktreeDir, REPORTS_LOCK_FILENAME, REPORTS_WORKTREE_DIRNAME } from 
 import { shellArgv } from '../workflow/shell-command.js';
 import { getRepoIdentity } from '../session-flow/sync.js';
 import { signalPid } from '@teamai/shared/process-group';
+import { entriesUnder } from '@teamai/shared/entries-under';
 
 /**
  * One scenario suite every step runtime passes, through the `StepRuntime` interface alone. `retains` says whether the
@@ -110,7 +111,7 @@ function setDirModes(root: string, mode: number): void {
   if (!fs.existsSync(root)) return;
   fs.chmodSync(root, mode);
 
-  for (const entry of fs.readdirSync(root, { recursive: true, withFileTypes: true })) {
+  for (const { entry } of entriesUnder(root)) {
     if (entry.isDirectory()) fs.chmodSync(path.join(entry.parentPath, entry.name), mode);
   }
 }

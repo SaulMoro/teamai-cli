@@ -12,6 +12,7 @@ import { z } from 'zod';
 import { encodeCwdClaude } from '@teamai/tool-core/sessions/fs';
 import { executableOf, LAUNCH_ORDER } from '../../launch-registry.js';
 import { installToyRuntime } from '../helpers/toy-runtime.js';
+import { entriesUnder } from '@teamai/shared/entries-under';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
 const CLI = path.join(ROOT, 'dist', 'index.js');
@@ -423,7 +424,7 @@ console.log(JSON.stringify({ type: 'result', structured_output: given?.propertie
 
     expect(envelope(shared.stdout), shared.stderr).toMatchObject({ data: { done: { outcome: 'succeeded' } } });
     const run = z.object({ done: z.object({ run: z.string() }) }).parse(envelope(shared.stdout).data).done.run;
-    const runFile = fs.readdirSync(home, { recursive: true, encoding: 'utf8' }).map((file) => path.join(home, file)).find((file) => file.endsWith(path.join('workflows', 'runs', `${run}.json`)));
+    const runFile = entriesUnder(home).map(({ relative }) => path.join(home, relative)).find((file) => file.endsWith(path.join('workflows', 'runs', `${run}.json`)));
     const { steps } = z.object({ steps: z.array(z.object({ id: z.string(), status: z.string(), attempt: z.string().optional(), outputs: z.unknown().optional() })) })
       .parse(JSON.parse(fs.readFileSync(String(runFile), 'utf8')));
     expect(steps.find((step) => step.id.endsWith('.label'))).toMatchObject({ status: 'succeeded', outputs: { labels: [{ scorer: 'review-quality', label: 'thorough' }] } });
@@ -468,7 +469,7 @@ console.log(JSON.stringify({ type: 'result', structured_output: given?.propertie
     const shared = await runCLI(['workflow', 'start', 'teamai-share-learnings', '--inputs', JSON.stringify(inputs), '--driver', 'toylearn', '--auto-approve'], app, env);
 
     const run = z.object({ run: z.string() }).parse(z.object({ done: z.unknown() }).passthrough().parse(envelope(shared.stdout).data ?? {}).done).run;
-    const runFile = fs.readdirSync(home, { recursive: true, encoding: 'utf8' }).map((file) => path.join(home, file)).find((file) => file.endsWith(path.join('workflows', 'runs', `${run}.json`)));
+    const runFile = entriesUnder(home).map(({ relative }) => path.join(home, relative)).find((file) => file.endsWith(path.join('workflows', 'runs', `${run}.json`)));
     const { steps } = z.object({ steps: z.array(z.object({ id: z.string(), status: z.string(), attempt: z.string().optional() })) })
       .parse(JSON.parse(fs.readFileSync(String(runFile), 'utf8')));
     const runtimeOf = (attempt: string | undefined): unknown => {
