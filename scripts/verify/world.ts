@@ -518,6 +518,13 @@ export function loadWorld(runId: string | undefined): World {
   // cleanup empties world.dir, so it must be this run's directory and nothing else.
   if (world.dir !== path.join(fs.realpathSync.native(WORLDS_ROOT), runId)) throw new Error(`${file} names ${world.dir}, which is not world ${runId}'s directory.`);
 
+  // cleanup removes each TMPDIR outside world.dir too, so one there must be the one made for this run or member.
+  for (const { tmp, member } of [{ tmp: world.tmp, member: undefined }, ...(world.members ?? []).map((each) => ({ tmp: each.tmp, member: each.name }))]) {
+    if (path.relative(world.dir, tmp).startsWith('..') && tmp !== worldTmpDir({ root: shortTmpRoot(), runId, member })) {
+      throw new Error(`${file} names ${tmp} as a TMPDIR, which is not one of world ${runId}'s own: cleanup would remove it.`);
+    }
+  }
+
   return world;
 }
 
