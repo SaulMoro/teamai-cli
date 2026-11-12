@@ -112,6 +112,17 @@ function writeContainer(container) {
   return true;
 }
 
+/**
+ * Sends `name` to process group `pgid`: never to one below 2, which kill reads as this program's own group (0), every
+ * process it may signal (-1), or init (1). node runs this program as it is, so it cannot load
+ * @teamai/shared/process-group, whose check this is.
+ */
+function signalGroup(pgid, name) {
+  if (!Number.isSafeInteger(pgid) || pgid <= 1) return;
+
+  try { process.kill(-pgid, name); } catch { /* gone */ }
+}
+
 /** Stops every process group an exec of the container whose directory is `dir` started, as a container stop does. */
 function killProcesses(dir) {
   let pids;
@@ -123,7 +134,7 @@ function killProcesses(dir) {
 
   for (const name of pids) {
     for (const signal of ['SIGTERM', 'SIGKILL']) {
-      try { process.kill(-Number(name), signal); } catch { /* gone */ }
+      signalGroup(Number(name), signal);
     }
 
     fs.rmSync(path.join(dir, 'execs', name), { force: true });
@@ -246,7 +257,7 @@ function runProcess(container, argv, cwd, env, stdin) {
     try { fs.writeFileSync(path.join(execs, String(child.pid)), ''); } catch (error) {
       if (error.code !== 'ENOENT') throw error;
 
-      try { process.kill(-Number(child.pid), 'SIGKILL'); } catch { /* gone */ }
+      signalGroup(Number(child.pid), 'SIGKILL');
     }
   });
   child.on('error', (error) => fail(`OCI runtime exec failed: ${error.message}: executable file not found in $PATH`, 127));

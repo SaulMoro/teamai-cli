@@ -2,6 +2,7 @@ import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import readline from 'node:readline';
 import { RUNTIME_PROTOCOL_ENV } from '@teamai/runtime-protocol';
 import { z } from 'zod';
+import { signalChild } from '@teamai/shared/process-group';
 
 const LineSchema = z.record(z.string(), z.json());
 
@@ -67,7 +68,7 @@ export function connectRuntime({ executable, env, cwd }: { executable: string; e
     stderr: () => stderr,
     async close() {
       child.stdin.end();
-      const timer = setTimeout(() => child.kill('SIGKILL'), 5000);
+      const timer = setTimeout(() => signalChild(child, 'SIGKILL'), 5000);
       const code = await exited;
       clearTimeout(timer);
 

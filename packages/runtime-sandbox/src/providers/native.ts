@@ -4,6 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { z } from 'zod';
 import { PlaceViewSchema, type Can, type PlaceView, type RuntimeFailure } from '@teamai/runtime-protocol';
+import { signalGroup } from '@teamai/shared/process-group';
 import { readRegularFileSync } from '@teamai/shared/regular-file';
 import { COMMAND_MS, handleOf, type ExecEnd, type ExecSpec, type Provider } from '../provider.js';
 import { offerSignedIn, type SignInProvider } from '../sign-in.js';
@@ -143,21 +144,9 @@ const PidSchema = z.coerce.number().int().positive();
 
 /** Whether the process group `pgid` still has a process. */
 function isAlive(pgid: number): boolean {
-  try {
-    process.kill(-pgid, 0);
+  const probe = signalGroup(pgid, 0);
 
-    return true;
-  } catch (error) {
-    return error instanceof Error && 'code' in error && error.code === 'EPERM';
-  }
-}
-
-function signal(pgid: number, name: NodeJS.Signals): void {
-  try {
-    process.kill(-pgid, name);
-  } catch {
-    // Gone already.
-  }
+  return probe === 'sent' || probe === 'denied';
 }
 
 async function until(isDone: () => boolean, ms: number): Promise<boolean> {
@@ -204,11 +193,11 @@ export function nativeProvider({ sandbox, state, env, home }: { sandbox: NativeS
   const stop = async (id: string): Promise<{ ok: true } | { ok: false; failure: RuntimeFailure }> => {
     const groups = groupsOf(id);
 
-    for (const pgid of groups) signal(pgid, 'SIGTERM');
+    for (const pgid of groups) signalGroup(pgid, 'SIGTERM');
 
     if (await until(() => groups.every((pgid) => !isAlive(pgid)), SIGTERM_GRACE_MS)) return { ok: true };
 
-    for (const pgid of groups) signal(pgid, 'SIGKILL');
+    for (const pgid of groups) signalGroup(pgid, 'SIGKILL');
 
     if (await until(() => groups.every((pgid) => !isAlive(pgid)), COMMAND_MS - SIGTERM_GRACE_MS)) return { ok: true };
     const left = groups.filter(isAlive);

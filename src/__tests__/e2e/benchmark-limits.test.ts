@@ -8,6 +8,7 @@ import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { z } from 'zod';
 import { benchmarkFixture, envelope, FIX_SUITE, said, type BenchmarkFixture, type FakeTool } from '../helpers/benchmark-fixture.js';
+import { signalPid } from '@teamai/shared/process-group';
 
 const DoneSchema = z.object({ run: z.string(), outcome: z.string() }).passthrough();
 const TrialSchema = z.object({ order: z.number(), result: z.string(), limit: z.string().optional(), unenforced: z.array(z.string()).optional() }).passthrough();
@@ -18,12 +19,7 @@ const fixtures: BenchmarkFixture[] = [];
 
 /** Whether process `pid` still runs. */
 function alive(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch {
-    return false;
-  }
+  return signalPid(pid, 0) === 'sent';
 }
 
 afterEach(() => {

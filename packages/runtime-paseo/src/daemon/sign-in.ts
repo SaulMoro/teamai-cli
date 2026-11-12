@@ -1,6 +1,7 @@
 import { execFile } from 'node:child_process';
 import path from 'node:path';
 import { spawnCommand } from '@teamai/shared/exec';
+import { signalChild, signalGroup } from '@teamai/shared/process-group';
 import { z } from 'zod';
 
 // ─── A tool's sign-in on the daemon's host ───────────────
@@ -61,13 +62,14 @@ export function codexLoginStatus(codex: string, env?: NodeJS.ProcessEnv): Promis
     let answer = '';
 
     const timer = setTimeout(() => {
+      const { pid } = child;
+
       try {
-        if (child.pid === undefined) child.kill('SIGKILL');
         // A taskkill that cannot run leaves the process teamai started to be killed on its own, as on POSIX.
-        else if (isWindows) execFile('taskkill', ['/pid', String(child.pid), '/T', '/F'], { windowsHide: true }, (error) => { if (error) child.kill('SIGKILL'); });
-        else process.kill(-child.pid, 'SIGKILL');
+        if (pid !== undefined && isWindows) execFile('taskkill', ['/pid', String(pid), '/T', '/F'], { windowsHide: true }, (error) => { if (error) signalChild(child, 'SIGKILL'); });
+        else if (pid !== undefined && signalGroup(pid, 'SIGKILL') !== 'sent') signalChild(child, 'SIGKILL');
       } catch {
-        child.kill('SIGKILL');
+        signalChild(child, 'SIGKILL');
       }
 
       reject(new Error(`no answer in ${SIGN_IN_CHECK_TIMEOUT_MS} ms`));

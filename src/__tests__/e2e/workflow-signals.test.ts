@@ -14,6 +14,7 @@ import YAML from 'yaml';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { resolveProjectDataHome } from '../../config.js';
 import { hasPython, IN_TERMINAL, TYPED_TERMINAL } from '../helpers/in-terminal.js';
+import { signalGroup, signalPid } from '@teamai/shared/process-group';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
 const CLI = path.join(ROOT, 'dist', 'index.js');
@@ -58,12 +59,7 @@ function git(args: string[], cwd: string): void {
 }
 
 function alive(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch {
-    return false;
-  }
+  return signalPid(pid, 0) === 'sent';
 }
 
 async function waitFor(check: () => boolean, ms: number): Promise<boolean> {
@@ -179,7 +175,7 @@ steps:
       expect(await ended).toEqual({ code: null, signal: 'SIGINT' });
       expect(await waitFor(() => !pids.some(alive), 2000), `still running: ${pids.filter(alive).join(' ')}`).toBe(true);
     } finally {
-      for (const pid of pids.filter(alive)) process.kill(pid, 'SIGKILL');
+      for (const pid of pids.filter(alive)) signalPid(pid, 'SIGKILL');
       if (driver.exitCode === null && driver.signalCode === null) driver.kill('SIGKILL');
     }
   });
@@ -212,7 +208,7 @@ steps:
       expect(resumed.code, `${resumed.stdout}\n${resumed.stderr}`).toBe(0);
       expect(JSON.parse(resumed.stdout)).toMatchObject({ data: { done: { outcome: 'succeeded' } } });
     } finally {
-      for (const pid of pids.filter(alive)) process.kill(pid, 'SIGKILL');
+      for (const pid of pids.filter(alive)) signalPid(pid, 'SIGKILL');
       if (driver.exitCode === null && driver.signalCode === null) driver.kill('SIGKILL');
     }
   });
@@ -236,7 +232,7 @@ steps:
 
       // A crash takes the driver and the command, and leaves what the command started.
       driver.kill('SIGKILL');
-      process.kill(command, 'SIGKILL');
+      expect(signalPid(command, 'SIGKILL')).toBe('sent');
       await ended;
       expect(alive(child)).toBe(true);
       const runId = /Run (\S+) started/.exec(stderr)?.[1];
@@ -248,7 +244,7 @@ steps:
       expect(JSON.parse(resumed.stdout)).toMatchObject({ data: { done: { outcome: 'succeeded' } } });
       expect(await waitFor(() => !alive(child), 2000), `still running: ${child}`).toBe(true);
     } finally {
-      for (const pid of pids.filter(alive)) process.kill(pid, 'SIGKILL');
+      for (const pid of pids.filter(alive)) signalPid(pid, 'SIGKILL');
       if (driver.exitCode === null && driver.signalCode === null) driver.kill('SIGKILL');
     }
   });
@@ -272,8 +268,8 @@ steps:
 
       // The driver leads the terminal's foreground group, which its command shares. The child ignores the hangup its
       // terminal sends that group once the driver is gone.
-      process.kill(Number(fs.readFileSync(terminalPid, 'utf8')), 'SIGKILL');
-      process.kill(command, 'SIGKILL');
+      expect(signalPid(Number(fs.readFileSync(terminalPid, 'utf8')), 'SIGKILL')).toBe('sent');
+      expect(signalPid(command, 'SIGKILL')).toBe('sent');
       await ended;
       expect(alive(child)).toBe(true);
       const runId = /Run (\S+) started/.exec(printed())?.[1];
@@ -285,7 +281,7 @@ steps:
       expect(JSON.parse(resumed.stdout)).toMatchObject({ data: { done: { outcome: 'succeeded' } } });
       expect(await waitFor(() => !alive(child), 2000), `still running: ${child}`).toBe(true);
     } finally {
-      for (const pid of pids.filter(alive)) process.kill(pid, 'SIGKILL');
+      for (const pid of pids.filter(alive)) signalPid(pid, 'SIGKILL');
       if (wrapper.exitCode === null && wrapper.signalCode === null) wrapper.kill('SIGKILL');
     }
   });
@@ -307,13 +303,13 @@ steps:
       pids = started.flatMap((file) => fs.readFileSync(file, 'utf8').trim().split(' ').map(Number));
       expect(pids.every(alive)).toBe(true);
 
-      process.kill(-Number(fs.readFileSync(terminalPid, 'utf8')), 'SIGINT');
+      expect(signalGroup(Number(fs.readFileSync(terminalPid, 'utf8')), 'SIGINT')).toBe('sent');
 
       await ended;
       expect(await waitFor(() => !pids.some(alive), 2000), `still running: ${pids.filter(alive).join(' ')}`).toBe(true);
       expect(max === 1 && fs.existsSync(pidFiles[1]!), 'the second command started after Ctrl-C').toBe(false);
     } finally {
-      for (const pid of pids.filter(alive)) process.kill(pid, 'SIGKILL');
+      for (const pid of pids.filter(alive)) signalPid(pid, 'SIGKILL');
       if (wrapper.exitCode === null && wrapper.signalCode === null) wrapper.kill('SIGKILL');
     }
   });

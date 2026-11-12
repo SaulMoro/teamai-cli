@@ -3,7 +3,9 @@
 //  How teamai and the runtimes stop what they started: a detached process group, or an attached command with its
 //  descendants, through a child handle while its starter lives, or through the record it left once its starter died.
 //  It also owns process identity, how a recorded pid is told from a later process given it, which the locks judge
-//  their holders by as well.
+//  their holders by as well, and every signal teamai sends: `signalPid` and `signalGroup`, which send nothing to a pid
+//  below 2, and `signalChild`, which sends nothing to a child that never spawned (`teamai/signal-owner` keeps every other
+//  module off `process.kill`, and production source off a child's own kill).
 //
 
 import { execFile, type ChildProcess } from 'node:child_process';
@@ -275,14 +277,10 @@ export async function isSameProcess(recorded: ProcessIdentity, { signal }: { sig
   // Its pid names another process here, or none, so neither says anything of the recorded one.
   if (isOtherPidNamespace(recorded.pidNamespace, namespace)) return 'foreign';
 
-  if (!isSignallable(recorded.pid)) return 'other';
+  // `denied`: a process has the pid, another user's.
+  const probe = signalPid(recorded.pid, 0);
 
-  try {
-    process.kill(recorded.pid, 0);
-  } catch (error) {
-    // ESRCH: no process has the pid. EPERM: one does, another user's.
-    if (!(error instanceof Error && 'code' in error && error.code === 'EPERM')) return 'other';
-  }
+  if (probe === 'gone' || probe === 'refused') return 'other';
 
   if (!keepsStart(recorded)) return 'unknown';
 
@@ -492,27 +490,66 @@ async function readGroup(file: string): Promise<Recorded | undefined> {
 }
 
 /**
- * Whether `pid` may go to `kill`, which every call of it here checks first: an integer above 1, as `kill` reads 0 as
- * this process's own group and -1 as every process it may signal, and 1 is init.
+ * Whether `pid` may go to `kill`, which every signal here checks first: an integer above 1, as `kill` reads 0 as this
+ * process's own group and -1 as every process it may signal, and 1 is init.
  */
 function isSignallable(pid: number): boolean {
   return Number.isSafeInteger(pid) && pid > 1;
 }
 
-/** Sends `name` to process `pid`, or with `isGroup` to the process group it leads. Whether the signal reached a process. */
-function sendSignal(pid: number, name: NodeJS.Signals | 0, { isGroup = false }: { isGroup?: boolean } = {}): boolean {
-  if (!isSignallable(pid)) return false;
+/**
+ * What a signal sent through this module came to. `sent`: a process had the pid, or a group the id, and the signal went
+ * to it (signal 0 only probes). `gone`: none has it. `denied`: one has it, another user's. `refused`: no signal went,
+ * because the pid is not an integer above 1 (0 is the caller's own group, -1 every process it may signal, 1 init), or
+ * a group was asked for on Windows, which has none.
+ */
+export type SignalOutcome = 'sent' | 'gone' | 'denied' | 'refused';
+
+/** The one call of `kill` in teamai: every signal, to a process or to a group, goes through it. */
+function sendSignal(pid: number, name: NodeJS.Signals | 0, { isGroup }: { isGroup: boolean }): SignalOutcome {
+  if (!isSignallable(pid) || (isGroup && process.platform === 'win32')) return 'refused';
 
   try {
-    return process.kill(isGroup ? -pid : pid, name);
-  } catch {
-    return false;
+    process.kill(isGroup ? -pid : pid, name);
+
+    return 'sent';
+  } catch (error) {
+    const code = error instanceof Error && 'code' in error ? error.code : undefined;
+
+    if (code === 'ESRCH') return 'gone';
+
+    if (code === 'EPERM') return 'denied';
+    throw error;
   }
 }
 
-/** Whether a signal reached any process of group `pid`. */
-function signalGroup(pid: number, name: NodeJS.Signals | 0): boolean {
-  return sendSignal(pid, name, { isGroup: true });
+/** Sends `name` to process `pid`, or with signal 0 tells whether it runs. Sends nothing to a pid below 2. */
+export function signalPid(pid: number, name: NodeJS.Signals | 0): SignalOutcome {
+  return sendSignal(pid, name, { isGroup: false });
+}
+
+/**
+ * Sends `name` to `child` through its handle, which names the process it started even once its pid is reused. Sends
+ * nothing to a child that never spawned: Node's kill of a handle whose spawn failed signals pid 0 until the error is
+ * delivered, the caller's whole process group.
+ */
+export function signalChild(child: Pick<ChildProcess, 'pid' | 'kill'>, name: Parameters<ChildProcess['kill']>[0] = 'SIGTERM'): SignalOutcome {
+  if (child.pid === undefined || !isSignallable(child.pid)) return 'refused';
+
+  return child.kill(name) ? 'sent' : 'gone';
+}
+
+/**
+ * Whether `pid` may name a process that runs: one another user runs counts, and so does a pid no probe may be sent to
+ * (below 2, or not an integer), so a lock or a record that names it is never taken for one whose process is gone.
+ */
+export function mayBeRunning(pid: number): boolean {
+  return signalPid(pid, 0) !== 'gone';
+}
+
+/** Sends `name` to every process of group `pgid`, or with signal 0 tells whether any runs. Sends nothing to a group below 2. */
+export function signalGroup(pgid: number, name: NodeJS.Signals | 0): SignalOutcome {
+  return sendSignal(pgid, name, { isGroup: true });
 }
 
 /**
@@ -528,7 +565,7 @@ export async function stopGroup(group: Recorded): Promise<boolean> {
 async function endGroup(group: Recorded): Promise<StopEnd> {
   if (process.platform === 'win32') return 'unreachable';
 
-  if (!signalGroup(group.pid, 0)) return 'gone';
+  if (signalGroup(group.pid, 0) !== 'sent') return 'gone';
   const running = await runningProcesses();
 
   // Without current identities, a pid reused since cannot be told apart, so the group is left alone.
@@ -542,7 +579,7 @@ async function endGroup(group: Recorded): Promise<StopEnd> {
   signalGroup(group.pid, 'SIGTERM');
 
   // Counted rather than timed, so a faked clock cannot stretch the grace period.
-  for (let probe = 0; signalGroup(group.pid, 0); probe += 1) {
+  for (let probe = 0; signalGroup(group.pid, 0) === 'sent'; probe += 1) {
     if (probe === 100) {
       signalGroup(group.pid, 'SIGKILL');
       break;
@@ -564,16 +601,10 @@ async function endGroup(group: Recorded): Promise<StopEnd> {
  * read it needed failed, so the record stays for a later stop.
  */
 async function stopLeftStarterGroup(recorded: Recorded, pgid: number): Promise<boolean> {
-  if (!signalGroup(pgid, 0)) return true;
+  if (signalGroup(pgid, 0) !== 'sent') return true;
 
-  try {
-    process.kill(pgid, 0);
-
-    return true;
-  } catch (error) {
-    // EPERM: a process has the id, another user's.
-    if (error instanceof Error && 'code' in error && error.code === 'EPERM') return true;
-  }
+  // `denied`: a process has the id, another user's.
+  if (signalPid(pgid, 0) !== 'gone') return true;
 
   const own = (await ownGroups())?.pgid;
 
@@ -685,12 +716,7 @@ async function stopRecordedTree(recorded: Recorded & { tree: true }): Promise<{ 
  * reused since cannot be told apart and none is signalled blind.
  */
 async function endProcesses(found: FoundProcess[]): Promise<boolean> {
-  /** Signals each process that is still the one found; whether any was reached, undefined when that cannot be read. */
-  const signal = async (name: NodeJS.Signals | 0): Promise<boolean | undefined> => {
-    const now = await runningProcesses();
-
-    return now === undefined ? undefined : found.filter(({ pid, start }) => isStillRunning(now, { pid, start })).reduce((reached, { pid }) => sendSignal(pid, name) || reached, false);
-  };
+  const signal = (name: NodeJS.Signals | 0): Promise<boolean | undefined> => signalStillRunning(found, name);
 
   if (await signal('SIGTERM') === undefined) return false;
 
@@ -705,15 +731,26 @@ async function endProcesses(found: FoundProcess[]): Promise<boolean> {
   }
 }
 
+/**
+ * Sends `name` to each process of `found`, as `descendantsOf` found them, that still runs as found: its pid names a
+ * process that started when it did, so a process given a pid since it was found gets nothing. Whether the signal
+ * reached any; undefined when the process table cannot be read, and then none is signalled blind.
+ */
+export async function signalStillRunning(found: readonly FoundProcess[], name: NodeJS.Signals | 0): Promise<boolean | undefined> {
+  const now = await runningProcesses();
+
+  return now === undefined ? undefined : found.filter((listed) => isStillRunning(now, listed)).reduce((reached, { pid }) => signalPid(pid, name) === 'sent' || reached, false);
+}
+
 /** Stops a detached process group or an attached process tree, with a five-second grace period before SIGKILL. */
 export function stopProcess<T>(child: ChildProcess, exit: Promise<T>, detached: boolean): (signal?: NodeJS.Signals) => Promise<T> {
   let stopping: Promise<T> | undefined;
   let descendants: FoundProcess[] = [];
 
-  /** Whether the signal reached any process in the group or tree. */
-  const signal = async (name: NodeJS.Signals | 0): Promise<boolean> => {
+  /** Whether the signal reached any process in the group or tree of `pid`, the child's. */
+  const signal = async (pid: number, name: NodeJS.Signals | 0): Promise<boolean> => {
     try {
-      if (detached && child.pid !== undefined) return signalGroup(child.pid, name);
+      if (detached) return signalGroup(pid, name) === 'sent';
       let targets = descendants;
 
       if ((name === 0 || name === 'SIGKILL') && descendants.length > 0) {
@@ -723,32 +760,34 @@ export function stopProcess<T>(child: ChildProcess, exit: Promise<T>, detached: 
         targets = descendants.filter((found) => isStillRunning(now, found));
       }
 
-      const reached = targets.reduce((any, { pid }) => sendSignal(pid, name) || any, false);
+      const reached = targets.reduce((any, found) => signalPid(found.pid, name) === 'sent' || any, false);
 
-      return child.kill(name) || reached;
+      return signalChild(child, name) === 'sent' || reached;
     } catch {
       return false;
     }
   };
 
   const stop = async (initial: NodeJS.Signals): Promise<T> => {
+    const { pid } = child;
+
     // A child whose spawn failed has no pid, and Node's kill of its handle signals pid 0: this process's whole group.
-    if (child.pid === undefined) return exit;
+    if (pid === undefined) return exit;
 
     if (process.platform === 'win32') {
-      execFile('taskkill', ['/pid', String(child.pid), '/T', '/F'], () => {});
+      execFile('taskkill', ['/pid', String(pid), '/T', '/F'], () => {});
 
       return exit;
     }
 
-    if (!detached && child.pid !== undefined) descendants = await descendantsOf(child.pid);
+    if (!detached) descendants = await descendantsOf(pid);
 
-    await signal(initial);
+    await signal(pid, initial);
     let timer: NodeJS.Timeout | undefined;
     let escalated = false;
 
     const killed = new Promise<void>((resolve) => {
-      timer = setTimeout(() => { escalated = true; void signal('SIGKILL').then(() => { resolve(); }); }, 5000);
+      timer = setTimeout(() => { escalated = true; void signal(pid, 'SIGKILL').then(() => { resolve(); }); }, 5000);
     });
 
     const result = await exit;
@@ -759,7 +798,7 @@ export function stopProcess<T>(child: ChildProcess, exit: Promise<T>, detached: 
     // of waiting the whole grace period after that first successful probe.
     // `escalated` flips inside the setTimeout closure registered above, which the linter can't see.
     // oxlint-disable-next-line no-unmodified-loop-condition
-    while (!escalated && await signal(0)) {
+    while (!escalated && await signal(pid, 0)) {
       await Promise.race([killed, new Promise<void>((resolve) => setTimeout(resolve, 50))]);
     }
 

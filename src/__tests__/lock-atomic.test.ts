@@ -309,10 +309,10 @@ describe('acquireLock never takes over a lock another live process may hold (#76
     // owner releases and exits, and another process creates a fresh lock.
     const deadPid = 999999;
     fs.writeFileSync(lockPath, JSON.stringify({ pid: deadPid, owner: 'old', startedAt: 'x' }));
-    const realKill = process.kill.bind(process);
     let deadPidChecks = 0;
-    const kill = vi.spyOn(process, 'kill').mockImplementation((pid, signal) => {
-      if (pid !== deadPid) return realKill(pid, signal);
+    const kill = vi.spyOn(process, 'kill').mockImplementation((pid) => {
+      // Every other pid this lock probes is this process's own, which runs.
+      if (pid !== deadPid) return true;
       deadPidChecks += 1;
       if (deadPidChecks === 2) {
         fs.writeFileSync(lockPath, JSON.stringify({ pid: process.pid, owner: 'other', startedAt: 'x' }));

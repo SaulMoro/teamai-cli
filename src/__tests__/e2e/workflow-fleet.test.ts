@@ -13,6 +13,7 @@ import { stringify } from 'yaml';
 import { CLAUDE_SESSIONS, CLI, fakeTool } from '../helpers/step-runtime-e2e.js';
 import { installToyRuntime } from '../helpers/toy-runtime.js';
 import { REPORTS_LOCK_FILENAME } from '../../types.js';
+import { signalGroup, signalPid } from '@teamai/shared/process-group';
 
 const URL = 'https://github.com/acme/business.git';
 
@@ -276,11 +277,7 @@ async function until(check: () => boolean, ms: number): Promise<boolean> {
 async function waitOn(check: () => boolean, ms: number, pid: () => number, running: Promise<RunResult>): Promise<void> {
   if (await until(check, ms)) return;
 
-  try {
-    process.kill(pid(), 'SIGTERM');
-  } catch {
-    // It already exited: what it printed says why.
-  }
+  signalPid(pid(), 'SIGTERM');
 
   expect.fail(said(await running));
 }
@@ -330,11 +327,7 @@ async function stopMembers(): Promise<void> {
   for (const group of [...groups, ...recorded(sandbox)]) {
     if (!live.has(group)) continue;
 
-    try {
-      process.kill(-group, 'SIGKILL');
-    } catch {
-      // Gone meanwhile.
-    }
+    signalGroup(group, 'SIGKILL');
   }
 
   groups.clear();
@@ -347,11 +340,7 @@ async function expectNothingLeft(): Promise<void> {
   const commands = left.map((pid) => spawnSync('ps', ['-o', 'command=', '-p', String(pid)], { encoding: 'utf8' }).stdout.trim());
 
   for (const pid of left) {
-    try {
-      process.kill(pid, 'SIGKILL');
-    } catch {
-      // Gone meanwhile.
-    }
+    signalPid(pid, 'SIGKILL');
   }
 
   expect(commands, 'processes still running in the sandbox after the test').toEqual([]);
@@ -398,13 +387,7 @@ function runsOf(member: string): string[] {
 }
 
 function isAlive(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-
-    return true;
-  } catch {
-    return false;
-  }
+  return signalPid(pid, 0) === 'sent';
 }
 
 async function join(member: string): Promise<void> {
@@ -491,7 +474,7 @@ describe('the fleet', () => {
     expect(records(run).map((record) => record.state)).toEqual(['offered']);
 
     // The owner goes away while the attempt is out.
-    process.kill(alicePid, 'SIGKILL');
+    expect(signalPid(alicePid, 'SIGKILL')).toBe('sent');
     await started;
 
     const published = await teamai('alice', ['workflow', 'publish', run]);
@@ -527,7 +510,7 @@ describe('the fleet', () => {
     const fresh = (): string | undefined => offeredRuns().find((name) => !before.has(name));
     await waitOn(() => fresh() !== undefined, 60_000, () => alicePid, started);
     const run = fresh() ?? '';
-    process.kill(alicePid, 'SIGKILL');
+    expect(signalPid(alicePid, 'SIGKILL')).toBe('sent');
     await started;
 
     let bobPid = 0;
@@ -535,7 +518,7 @@ describe('the fleet', () => {
     // Bob pushed part of the work and said so, then went away.
     expect(await until(() => records(run).some((record) => record.state === 'claimed' && record.pushed !== record.start), 60_000)).toBe(true);
     const [claimed] = records(run);
-    process.kill(bobPid, 'SIGKILL');
+    expect(signalPid(bobPid, 'SIGKILL')).toBe('sent');
     await taking;
     await new Promise((resolve) => setTimeout(resolve, 7_000));
 
@@ -635,9 +618,9 @@ describe('the fleet', () => {
     const taking = teamai('bob', ['workflow', 'resume', '--next', '--pool', 'build'], (pid) => { bobPid = pid; });
     await waitOn(() => records(run).some((record) => record.state === 'claimed' && record.pushed !== record.start), 60_000, () => bobPid, taking);
     // Bob's machine sleeps past stale_after: the owner, still up, gives the claim up.
-    process.kill(bobPid, 'SIGSTOP');
+    expect(signalPid(bobPid, 'SIGSTOP')).toBe('sent');
     const failed = await started;
-    process.kill(bobPid, 'SIGCONT');
+    expect(signalPid(bobPid, 'SIGCONT')).toBe('sent');
 
     expect(failed.envelope(), said(failed)).toMatchObject({ data: { done: { outcome: 'failed' } } });
     expect(runStateOf('alice', run).steps[0]?.failure?.code).toBe('fleet_member_gone');
@@ -741,7 +724,7 @@ describe('the fleet', () => {
     await waitOn(() => fs.existsSync(pidFile), 60_000, () => bobPid, taking);
     const left = Number(fs.readFileSync(pidFile, 'utf8'));
     // Bob's teamai is killed; the command of its nested run, in a process group of its own, is not.
-    process.kill(bobPid, 'SIGKILL');
+    expect(signalPid(bobPid, 'SIGKILL')).toBe('sent');
     await taking;
     expect(isAlive(left)).toBe(true);
 
@@ -767,7 +750,7 @@ describe('the fleet', () => {
     let bobPid = 0;
     const taking = teamai('bob', ['workflow', 'resume', '--next', '--pool'], (pid) => { bobPid = pid; });
     await waitOn(() => fs.existsSync(pidFile), 60_000, () => bobPid, taking);
-    process.kill(bobPid, 'SIGKILL');
+    expect(signalPid(bobPid, 'SIGKILL')).toBe('sent');
     await taking;
 
     const again = await teamai('bob', ['workflow', 'resume', '--next', '--pool']);
@@ -794,7 +777,7 @@ describe('the fleet', () => {
     const taking = teamai('bob', ['workflow', 'resume', '--next', '--pool'], (pid) => { bobPid = pid; });
     await waitOn(() => fs.existsSync(pidFile), 60_000, () => bobPid, taking);
     const left = Number(fs.readFileSync(pidFile, 'utf8'));
-    process.kill(bobPid, 'SIGKILL');
+    expect(signalPid(bobPid, 'SIGKILL')).toBe('sent');
     await taking;
     const nested = path.join(dataHomeOf('bob'), 'workflows', 'runs', run, 'attempts', records(run)[0]?.attempt ?? '', 'nested-run');
     fs.chmodSync(nested, 0o000);
@@ -809,7 +792,7 @@ describe('the fleet', () => {
       expect(runsOf('bob').filter((id) => !bobsBefore.has(id))).toHaveLength(1);
     } finally {
       fs.chmodSync(nested, 0o644);
-      if (isAlive(left)) process.kill(left, 'SIGKILL');
+      if (isAlive(left)) signalPid(left, 'SIGKILL');
       await teamai('alice', ['workflow', 'cancel', run]);
       // The owner waits for the member to answer the cancel of a whole step, with what it spent, until stale_after:
       // bob, whose nested run's record reads again, answers it, so neither waits on it in a later test.
@@ -849,7 +832,7 @@ describe('the fleet', () => {
     const fresh = (): string | undefined => offeredRuns().find((name) => !before.has(name));
     await waitOn(() => fresh() !== undefined, 60_000, () => alicePid, started);
     const run = fresh() ?? '';
-    process.kill(alicePid, 'SIGKILL');
+    expect(signalPid(alicePid, 'SIGKILL')).toBe('sent');
     await started;
 
     let bobPid = 0;
@@ -956,7 +939,7 @@ wait();`;
     await waitOn(() => fresh() !== undefined, 60_000, () => alicePid, started);
     const run = fresh() ?? '';
     // A stop the driver hears, as Ctrl-C: it leaves the attempt out for a later resume.
-    process.kill(alicePid, 'SIGTERM');
+    expect(signalPid(alicePid, 'SIGTERM')).toBe('sent');
     await started;
 
     const cancel = await teamai('alice', ['workflow', 'cancel', run]);
@@ -1012,7 +995,7 @@ wait();`;
       await waitOn(() => fs.existsSync(pidFile) && fs.readFileSync(pidFile, 'utf8') !== '', 60_000, () => alicePid, started);
       const command = Number(fs.readFileSync(pidFile, 'utf8'));
       const run = runsOf('alice').find((name) => !before.has(name)) ?? '';
-      process.kill(alicePid, 'SIGKILL');
+      expect(signalPid(alicePid, 'SIGKILL')).toBe('sent');
       await started;
       expect(isAlive(command)).toBe(true);
 

@@ -1,7 +1,7 @@
 /** @import { ESTree } from '@oxlint/plugins' */
 import { defineRule } from '@oxlint/plugins';
 
-import { importedName } from '../imports.js';
+import { namesExport } from '../imports.js';
 import { inProductionSource, isOneOf, scopedFiles, stringLiteralValue, variableOf } from '../utils.js';
 
 /** The one module that starts a process through cross-spawn, behind `spawnCommand`, `spawnCommandSync` and `execCommand`. */
@@ -18,15 +18,8 @@ const MODULE = new Set(['module', 'node:module']);
  * @param {ESTree.Node} node
  */
 function isCreateRequire(sourceCode, node) {
-  if (node.type === 'MemberExpression') return !node.computed && node.property.type === 'Identifier' && node.property.name === 'createRequire';
-
-  if (node.type !== 'Identifier') return false;
-  const def = variableOf(sourceCode, node, node.name)?.defs[0];
-
-  if (def?.type !== 'ImportBinding') return node.name === 'createRequire';
-
-  return def.node.type === 'ImportSpecifier' && def.parent?.type === 'ImportDeclaration' && MODULE.has(String(def.parent.source.value))
-    && importedName(def.node) === 'createRequire';
+  // A name no import binds is judged by its spelling.
+  return namesExport(sourceCode, node, { modules: MODULE, name: 'createRequire' }) ?? (node.type === 'Identifier' && node.name === 'createRequire');
 }
 
 /**

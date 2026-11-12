@@ -4,6 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { afterEach, expect, it } from 'vitest';
 import { groupRunning, stopLeftSkillRunners } from './helpers/skill-runners.js';
+import { signalGroup } from '@teamai/shared/process-group';
 
 const roots: string[] = [];
 afterEach(() => { for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true }); });
@@ -41,7 +42,7 @@ it.skipIf(process.platform === 'win32')('stops the process group of a skill runn
     expect(stopLeftSkillRunners(() => [left.pid, other.pid], { exitMs: 0 })).toEqual([]);
   } finally {
     for (const pid of [left.pid, left.step, other.pid, other.step]) {
-      try { process.kill(-pid, 'SIGKILL'); } catch { /* already gone */ }
+      signalGroup(pid, 'SIGKILL');
     }
   }
 });
@@ -61,7 +62,7 @@ it.skipIf(process.platform === 'win32')('stops only the skill runners working in
     expect(groupRunning(away.pid), 'a runner working elsewhere is left alone').toBe(true);
   } finally {
     for (const pid of [working.pid, working.step, away.pid, away.step]) {
-      try { process.kill(-pid, 'SIGKILL'); } catch { /* already gone */ }
+      signalGroup(pid, 'SIGKILL');
     }
   }
 });
@@ -77,7 +78,7 @@ it.skipIf(process.platform === 'win32')('stops a runner working in a directory i
     expect(groupRunning(untracked.pid), 'the untracked runner was stopped').toBe(false);
   } finally {
     for (const pid of [untracked.pid, untracked.step]) {
-      try { process.kill(-pid, 'SIGKILL'); } catch { /* already gone */ }
+      signalGroup(pid, 'SIGKILL');
     }
   }
 });
@@ -98,7 +99,7 @@ it.skipIf(process.platform === 'win32')('stops, besides the tracked runners, eve
     expect(groupRunning(foreign.pid), 'an untracked runner elsewhere is left alone').toBe(true);
   } finally {
     for (const pid of [tracked.pid, tracked.step, untracked.pid, untracked.step, foreign.pid, foreign.step]) {
-      try { process.kill(-pid, 'SIGKILL'); } catch { /* already gone */ }
+      signalGroup(pid, 'SIGKILL');
     }
   }
 });

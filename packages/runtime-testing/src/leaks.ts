@@ -1,5 +1,6 @@
 import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
+import { mayBeRunning } from '@teamai/shared/process-group';
 import { z } from 'zod';
 import type { Connection } from './connect.js';
 
@@ -14,17 +15,6 @@ export function processesUnder(dir: string): string[] {
   const roots = [...new Set([dir, ...(fs.existsSync(dir) ? [fs.realpathSync(dir)] : [])])];
 
   return execFileSync('ps', ['-axo', 'pid=,args='], { encoding: 'utf8' }).split('\n').map((line) => line.trim()).filter((line) => line !== '' && roots.some((root) => line.includes(root)));
-}
-
-/** Whether the process `pid` runs. */
-function isAlive(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-
-    return true;
-  } catch (error) {
-    return error instanceof Error && 'code' in error && error.code === 'EPERM';
-  }
 }
 
 /** An answer about a place that names what the runtime leaves of it on purpose. */
@@ -54,7 +44,7 @@ function namesWhole(thing: string, name: string): boolean {
 function leftRunning({ dir, connections, left }: Scope): string[] {
   const kept = keptBy(connections);
   const isKept = (thing: string): boolean => kept.some((name) => namesWhole(thing, name));
-  const runtimes = connections.flatMap(({ child }) => (child.pid !== undefined && child.exitCode === null && child.signalCode === null && isAlive(child.pid) ? [`runtime: ${child.pid} ${child.spawnargs.join(' ')}`] : []));
+  const runtimes = connections.flatMap(({ child }) => (child.pid !== undefined && child.exitCode === null && child.signalCode === null && mayBeRunning(child.pid) ? [`runtime: ${child.pid} ${child.spawnargs.join(' ')}`] : []));
 
   return [...runtimes, ...processesUnder(dir).filter((line) => !isKept(line)).map((line) => `process: ${line}`), ...left().filter((thing) => !isKept(thing)).map((thing) => `left: ${thing}`)];
 }

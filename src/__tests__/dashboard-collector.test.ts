@@ -29,6 +29,7 @@ import { collectSession } from '../session-collector.js';
 import type { DashboardEvent } from '../types.js';
 import * as pidMonitor from '../pid-monitor.js';
 import { _resetState as resetLogger, _setLogFilePath } from '@teamai/shared/debug-log';
+import { signalPid } from '@teamai/shared/process-group';
 
 // ─── Transcript fixtures for intervention scanning ──────
 const INTERRUPT_LINE = JSON.stringify({
@@ -3178,11 +3179,7 @@ describe('dashboard-report records the git state a session started on', () => {
       process.env.PATH = originalPath;
 
       for (const pid of fs.existsSync(holders) ? fs.readFileSync(holders, 'utf8').split('\n').filter(Boolean) : []) {
-        try {
-          process.kill(Number(pid), 'SIGKILL');
-        } catch {
-          // Already gone.
-        }
+        signalPid(Number(pid), 'SIGKILL');
       }
     }
 

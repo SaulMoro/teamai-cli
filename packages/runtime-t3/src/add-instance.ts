@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { runsCommand } from '@teamai/runtime-protocol';
 import { isJsonObject, parseJson, type JsonValue } from '@teamai/shared/json';
+import { mayBeRunning } from '@teamai/shared/process-group';
 import { z } from 'zod';
 import { DRIVERS, type Driver } from './sessions.js';
 import { instanceToolHome, SettingsSchema } from './settings.js';
@@ -90,16 +91,6 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-function isAlive(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-
-    return true;
-  } catch (error) {
-    return error instanceof Error && 'code' in error && error.code === 'EPERM';
-  }
-}
-
 /** A file's text, or none when there is no file. */
 function readText(file: string): string | undefined {
   try {
@@ -157,7 +148,7 @@ async function locked<TValue>(file: string, work: () => TValue): Promise<{ ok: t
       if (held === undefined) continue;
       const holder = HolderSchema.safeParse(held);
 
-      if (holder.success && isAlive(holder.data.pid) && Date.now() - holder.data.takenAt < LOCK_STALE_MS) {
+      if (holder.success && mayBeRunning(holder.data.pid) && Date.now() - holder.data.takenAt < LOCK_STALE_MS) {
         if (Date.now() > deadline) return { ok: false };
         await sleep(50);
         continue;

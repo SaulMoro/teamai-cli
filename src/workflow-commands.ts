@@ -8,6 +8,7 @@ import { FINISHED_WORKFLOW } from './scorers/judging-workflows.js';
 import { PassScoring } from './scorers/pass-scoring.js';
 import { Subject } from './scorers/subject.js';
 import { log, PROGRESS_STREAMS_ENV, setStderrOnly, writeInfoLine } from '@teamai/shared/log';
+import { signalPid } from '@teamai/shared/process-group';
 import { collectEnvSecrets, redact, redactJson } from '@teamai/shared/redact';
 import { definitionNeedsAiTool } from './workflow/describe.js';
 import { admitStart, parseNextPayload, parseReport, parseResponsePayload, resumableSessions, withIgnored, type ParsedResponsePayload } from './workflow/engine.js';
@@ -131,7 +132,7 @@ function resumeWhileOpen(config: LocalConfig, runId: string) {
     say();
     stopListening();
 
-    if (process.listenerCount(signal) === 0) process.stderr.write('', () => process.kill(process.pid, signal));
+    if (process.listenerCount(signal) === 0) process.stderr.write('', () => signalPid(process.pid, signal));
   };
 
   const stopListening = (): void => {

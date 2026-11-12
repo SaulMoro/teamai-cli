@@ -137,6 +137,7 @@ import { parseYaml } from '@teamai/shared/yaml';
 import { resolveOpenclawConfigPath } from './openclaw-home.js';
 import { realHost, toolHome } from './tool-home.js';
 import YAML from 'yaml';
+import { signalChild } from '@teamai/shared/process-group';
 
 const execFileAsync = promisify(execFile);
 
@@ -1563,7 +1564,7 @@ export async function execPluginCommand(cmd: string, timeoutMs: number): Promise
     };
 
     timer = setTimeout(() => {
-      child.kill('SIGKILL');
+      signalChild(child, 'SIGKILL');
       finish(() => reject(new Error(`command timed out after ${timeoutMs}ms`)));
     }, timeoutMs);
     child.on('error', (e) => finish(() => reject(e)));

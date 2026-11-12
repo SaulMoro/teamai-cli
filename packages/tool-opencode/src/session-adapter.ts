@@ -88,7 +88,7 @@ async function startChildServer(env: NodeJS.ProcessEnv, processes: Processes): P
   });
 
   const stop = async (): Promise<void> => {
-    if (child.exitCode === null) child.kill('SIGTERM');
+    if (child.exitCode === null) processes.signalChild(child, 'SIGTERM');
     await exited;
   };
 

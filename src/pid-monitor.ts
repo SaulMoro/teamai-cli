@@ -1,7 +1,7 @@
 import { execFileSync } from 'node:child_process';
 
 import { windowsPowerShell } from './utils/powershell.js';
-import { tellProcessRead } from '@teamai/shared/process-group';
+import { mayBeRunning, tellProcessRead } from '@teamai/shared/process-group';
 import { readRegularFileSync } from '@teamai/shared/regular-file';
 
 // ─── Process tree helpers ──────────────────────────────
@@ -231,20 +231,9 @@ export function resolveMonitorPid(hookPpid: number): number {
  * Check if a process with the given PID is still alive.
  * Uses kill(pid, 0) which sends no signal — just checks existence.
  *
- * Returns true if the process exists (even if we lack permission to signal it).
+ * Returns true if the process exists (even if we lack permission to signal it),
+ * and for a pid no probe may be sent to, which is never taken for gone.
  */
 export function isProcessAlive(pid: number): boolean {
-    try {
-        process.kill(pid, 0);
-
-        return true;
-    } catch (err: unknown) {
-        const code = err instanceof Error && 'code' in err ? err.code : undefined;
-
-        if (code === 'ESRCH') return false;  // No such process
-
-        if (code === 'EPERM') return true;   // Exists, but no permission
-
-        return false;
-    }
+    return mayBeRunning(pid);
 }

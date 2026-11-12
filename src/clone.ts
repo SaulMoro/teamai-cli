@@ -10,6 +10,7 @@ import { tgitGitCloneUrl } from './providers/tgit/rest-auth.js';
 import { log } from '@teamai/shared/log';
 import { sanitizeGitUrl } from '@teamai/shared/redact';
 import { assertSafeRepoCachePath } from './utils/repo-cache.js';
+import { signalChild } from '@teamai/shared/process-group';
 
 // ─── Types ──────────────────────────────────────────────
 
@@ -110,7 +111,7 @@ function runCommand(
         child.stderr.on('data', (chunk: Buffer) => { stderr += stderrDecoder.write(chunk); });
 
         const timer = setTimeout(() => {
-            child.kill();
+            signalChild(child);
             reject(new Error(`Command timed out after ${opts.timeoutMs}ms: ${cmd} ${args.join(' ')}`));
         }, opts.timeoutMs);
 

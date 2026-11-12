@@ -10,6 +10,7 @@ import { afterAll, beforeEach } from 'vitest';
 import { trackDetachedProcesses } from './detached-processes.js';
 import { stopLeftChildren } from './left-children.js';
 import { leftSkillRunners, RUNNER_EXIT_MS, stopLeftSkillRunners } from './skill-runners.js';
+import { signalPid } from '@teamai/shared/process-group';
 
 // A recursive removal fails with ENOTEMPTY when something keeps writing into
 // the directory while it is removed. teamai's own detached work is such a
@@ -149,12 +150,7 @@ function isDetached(arg: unknown): boolean {
 }
 
 function isRunning(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch {
-    return false;
-  }
+  return signalPid(pid, 0) === 'sent';
 }
 
 function failOnLeftRunners(left: readonly number[]): void {

@@ -1,19 +1,13 @@
 import { spawn } from 'node:child_process';
 import diagnostics from 'node:diagnostics_channel';
 import { once } from 'node:events';
-import { PROCESS_READ_CHANNEL } from '@teamai/shared/process-group';
+import { PROCESS_READ_CHANNEL, signalPid } from '@teamai/shared/process-group';
 import { describe, expect, it, vi } from 'vitest';
 
 import { endProcessTree } from '../utils/git.js';
 
 function alive(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-
-    return true;
-  } catch {
-    return false;
-  }
+  return signalPid(pid, 0) === 'sent';
 }
 
 describe('endProcessTree', () => {
@@ -40,7 +34,7 @@ setInterval(() => {}, 1000);`], { stdio: ['ignore', 'pipe', 'ignore'] });
     diagnostics.subscribe(PROCESS_READ_CHANNEL, told);
 
     try {
-      await endProcessTree(parent.pid!);
+      await endProcessTree(parent);
     } finally {
       diagnostics.unsubscribe(PROCESS_READ_CHANNEL, told);
     }
@@ -48,6 +42,26 @@ setInterval(() => {}, 1000);`], { stdio: ['ignore', 'pipe', 'ignore'] });
     await exited;
     await vi.waitFor(() => expect(tree.filter(alive)).toEqual([]), { timeout: 5_000, interval: 50 });
     // The channel tells process-identity reads, not kills: taskkill /T ends the tree on Windows without listing it.
-    expect(reads).toHaveLength(process.platform === 'win32' ? 0 : 1);
+    // Elsewhere one read lists the tree and a second checks each process is still the one listed before it is signalled.
+    expect(reads).toHaveLength(process.platform === 'win32' ? 0 : 2);
   }, 15_000);
+
+  it.skipIf(process.platform === 'win32')('signals git itself through its handle, never by a pid another process may have by then', async () => {
+    const git = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore' });
+    const exited = new Promise<NodeJS.Signals | null>((resolve) => { git.once('exit', (_code, signal) => resolve(signal)); });
+    await new Promise<void>((resolve, reject) => { git.once('spawn', resolve); git.once('error', reject); });
+    const handle = vi.spyOn(git, 'kill');
+    const byPid = vi.spyOn(process, 'kill');
+
+    try {
+      await endProcessTree(git);
+
+      expect(await exited).toBe('SIGTERM');
+      expect(handle).toHaveBeenCalledWith('SIGTERM');
+      expect(byPid.mock.calls.filter(([pid]) => Math.abs(pid) === git.pid)).toEqual([]);
+    } finally {
+      vi.restoreAllMocks();
+      git.kill('SIGKILL');
+    }
+  });
 });

@@ -173,7 +173,7 @@ const TeamaiHooks = async ({ directory, worktree }) => {
           }
         };
         const timer = setTimeout(() => {
-          try { child.kill(); } catch {}
+          try { if (child.pid !== undefined) child.kill(); } catch {}
           out = '';
           finish();
         }, TEAM_HOOKS_TIMEOUT_MS);

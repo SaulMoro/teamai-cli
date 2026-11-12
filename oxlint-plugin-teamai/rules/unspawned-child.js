@@ -1,8 +1,7 @@
 /** @import { ESTree } from '@oxlint/plugins' */
 import { defineRule } from '@oxlint/plugins';
 
-import { importedName } from '../imports.js';
-import { variableOf } from '../utils.js';
+import { namesExport } from '../imports.js';
 
 const MESSAGE = 'A ChildProcess built with new, through a class that extends it, or by calling it on an object, holds a native handle no process was spawned for, and its kill() signals pid 0: the whole process group of whatever runs it, which on a CI runner is the runner itself. Spawn a real process, or build a fake with no handle: Object.create(ChildProcess.prototype).';
 
@@ -33,15 +32,7 @@ function calledOn(node) {
  * @param {ESTree.Node} node
  */
 function isChildProcessClass(sourceCode, node) {
-  if (node.type === 'MemberExpression') return !node.computed && node.property.type === 'Identifier' && node.property.name === 'ChildProcess';
-
-  if (node.type !== 'Identifier') return false;
-  const def = variableOf(sourceCode, node, node.name)?.defs[0];
-
-  if (def?.type !== 'ImportBinding') return false;
-
-  return def.node.type === 'ImportSpecifier' && def.parent?.type === 'ImportDeclaration' && MODULE.has(String(def.parent.source.value))
-    && importedName(def.node) === 'ChildProcess';
+  return namesExport(sourceCode, node, { modules: MODULE, name: 'ChildProcess' }) === true;
 }
 
 export default defineRule({

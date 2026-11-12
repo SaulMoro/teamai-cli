@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { fakeEngine, tempDir, type FakeEngine } from './harness.js';
+import { signalPid } from '@teamai/shared/process-group';
 
 const IMAGE = 'ghcr.io/acme/agent:1';
 
@@ -56,7 +57,7 @@ beforeEach(() => {
 
 afterEach(() => {
   for (const pid of leftWriters.splice(0)) {
-    try { process.kill(pid, 'SIGKILL'); } catch { /* ended */ }
+    signalPid(pid, 'SIGKILL');
   }
 
   fs.rmSync(dir, { recursive: true, force: true, maxRetries: 5 });

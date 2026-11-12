@@ -71,6 +71,7 @@ import os from 'node:os';
 import path from 'node:path';
 import readline from 'node:readline';
 import { RuntimeRequestSchema } from '@teamai/runtime-protocol';
+import { signalGroup, signalPid } from '@teamai/shared/process-group';
 import { encodeCwdClaude } from '@teamai/tool-core/sessions/fs';
 
 const OPTIONS = new Set(['state', 'die_at', 'exit_at', 'close_fails', 'open_fails', 'open_refuses', 'can', 'display', 'agent', 'judge', 'path', 'answer', 'init_fails', 'cancel_fails', 'recover', 'check', 'stop_ms', 'stray', 'notice', 'unavailable', 'permissions', 'own_logins', 'calls', 'wake_log', 'prompt_tool_home', 'binds']);
@@ -149,19 +150,13 @@ function dieAt(point) {
 
   if (fs.existsSync(marker)) return false;
   fs.writeFileSync(marker, '');
-  process.kill(process.ppid, 'SIGKILL');
+  signalPid(process.ppid, 'SIGKILL');
 
   return true;
 }
 
 function pidAlive(pid) {
-  try {
-    process.kill(pid, 0);
-
-    return true;
-  } catch {
-    return false;
-  }
+  return signalPid(pid, 0) === 'sent';
 }
 
 /** The toy that started an exec outlives teamai and records the exec's outcome, so while it lives the exec may still end. */
@@ -170,18 +165,12 @@ function ownerAlive(record) {
 }
 
 function groupAlive(pgid) {
-  try {
-    process.kill(-pgid, 0);
-
-    return true;
-  } catch {
-    return false;
-  }
+  return signalGroup(pgid, 0) === 'sent';
 }
 
 function stopGroup(pgid) {
-  try { process.kill(-pgid, 'SIGTERM'); } catch { return; }
-  setTimeout(() => { try { process.kill(-pgid, 'SIGKILL'); } catch { /* gone */ } }, 2000).unref();
+  if (signalGroup(pgid, 'SIGTERM') !== 'sent') return;
+  setTimeout(() => { signalGroup(pgid, 'SIGKILL'); }, 2000).unref();
 }
 
 // It appends the names, never the values, of the credentials and logins its init names, and of the credentials each

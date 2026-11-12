@@ -2,9 +2,10 @@ import crypto from 'node:crypto';
 import path from 'node:path';
 import { z } from 'zod';
 import type { Can, RuntimeFailure } from '@teamai/runtime-protocol';
+import { mayBeRunning } from '@teamai/shared/process-group';
 import type { JournalId } from '../journal.js';
 import type { ProfileOption, WarmOptions } from '../options.js';
-import { isRunning, oneBuildPerKey, planWarm, scratchOf, WARM_REPOSITORY, warmFailed, type WarmPlan } from '../warm.js';
+import { oneBuildPerKey, planWarm, scratchOf, WARM_REPOSITORY, warmFailed, type WarmPlan } from '../warm.js';
 import { COMMAND_MS, type ExecEnd, type ExecSpec, type PlaceKey, type Provider } from '../provider.js';
 import { offerSignedIn, type MissingCommand } from '../sign-in.js';
 import { cliOf, commandsOf, definedOnly, heldProbe, signalled, LAUNCHABLE, mountsOf, WORKSPACES, type Ran } from './cli.js';
@@ -359,7 +360,7 @@ export function sbxProvider({ agent, owner, env, warm, profile }: { agent: strin
         leftWarm: listed.names.filter((name) => {
           const pid = name.startsWith(journalPrefix) ? /^warm-(\d+)-[0-9a-f]+$/.exec(name.slice(journalPrefix.length))?.[1] : undefined;
 
-          return pid !== undefined && !isRunning(Number(pid));
+          return pid !== undefined && !mayBeRunning(Number(pid));
         }),
       };
     },

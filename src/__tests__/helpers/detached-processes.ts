@@ -2,6 +2,7 @@ import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { leftSkillRunners, RUNNER_EXIT_MS, stopLeftSkillRunners } from './skill-runners.js';
+import { signalPid } from '@teamai/shared/process-group';
 
 /** Track detached children before their parent exits, so a fixture can join them. */
 export function trackDetachedProcesses(root: string): { preload: string; nodeOptions: string; running: () => number[]; waitForExit: (options?: { runnerExitMs?: number }) => Promise<void> } {
@@ -61,18 +62,13 @@ function trackedChildren(): string {
 /** The tracked pids still running; each exited one is forgotten. */
 function runningIn(children: string): number[] {
   return fs.readdirSync(children).map(Number).filter((pid) => {
-    try {
-      process.kill(pid, 0);
-      return !isZombie(pid);
-    } catch (e) {
-      // ESRCH means the pid is gone. EPERM means it belongs to a process this
-      // runner cannot signal: on macOS a pid the kernel recycled to another
-      // user's process answers that way. It is not teamai's child any more, so
-      // it is forgotten like ESRCH (#1504).
-      if (!(e instanceof Error && 'code' in e && (e.code === 'ESRCH' || e.code === 'EPERM'))) throw e;
-      fs.unlinkSync(path.join(children, String(pid)));
-      return false;
-    }
+    if (signalPid(pid, 0) === 'sent') return !isZombie(pid);
+    // `gone`: the pid is gone. `denied`: it belongs to a process this runner
+    // cannot signal: on macOS a pid the kernel recycled to another user's
+    // process answers that way. It is not teamai's child any more, so it is
+    // forgotten like a gone one (#1504).
+    fs.unlinkSync(path.join(children, String(pid)));
+    return false;
   });
 }
 

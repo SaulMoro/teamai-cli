@@ -2,6 +2,7 @@ import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { z } from 'zod';
+import { signalGroup, signalPid } from '@teamai/shared/process-group';
 import { readRegularFileSync } from '@teamai/shared/regular-file';
 
 /** What the prompt or the options ask a fake agent to do beyond answering. */
@@ -99,7 +100,7 @@ export function fakeAgent(recording: FakeAgentRecording, options: FakeAgentOptio
       const listed = fs.existsSync(pids) ? readRegularFileSync(pids, 'utf8').split('\n').filter(Boolean).map(Number) : [];
       const alive = listed.filter(isAlive);
 
-      for (const pid of alive) process.kill(pid, 'SIGKILL');
+      for (const pid of alive) signalPid(pid, 'SIGKILL');
 
       return alive;
     },
@@ -108,13 +109,7 @@ export function fakeAgent(recording: FakeAgentRecording, options: FakeAgentOptio
 }
 
 function isAlive(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-
-    return true;
-  } catch {
-    return false;
-  }
+  return signalPid(pid, 0) === 'sent';
 }
 
 const ENGINE = String.raw`
@@ -161,7 +156,7 @@ export function runFakeAgent(executable: string, args: readonly string[], prompt
 
     if (pid !== undefined) started.add(pid);
     child.stdout.on('data', (chunk: Buffer) => {
-      if (stdout === '' && stopAfterOutputMs !== undefined && pid !== undefined) setTimeout(() => process.kill(-pid, 'SIGTERM'), stopAfterOutputMs);
+      if (stdout === '' && stopAfterOutputMs !== undefined && pid !== undefined) setTimeout(() => signalGroup(pid, 'SIGTERM'), stopAfterOutputMs);
       stdout += chunk.toString('utf8');
     });
     child.on('close', (code) => resolve({ stdout, code }));
@@ -175,7 +170,7 @@ export function leftFakeAgents(): number[] {
 
   started.clear();
 
-  for (const pid of alive) process.kill(-pid, 'SIGKILL');
+  for (const pid of alive) signalGroup(pid, 'SIGKILL');
 
   return alive;
 }

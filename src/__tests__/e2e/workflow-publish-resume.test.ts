@@ -12,6 +12,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { z } from 'zod';
 import { REPORTS_LOCK_FILENAME } from '../../types.js';
 import { acquireLock, releaseLock } from '../../update.js';
+import { signalGroup } from '@teamai/shared/process-group';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
 const CLI = path.join(ROOT, 'dist', 'index.js');
@@ -308,7 +309,7 @@ describe('workflow publish and resume across members', () => {
     });
     expect(await waitFor(`${hold}.held`, 30_000), 'alice reached change.more').toBe(true);
     // Ctrl-C in a terminal: the foreground group, the driver and the command it runs, gets SIGINT.
-    process.kill(-pid, 'SIGINT');
+    expect(signalGroup(pid, 'SIGINT')).toBe('sent');
     const stopped = await started;
     expect(stopped.signal, said(stopped)).toBe('SIGINT');
     fs.rmSync(hold);
@@ -399,7 +400,7 @@ describe('workflow publish and resume across members', () => {
       expect(refused.envelope()).toMatchObject({ error: { code: 'driver_running' } });
       expect(() => publishedState(run), 'nothing reached teamai-reports').toThrow();
     } finally {
-      process.kill(-pid, 'SIGINT');
+      signalGroup(pid, 'SIGINT');
       await started;
     }
   }, 120_000);

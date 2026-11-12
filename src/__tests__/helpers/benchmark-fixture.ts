@@ -431,7 +431,7 @@ export async function benchmarkFixture(options: BenchmarkFixtureOptions): Promis
   if (pulled.status !== 0) throw new Error('teamai pull failed: ' + pulled.stderr);
 }`,
     'kills-its-driver': `if (first) {
-  process.kill(process.ppid, 'SIGKILL');
+  if (process.ppid > 1) process.kill(process.ppid, 'SIGKILL');
   process.exit(0);
 }`,
   };

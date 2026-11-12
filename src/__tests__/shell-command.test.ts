@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { stopRecordedGroup } from '@teamai/shared/process-group';
+import { signalPid, stopRecordedGroup } from '@teamai/shared/process-group';
 import { runShellCommand, startGroupedCommand } from '../workflow/shell-command.js';
 
 const dirs: string[] = [];
@@ -61,7 +61,7 @@ it.skipIf(process.platform === 'win32')('stops an attached command and what it s
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-stop-attached-'));
   const pidFile = path.join(directory, 'sleep.pid');
   const started = startGroupedCommand({ command: `sleep 60 & echo $! > ${JSON.stringify(pidFile)}; wait`, cwd: directory, env: process.env, detached: false, group: directory });
-  const alive = (pid: number): boolean => { try { return process.kill(pid, 0); } catch { return false; } };
+  const alive = (pid: number): boolean => signalPid(pid, 0) === 'sent';
   try {
     for (let probe = 0; probe < 100 && !(fs.existsSync(pidFile) && fs.readFileSync(pidFile, 'utf8').trim() !== ''); probe += 1) await new Promise((resolve) => setTimeout(resolve, 50));
     const sleeper = Number(fs.readFileSync(pidFile, 'utf8'));

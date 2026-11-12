@@ -19,7 +19,7 @@ import { log } from '@teamai/shared/log';
 import { holdLogin, holdLoginFrom, loginHolder, loginHome, loginLockFile } from '../workflow/runtimes/login.js';
 import { knownSecrets } from '../env-resolution.js';
 import { alive, dirs, exitsWithin, LOG, parallelFixture, toolPaths, TWO_BARRIERS, workflowFixture } from './helpers/workflow-local-driver-fixture.js';
-import { recordGroup } from '@teamai/shared/process-group';
+import { recordGroup, signalPid } from '@teamai/shared/process-group';
 import * as envExec from '../env-exec.js';
 
 _setDriverPollMs(20);
@@ -351,7 +351,7 @@ const timer = setInterval(() => {
     const cleanup = (): void => {
       if (!fs.existsSync(pidFile)) return;
       const pid = Number(fs.readFileSync(pidFile, 'utf8'));
-      if (Number.isSafeInteger(pid) && pid > 0 && alive(pid)) process.kill(pid, 'SIGKILL');
+      if (Number.isSafeInteger(pid) && pid > 0 && alive(pid)) signalPid(pid, 'SIGKILL');
     };
     signal.addEventListener('abort', cleanup, { once: true });
     try {
@@ -409,7 +409,7 @@ setInterval(() => {}, 1000);
       expect(done).toMatchObject({ data: { done: { outcome: 'succeeded', end: 'done' } } });
       expect(await exitsWithin(pid, 1000)).toBe(true);
     } finally {
-      if (pid !== undefined && alive(pid)) process.kill(pid, 'SIGKILL');
+      if (pid !== undefined && alive(pid)) signalPid(pid, 'SIGKILL');
     }
   });
 
@@ -858,7 +858,7 @@ setInterval(() => {}, 1000);
       expect(await driving).toMatchObject({ data: { done: { outcome: 'cancelled' } } });
       expect(await exitsWithin(pid, 1000)).toBe(true);
     } finally {
-      if (pid !== undefined && alive(pid)) process.kill(pid, 'SIGKILL');
+      if (pid !== undefined && alive(pid)) signalPid(pid, 'SIGKILL');
       await cancelRun(config, runId, await knownSecrets(config));
       await driving;
     }
@@ -918,7 +918,7 @@ setInterval(() => {}, 1000);
         await vi.waitFor(() => expect(fs.existsSync(path.join(markers, 'first.stopping'))).toBe(true), { timeout: 7000, interval: 20 });
         expect(await driving).not.toHaveProperty('error');
         const pid = Number(fs.readFileSync(path.join(markers, 'first.pid'), 'utf8'));
-        expect(() => process.kill(pid, 0)).toThrow();
+        expect(signalPid(pid, 0)).toBe('gone');
         expect(await runLocalDriver(config, runId, workspace, options)).toMatchObject({ data: { done: { outcome: 'succeeded' } } });
         expect(fs.existsSync(path.join(markers, 'first.stopping'))).toBe(true);
         expect(fs.existsSync(path.join(markers, 'first.cleaned'))).toBe(true);
@@ -929,7 +929,7 @@ setInterval(() => {}, 1000);
         await cancelRun(config, runId, await knownSecrets(config));
         const pidFile = path.join(markers, 'first.pid');
         if (fs.existsSync(pidFile) && !fs.existsSync(path.join(markers, 'first.cleaned'))) {
-          try { process.kill(Number(fs.readFileSync(pidFile, 'utf8')), 'SIGKILL'); } catch { /* Already exited. */ }
+          try { signalPid(Number(fs.readFileSync(pidFile, 'utf8')), 'SIGKILL'); } catch { /* Already exited. */ }
         }
         await driving;
       }
