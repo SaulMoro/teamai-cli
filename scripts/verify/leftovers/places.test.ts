@@ -51,16 +51,16 @@ function contextOf(files: string[], world: World = sandboxWorld()): LeftoverCont
 function dockerListing(world: World, containers: readonly string[]) {
   const owner = journal(sandboxJournalRoot(world.home)).owner;
 
-  return (argv: readonly string[]): Promise<string | undefined> => {
-    const [command = '', verb = ''] = argv;
+  const printed = (stdout: string) => ({ kind: 'ran', stdout }) as const;
 
-    if (command !== 'docker') return Promise.resolve(undefined);
+  return ([command = '', verb = '']: readonly string[]) => {
+    if (command !== 'docker') return Promise.resolve({ kind: 'missing' } as const);
 
-    if (verb === 'info') return Promise.resolve('29.0.0\n');
+    if (verb === 'info') return Promise.resolve(printed('29.0.0\n'));
 
-    if (verb === 'ps') return Promise.resolve(containers.map((name) => `c0ffee\t${name}\t${owner}\n`).join(''));
+    if (verb === 'ps') return Promise.resolve(printed(containers.map((name) => `c0ffee\t${name}\t${owner}\n`).join('')));
 
-    return Promise.resolve(verb === 'exec' ? 'PATH=/usr/bin\0HOME=/root\0\0' : undefined);
+    return Promise.resolve(printed('PATH=/usr/bin\0HOME=/root\0\0'));
   };
 }
 

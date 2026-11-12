@@ -26,6 +26,9 @@ import { declaredCredentialNames, judgeSandboxEnv, parseEnviron, type EnvVerdict
 import { CANARY_NAME, worldHomes, type World } from './world.js';
 
 const run = promisify(execFile);
+
+/** What a failed `execFile` adds to its error: the command's stderr, and whether its timeout killed it. */
+const ExecFailureSchema = z.looseObject({ stderr: z.string().optional(), killed: z.boolean().optional() });
 const POLL_MS = 500;
 const OBSERVED_FILE = 'observed.jsonl';
 
@@ -120,14 +123,21 @@ function environsOf(stdout: string): Array<Map<string, string>> {
   return stdout.split('\0\0').flatMap((block) => (block === '' ? [] : [parseEnviron(block)]));
 }
 
-/** What `argv` printed on this machine, or undefined when it could not run or failed: the observer's one effect on a sandbox. */
-async function listedHere(argv: readonly string[]): Promise<string | undefined> {
+/** What a command the observer runs answered: what it printed, that it is not installed here, or that it failed and why. */
+export type Listed = { kind: 'ran'; stdout: string } | { kind: 'missing' } | { kind: 'failed'; why: string };
+
+/** What `argv` answered on this machine: the observer's one effect on a sandbox. */
+async function listedHere(argv: readonly string[]): Promise<Listed> {
   const [command = 'true', ...args] = argv;
 
   try {
-    return (await run(command, args, { encoding: 'utf8', timeout: 10_000, maxBuffer: 16 * 1024 ** 2 })).stdout;
-  } catch {
-    return undefined;
+    return { kind: 'ran', stdout: (await run(command, args, { encoding: 'utf8', timeout: 10_000, maxBuffer: 16 * 1024 ** 2 })).stdout };
+  } catch (error) {
+    if (errnoCode(error) === 'ENOENT') return { kind: 'missing' };
+    const failure = ExecFailureSchema.safeParse(error);
+    const said = failure.success ? failure.data.stderr?.trim().split('\n').at(-1) : undefined;
+
+    return { kind: 'failed', why: failure.success && failure.data.killed === true ? 'it took over 10 s' : said || (error instanceof Error ? error.message : String(error)) };
   }
 }
 
@@ -178,7 +188,7 @@ export function bwrapSteps(procs: readonly ProcEntry[], roots: readonly string[]
 }
 
 /** Starts watching; `stop` takes a last look and answers the lines to show, and has written them to observed.jsonl. */
-export function startObserver(world: World, { pass, label, listed = listedHere }: { pass: ReadonlyMap<string, string>; label: string; listed?: (argv: readonly string[]) => Promise<string | undefined> }) {
+export function startObserver(world: World, { pass, label, listed = listedHere }: { pass: ReadonlyMap<string, string>; label: string; listed?: (argv: readonly string[]) => Promise<Listed> }) {
   const canary = world.env?.[CANARY_NAME] ?? '';
   const secrets = new Map([...Object.entries(collectEnvSecrets(process.env)), ...pass]);
   const { declared, unreadable } = declaredCredentials(world);
@@ -187,7 +197,8 @@ export function startObserver(world: World, { pass, label, listed = listedHere }
   const unobserved = new Set<string>();
   const notRunning = new Map<string, string>();
   let sawSeatbelt = false;
-  let enginesUp: Array<(typeof CONTAINER_ENGINES)[number]> | undefined;
+  // An engine down at one look is asked again at the next; one not installed, never again.
+  const engines = new Map<(typeof CONTAINER_ENGINES)[number], 'up' | 'missing'>();
 
   const judge = (key: string, what: string, environs: ReadonlyArray<ReadonlyMap<string, string>>): void => {
     const entry = seen.get(key) ?? { what, read: 0, names: new Set<string>() };
@@ -201,34 +212,58 @@ export function startObserver(world: World, { pass, label, listed = listedHere }
     }
   };
 
-  const containers = async (): Promise<void> => {
-    enginesUp ??= (await Promise.all(CONTAINER_ENGINES.map(async (engine) => ((await listed([PROVIDER_COMMANDS[engine], 'info', '--format', '{{.ServerVersion}}'])) === undefined ? [] : [engine])))).flat();
+  const containers = (): Promise<void[]> => Promise.all(CONTAINER_ENGINES.map(async (engine) => {
+    const command = PROVIDER_COMMANDS[engine];
 
-    for (const engine of enginesUp) {
-      const command = PROVIDER_COMMANDS[engine];
-      const lines = await listed([command, 'ps', '--filter', 'label=teamai.owner', '--format', '{{.ID}}\t{{.Names}}\t{{.Label "teamai.owner"}}']);
+    if (engines.get(engine) === 'missing') return;
 
-      if (lines === undefined) {
-        unobserved.add(`${engine} containers, \`${engine} ps\` failed`);
-        continue;
-      }
+    if (engines.get(engine) !== 'up') {
+      const info = await listed([command, 'info', '--format', '{{.ServerVersion}}']);
 
-      for (const line of lines.split('\n')) {
-        const [id = '', name = '', owner = ''] = line.split('\t');
+      if (info.kind === 'failed') return;
+      engines.set(engine, info.kind === 'missing' ? 'missing' : 'up');
 
-        if (id === '' || !owners.has(owner)) continue;
-        const environs = await listed([command, 'exec', id, 'sh', '-c', ENVIRONS]);
-
-        judge(`${engine}:${name}`, `${engine}:${name}`, environs === undefined ? [] : environsOf(environs));
-      }
+      if (info.kind === 'missing') return;
     }
-  };
+
+    const lines = await listed([command, 'ps', '--filter', 'label=teamai.owner', '--format', '{{.ID}}\t{{.Names}}\t{{.Label "teamai.owner"}}']);
+
+    if (lines.kind !== 'ran') {
+      unobserved.add(`${engine} containers, \`${engine} ps\` failed`);
+
+      return;
+    }
+
+    for (const line of lines.stdout.split('\n')) {
+      const [id = '', name = '', owner = ''] = line.split('\t');
+
+      if (id === '' || !owners.has(owner)) continue;
+      const environs = await listed([command, 'exec', id, 'sh', '-c', ENVIRONS]);
+
+      judge(`${engine}:${name}`, `${engine}:${name}`, environs.kind === 'ran' ? environsOf(environs.stdout) : []);
+    }
+  }));
 
   const sbx = async (): Promise<void> => {
     const out = await listed([PROVIDER_COMMANDS.sbx, 'ls', '--json']);
-    const parsed = out === undefined ? undefined : SbxListedSchema.safeParse(JSON.parse(out));
 
-    for (const sandbox of parsed?.success === true ? parsed.data : []) {
+    if (out.kind === 'missing') return;
+
+    if (out.kind === 'failed') {
+      unobserved.add(`sbx sandboxes, \`sbx ls\` failed (${out.why})`);
+
+      return;
+    }
+
+    const parsed = SbxListedSchema.safeParse(JSON.parse(out.stdout));
+
+    if (!parsed.success) {
+      unobserved.add('sbx sandboxes, `sbx ls --json` printed a list this harness cannot read');
+
+      return;
+    }
+
+    for (const sandbox of parsed.data) {
       const owner = journalOfSbxName(sandbox.name);
 
       if (owner === undefined || !owners.has(owner)) continue;
@@ -241,7 +276,7 @@ export function startObserver(world: World, { pass, label, listed = listedHere }
 
       const environs = await listed([PROVIDER_COMMANDS.sbx, 'exec', sandbox.name, 'sh', '-c', ENVIRONS]);
 
-      judge(`sbx:${sandbox.name}`, `sbx:${sandbox.name}`, environs === undefined ? [] : environsOf(environs));
+      judge(`sbx:${sandbox.name}`, `sbx:${sandbox.name}`, environs.kind === 'ran' ? environsOf(environs.stdout) : []);
     }
   };
 

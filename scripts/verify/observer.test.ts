@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { journal } from '../../packages/runtime-sandbox/src/journal.js';
 import { sandboxJournalRoot } from '../../packages/runtime-sandbox/src/journal-root.js';
 import { bwrapSteps, startObserver } from './observer.js';
@@ -10,6 +10,8 @@ import type { World } from './world.js';
 const roots: string[] = [];
 
 afterEach(() => {
+  vi.useRealTimers();
+
   for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true });
 });
 
@@ -25,18 +27,22 @@ function worldIn(members: World['members'] = []): World {
   };
 }
 
+const failed = { kind: 'failed', why: 'exit 1' } as const;
+const missing = { kind: 'missing' } as const;
+const printed = (stdout: string) => ({ kind: 'ran', stdout }) as const;
+
 /** An engine that lists one teamai container of `world`'s journal and fails every `docker exec` into it. */
 function dockerFailingExec(world: World) {
   const owner = journal(sandboxJournalRoot(world.home)).owner;
 
-  return (argv: readonly string[]): Promise<string | undefined> => {
+  return (argv: readonly string[]) => {
     const [command = '', verb = ''] = argv;
 
-    if (command === 'docker' && verb === 'info') return Promise.resolve('29.0.0\n');
+    if (command === 'docker' && verb === 'info') return Promise.resolve(printed('29.0.0\n'));
 
-    if (command === 'docker' && verb === 'ps') return Promise.resolve(`c0ffee\tteamai-r1-a1\t${owner}\n`);
+    if (command === 'docker' && verb === 'ps') return Promise.resolve(printed(`c0ffee\tteamai-r1-a1\t${owner}\n`));
 
-    return Promise.resolve(undefined);
+    return Promise.resolve(command === 'docker' ? failed : missing);
   };
 }
 
@@ -50,9 +56,40 @@ describe('the sandbox observer', () => {
 
   it.runIf(process.platform !== 'linux')("says a container member's bwrap steps go unread off Linux, where it reads no /proc", async () => {
     const world = worldIn([{ machine: 'container', container: 'teamai-verify-x-carol', name: 'carol', home: '/w/carol/home', project: '/w/carol/project', tmp: '/tmp/carol', writers: '/w/carol/writers.json', env: {}, baseline: { files: {} } }]);
-    const observer = startObserver(world, { pass: new Map(), label: 'teamai workflow start', listed: () => Promise.resolve(undefined) });
+    const observer = startObserver(world, { pass: new Map(), label: 'teamai workflow start', listed: () => Promise.resolve(missing) });
 
     expect(await observer.stop()).toContain("[verify] NOT OBSERVED: bwrap steps in @carol's container, the observer reads their environment from /proc on Linux only");
+  });
+
+  it('says it could not list the sbx sandboxes when `sbx ls` fails, and nothing when sbx is not installed', async () => {
+    const world = worldIn();
+    const sbxFails = startObserver(world, { pass: new Map(), label: 'teamai workflow start', listed: ([command]) => Promise.resolve(command === 'sbx' ? { kind: 'failed', why: 'sbx: not signed in' } as const : missing) });
+    const noSbx = startObserver(world, { pass: new Map(), label: 'teamai workflow start', listed: () => Promise.resolve(missing) });
+
+    expect(await sbxFails.stop()).toEqual(['[verify] NOT OBSERVED: sbx sandboxes, `sbx ls` failed (sbx: not signed in)']);
+    expect(await noSbx.stop()).toEqual([]);
+  });
+
+  it('asks again on the next look for an engine that was down at the first, and reads the container it then lists', async () => {
+    vi.useFakeTimers();
+    const world = worldIn();
+    const owner = journal(sandboxJournalRoot(world.home)).owner;
+    let infos = 0;
+    const observer = startObserver(world, {
+      pass: new Map(),
+      label: 'teamai workflow start',
+      listed: ([command = '', verb = '']) => {
+        if (command !== 'docker') return Promise.resolve(missing);
+
+        if (verb === 'info') return Promise.resolve((infos += 1) === 1 ? failed : printed('29.0.0\n'));
+
+        return Promise.resolve(verb === 'ps' ? printed(`c0ffee\tteamai-r0123abcd-a0123abcd\t${owner}\n`) : printed('PATH=/usr/bin\0\0'));
+      },
+    });
+
+    await vi.advanceTimersByTimeAsync(500);
+
+    expect(await observer.stop()).toEqual(['[verify] observed docker:teamai-r0123abcd-a0123abcd: env ok']);
   });
 
   // bwrap with --unshare-pid runs a second bwrap as the namespace's first process, with the same arguments.
