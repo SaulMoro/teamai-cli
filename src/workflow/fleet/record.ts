@@ -18,7 +18,7 @@ import { log } from '@teamai/shared/log';
 import { writeJsonAtomic } from '../../utils/fs.js';
 import { getCurrentVersion } from '../../package-info.js';
 import { fetchReportsOriginFile, updateReports, type ReportsChange } from '../../utils/reports-branch.js';
-import { JsonValueSchema, parseJson, type JsonObject, type JsonValue, isJsonObject } from '@teamai/shared/json';
+import { JsonValueSchema, parseJson, type JsonValue, isJsonObject } from '@teamai/shared/json';
 import { TurnLimitsSchema } from '../requirements.js';
 import { TokenUsageSchema } from '../step-state.js';
 import type { TokenUsage } from '@teamai/tool-core/stdout';
@@ -135,17 +135,18 @@ export type FleetResult = z.infer<typeof FleetResultSchema>;
 
 /**
  * The format of the attempt records this teamai writes and reads. 2: prompt leases, a prompt's session, whole
- * workflow leases and their gates, and an offer's `left`. A record is must-understand: a reader ignores a field it does
- * not know unless the record's `critical` names it, by dotted path from the record's top, an array's elements under the
- * array's own key; then it refuses the record as one a newer teamai wrote. A writer names in `critical` each field that
- * changes what a reader must do, and only a format a reader cannot read at all bumps this. A rewrite keeps the fields
- * its writer does not know as it read them, outside a list's elements. The run's `definition` and a prompt's `limits`
- * stay strict: an unknown key there is another workflow, or a limit nobody would hold the tool to.
+ * workflow leases and their gates, and an offer's `left`. A record is must-understand: a reader ignores a field its
+ * parse leaves out, one this teamai does not know for the record's state and lease kind, unless the record's `critical`
+ * names it, by dotted path from the record's top, an array's elements under the array's own key; then it refuses the
+ * record as one a newer teamai wrote. A writer names in `critical` each field that changes what a reader must do, and
+ * only a format a reader cannot read at all bumps this. A rewrite keeps the fields its writer does not know as it read
+ * them, outside a list's elements. The run's `definition` and a prompt's `limits` stay strict: an unknown key there is
+ * another workflow, or a limit nobody would hold the tool to.
  */
 const RECORD_VERSION = 2;
 
 /** What any teamai's record says of its format, whatever else it holds. */
-const RecordFormatSchema = z.object({ version: z.number(), teamai: z.string().optional().catch(undefined), critical: z.array(z.string()).optional().catch(undefined) });
+const RecordFormatSchema = z.object({ version: z.number(), teamai: z.string().optional().catch(undefined) });
 
 /** What a member's reason for leaving an offer keeps, and how many members' reasons an offer keeps, the newest. */
 const LEFT_WHY_MAX = 400;
@@ -234,24 +235,6 @@ const CancelledSchema = CancellingSchema.extend({ state: z.literal('cancelled'),
 
 export const FleetRecordSchema = z.discriminatedUnion('state', [OfferedSchema, ClaimedSchema, AskingSchema, AnsweredSchema, FinishedSchema, ExpiredSchema, WithdrawnSchema, CancellingSchema, CancelledSchema]);
 
-/** Each field a record of this format may hold, as `critical` names it. */
-const KNOWN_FIELDS: ReadonlySet<string> = new Set(fieldPaths(FleetRecordSchema, ''));
-
-/** Each known field that holds an object of known fields, as `lease` does and a JSON value such as `values.inputs` does not. */
-const KNOWN_OBJECTS: ReadonlySet<string> = new Set([...KNOWN_FIELDS].flatMap((field) => (field.includes('.') ? [field.slice(0, field.lastIndexOf('.'))] : [])));
-
-function fieldPaths(schema: z.core.$ZodType, prefix: string): string[] {
-  if (schema instanceof z.ZodOptional) return fieldPaths(schema.unwrap(), prefix);
-
-  if (schema instanceof z.ZodArray) return fieldPaths(schema.element, prefix);
-
-  if (schema instanceof z.ZodUnion) return schema.options.flatMap((option) => fieldPaths(option, prefix));
-
-  if (!(schema instanceof z.ZodObject)) return [];
-
-  return Object.entries(schema.shape).flatMap(([key, field]) => [`${prefix}${key}`, ...fieldPaths(field, `${prefix}${key}.`)]);
-}
-
 export type FleetRecord = z.infer<typeof FleetRecordSchema>;
 
 export type Offered = Extract<FleetRecord, { state: 'offered' }>;
@@ -310,29 +293,32 @@ function recordPath(run: RunId, attempt: AttemptId): string {
   return `${ATTEMPTS_DIR}/${run}/${attempt}.json`;
 }
 
-function recordText(record: FleetRecord, held?: JsonValue): string {
+/** `record` as written over `held`, the record it replaces as read, with what this teamai's parse of it (`kept`) left out. */
+function recordText(record: FleetRecord, held?: { raw: JsonValue | undefined; kept: FleetRecord }): string {
   const text = `${JSON.stringify(record, null, 2)}\n`;
   const written = held === undefined ? undefined : jsonOf(text);
 
-  return written === undefined || held === undefined ? text : `${JSON.stringify(withUnknownFields(held, written, ''), null, 2)}\n`;
+  return written === undefined || held === undefined ? text : `${JSON.stringify(withUnknownFields(held.raw, jsonOf(JSON.stringify(held.kept)), written), null, 2)}\n`;
 }
 
 /**
- * `written` with each field of `held`, the record it replaces, that this teamai does not know, beside its known fields
- * at `prefix`: a newer teamai's field outlives an older one's write. An array's elements keep only the fields it knows.
+ * `written` with each field `held` holds that `kept`, what this teamai's parse of `held` kept, does not: a field this
+ * teamai does not know outlives its write. An array's elements keep only the fields it knows.
  */
-function withUnknownFields(held: JsonValue, written: JsonValue, prefix: string): JsonValue {
-  if (!isJsonObject(held) || !isJsonObject(written)) return written;
-  const merged: JsonObject = { ...written };
+function withUnknownFields(held: JsonValue | undefined, kept: JsonValue | undefined, written: JsonValue): JsonValue {
+  if (!isJsonObject(held) || !isJsonObject(kept) || !isJsonObject(written)) return written;
+  const unknown = Object.entries(held).filter(([key]) => !Object.hasOwn(kept, key) && !Object.hasOwn(written, key));
 
-  for (const [key, value] of Object.entries(held)) {
-    const at = `${prefix}${key}`;
+  return Object.fromEntries([...Object.entries(written).map(([key, value]) => [key, withUnknownFields(held[key], kept[key], value)] as const), ...unknown]);
+}
 
-    if (!KNOWN_FIELDS.has(at)) merged[key] ??= value;
-    else if (merged[key] !== undefined && KNOWN_OBJECTS.has(at)) merged[key] = withUnknownFields(value, merged[key], `${at}.`);
-  }
+/** Whether `value` holds the field at dotted `path`, an array's elements under the array's own key. */
+function holds(value: JsonValue | undefined, [key, ...rest]: readonly string[]): boolean {
+  if (key === undefined) return value !== undefined;
 
-  return merged;
+  if (Array.isArray(value)) return value.some((element) => holds(element, [key, ...rest]));
+
+  return isJsonObject(value) && Object.hasOwn(value, key) && holds(value[key], rest);
 }
 
 /**
@@ -699,18 +685,20 @@ function parseRecord(text: string, run: string, attempt: string): Written<FleetR
     return { ok: false, error: { code: 'fleet_record_unreadable', message: `The record of attempt ${attempt} of run ${run} on teamai-reports was written by teamai ${format.data.teamai ?? 'older than this one'}, in an older format this teamai does not read. Upgrade teamai on the install that offered it.` } };
   }
 
-  const unknownFields = format.success ? (format.data.critical ?? []).filter((field) => !KNOWN_FIELDS.has(field)) : [];
-
-  if (format.success && unknownFields.length > 0) {
-    const by = format.data.teamai;
-
-    return { ok: false, error: { code: 'fleet_record_newer', message: `The record of attempt ${attempt} of run ${run} on teamai-reports was written by teamai ${by ?? 'newer than this one'}, and needs ${unknownFields.map((field) => `"${field}"`).join(', ')}, which this teamai does not know. Upgrade teamai${by === undefined ? '' : ` to ${by} or later`}.` } };
-  }
-
   const parsed = FleetRecordSchema.safeParse(raw);
 
   if (!parsed.success || parsed.data.run !== run || parsed.data.attempt !== attempt) {
     return { ok: false, error: { code: 'fleet_record_unreadable', message: `The record of attempt ${attempt} of run ${run} on teamai-reports cannot be read.` } };
+  }
+
+  // A field the parse left out is one this teamai does not know, though another state or lease kind may hold it.
+  const kept = jsonOf(JSON.stringify(parsed.data));
+  const unknownFields = (parsed.data.critical ?? []).filter((field) => holds(raw, field.split('.')) && !holds(kept, field.split('.')));
+
+  if (unknownFields.length > 0) {
+    const by = parsed.data.teamai;
+
+    return { ok: false, error: { code: 'fleet_record_newer', message: `The record of attempt ${attempt} of run ${run} on teamai-reports was written by teamai ${by ?? 'newer than this one'}, and needs ${unknownFields.map((field) => `"${field}"`).join(', ')}, which this teamai does not know. Upgrade teamai${by === undefined ? '' : ` to ${by} or later`}.` } };
   }
 
   return { ok: true, value: parsed.data };
@@ -851,7 +839,7 @@ async function writeRecord(config: LocalConfig, record: FleetRecord, { replaces,
 
     if ((held?.value.write) !== replaces) return { value: { ok: false, error: moved }, write: null };
     await fs.mkdir(path.join(worktree, path.dirname(rel)), { recursive: true });
-    await writeRegularFile(path.join(worktree, rel), recordText({ ...record, teamai: getCurrentVersion() }, read.status === 'found' ? jsonOf(read.text) : undefined));
+    await writeRegularFile(path.join(worktree, rel), recordText({ ...record, teamai: getCurrentVersion() }, read.status === 'found' && held?.ok ? { raw: jsonOf(read.text), kept: held.value } : undefined));
 
     return { value: { ok: true, value: undefined }, write: { files: [rel], message } };
   });

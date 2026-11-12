@@ -137,14 +137,15 @@ describe('fleet attempts on teamai-reports', () => {
     expect(published).toMatchObject({ state: 'claimed', ...newer, left: [{ member: { id: 'm1', user: 'carol' }, why: 'no gpu' }] });
   });
 
-  it('refuses a record that names a field this teamai does not know among those its reader must understand, naming the teamai that wrote it', async () => {
+  // A prompt lease's `limits` is a field this teamai knows, but not on a command lease, which would run without it.
+  it.each([['sandbox', 'strict'], ['limits', { turns: 3 }]])('refuses a record that names a field this teamai does not know among those its reader must understand, naming the teamai that wrote it: lease.%s', async (field, value) => {
     const acme = team();
     const [alice, bob] = [await acme.member('alice'), await acme.member('bob')];
     const offered = await offer(alice);
     if (!offered.ok) throw new Error(offered.error.message);
     const rel = `workflows/attempts/${RUN}/${ATTEMPT}.json`;
     await updateReports(alice.config, async (worktree) => {
-      fs.writeFileSync(path.join(worktree, rel), JSON.stringify({ ...offered.value, teamai: '9.1.0', critical: ['lease.command', 'lease.sandbox'], lease: { ...offered.value.lease, sandbox: 'strict' } }));
+      fs.writeFileSync(path.join(worktree, rel), JSON.stringify({ ...offered.value, teamai: '9.1.0', critical: ['lease.command', `lease.${field}`], lease: { ...offered.value.lease, [field]: value } }));
 
       return { value: undefined, write: { files: [rel], message: 'a record with a field its reader must understand' } };
     });
@@ -152,7 +153,7 @@ describe('fleet attempts on teamai-reports', () => {
 
     expect(await readAttemptRecord(bob.config, RUN, ATTEMPT)).toEqual({ ok: false, error: {
       code: 'fleet_record_newer',
-      message: `The record of attempt ${ATTEMPT} of run ${RUN} on teamai-reports was written by teamai 9.1.0, and needs "lease.sandbox", which this teamai does not know. Upgrade teamai to 9.1.0 or later.`,
+      message: `The record of attempt ${ATTEMPT} of run ${RUN} on teamai-reports was written by teamai 9.1.0, and needs "lease.${field}", which this teamai does not know. Upgrade teamai to 9.1.0 or later.`,
     } });
     expect(await listOffers(bob.config, { pool: 'default', repository: 'github.com/acme/business' })).toEqual([]);
   });
