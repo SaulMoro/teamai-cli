@@ -84,7 +84,16 @@ describe('what cleanup does with what the rows found', () => {
       { onCleanup: 'remove', observed: [{ kind: 'observed', findings: [{ what: 'docker container c', attribution: own, remove: ['docker', 'rm', '-f', 'c'] }], notes: [] }] },
     ]);
 
-    expect(plan).toEqual({ kind: 'refuse', processes: ['process 42 on this machine (sleep 900)'] });
+    expect(plan).toEqual({ kind: 'refuse', processes: ['process 42 on this machine (sleep 900)'], unseen: [] });
+  });
+
+  it('refuses when it could not look at the processes, since one of the world may still run there', () => {
+    const plan = cleanupPlan([
+      { onCleanup: 'refuse', observed: [{ kind: 'observed', findings: [], notes: [] }, { kind: 'not_observed', what: 'working directories on this machine', why: 'lsof listed none' }] },
+      { onCleanup: 'remove', observed: [{ kind: 'observed', findings: [{ what: 'docker container c', attribution: own, remove: ['docker', 'rm', '-f', 'c'] }], notes: [] }] },
+    ]);
+
+    expect(plan).toEqual({ kind: 'refuse', processes: [], unseen: ['working directories on this machine, lsof listed none'] });
   });
 
   it("removes only the world's own removable leftovers, keeps what a row keeps, and says what it could not look at", () => {

@@ -10,7 +10,7 @@ const BASIC = `Verify a teamai change end to end: the real CLI, packed and insta
   npm run -s verify -- sh <run> <cmd> [args]  any command in the world (git, claude -p, a second checkout)
   npm run -s verify -- ledger <run>           uninstall teamai in the world, then what is left, in LEDGER-<n>.md; exit 1 on any LEAK
   npm run -s verify -- cleanup <run>|--all    remove the world and the containers and sandboxes it left, keeping world.json,
-                                              logs/ and every ledger; refuses while a process of the world runs
+                                              logs/ and every ledger; refuses while a process of the world runs, or the check for one fails
   npm run -s verify -- dir <run>|--all        the world's directory, or every live world
 
 A world holds a project repo with one commit, a bare team repo at ${TEAM_URL}, the npm pack tarball of

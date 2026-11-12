@@ -35,13 +35,16 @@ function doctor(runId: string | undefined): void {
 
 /**
  * Removes what the world's runs left that the leftover rows attribute to it, then the world's files, keeping world.json,
- * logs/, observed.jsonl and every ledger. Never signals a process: while one of the world's lives, refuses and names it.
+ * logs/, observed.jsonl and every ledger. Never signals a process: while one of the world's lives, or the process check
+ * could not run, refuses and says why.
  */
 async function cleanup(world: World): Promise<boolean> {
   const plan = await planCleanup(world);
 
   if (plan.kind === 'refuse') {
-    console.error(`Not cleaning ${world.runId}: a process of the world still runs. Stop each one, then run cleanup again:\n${plan.processes.map((what) => `  ${what}`).join('\n')}`);
+    if (plan.processes.length > 0) console.error(`Not cleaning ${world.runId}: a process of the world still runs. Stop each one, then run cleanup again:\n${plan.processes.map((what) => `  ${what}`).join('\n')}`);
+
+    if (plan.unseen.length > 0) console.error(`Not cleaning ${world.runId}: cleanup could not look for a process of the world, so one may still run. Fix what failed, then run cleanup again:\n${plan.unseen.map((what) => `  NOT OBSERVED: ${what}`).join('\n')}`);
 
     return false;
   }

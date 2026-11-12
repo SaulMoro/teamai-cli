@@ -331,21 +331,25 @@ export async function leftoversSection(world: World): Promise<{ leaks: string[];
   return { leaks, notes };
 }
 
-/** What cleanup does: refuse while a process of the world lives, naming each; otherwise remove the world's own removable leftovers. */
+/**
+ * What cleanup does: refuse while a process of the world lives, naming each, or while it could not look for one, saying
+ * where; otherwise remove the world's own removable leftovers.
+ */
 export type CleanupPlan =
-  | { kind: 'refuse'; processes: string[] }
+  | { kind: 'refuse'; processes: string[]; unseen: string[] }
   | { kind: 'remove'; removals: Array<{ what: string; command: readonly string[] }>; unobserved: string[] };
 
 /** The plan for what each row observed, judged by the row's `onCleanup`: only this world's own findings count. */
 export function cleanupPlan(rows: ReadonlyArray<{ onCleanup: LeftoverKind['onCleanup']; observed: readonly Observed[] }>): CleanupPlan {
   const processes: string[] = [];
+  const unseen: string[] = [];
   const removals: Array<{ what: string; command: readonly string[] }> = [];
   const unobserved: string[] = [];
 
   for (const { onCleanup, observed } of rows) {
     for (const seen of observed) {
       if (seen.kind === 'not_observed') {
-        unobserved.push(`${seen.what}, ${seen.why}`);
+        (onCleanup === 'refuse' ? unseen : unobserved).push(`${seen.what}, ${seen.why}`);
         continue;
       }
 
@@ -370,7 +374,7 @@ export function cleanupPlan(rows: ReadonlyArray<{ onCleanup: LeftoverKind['onCle
     }
   }
 
-  return processes.length > 0 ? { kind: 'refuse', processes } : { kind: 'remove', removals, unobserved };
+  return processes.length > 0 || unseen.length > 0 ? { kind: 'refuse', processes, unseen } : { kind: 'remove', removals, unobserved };
 }
 
 /** Cleanup's plan for `world`, from every row a world of its tier needs. */
