@@ -234,12 +234,23 @@ function stepPromptSections(files: JudgedSession['stepEvidence']): Array<{ title
 /** What a file name may not hold on Windows: control characters, and what a masked name's placeholders (`<REDACTED:…>`, `<repo>`) carry. */
 const UNWRITABLE_NAME_CHARS = /[<>:"|?*\\\p{Cc}]/gu;
 
+/** A name Windows opens as a device, with any extension: `nul.txt` is NUL ("Naming Files, Paths, and Namespaces"). */
+const WINDOWS_DEVICE_NAME = /^(?:con|prn|aux|nul|com[0-9¹²³]|lpt[0-9¹²³])(?:\..*)?$/iu;
+
+/** One segment of a judge's path as Windows writes it: without what it refuses, never a device, and with nothing it strips at the end. */
+function writableSegment(segment: string): string {
+  const named = segment.replace(UNWRITABLE_NAME_CHARS, '_').replace(/[. ]+$/u, (stripped) => '_'.repeat(stripped.length)) || '_';
+
+  return WINDOWS_DEVICE_NAME.test(named) ? `_${named}` : named;
+}
+
 /**
- * Where masked path `masked` goes in the judge's directory so every platform can write it: each segment without what
- * Windows refuses in a name, and, when that path or a directory on it is taken by an earlier file, as one numbered name.
+ * Where masked path `masked` goes in the judge's directory so every platform can write it: each segment as Windows
+ * writes it (`writableSegment`), and, when that path or a directory on it is taken by an earlier file, as one numbered
+ * name.
  */
 function judgeDirPath(masked: string, taken: { files: Set<string>; dirs: Set<string> }): string {
-  const segments = masked.split('/').map((segment) => segment.replace(UNWRITABLE_NAME_CHARS, '_') || '_');
+  const segments = masked.split('/').map(writableSegment);
   const dirsOf = (parts: readonly string[]): string[] => parts.slice(0, -1).map((_, index) => parts.slice(0, index + 1).join('/'));
   const isFree = (parts: readonly string[]): boolean => !taken.files.has(parts.join('/')) && !taken.dirs.has(parts.join('/')) && dirsOf(parts).every((dir) => !taken.files.has(dir));
   let chosen = segments;
