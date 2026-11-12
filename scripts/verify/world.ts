@@ -174,14 +174,31 @@ export function shortTmpRoot(): string {
   return fs.realpathSync.native('/tmp');
 }
 
-/** Where the host finds a command, or undefined when it has none. */
+/**
+ * Where the host finds a command, or undefined when it has none. Past the `node_modules/.bin` folders `npm run` puts
+ * first on PATH, so a tool this checkout has as a dependency is not taken for the member's own.
+ */
 function hostCommand(name: string): string | undefined {
-  const found = spawnSync('sh', ['-c', `command -v ${name}`], { encoding: 'utf8' }).stdout.trim();
+  const PATH = (process.env.PATH ?? '').split(':').filter((dir) => !dir.endsWith(`${path.sep}node_modules${path.sep}.bin`)).join(':');
+  const found = spawnSync('sh', ['-c', `command -v ${quote(name)}`], { encoding: 'utf8', env: { ...process.env, PATH } }).stdout.trim();
 
   return found === '' ? undefined : found;
 }
 
-/** The only variables a world's commands get. Anything else, a tool home or a teamai setting, must be set on the command line. */
+/**
+ * Links each host command a world may run into `tools`, alone. Its folder would bring every other command there, such
+ * as a launcher that tells itself from the real program by `$HOME`, which in a world names another folder.
+ */
+function linkHostCommands(tools: string): void {
+  fs.mkdirSync(tools, { recursive: true });
+
+  for (const name of worldCommandNames()) {
+    const found = hostCommand(name);
+
+    if (found !== undefined) fs.symlinkSync(found, path.join(tools, path.basename(name)));
+  }
+}
+
 /** Where each install of the world keeps the state of the runtimes outside teamai's process (sandbox, T3, Paseo), one folder each. */
 export function runtimeStateDirs(world: Pick<World, 'home' | 'members'>): string[] {
   return [world.home, ...(world.members ?? []).map((member) => member.home)].map((home) => path.join(home, '.teamai', 'runtime-state'));
@@ -190,9 +207,9 @@ export function runtimeStateDirs(world: Pick<World, 'home' | 'members'>): string
 /** The variable every world's commands carry with a value of its own, which no step may receive: the observer looks for it. */
 export const CANARY_NAME = 'VERIFY_WORLD_CANARY';
 
-function worldEnv(home: string, tmp: string, bin: string, fakes: string, npmCache: string) {
-  const commands = worldCommandNames().flatMap((name) => hostCommand(name) ?? []);
-  const search = [fakes, bin, path.dirname(process.execPath), ...commands.map((command) => path.dirname(command)), '/usr/bin', '/bin', '/usr/sbin', '/sbin'];
+/** The only variables a world's commands get. Anything else, a tool home or a teamai setting, must be set on the command line. */
+function worldEnv(home: string, tmp: string, bin: string, fakes: string, tools: string, npmCache: string) {
+  const search = [fakes, bin, path.dirname(process.execPath), tools, '/usr/bin', '/bin', '/usr/sbin', '/sbin'];
 
   return {
     HOME: home,
@@ -275,7 +292,8 @@ function buildWorld(runId: string, dir: string, tmp: string): World {
   const bin = at('bin');
   fs.mkdirSync(bin);
   writeFakeGh(at('fakes'));
-  const env = worldEnv(at('home'), tmp, path.join(at('install'), 'node_modules', '.bin'), at('fakes'), at('npm-cache'));
+  linkHostCommands(at('tools'));
+  const env = worldEnv(at('home'), tmp, path.join(at('install'), 'node_modules', '.bin'), at('fakes'), at('tools'), at('npm-cache'));
   const run = path.join(bin, 'run');
   fs.writeFileSync(
     run,
