@@ -1147,6 +1147,20 @@ describe('a prompt attempt in a container', () => {
     expect(await second.next((message) => message.event === 'closed' || message.event === 'close_failed', 30_000)).toEqual({ event: 'closed', handle: HANDLE });
   });
 
+  it('keeps the place of an open attempt, and runs its next exec, when an open of it again fails', async () => {
+    const connection = start();
+    await init(connection, { provider: 'docker', image: IMAGE });
+    const at = place();
+    expect((await openPlace(connection, at)).ready).toMatchObject({ event: 'ready' });
+    engine.daemon(false);
+    expect((await openPlace(connection, at)).ready).toMatchObject({ event: 'failed' });
+    engine.daemon(true);
+
+    expect(await exec(connection, { argv: ['/bin/sh', '-c', 'echo still'], cwd: at.worktree })).toMatchObject({ end: { event: 'exited', code: 0 }, output: 'still\n' });
+    connection.send({ type: 'close', handle: HANDLE });
+    expect(await connection.next((message) => message.event === 'closed' || message.event === 'close_failed', 30_000)).toEqual({ event: 'closed', handle: HANDLE });
+  });
+
   it('stops a place on the options it was opened with when teamai, whose profile is gone, gives none', async () => {
     const first = start();
     await init(first, { provider: 'docker', image: IMAGE });
@@ -3117,6 +3131,21 @@ describe('a warm image', () => {
     expect(await openAttempt(connection, at, ATTEMPT)).toMatchObject({ event: 'failed', failure: { code: 'bad_option', key: 'warm.cache', message: expect.stringContaining('package-lock.json is a link to a file outside the checkout') } });
     expect(builds()).toEqual({ saves: [], prepares: [] });
     expect(engine.containers()).toEqual([]);
+  });
+
+  it('keeps no place and serves no attempt socket for an attempt whose first open failed after it was accepted', async () => {
+    const connection = start();
+    await init(connection, { provider: 'docker', image: IMAGE, warm: { prepare: 'exit 7', cache: ['package-lock.json'] } });
+    const at = checkout();
+    const view = { worktree: at.worktree, readonly: [at.git], result: at.result, runDir: at.runDir, toolHome: { CLAUDE_CONFIG_DIR: at.toolHome } };
+    const op = newOp();
+    connection.send({ type: 'open', op, run: RUN, attempt: ATTEMPT, tool: 'claude', credentials: { CLAUDE_CODE_OAUTH_TOKEN: 'oauth-secret-2' }, view });
+    const { socket } = z.object({ socket: z.string() }).parse(JSON.parse(String((await connection.next((message) => message.op === op && message.event === 'accepted')).handle)));
+
+    expect(await connection.next((message) => message.op === op && (message.event === 'ready' || message.event === 'failed'), 30_000)).toMatchObject({ event: 'failed' });
+    expect(fs.existsSync(socket)).toBe(false);
+    connection.send({ type: 'reattach', handle: HANDLE });
+    expect(await connection.next((message) => message.handle === HANDLE && ['alive', 'gone', 'failed'].includes(String(message.event)))).toEqual({ event: 'gone', handle: HANDLE });
   });
 
   it('fails the open with bad_option on warm.cache naming a cache file the checkout does not hold, before any sandbox exists', async () => {

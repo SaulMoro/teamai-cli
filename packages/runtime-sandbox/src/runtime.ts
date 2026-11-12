@@ -200,6 +200,20 @@ export function serve({ input, write: send, journal, warn, provider: providerFor
     // A place whose tool an app may launch through teamai's wrapper serves the attempt socket from now on; its path
     // travels in the handle, which teamai gives that app's runtime as `outer`.
     const outer = tool !== undefined && provider.client !== undefined ? { socket: socketPathOf({ result: view.result, place: handle }), worktree: view.worktree, toolHome: view.toolHome } : undefined;
+    // An open again of a place an earlier open made keeps it whatever this one ends with; a first open that fails after
+    // it was accepted leaves neither its record nor its socket, which holds the step's credentials. teamai's close of
+    // the handle then finds nothing, and a sandbox the engine made meanwhile is this journal's to sweep.
+    const isFirst = journal.place(handle) === undefined;
+
+    const failOpen = async (failure: RuntimeFailure): Promise<void> => {
+      // One with a sandbox recorded is another open's, of the same attempt, that made it meanwhile.
+      if (isFirst && journal.place(handle) !== undefined && journal.place(handle)?.id === undefined) {
+        journal.forget(handle);
+        await sockets.unserve(handle, outer?.socket);
+      }
+
+      fail(op, failure);
+    };
 
     if (outer !== undefined) {
       const served = await sockets.serve({ place: handle, socketPath: outer.socket, credentials, unset });
@@ -223,7 +237,7 @@ export function serve({ input, write: send, journal, warn, provider: providerFor
     const warmed = provider.warm === undefined ? { ok: true as const } : await provider.warm(view, launched, deadline);
 
     if (!warmed.ok) {
-      fail(op, warmed.failure);
+      await failOpen(warmed.failure);
 
       return;
     }
@@ -261,7 +275,7 @@ export function serve({ input, write: send, journal, warn, provider: providerFor
     const made = await creation(handle, make());
 
     if (!made.ok) {
-      fail(op, made.failure);
+      await failOpen(made.failure);
 
       return;
     }
