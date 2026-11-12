@@ -133,7 +133,7 @@ export const KeptLimitSchema = z.object({
   hitAt: z.number(),
   resetsAt: z.number().optional(),
   tryAt: z.number(),
-  /** Limits in a row with no reset given, which space the tries apart. */
+  /** Limits in a row with no reset given, or one already past, which space the tries apart. */
   tries: z.number().int(),
   isWaitChosen: z.boolean(),
 });
@@ -183,15 +183,23 @@ function open({ capMs = WAIT_CAP_MS, zone = memberZone(), kept = [] }: { capMs?:
     return `${isToday ? time : `${wall.year}-${pad(wall.month)}-${pad(wall.day)} ${time}`} (${zone})`;
   };
 
-  const reasonOf = (tool: string, limit: KeptLimit, now: number): string => (limit.resetsAt === undefined
-    ? `${tool} hit its usage limit and gave no reset time, so teamai tries it again at ${clock({ at: limit.tryAt, now })}`
-    : `${tool} hit its usage limit, which resets at ${clock({ at: limit.resetsAt, now })}`);
+  const reasonOf = (tool: string, limit: KeptLimit, now: number): string => {
+    if (limit.resetsAt === undefined) return `${tool} hit its usage limit and gave no reset time, so teamai tries it again at ${clock({ at: limit.tryAt, now })}`;
+
+    if (limit.resetsAt < limit.tryAt) return `${tool} hit its usage limit, which it said resets at ${clock({ at: limit.resetsAt, now })}, already past, so teamai tries it again at ${clock({ at: limit.tryAt, now })}`;
+
+    return `${tool} hit its usage limit, which resets at ${clock({ at: limit.resetsAt, now })}`;
+  };
 
   const capText = capMs % 3_600_000 === 0 ? `${capMs / 3_600_000} hour${capMs === 3_600_000 ? '' : 's'}` : `${Math.ceil(capMs / 60_000)} minutes`;
 
-  const pastCapReason = (tool: string, limit: KeptLimit, now: number): string => (limit.resetsAt === undefined
-    ? `${tool} hit its usage limit at ${clock({ at: limit.since, now })} and gave no reset time, and it held for the ${capText} an unattended run waits for it`
-    : `${tool} hit its usage limit, which resets at ${clock({ at: limit.resetsAt, now })}, past the ${capText} an unattended run waits for it`);
+  const pastCapReason = (tool: string, limit: KeptLimit, now: number): string => {
+    if (limit.resetsAt === undefined) return `${tool} hit its usage limit at ${clock({ at: limit.since, now })} and gave no reset time, and it held for the ${capText} an unattended run waits for it`;
+
+    if (limit.resetsAt < limit.tryAt) return `${tool} hit its usage limit at ${clock({ at: limit.since, now })} and still held past the reset it gave, for the ${capText} an unattended run waits for it`;
+
+    return `${tool} hit its usage limit, which resets at ${clock({ at: limit.resetsAt, now })}, past the ${capText} an unattended run waits for it`;
+  };
 
   const isPastCap = (limit: KeptLimit, now: number): boolean => now >= limit.since + capMs || limit.tryAt > limit.since + capMs;
 
@@ -212,8 +220,9 @@ function open({ capMs = WAIT_CAP_MS, zone = memberZone(), kept = [] }: { capMs?:
     hit({ tool, message, now, on = 'here' }) {
       const earlier = limits.get(keyOf(tool, on));
       const resetsAt = resetOf(message, { now, zone });
-      const tries = resetsAt === undefined ? (earlier?.tries ?? -1) + 1 : 0;
-      const tryAt = resetsAt ?? now + Math.min(FIRST_TRY_MS * 2 ** tries, LONGEST_TRY_MS);
+      // A reset already past, as a server still refusing just after it or a clock behind, is spaced as no reset is.
+      const tries = resetsAt !== undefined && resetsAt > now ? 0 : (earlier?.tries ?? -1) + 1;
+      const tryAt = resetsAt !== undefined && resetsAt > now ? resetsAt : now + Math.min(FIRST_TRY_MS * 2 ** tries, LONGEST_TRY_MS);
 
       limits.set(keyOf(tool, on), { tool, on, since: earlier?.since ?? now, hitAt: now, tryAt, tries, isWaitChosen: earlier?.isWaitChosen ?? false, ...(resetsAt !== undefined && { resetsAt }) });
     },

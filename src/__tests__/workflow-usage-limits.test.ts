@@ -64,6 +64,19 @@ describe('usage limits of one drive', () => {
     expect(limits.whenIdle(now + 6 * hour, ['claude'])).toEqual({ kind: 'past_cap', tool: 'claude', reason: 'claude hit its usage limit at 13:30 (Europe/Madrid) and gave no reset time, and it held for the 6 hours an unattended run waits for it' });
   });
 
+  it('tries a limit whose given reset is already past again a little later, not at once, a little later each time', () => {
+    const limits = UsageLimits.open({ capMs: 6 * hour, zone });
+    // The older Claude Code form, an epoch a minute past: the server still refuses for a while after it.
+    const message = `Claude AI usage limit reached|${(now - 60_000) / 1000}`;
+    limits.hit({ tool: 'claude', message, now });
+
+    expect(limits.whenIdle(now, ['claude'])).toMatchObject({ kind: 'wait', until: now + 60_000 });
+    expect(limits.held(now)).toEqual({ claude: 'claude hit its usage limit, which it said resets at 13:29 (Europe/Madrid), already past, so teamai tries it again at 13:31 (Europe/Madrid)' });
+    limits.hit({ tool: 'claude', message, now: now + 60_000 });
+    expect(limits.whenIdle(now + 60_000, ['claude'])).toMatchObject({ kind: 'wait', until: now + 180_000 });
+    expect(limits.whenIdle(now + 6 * hour, ['claude'])).toEqual({ kind: 'past_cap', tool: 'claude', reason: 'claude hit its usage limit at 13:30 (Europe/Madrid) and still held past the reset it gave, for the 6 hours an unattended run waits for it' });
+  });
+
   it('holds a tool a fleet member met the limit of on the fleet only, where a limit met here holds it on the fleet within the cap', () => {
     const limits = UsageLimits.open({ capMs: 6 * hour, zone });
     limits.hit({ tool: 'claude', message: 'claude hit its usage limit: You\'ve hit your limit · resets 3pm (Europe/Madrid)', now, on: 'fleet' });
