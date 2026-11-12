@@ -169,6 +169,12 @@ describe('which runtime a name finds', () => {
     if (!next.ok) throw new Error(next.failure.message);
 
     expect(fs.existsSync(leftDir)).toBe(false);
+    if (next.source.launch.kind !== 'executable') throw new Error('no copy');
+    // The person reviews what runs, which a pull no longer changes, at the revision they accept.
+    const asked: string[] = [];
+    const { acceptRuntime } = await import('../workflow/runtimes/locate.js');
+    expect(await acceptRuntime(next.source, { mode: 'attended', canAsk: true, ask: async (question) => { asked.push(question); return true; } })).toEqual({ ok: true });
+    expect(asked).toEqual([expect.stringContaining(`Review ${path.dirname(next.source.launch.executable)} (RUNTIME.yaml, runtime)`)]);
     await next.remove();
   });
 

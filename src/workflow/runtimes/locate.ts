@@ -52,9 +52,10 @@ export type RuntimeLaunch = { readonly kind: 'node'; readonly file: string } | {
 
 /**
  * What a person accepts before a team runtime first runs here: its folder at its revision, or its file's command at the
- * file's content. A member's own runtime and teamai's need nothing.
+ * file's content. A member's own runtime and teamai's need nothing. `copy`: the copy of the folder it runs from, once
+ * pinned (`pinRuntime`), which the person reviews; `dir` stays what an acceptance is kept for.
  */
-export type RuntimeTrust = { readonly kind: 'none' } | { readonly kind: 'folder'; readonly dir: string } | { readonly kind: 'command'; readonly command: string };
+export type RuntimeTrust = { readonly kind: 'none' } | { readonly kind: 'folder'; readonly dir: string; readonly copy?: string } | { readonly kind: 'command'; readonly command: string };
 
 /** A runtime that is an external program, as its marker declares it. */
 export interface ExternalRuntime {
@@ -388,7 +389,7 @@ export async function pinRuntime(source: ExternalRuntime, { config }: { config: 
 
   if (link.link !== undefined) return refused(`its folder now holds the link ${link.link}, and teamai runs a team runtime only when its folder holds no link`);
 
-  return { ok: true, source: { ...source, revision: await folderRevision(copy), launch: { kind: 'executable', executable: path.join(copy, path.relative(trust.dir, launch.executable)) } }, remove };
+  return { ok: true, source: { ...source, revision: await folderRevision(copy), trust: { ...trust, copy }, launch: { kind: 'executable', executable: path.join(copy, path.relative(trust.dir, launch.executable)) } }, remove };
 }
 
 /** Whether `source` was accepted here, asking no one: for a decision that must not wait on a person. */
@@ -428,7 +429,7 @@ export async function acceptRuntime(source: RuntimeSource, { mode, canAsk, ask =
     }
 
     case 'folder':
-      return acceptFolder(source, trust.dir, { isAsking, ask });
+      return acceptFolder(source, { dir: trust.dir, review: trust.copy ?? trust.dir }, { isAsking, ask });
     default: {
       const unhandled: never = trust;
 
@@ -437,8 +438,8 @@ export async function acceptRuntime(source: RuntimeSource, { mode, canAsk, ask =
   }
 }
 
-/** Whether the runtime folder `dir` of `source` was accepted here at `source`'s revision, asking when `isAsking`. */
-async function acceptFolder(source: ExternalRuntime, dir: string, { isAsking, ask }: { isAsking: boolean; ask: (question: string) => Promise<boolean | undefined> }): Promise<Acceptance> {
+/** Whether the runtime folder `dir` of `source` was accepted here at `source`'s revision, asking when `isAsking` to review `review`. */
+async function acceptFolder(source: ExternalRuntime, { dir, review }: { dir: string; review: string }, { isAsking, ask }: { isAsking: boolean; ask: (question: string) => Promise<boolean | undefined> }): Promise<Acceptance> {
   const { revision } = source;
   const trust = await readTrust();
 
@@ -448,7 +449,7 @@ async function acceptFolder(source: ExternalRuntime, dir: string, { isAsking, as
 
   if (isAsking) {
     const question = `Step runtime "${source.name}" comes from the team repo (${relative}) at revision ${short}, which you have not accepted on this machine. `
-      + `It runs as you, with your files. Review ${dir} (${(await folderEntries(dir)).join(', ')}) before you accept it.\nRun it? [y/N] `;
+      + `It runs as you, with your files. Review ${review} (${(await folderEntries(review)).join(', ')}) before you accept it.\nRun it? [y/N] `;
 
     const accepted = await ask(question);
 
