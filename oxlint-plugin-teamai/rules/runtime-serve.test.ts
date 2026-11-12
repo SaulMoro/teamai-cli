@@ -1,12 +1,15 @@
-import { expect } from 'vitest';
+import { spawnSync } from 'node:child_process';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { expect, it, onTestFinished } from 'vitest';
 
 import { ruleHarness } from '../test/harness.ts';
 
-/** A runtime the fixtures list as not yet on the kit, and one listed whose file is gone. */
-const LISTED = 'packages/runtime-listed/src/main.ts';
-const GONE = 'packages/runtime-gone/src/main.ts';
+const PLUGIN = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
-const rule = ruleHarness('teamai/runtime-serve', { filename: 'packages/runtime-t3/src/conversation.ts', options: [{ notYetOnTheKit: [LISTED, GONE] }] });
+const rule = ruleHarness('teamai/runtime-serve', { filename: 'packages/runtime-t3/src/conversation.ts' });
 
 rule.invalid('rejects a runtime writing an op\'s end itself', `export const end = (write: (line: object) => void, op: string) => write({ op, event: 'finished', result: {} });`, (output) => {
   expect(output).toContain("End an operation through the runtime kit's ledger");
@@ -62,12 +65,18 @@ rule.valid('allows a runtime\'s tests and test harness to read its lines', `impo
 export const lines = (input: NodeJS.ReadableStream) => readline.createInterface({ input });
 export const exited = { op: 'op-1', event: 'exited', code: 0, stdout: '' };`, { filename: 'packages/runtime-t3/src/testing/harness.ts' });
 
-rule.valid('leaves a runtime not yet on the kit alone while it still serves the protocol', `export const end = (write: (line: object) => void, op: string) => write({ op, event: 'cancelled' });`, { filename: LISTED });
+it('takes no list of runtimes let off the kit, so every runtime serves through it', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-oxlint-rule-'));
+  onTestFinished(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const file = path.join(dir, 'packages', 'runtime-listed', 'src', 'main.ts');
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(path.join(dir, 'package.json'), '{}');
+  fs.writeFileSync(file, "export const end = (write: (line: object) => void, op: string) => write({ op, event: 'cancelled' });\n");
+  const config = path.join(dir, '.oxlintrc.json');
+  fs.writeFileSync(config, JSON.stringify({ jsPlugins: [path.join(PLUGIN, 'index.js')], categories: { correctness: 'off' }, rules: { 'teamai/runtime-serve': ['error', { notYetOnTheKit: ['packages/runtime-listed/src/main.ts'] }] } }));
+  const oxlint = path.join(PLUGIN, '..', 'node_modules', '.bin', process.platform === 'win32' ? 'oxlint.cmd' : 'oxlint');
 
-rule.invalid('fails a runtime left on the list once it no longer serves the protocol itself', `export const nothing = 1;`, (output) => {
-  expect(output).toContain(`${LISTED} no longer reads requests or writes an op's end itself`);
-}, { filename: LISTED });
+  const lint = spawnSync(oxlint, ['-c', config, file], { encoding: 'utf8', shell: process.platform === 'win32' });
 
-rule.invalid('fails a listed file that no longer exists, from any source of its runtime', `export const nothing = 1;`, (output) => {
-  expect(output).toContain(`${GONE} is listed in notYetOnTheKit but does not exist`);
-}, { filename: 'packages/runtime-gone/src/other.ts' });
+  expect(lint.stdout + lint.stderr).toContain("Rule 'teamai/runtime-serve' does not accept options");
+});
