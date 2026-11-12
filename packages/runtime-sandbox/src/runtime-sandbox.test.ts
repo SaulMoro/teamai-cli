@@ -2017,7 +2017,7 @@ describe('a judge (a confined prompt) in a container of its own', () => {
     expect(judgeRun.filter((arg, index) => judgeRun[index - 1] === '-v')).toEqual([`${evidence}:/evidence:ro`]);
     expect(judgeRun.join(' ')).toContain(`--network ${HANDLE}-net`);
     expect(judgeRun.join(' ')).toContain('--cap-drop ALL');
-    expect(engine.calls()).toContainEqual(['docker', 'network', 'create', '--internal', '-o', 'com.docker.network.bridge.inhibit_ipv4=true', '--label', `teamai.run=${RUN}`, '--label', `teamai.attempt=${ATTEMPT}`, '--label', expect.stringMatching(/^teamai\.owner=[0-9a-f]{16}$/), `${HANDLE}-net`]);
+    expect(engine.calls()).toContainEqual(['docker', 'network', 'create', '--internal', '-o', 'com.docker.network.bridge.inhibit_ipv4=true', '-o', 'com.docker.network.enable_ipv6=false', '--label', `teamai.run=${RUN}`, '--label', `teamai.attempt=${ATTEMPT}`, '--label', expect.stringMatching(/^teamai\.owner=[0-9a-f]{16}$/), `${HANDLE}-net`]);
     // The filter in front of that network lets through only the provider's host.
     expect(proxyRun.at(-2)).toBe('3128');
     expect(proxyRun.at(-1)).toBe('api.anthropic.com:443');

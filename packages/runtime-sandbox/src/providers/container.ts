@@ -225,8 +225,9 @@ export function containerProvider({ engine, image, owner, host, warm, profile, s
    * it fails, as no sweep finds a network.
    */
   const filtered = async (key: PlaceKey, rules: string[], { isStep }: { isStep: boolean }): Promise<{ ok: true } | { ok: false; failure: RuntimeFailure }> => {
-    // No address of the host on the bridge either, so the host's own services are out of reach too.
-    const network = await cli(['network', 'create', '--internal', '-o', 'com.docker.network.bridge.inhibit_ipv4=true', '--label', `teamai.run=${key.run}`, '--label', `teamai.attempt=${key.attempt}`, '--label', `teamai.owner=${owner}`, networkOf(key)]);
+    // No address of the host on the bridge either, so the host's own services are out of reach too; and no IPv6, which
+    // a daemon's default-network-opts may turn on, so the bridge holds no IPv6 address of the host.
+    const network = await cli(['network', 'create', '--internal', '-o', 'com.docker.network.bridge.inhibit_ipv4=true', '-o', 'com.docker.network.enable_ipv6=false', '--label', `teamai.run=${key.run}`, '--label', `teamai.attempt=${key.attempt}`, '--label', `teamai.owner=${owner}`, networkOf(key)]);
 
     if (!(network.kind === 'ran' && (network.code === 0 || said(network, /already exists/i)))) return sandboxFailed(`${engine} could not create the network ${networkOf(key)} of attempt ${key.attempt}: ${why(network)}`);
     const own = isStep ? ['-v', `${thisMachineOf(key)}:${THIS_MACHINE_DIR}:ro${host.selinux ? ',z' : ''}`] : [];
