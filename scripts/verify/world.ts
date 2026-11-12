@@ -180,6 +180,14 @@ function hostCommand(name: string): string | undefined {
 }
 
 /** The only variables a world's commands get. Anything else, a tool home or a teamai setting, must be set on the command line. */
+/** Where each install of the world keeps the state of the runtimes outside teamai's process (sandbox, T3, Paseo), one folder each. */
+export function runtimeStateDirs(world: Pick<World, 'home' | 'members'>): string[] {
+  return [world.home, ...(world.members ?? []).map((member) => member.home)].map((home) => path.join(home, '.teamai', 'runtime-state'));
+}
+
+/** The variable every world's commands carry with a value of its own, which no step may receive: the observer looks for it. */
+export const CANARY_NAME = 'VERIFY_WORLD_CANARY';
+
 function worldEnv(home: string, tmp: string, bin: string, fakes: string, npmCache: string) {
   const commands = worldCommandNames().flatMap((name) => hostCommand(name) ?? []);
   const search = [fakes, bin, path.dirname(process.execPath), ...commands.map((command) => path.dirname(command)), '/usr/bin', '/bin', '/usr/sbin', '/sbin'];
@@ -194,6 +202,7 @@ function worldEnv(home: string, tmp: string, bin: string, fakes: string, npmCach
     npm_config_cache: npmCache,
     LANG: process.env.LANG ?? 'C.UTF-8',
     TERM: process.env.TERM ?? 'dumb',
+    [CANARY_NAME]: crypto.randomBytes(16).toString('hex'),
   };
 }
 

@@ -50,3 +50,31 @@ export function lineRedactor(mask: (text: string) => string) {
     },
   };
 }
+
+/** A process's environment as /proc/<pid>/environ holds it: NUL-separated NAME=value, read in memory only. */
+export function parseEnviron(text: string): Map<string, string> {
+  return new Map(text.split('\0').flatMap((pair) => {
+    const at = pair.indexOf('=');
+
+    return at > 0 ? [[pair.slice(0, at), pair.slice(at + 1)] as const] : [];
+  }));
+}
+
+/** Whether a sandbox's environment is what a step may carry, or the names of the variables that leak: names only, never a value. */
+export type EnvVerdict = { kind: 'ok' } | { kind: 'leak'; names: string[] };
+
+/**
+ * Judges `env`, a sandbox's environment: a variable leaks when it holds the world's canary, which no step may receive, or
+ * the value of a host secret (`secrets`) under a name the step's credentials did not declare.
+ */
+export function judgeSandboxEnv({ env, canary, secrets, declared }: { env: ReadonlyMap<string, string>; canary: string; secrets: ReadonlyMap<string, string>; declared: ReadonlySet<string> }): EnvVerdict {
+  const hostValues = [...secrets.values()].filter((value) => value !== '');
+
+  const names = [...env].flatMap(([name, value]) => {
+    if (canary !== '' && value.includes(canary)) return [name];
+
+    return !declared.has(name) && hostValues.some((secret) => value.includes(secret)) ? [name] : [];
+  });
+
+  return names.length === 0 ? { kind: 'ok' } : { kind: 'leak', names: names.toSorted() };
+}

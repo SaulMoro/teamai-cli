@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { lineRedactor, passedKeys, splitPassOption, worldRedactor } from './secrets.js';
+import { judgeSandboxEnv, lineRedactor, parseEnviron, passedKeys, splitPassOption, worldRedactor } from './secrets.js';
 
 const TOKEN = 'tok-0123456789abcdef';
 
@@ -31,5 +31,30 @@ describe("a world's redaction", () => {
     const lines = lineRedactor(worldRedactor({ passed: new Map([['A_TOKEN', TOKEN]]), harnessEnv: {} }));
 
     expect(`${lines.push(`one ${TOKEN.slice(0, 7)}`)}${lines.push(`${TOKEN.slice(7)} two\nthree `)}${lines.push(TOKEN)}${lines.end()}`).toBe('one <REDACTED:A_TOKEN> two\nthree <REDACTED:A_TOKEN>');
+  });
+});
+
+describe("what a sandbox's environment may hold", () => {
+  const canary = 'c4n4ry-0123456789abcdef';
+  const secrets = new Map([['GATEWAY_TOKEN', 'tok-abcdef0123456789'], ['OTHER_API_KEY', 'key-9876543210fedcba']]);
+
+  it('is ok with what a step may carry, a declared credential under its own name among it', () => {
+    expect(judgeSandboxEnv({ env: new Map([['PATH', '/usr/bin'], ['GATEWAY_TOKEN', 'tok-abcdef0123456789']]), canary, secrets, declared: new Set(['GATEWAY_TOKEN']) })).toEqual({ kind: 'ok' });
+  });
+
+  it("names every variable that holds the world's canary, or a host secret the step's credentials did not declare, and never a value", () => {
+    const judged = judgeSandboxEnv({
+      env: new Map([['LEAKED', `x${canary}y`], ['VERIFY_WORLD_CANARY', canary], ['ANTHROPIC_API_KEY', 'tok-abcdef0123456789'], ['OTHER_API_KEY', 'key-9876543210fedcba']]),
+      canary,
+      secrets,
+      declared: new Set(['ANTHROPIC_API_KEY']),
+    });
+
+    expect(judged).toEqual({ kind: 'leak', names: ['LEAKED', 'OTHER_API_KEY', 'VERIFY_WORLD_CANARY'] });
+    expect(JSON.stringify(judged)).not.toContain('tok-');
+  });
+
+  it("reads a process's environment as /proc gives it, NUL-separated", () => {
+    expect(parseEnviron('A=1\0B=x=y\0\0junk\0')).toEqual(new Map([['A', '1'], ['B', 'x=y']]));
   });
 });

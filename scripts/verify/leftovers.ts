@@ -12,7 +12,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { z } from 'zod';
 import { worldRedactor } from './secrets.js';
-import { WORLDS_ROOT, type World } from './world.js';
+import { runtimeStateDirs, WORLDS_ROOT, type World } from './world.js';
 
 /** Whose a leftover is: this world's (a LEAK), another world's, teamai's but no world's, or nothing of teamai's. */
 export type Attribution =
@@ -167,12 +167,7 @@ function scanRecords(world: World): RecordScan {
     }
   }
 
-  // Each runtime outside teamai's process (sandbox, T3, Paseo) keeps its state in a folder of its own under this one.
-  const runtimeJournals = homesOf(world).flatMap((home) => {
-    const state = path.join(home, '.teamai', 'runtime-state');
-
-    return fs.existsSync(state) ? fs.readdirSync(state) : [];
-  }).length;
+  const runtimeJournals = runtimeStateDirs(world).flatMap((state) => (fs.existsSync(state) ? fs.readdirSync(state) : [])).length;
 
   return { files, runs, runtimeJournals };
 }

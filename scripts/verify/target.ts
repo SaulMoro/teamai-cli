@@ -4,10 +4,11 @@
  * what a member's own program wrote.
  */
 import { spawn, spawnSync } from 'node:child_process';
+import fs from 'node:fs';
 import path from 'node:path';
 import { lineRedactor, worldRedactor } from './secrets.js';
 import { MEMBER_NAME } from './members.js';
-import { recordWriters, worldFiles, worldWritersFile, writeCommandLog, type Member, type World } from './world.js';
+import { recordWriters, runtimeStateDirs, worldFiles, worldWritersFile, writeCommandLog, type Member, type World } from './world.js';
 
 export type Target = { kind: 'world' } | { kind: 'member'; name: string };
 
@@ -77,6 +78,7 @@ export async function runOn(world: World, target: Target, argv: readonly string[
   const before = worldFiles(place);
   const { command, args, env, cwd } = hostCommand(world, place, argv);
   const child = spawn(command, args, { cwd, env: { ...env, ...Object.fromEntries(pass) }, stdio: ['inherit', 'pipe', 'pipe'] });
+  const watching = watchSandboxes(world, { pass, label: argv.slice(0, 3).map(mask).join(' ') });
   let output = '';
 
   const closed = [child.stdout, child.stderr].map((stream, i) => {
@@ -108,10 +110,46 @@ export async function runOn(world: World, target: Target, argv: readonly string[
   });
 
   await Promise.all(closed);
+
+  for (const line of await watching.stop()) {
+    console.log(line);
+    output += `${line}\n`;
+  }
+
   const log = writeCommandLog(world, argv.map(mask), output, status);
   recordWriters(place.writers, argv, before, worldFiles(place));
 
   return { exit: status ?? 1, log };
+}
+
+/**
+ * Watches for the state a runtime outside teamai's process keeps under a HOME of the world, one stat a second, and
+ * starts the observer (observer.ts) once it is there: a command that runs no such runtime loads none of it.
+ */
+function hasRuntimeState(world: World): boolean {
+  return runtimeStateDirs(world).some((dir) => fs.existsSync(dir));
+}
+
+function watchSandboxes(world: World, { pass, label }: { pass: ReadonlyMap<string, string>; label: string }) {
+  let observer: Promise<{ stop(): Promise<string[]> }> | undefined;
+
+  const look = (): void => {
+    if (observer !== undefined || !hasRuntimeState(world)) return;
+    observer = import('./observer.js').then(({ startObserver }) => startObserver(world, { pass, label }));
+  };
+
+  const timer = setInterval(look, 1_000);
+
+  look();
+
+  return {
+    async stop(): Promise<string[]> {
+      clearInterval(timer);
+      look();
+
+      return observer === undefined ? [] : (await observer).stop();
+    },
+  };
 }
 
 /** Runs a probe `argv` on `target` and answers what it printed, unlogged: how the ledger reads a machine. */
