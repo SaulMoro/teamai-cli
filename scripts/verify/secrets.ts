@@ -101,6 +101,7 @@ export type EnvVerdict = { kind: 'ok' } | { kind: 'leak'; names: string[] };
  */
 export function judgeSandboxEnv({ env, canary, secrets, declared }: { env: ReadonlyMap<string, string>; canary: string; secrets: ReadonlyMap<string, string>; declared: ReadonlySet<string> }): EnvVerdict {
   const envSecrets = Object.fromEntries([...secrets].filter(([, value]) => value.length >= MIN_ENV_VALUE_LENGTH));
+
   const holdsSecret = (name: string, value: string): boolean => {
     const own = secrets.get(name);
 
