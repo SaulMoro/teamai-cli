@@ -131,33 +131,44 @@ type AttemptStop = 'closed' | 'released' | 'none' | 'running';
 /** How `stopAttempt` ended: still `running`, with why, or done; `masked` holds the values its runtime's messages are masked with. */
 type Stopped = ({ ended: Exclude<AttemptStop, 'running'> } | { ended: 'running'; why: string }) & { masked?: Record<string, string> };
 
+/** An attempt of `config`'s scope whose place a step runtime may still hold: its record says `open`, or cannot be read. */
+export type PlaceMaybeHeld = { run: RunId; attempt: AttemptId } & ({ held: 'open' } | { held: 'unreadable'; why: string });
+
 /**
- * Each run of `config`'s scope with an attempt whose record says a step runtime still holds its place, leased or not,
- * and those attempts: `teamai workflow cancel <run>` closes them, and only while the run's records are there.
+ * Each attempt of `config`'s scope whose place a step runtime may still hold, whether its run still goes or was left:
+ * `teamai workflow cancel <run>` closes them, and only while the run's records are there. Fails closed: a folder there
+ * but unreadable throws, and an unreadable record is listed.
  */
-export async function runsWithPlacesLeftOpen(config: LocalConfig): Promise<Array<{ run: RunId; attempts: AttemptId[] }>> {
-  // A runs folder that is there but cannot be read may hold one: the caller learns that rather than none.
-  let names: string[];
+export async function placesMaybeHeld(config: LocalConfig): Promise<PlaceMaybeHeld[]> {
+  const held: PlaceMaybeHeld[] = [];
 
-  try {
-    names = await fs.readdir(runsDir(config));
-  } catch (cause) {
-    if (errnoCode(cause) !== 'ENOENT') throw cause;
-    names = [];
-  }
-
-  const runs: Array<{ run: RunId; attempts: AttemptId[] }> = [];
-
-  for (const name of names.sort()) {
+  for (const name of await namesIn(runsDir(config))) {
     const run = RunIdSchema.safeParse(name);
 
     if (!run.success) continue;
-    const attempts = await placesLeftOpen(config, run.data, new Set());
 
-    if (attempts.length > 0) runs.push({ run: run.data, attempts });
+    for (const entry of await namesIn(attemptsDir(config, run.data))) {
+      const attempt = AttemptIdSchema.safeParse(entry);
+
+      if (!attempt.success) continue;
+      const placement = await readAttemptPlacement(config, run.data, attempt.data);
+
+      if (isPlaceLeftOpen(placement)) held.push({ run: run.data, attempt: attempt.data, held: 'open' });
+      else if (placement.kind === 'unreadable') held.push({ run: run.data, attempt: attempt.data, held: 'unreadable', why: placement.why });
+    }
   }
 
-  return runs;
+  return held;
+}
+
+/** The names in `dir`, sorted, none when it is not there; throws when it is there but cannot be read. */
+async function namesIn(dir: string): Promise<string[]> {
+  try {
+    return (await fs.readdir(dir)).sort();
+  } catch (cause) {
+    if (errnoCode(cause) === 'ENOENT') return [];
+    throw cause;
+  }
 }
 
 /** The attempts of `run` that no lease runs, whose record says a step runtime still holds their place. */

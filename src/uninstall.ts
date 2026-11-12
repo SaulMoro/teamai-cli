@@ -3442,7 +3442,7 @@ async function sweepCreatedLeftovers(plan: RemovalPlan, hooksLeft: ReadonlyArray
     log.debug(`Could not remove ${inventory}: ${e instanceof Error ? e.message : String(e)}`);
   }
 
-  // Nothing of it runs any more: the uninstall refused while a place one keeps was open (`refusedForOpenPlaces`).
+  // Nothing of it runs any more: the uninstall refused while a place one keeps was open (`refusedForHeldPlaces`).
   const runtimeState = runtimeStateRoot(home);
 
   try {
@@ -3628,7 +3628,7 @@ export async function uninstall(opts: UninstallOptions): Promise<void> {
       return;
     }
 
-    if (plan.includeShared && await refusedForOpenPlaces(localConfig)) return;
+    if (plan.includeShared && await refusedForHeldPlaces(localConfig)) return;
 
     printSummary(plan, agentKey);
 
@@ -3678,29 +3678,35 @@ export async function uninstall(opts: UninstallOptions): Promise<void> {
 }
 
 /**
- * Refuses an uninstall that takes this scope's workflow runs while a step runtime keeps a place of one open: those
+ * Refuses an uninstall that takes this scope's workflow runs while a step runtime may still hold a place of one: those
  * records, and what the runtime keeps of the place, are what `teamai workflow cancel` closes it with. Answers whether it
  * refused.
  */
-async function refusedForOpenPlaces(localConfig: LocalConfig): Promise<boolean> {
-  const { runsWithPlacesLeftOpen } = await import('./workflow/runtimes/cancelled.js');
-  let open: Awaited<ReturnType<typeof runsWithPlacesLeftOpen>>;
+async function refusedForHeldPlaces(localConfig: LocalConfig): Promise<boolean> {
+  const { placesMaybeHeld } = await import('./workflow/runtimes/cancelled.js');
+  let held: Awaited<ReturnType<typeof placesMaybeHeld>>;
 
   try {
-    open = await runsWithPlacesLeftOpen(localConfig);
+    held = await placesMaybeHeld(localConfig);
   } catch (e) {
-    log.error(`Cannot uninstall: teamai could not read this scope's workflow runs (${e instanceof Error ? e.message : String(e)}), so it cannot tell whether a step runtime still keeps a place of one open. Fix that folder's permissions, then run \`teamai uninstall\` again.`);
+    log.error(`Cannot uninstall: teamai could not read this scope's workflow runs (${e instanceof Error ? e.message : String(e)}), so it cannot tell whether a step runtime still holds a place of one. Fix what keeps it from being read, then run \`teamai uninstall\` again.`);
     process.exitCode = 1;
 
     return true;
   }
 
-  for (const { run, attempts } of open) {
-    log.error(`Cannot uninstall while a step runtime keeps a place of run ${run} open (attempt ${attempts.join(', ')}): removing teamai's records would leave it with nothing to close it. `
-      + `Run \`teamai workflow cancel ${run}\` to close it, then \`teamai uninstall\` again.`);
+  for (const place of held) {
+    if (place.held === 'unreadable') {
+      log.error(`Cannot uninstall: the record of attempt ${place.attempt} of run ${place.run} cannot be read (${place.why}), so a step runtime may still hold its place. `
+        + `Run \`teamai workflow cancel ${place.run}\` to close what it can, or fix that record, then \`teamai uninstall\` again.`);
+      continue;
+    }
+
+    log.error(`Cannot uninstall while a step runtime holds a place of run ${place.run} (attempt ${place.attempt}): removing teamai's records would leave it with nothing to close it. `
+      + `Let the run end, or run \`teamai workflow cancel ${place.run}\` to stop it, then \`teamai uninstall\` again.`);
   }
 
-  if (open.length === 0) return false;
+  if (held.length === 0) return false;
   process.exitCode = 1;
 
   return true;

@@ -549,6 +549,8 @@ describe('uninstall', () => {
     await fse.outputJson(journal, {});
     const record = path.join(dataHome, 'workflows', 'runs', 'r0123456789abcdef', 'attempts', 'a01234567', 'runtime.json');
     await fse.outputJson(record, { runtime: 'box', driver: 'box', phase: 'running', open: { op: newOpId(), handle: 'teamai-r0123456789abcdef-a01234567' } });
+    // A record teamai cannot read may name a place as well: the check fails closed on it.
+    await fse.outputFile(path.join(dataHome, 'workflows', 'runs', 'r1111111111111111', 'attempts', 'a11111111', 'runtime.json'), '{');
     mockAutoDetectInit.mockResolvedValue({
       localConfig: makeLocalConfig(homeDir, repoPath, { scope: 'project', projectRoot: homeDir, dataHome }),
       teamConfig: makeTeamConfig(),
@@ -560,6 +562,7 @@ describe('uninstall', () => {
     expect(process.exitCode).toBe(1);
     process.exitCode = previousExitCode;
     expect(log.error).toHaveBeenCalledWith(expect.stringContaining('`teamai workflow cancel r0123456789abcdef`'));
+    expect(log.error).toHaveBeenCalledWith(expect.stringContaining('attempt a11111111 of run r1111111111111111'));
     expect(await fse.pathExists(record), 'run record').toBe(true);
     expect(await fse.pathExists(journal), 'runtime state').toBe(true);
     expect(await fse.pathExists(path.join(homeDir, '.claude', 'skills', 'team-skill')), 'delivered skill').toBe(true);
