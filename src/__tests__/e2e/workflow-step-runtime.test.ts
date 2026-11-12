@@ -6,7 +6,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { resolveProjectDataHome } from '../../config.js';
 import type { RunState } from '../../workflow/types.js';
 import { hasPython, TYPED_TERMINAL } from '../helpers/in-terminal.js';
-import { runtimeRevision } from '../../workflow/runtimes/locate.js';
+import { folderRevision } from '../../workflow/runtimes/resource-folder.js';
 import { installToyRuntime, TOY_RUNTIME, TOY_RUNTIME_MARKER } from '../helpers/toy-runtime.js';
 import { attemptOf, CLAUDE_SESSIONS, CLI, CODEBUDDY_SESSIONS, envelope, fakeTool, runCLI, type Ran } from '../helpers/step-runtime-e2e.js';
 
@@ -614,7 +614,7 @@ Judge the review.
   it('says once that a team runtime replaces teamai\'s, and records in each attempt where its runtime came from, at which revision', async () => {
     const runtimeDir = writeTeamRuntime('t3', path.join(sandbox, 'team-t3-spawns'));
     writeDefinition('teamt3', { state: path.join(sandbox, 'toy-state-team-t3') }, { use: 't3' });
-    const revision = await runtimeRevision(runtimeDir);
+    const revision = await folderRevision(runtimeDir);
     const trust = path.join(os.homedir(), '.teamai', 'trust', 'runtimes.json');
     const accepted = fs.existsSync(trust) ? (JSON.parse(fs.readFileSync(trust, 'utf8')) as { accepted: unknown[] }).accepted : [];
     fs.mkdirSync(path.dirname(trust), { recursive: true });

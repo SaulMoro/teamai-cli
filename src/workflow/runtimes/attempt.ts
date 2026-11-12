@@ -65,7 +65,7 @@ const ToolHomeSchema = z.object({ tool: z.string(), dir: z.string() });
 
 /**
  * Where one runtime an attempt runs on came from: the resource found for it (`t3`, or teamai's `teamai-t3`), its layer,
- * where a person finds it, and its revision, a folder's (`runtimeRevision`) or the sha256 of a file's content.
+ * where a person finds it, and its revision, a folder's (`folderRevision`) or the sha256 of a file's content.
  */
 const RuntimeOriginSchema = z.object({ runtime: z.string(), layer: z.enum(['personal', 'team', 'teamai']), location: z.string(), revision: z.string() });
 

@@ -15,6 +15,7 @@ import { getKnowledgeDir, getTeamaiHomeDir } from '../../types.js';
 import { writeJsonAtomic } from '../../utils/fs.js';
 import type { WorkflowFailure } from '../types.js';
 import { personalItem, teamTreeOf, type ResolvedDriver } from './definitions.js';
+import { firstLink, folderEntries, folderRevision } from './resource-folder.js';
 
 // ─── Where a step runtime comes from ─────────────────────
 //
@@ -68,7 +69,7 @@ export interface ExternalRuntime {
   readonly launch: RuntimeLaunch;
   /** `exec: false` when its marker says it runs no command, which a run that needs no AI tool reads without starting it. */
   readonly exec?: boolean;
-  /** The sha256 of the file form's content, or the folder's revision (`runtimeRevision`). */
+  /** The sha256 of the file form's content, or the folder's revision (`folderRevision`). */
   readonly revision: string;
   readonly trust: RuntimeTrust;
   /** The runtime of teamai's own this one of the member or the team stands in for, by the name `use` would find it. */
@@ -168,7 +169,7 @@ async function readDefinition(driver: ResolvedDriver, use: string, definition: D
   const launched = await launchOf(definition, marker.entry);
 
   if (!launched.ok) return unusable(launched.reason);
-  const revision = definition.form === 'folder' ? await runtimeRevision(definition.at) : sha256(text);
+  const revision = definition.form === 'folder' ? await folderRevision(definition.at) : sha256(text);
 
   return {
     kind: 'found',
@@ -368,54 +369,6 @@ async function shippedRuntime(names: readonly string[]): Promise<string | undefi
 /** The prefix of every runtime teamai ships, as of every default. */
 const SHIPPED_PREFIX = 'teamai-';
 
-/**
- * What a team runtime's folder holds, by relative path, sorted: its files, folders and links. A linked folder is not
- * walked, so nothing outside the folder is listed or read.
- */
-async function runtimeEntries(dir: string): Promise<string[]> {
-  const found: string[] = [];
-  const pending = [''];
-
-  for (let folder = pending.pop(); folder !== undefined; folder = pending.pop()) {
-    for (const entry of await fs.readdir(path.join(dir, folder), { withFileTypes: true })) {
-      const relative = path.join(folder, entry.name);
-      found.push(relative);
-
-      if (entry.isDirectory()) pending.push(relative);
-    }
-  }
-
-  return found.sort();
-}
-
-/** The first link a team runtime's folder holds, by relative path, or none. */
-async function firstLink(dir: string): Promise<string | undefined> {
-  for (const relative of await runtimeEntries(dir).catch(() => [])) {
-    if ((await fs.lstat(path.join(dir, relative)).catch(() => undefined))?.isSymbolicLink() === true) return relative.split(path.sep).join('/');
-  }
-
-  return undefined;
-}
-
-/**
- * A runtime folder's revision: a hash of every file under it, by relative path, executable bit and content, with a link
- * hashed as the path it names, never what it points to. Any change a teammate pushes there is a new revision.
- */
-export async function runtimeRevision(dir: string): Promise<string> {
-  const hash = createHash('sha256');
-
-  for (const relative of await runtimeEntries(dir)) {
-    const at = path.join(dir, relative);
-    const stat = await fs.lstat(at);
-
-    if (stat.isDirectory()) continue;
-    const body = stat.isSymbolicLink() ? `link:${await fs.readlink(at)}` : await readRegularFileNoLink(at);
-    hash.update(`${relative.split(path.sep).join('/')}\0${stat.mode & 0o111 ? 'x' : '-'}\0`).update(body).update('\0');
-  }
-
-  return hash.digest('hex');
-}
-
 const TrustFileSchema = z.object({ accepted: z.array(z.object({ dir: z.string(), revision: z.string(), acceptedAt: z.string() })) });
 
 function trustFile(): string {
@@ -501,7 +454,7 @@ export async function acceptRuntime(source: RuntimeSource, { mode, canAsk, ask =
 
 /** Whether the runtime folder `dir` of `source` was accepted here at its revision, asking when `isAsking`. */
 async function acceptFolder(source: ExternalRuntime, dir: string, { isAsking, ask }: { isAsking: boolean; ask: (question: string) => Promise<boolean | undefined> }): Promise<Acceptance> {
-  const revision = await runtimeRevision(dir);
+  const revision = await folderRevision(dir);
   const trust = await readTrust();
 
   if (trust.accepted.some((entry) => entry.dir === dir && entry.revision === revision)) return { ok: true };
@@ -510,7 +463,7 @@ async function acceptFolder(source: ExternalRuntime, dir: string, { isAsking, as
 
   if (isAsking) {
     const question = `Step runtime "${source.name}" comes from the team repo (${relative}) at revision ${short}, which you have not accepted on this machine. `
-      + `It runs as you, with your files. Review ${dir} (${(await runtimeEntries(dir)).join(', ')}) before you accept it.\nRun it? [y/N] `;
+      + `It runs as you, with your files. Review ${dir} (${(await folderEntries(dir)).join(', ')}) before you accept it.\nRun it? [y/N] `;
 
     const accepted = await ask(question);
 
