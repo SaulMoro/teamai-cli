@@ -199,9 +199,14 @@ function linkHostCommands(tools: string): void {
   }
 }
 
+/** The HOME of each install of the world, its own and then each member's, as this machine's file system has it: a container member's is mounted at the same path. */
+export function worldHomes(world: { home: string; members?: ReadonlyArray<{ home: string }> | undefined }): string[] {
+  return [world.home, ...(world.members ?? []).map((member) => member.home)];
+}
+
 /** Where each install of the world keeps the state of the runtimes outside teamai's process (sandbox, T3, Paseo), one folder each. */
 export function runtimeStateDirs(world: Pick<World, 'home' | 'members'>): string[] {
-  return [world.home, ...(world.members ?? []).map((member) => member.home)].map((home) => path.join(home, '.teamai', 'runtime-state'));
+  return worldHomes(world).map((home) => path.join(home, '.teamai', 'runtime-state'));
 }
 
 /** The variable every world's commands carry with a value of its own, which no step may receive: the observer looks for it. */

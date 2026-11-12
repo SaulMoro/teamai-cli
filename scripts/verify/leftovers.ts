@@ -12,7 +12,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { z } from 'zod';
 import { worldRedactor } from './secrets.js';
-import { markDriverSeen, runtimeStateDirs, WORLDS_ROOT, type World } from './world.js';
+import { markDriverSeen, runtimeStateDirs, worldHomes, WORLDS_ROOT, type World } from './world.js';
 
 /** Whose a leftover is: this world's (a LEAK), another world's, teamai's but no world's, or nothing of teamai's. */
 export type Attribution =
@@ -126,11 +126,6 @@ export function probeHere(argv: readonly string[], { timeoutMs = 30_000 }: { tim
   return { kind: 'ran', code: ran.error === undefined ? ran.status : null, stdout: ran.stdout ?? '', why: ran.error?.message ?? ran.stderr?.trim().split('\n').at(-1) ?? '' };
 }
 
-/** The HOMEs of a world's installs: its own, and each member's. */
-function homesOf(world: World): string[] {
-  return [world.home, ...(world.members ?? []).map((member) => member.home)];
-}
-
 /** The data homes under `home` whose runs teamai keeps: user scope's ~/.teamai and each workspace's ~/.teamai/projects/<slug>. */
 function runsDirsUnder(home: string): string[] {
   const teamai = path.join(home, '.teamai');
@@ -155,7 +150,7 @@ function scanRecords(world: World): RecordScan {
   const files: string[] = [];
   const runs: string[] = [];
 
-  for (const runsDir of homesOf(world).flatMap(runsDirsUnder)) {
+  for (const runsDir of worldHomes(world).flatMap(runsDirsUnder)) {
     for (const run of fs.readdirSync(runsDir, { withFileTypes: true })) {
       if (!run.isDirectory()) continue;
       runs.push(run.name);
@@ -195,7 +190,7 @@ function withRealPath(at: string): string[] {
 
 /** What ties a world, from its world.json: any world's, from any checkout, cleaned or not. */
 function tiesOf(world: z.infer<typeof SpanSchema>, runs: readonly string[], journalOf: ((home: string) => string) | undefined): WorldTies {
-  const homes = [world.home, ...(world.members ?? []).map((member) => member.home)];
+  const homes = worldHomes(world);
 
   return {
     runId: world.runId,

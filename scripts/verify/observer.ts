@@ -17,7 +17,7 @@ import { journal, sandboxJournalRoot } from '../../packages/runtime-sandbox/src/
 import { CONTAINER_ENGINES, PROVIDER_COMMANDS } from '../../packages/runtime-sandbox/src/options.js';
 import { journalOfSbxName } from './leftovers/sbx.js';
 import { declaredCredentialNames, judgeSandboxEnv, parseEnviron, type EnvVerdict } from './secrets.js';
-import { CANARY_NAME, type World } from './world.js';
+import { CANARY_NAME, worldHomes, type World } from './world.js';
 
 const run = promisify(execFile);
 const POLL_MS = 500;
@@ -30,11 +30,6 @@ interface Seen {
   readonly what: string;
   read: number;
   names: Set<string>;
-}
-
-/** The HOMEs of the world's installs on this machine's file system: a container member's is mounted at the same path. */
-function homesOf(world: World): string[] {
-  return [world.home, ...(world.members ?? []).map((member) => member.home)];
 }
 
 /**
@@ -66,7 +61,7 @@ function declaredCredentials(world: World) {
     }
   };
 
-  for (const root of [...homesOf(world), world.project, ...(world.members ?? []).map((member) => member.project)]) walk(path.join(root, '.teamai'), 0);
+  for (const root of [...worldHomes(world), world.project, ...(world.members ?? []).map((member) => member.project)]) walk(path.join(root, '.teamai'), 0);
 
   return { declared, unreadable };
 }
@@ -93,7 +88,7 @@ export function startObserver(world: World, { pass, label }: { pass: ReadonlyMap
   const canary = world.env?.[CANARY_NAME] ?? '';
   const secrets = new Map([...Object.entries(collectEnvSecrets(process.env)), ...pass]);
   const { declared, unreadable } = declaredCredentials(world);
-  const owners = new Set<string>(homesOf(world).map((home) => journal(sandboxJournalRoot(home)).owner));
+  const owners = new Set<string>(worldHomes(world).map((home) => journal(sandboxJournalRoot(home)).owner));
   const seen = new Map<string, Seen>();
   const unobserved = new Set<string>();
   const notRunning = new Map<string, string>();
@@ -204,7 +199,7 @@ export function startObserver(world: World, { pass, label }: { pass: ReadonlyMap
       await Promise.all([containers(), sbx()]);
       bwraps();
       // A place's record goes once it closes, so each look notes whether one runs on seatbelt.
-      sawSeatbelt ||= homesOf(world).some(usesSeatbelt);
+      sawSeatbelt ||= worldHomes(world).some(usesSeatbelt);
     } catch (error) {
       unobserved.add(`a look at the sandboxes, ${error instanceof Error ? error.message : String(error)}`);
     } finally {
