@@ -1093,6 +1093,42 @@ steps:
     expect(shown).toEqual(['Found 2 entries.', 'Using <REDACTED:DEPLOY_TOKEN>']);
     expect(done).toMatchObject({ data: { done: { outcome: 'succeeded', progress: [{ step: 'say', lines: shown }] } } });
   });
+
+  it('keeps the last lines a command writes to stdout that are not its outputs, masked, in its attempt\'s directory, names that file, and publishes none of them', async () => {
+    const { config, workspace, runId } = await workflowFixture(`schemaVersion: v1alpha1
+name: build
+description: Say what it did.
+steps:
+  - id: say
+    command: echo "built 3 files"; echo "with $DEPLOY_TOKEN"
+    requires: { env: [DEPLOY_TOKEN] }
+  - id: emit
+    needs: [say]
+    command: echo '{"count":3}'
+`);
+    fs.mkdirSync(path.join(config.repo.localPath, 'env'), { recursive: true });
+    fs.writeFileSync(path.join(config.repo.localPath, 'env', 'secrets.yaml'), 'secrets:\n  - key: DEPLOY_TOKEN\n');
+    vi.stubEnv('DEPLOY_TOKEN', 'deploy-secret-value');
+    onTestFinished(() => { vi.unstubAllEnvs(); });
+    const info = vi.spyOn(log, 'info').mockImplementation(() => undefined);
+    onTestFinished(() => { info.mockRestore(); });
+
+    const done = await runLocalDriver(config, runId, workspace, { hitl: false });
+
+    expect(done).toMatchObject({ data: { done: { outcome: 'succeeded' } } });
+    const run = await readRun(config, RunIdSchema.parse(runId));
+    if (typeof run !== 'object') throw new Error(`run ${runId} is ${run}`);
+    const attemptOf = (id: string) => {
+      const step = run.steps.find((one) => one.id === id);
+
+      return AttemptIdSchema.parse(step && 'attempt' in step ? step.attempt : undefined);
+    };
+    const kept = path.join(attemptDir(config, RunIdSchema.parse(runId), attemptOf('say')), 'stdout.log');
+    expect(fs.readFileSync(kept, 'utf8')).toBe('built 3 files\nwith <REDACTED:DEPLOY_TOKEN>\n');
+    expect(fs.existsSync(path.join(attemptDir(config, RunIdSchema.parse(runId), attemptOf('emit')), 'stdout.log'))).toBe(false);
+    expect(info.mock.calls.flat().filter((line) => String(line).includes('stdout'))).toEqual([`Step "say" printed text on stdout, which is not its outputs: its last lines are in ${kept}.`]);
+    expect(JSON.stringify(await endRecord(config))).not.toContain('built 3 files');
+  });
 });
 
 describe('a prompt runtime that runs each tool on the attempt\'s tool home', () => {

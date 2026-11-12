@@ -119,6 +119,14 @@ export function attemptOutDir(config: LocalConfig, run: RunId, attempt: AttemptI
   return path.join(attemptDir(config, run, attempt), 'out');
 }
 
+/**
+ * `attempts/<a>/stdout.log`: the last lines a command step wrote to stdout that are not its outputs, masked, which stay
+ * on this machine: a command can print a secret no mask knows.
+ */
+export function attemptStdoutPath(config: LocalConfig, run: RunId, attempt: AttemptId): string {
+  return path.join(attemptDir(config, run, attempt), 'stdout.log');
+}
+
 /** The name of an attempt's result file in its `out/` directory. */
 export const ATTEMPT_RESULT_FILE = 'result.json';
 
