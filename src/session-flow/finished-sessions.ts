@@ -289,7 +289,7 @@ async function wantsOf(config: LocalConfig, request: Request): Promise<Wants | E
 
   if (scoring?.ok === false) return { ok: false, code: 'scoring_settings_invalid', message: scoring.reason };
   const judging = scoring && judgingOf(scoring);
-  const publishing = SessionPolicy.publish(config, await loadTeamConfig(config.repo.localPath)).policies;
+  const publishing = SessionPolicy.publish(config, await loadTeamConfig(config.repo.localPath, config)).policies;
   const chosen = await candidatesOf(config, { names: request.scorers, judging });
 
   if ('ok' in chosen) return chosen;
@@ -391,7 +391,7 @@ async function worksOnAttended(config: LocalConfig): Promise<boolean> {
   if (scoring?.ok === false) log.warn(`[${config.scope}] Finished sessions are not judged here: ${scoring.reason}`);
 
   return (scoring?.ok === true && scoring.sessions.policies.attended.policy === 'auto')
-    || SessionPolicy.publish(config, await loadTeamConfig(config.repo.localPath)).policies.attended.policy === 'auto';
+    || SessionPolicy.publish(config, await loadTeamConfig(config.repo.localPath, config)).policies.attended.policy === 'auto';
 }
 
 /** The scopes `cwd` reaches that judge or publish attended sessions automatically, which the session-start hook works on. */

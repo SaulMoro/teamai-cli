@@ -377,7 +377,7 @@ async function readyStartConfig(name: string, scope?: LocalConfig, readOnly = fa
   const { config } = scope ? { config: scope } : await resolveStart(loaded.config, name);
 
   if (config === loaded.config) return loaded;
-  const teamConfig = await loadTeamConfig(config.repo.localPath);
+  const teamConfig = await loadTeamConfig(config.repo.localPath, config);
 
   if (!teamConfig) return loaded;
   const env = await resolveWorkflowEnv(config);
@@ -400,7 +400,7 @@ async function runOwner(runId: string, { allowRemote }: { allowRemote: boolean }
   }
 
   if ('config' in current && getDataHome(current.config) === getDataHome(found.config) && getBusinessRoot(current.config) === getBusinessRoot(found.config)) return { config: found.config, teamConfig: current.teamConfig };
-  const teamConfig = await loadTeamConfig(found.config.repo.localPath);
+  const teamConfig = await loadTeamConfig(found.config.repo.localPath, found.config);
 
   if (!teamConfig) return { error: { code: 'not_initialized', message: 'The run owning team configuration cannot be read' } };
 

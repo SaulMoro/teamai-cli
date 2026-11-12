@@ -292,7 +292,7 @@ export class EnvScopesUnreadableError extends Error {
 async function userScopeLine(): Promise<string | null> {
   if (!await hasUserScopeInstall()) return null;
   const user = await loadLocalConfig({ dryRun: true, suppressMigrationNotice: true });
-  const team = user ? await loadTeamConfig(user.repo.localPath) : null;
+  const team = user ? await loadTeamConfig(user.repo.localPath, user) : null;
 
   if (!user || !team) {
     log.warn('Could not read the user scope\'s config or its team\'s teamai.yaml, so its env stays out of shells. Fix that config, then run `teamai pull` outside any project.');

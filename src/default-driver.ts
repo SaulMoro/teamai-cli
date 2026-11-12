@@ -77,7 +77,7 @@ export async function drivesHere(config: LocalConfig, name: DriverName): Promise
 
 /** What a start in `config`'s scope does without `--driver`, from `workflows.driver`. */
 export async function driveByDefault(config: LocalConfig): Promise<DefaultDrive> {
-  const { driver } = await resolveDefaultDriver(config, await loadTeamConfig(config.repo.localPath));
+  const { driver } = await resolveDefaultDriver(config, await loadTeamConfig(config.repo.localPath, config));
 
   if (driver === 'none') return { kind: 'unassigned' };
   const name = driver === 'local' ? LOCAL_DRIVER : driver.external;

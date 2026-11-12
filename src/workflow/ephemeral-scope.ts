@@ -44,7 +44,8 @@ async function open(checkout: string, teamRepo?: string): Promise<EphemeralScope
     }
 
     await writeRegularFile(file, YAML.stringify({ repo: { localPath: team, remote: '' }, username: memberName(), scope: 'workspace' }));
-    const [config, teamConfig] = await Promise.all([readEphemeralConfig(file, checkout), loadTeamConfig(team)]);
+    const config = await readEphemeralConfig(file, checkout);
+    const teamConfig = config && await loadTeamConfig(team, config);
 
     if (!config || !teamConfig) throw new Error(`The config built for this run in ${root} could not be read back. Run teamai init, then run the command again.`);
 

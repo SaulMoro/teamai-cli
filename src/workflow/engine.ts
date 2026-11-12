@@ -762,7 +762,7 @@ export async function finishRun(
 
   // The first end only: a run a retry reopened has `limitsFrom`, and another install sweeps by what that end published.
   if (run.limitsFrom === undefined) {
-    const retainedUntil = retentionEnds(now, await resolveRetention(config, await loadTeamConfig(config.repo.localPath)));
+    const retainedUntil = retentionEnds(now, await resolveRetention(config, await loadTeamConfig(config.repo.localPath, config)));
 
     if (retainedUntil !== undefined) run.retainedUntil = new Date(retainedUntil).toISOString();
   }

@@ -341,7 +341,7 @@ export function registerSessionFlowCommands(sessionCmd: Command): void {
     const options = { dryRun: isDryRun() };
     const config = (await detectProjectConfig(action.opts<{ cwd?: string }>().cwd, undefined, options)) ?? (await loadLocalConfig(options));
 
-    if (config) await loadTeamConfig(config.repo.localPath);
+    if (config) await loadTeamConfig(config.repo.localPath, config);
   });
 
   // ── session platforms ──────────────────────────────────────

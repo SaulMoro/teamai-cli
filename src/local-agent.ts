@@ -1130,7 +1130,7 @@ async function gitExcludeEnabledFor(workspacePath: string): Promise<boolean | { 
   if (unreadable) return unreadable;
 
   if (!config) return false;
-  const enabled = resolveGitExclude(config, await loadTeamConfig(config.repo.localPath));
+  const enabled = resolveGitExclude(config, await loadTeamConfig(config.repo.localPath, config));
 
   if (enabled !== undefined) return enabled;
   const override = isUnmigratedDataHome(config) ? '' : `, or set \`gitExcludeEnabled\` in ${path.join(getDataHome(config), 'config.yaml')}`;
@@ -3841,7 +3841,7 @@ async function hookDeliveryProblem(
   const parts = [block ? instructionHookText({ claudemd: block }, false) : ''];
   const { loadTeamConfig, resolveConfigForDir } = await import('./config.js');
   const memberConfig = localConfig.projectRoot ? await resolveConfigForDir(localConfig.projectRoot) : null;
-  const memberTeam = memberConfig ? await loadTeamConfig(memberConfig.repo.localPath) : null;
+  const memberTeam = memberConfig ? await loadTeamConfig(memberConfig.repo.localPath, memberConfig) : null;
 
   if (memberConfig && memberTeam) parts.unshift(await instructionHookTextFor(memberTeam, memberConfig, tool));
   const length = parts.filter(Boolean).join('\n\n').length;

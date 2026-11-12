@@ -457,7 +457,7 @@ async function mrHintAllowed(localConfig?: LocalConfig | null): Promise<boolean>
   let teamConfig: Awaited<ReturnType<typeof loadTeamConfig>> = null;
 
   try {
-    teamConfig = await loadTeamConfig(localConfig.repo.localPath);
+    teamConfig = await loadTeamConfig(localConfig.repo.localPath, localConfig);
   } catch {
     // An unreadable teamai.yaml is not an instruction to stop; a team with no
     // opinion leaves the hint on, which is what isMrHintEnabled defaults to.
@@ -687,7 +687,7 @@ async function proposals(
   if (matching.length === 0) return {};
 
   const { loadTeamConfig } = await import('./config.js');
-  const team = await loadTeamConfig(config.repo.localPath);
+  const team = await loadTeamConfig(config.repo.localPath, config);
 
   const proposed: Record<keyof typeof CONTRACT, Proposal> = {
     mrs: await mrsProposal(caller.cwd, caller.session),

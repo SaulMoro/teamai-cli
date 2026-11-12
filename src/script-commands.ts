@@ -29,7 +29,7 @@ export async function scriptRun(eventName: string): Promise<void> {
     return;
   }
 
-  const team = await loadTeamConfig(local.repo.localPath);
+  const team = await loadTeamConfig(local.repo.localPath, local);
   const declared = team?.scripts?.[eventName]?.path;
 
   if (!declared) {

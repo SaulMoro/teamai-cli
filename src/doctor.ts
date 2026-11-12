@@ -770,7 +770,7 @@ export async function resolveDoctorContext(options: { gitContext?: GitContext } 
 
   if (!localConfig) return null;
 
-  const teamConfig = await loadTeamConfig(localConfig.repo.localPath);
+  const teamConfig = await loadTeamConfig(localConfig.repo.localPath, localConfig);
 
   const toolPaths: TeamaiConfig['toolPaths'] = teamConfig
     ? Object.fromEntries(
@@ -906,7 +906,7 @@ export async function buildChecks(ctx: DoctorContext, stage: CheckStage = 'docto
       name: 'Team config (teamai.yaml) is valid',
       source: 'local',
       check: async () => {
-        const config = await loadTeamConfig(localConfig.repo.localPath);
+        const config = await loadTeamConfig(localConfig.repo.localPath, localConfig);
 
         return config !== null;
       },

@@ -14,7 +14,7 @@ export type MemberSettingsPanel =
   | { configured: true; scope: 'workspace' | 'self' | 'user'; home: string; machineFile: string; rows: MemberSettingRow[]; unread: string[] };
 
 export async function readMemberSettingsPanel(config: LocalConfig): Promise<MemberSettingsPanel> {
-  const teamConfig = await loadTeamConfig(config.repo.localPath);
+  const teamConfig = await loadTeamConfig(config.repo.localPath, config);
   const [reports, unread] = await Promise.all([memberSettingsReport({ localConfig: config, teamConfig }), machineUnreadKeys()]);
 
   return {

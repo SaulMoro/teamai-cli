@@ -133,7 +133,7 @@ async function legacyAgentDirs(projectRoot?: string): Promise<Set<string>> {
 
   for (const config of configs) {
     if (!config) continue;
-    const team = await loadTeamConfig(config.repo.localPath);
+    const team = await loadTeamConfig(config.repo.localPath, config);
 
     if (!team) continue;
     const own = ownOf(await locate('kiro', 'agents', installOf(team, config)));

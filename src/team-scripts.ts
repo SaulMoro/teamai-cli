@@ -175,7 +175,7 @@ export async function runTeamScript(
  * does not pull team resources before it exits.
  */
 export async function syncMcpAfterPostInit(localConfig: LocalConfig): Promise<void> {
-  const teamConfig = await loadTeamConfig(localConfig.repo.localPath);
+  const teamConfig = await loadTeamConfig(localConfig.repo.localPath, localConfig);
 
   if (!teamConfig) return;
 

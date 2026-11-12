@@ -1221,7 +1221,7 @@ export async function doUpdate(runningScope: LocalConfig | null, options?: { for
     // happened to be on for the copy that ran (#1753).
     // oxlint-disable-next-line teamai/config-load-options -- an automatic update reads the same member policy as a self-update
     const localConfig = await loadLocalConfig().catch(() => null) ?? runningScope;
-    const teamConfig = localConfig ? await loadTeamConfig(localConfig.repo.localPath) : null;
+    const teamConfig = localConfig ? await loadTeamConfig(localConfig.repo.localPath, localConfig) : null;
     const policy = resolveEffectiveUpdatePolicy(localConfig, teamConfig);
 
     if (policy !== 'auto' || localConfig?.updateOtherInstallations !== true) {
@@ -1259,7 +1259,7 @@ export async function doUpdate(runningScope: LocalConfig | null, options?: { for
   const localConfig = (await loadLocalConfig()) ?? runningScope;
 
   const teamConfig = localConfig
-    ? await loadTeamConfig(localConfig.repo.localPath)
+    ? await loadTeamConfig(localConfig.repo.localPath, localConfig)
     : null;
 
   const policy = resolveEffectiveUpdatePolicy(localConfig, teamConfig);

@@ -340,7 +340,7 @@ export type RecordState = 'published' | 'pending';
 
 /** The opt-out `pull` applies to stat commits covers run records too: the member's `usageReportEnabled`, else teamai.yaml `usageReport`. */
 async function isRecordingEnabled(config: LocalConfig): Promise<boolean> {
-  return isUsageReportEnabled(config, (await loadTeamConfig(config.repo.localPath)) ?? {});
+  return isUsageReportEnabled(config, (await loadTeamConfig(config.repo.localPath, config)) ?? {});
 }
 
 /**

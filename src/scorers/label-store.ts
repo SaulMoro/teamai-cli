@@ -224,7 +224,7 @@ export const LabelStore = {
 
     if (pending.length === 0) return { state: 'published' };
 
-    if (!isUsageReportEnabled(config, (await loadTeamConfig(config.repo.localPath)) ?? {})) {
+    if (!isUsageReportEnabled(config, (await loadTeamConfig(config.repo.localPath, config)) ?? {})) {
       return { state: 'pending', reason: 'Usage reporting is off, so labels stay on this machine.' };
     }
 
@@ -309,7 +309,7 @@ export const LabelStore = {
 
   /** How many labels a push would publish: the pending ones, or none while usage reporting is off. */
   async unpublished(config: LocalConfig): Promise<number> {
-    if (!isUsageReportEnabled(config, (await loadTeamConfig(config.repo.localPath)) ?? {})) return 0;
+    if (!isUsageReportEnabled(config, (await loadTeamConfig(config.repo.localPath, config)) ?? {})) return 0;
 
     return (await readPending(config)).length;
   },

@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import type { LocalConfig } from '../types.js';
 
 /**
  * Tool instances as `loadTeamConfig` reads them: a team's in tools/ of its repo, a member's in ~/.teamai/tools/, and
@@ -60,12 +61,12 @@ command: acme-claude
 home: { dir: .acme-claude, env: ACME_CLAUDE_CONFIG_DIR }
 `;
 
-async function load(repo: string) {
+async function load(repo: string, member?: LocalConfig) {
   const { loadTeamConfig } = await import('../config.js');
   const registry = await import('../tool-registry.js');
   const { log } = await import('@teamai/shared/log');
   const errors = vi.spyOn(log, 'error').mockImplementation(() => undefined);
-  const config = await loadTeamConfig(repo);
+  const config = await loadTeamConfig(repo, member);
 
   return { config, registry, errors: errors.mock.calls.map(([message]) => String(message)) };
 }
@@ -182,7 +183,7 @@ describe('team tool instances', () => {
     expect(registry.toolOf('acme-claude')?.instance?.command).toBe('acme-claude-web');
   });
 
-  it('reads an instance in a namespace only for a member whose project or role selects it, as drivers and workflows are', async () => {
+  it('reads an instance in a namespace only for the member it is given, whose project or role selects it, as drivers and workflows are', async () => {
     const repo = teamRepo({
       'manifest/projects.yaml': 'version: 1\nprojects:\n  - id: checkout\n    resources: { workflows: [web] }\n  - id: billing\n    resources: { workflows: [mobile] }\n',
       'tools/web/web-claude.yaml': ACME_CLAUDE.replaceAll('acme-claude', 'web-claude'),
@@ -190,15 +191,17 @@ describe('team tool instances', () => {
     });
     memberOf(repo, { projects: ['checkout'] });
     const { loadLocalConfig } = await import('../config.js');
-    await loadLocalConfig();
-    const { registry, config } = await load(repo);
+    // A loader that ran for another member before decides nothing.
+    const checkout = await loadLocalConfig();
+    if (checkout === null) throw new Error('no member config');
+    const { registry, config } = await load(repo, { ...checkout, projects: ['billing'] });
 
-    expect(registry.toolOf('web-claude')?.instance?.command).toBe('web-claude');
-    expect(registry.toolOf('mobile-claude')).toBeUndefined();
-    expect(config?.toolPaths['mobile-claude']).toBeUndefined();
+    expect(registry.toolOf('mobile-claude')?.instance?.command).toBe('mobile-claude');
+    expect(registry.toolOf('web-claude')).toBeUndefined();
+    expect(config?.toolPaths['web-claude']).toBeUndefined();
   });
 
-  it('reads only the root instances of a team repo whose manifest selects namespaces, when no member of it was loaded', async () => {
+  it('reads only the root instances of a team repo whose manifest selects namespaces, when given no member', async () => {
     const { registry } = await load(teamRepo({
       'manifest/projects.yaml': 'version: 1\nprojects:\n  - id: checkout\n    resources: { workflows: [web] }\n',
       'tools/acme-claude.yaml': ACME_CLAUDE,
@@ -236,10 +239,11 @@ describe('team instances of two scopes', () => {
     fs.mkdirSync(path.join(project, '.teamai'), { recursive: true });
     fs.writeFileSync(path.join(project, '.teamai', 'config.yaml'), `repo:\n  localPath: ${workspaceRepo}\n  remote: https://example.test/acme/workspace.git\nusername: tester\nscope: workspace\n`);
     const { loadLocalConfig, readConfigFrom } = await import('../config.js');
-    await loadLocalConfig();
-    expect(await readConfigFrom(path.join(project, '.teamai'), project)).toMatchObject({ scope: 'project' });
-    const { registry, errors } = await load(workspaceRepo);
-    await load(userRepo);
+    const user = await loadLocalConfig();
+    const workspace = await readConfigFrom(path.join(project, '.teamai'), project);
+    expect(workspace).toMatchObject({ scope: 'project' });
+    const { registry, errors } = await load(workspaceRepo, workspace ?? undefined);
+    await load(userRepo, user ?? undefined);
 
     expect(registry.toolOf('acme-claude')?.instance?.command).toBe('acme-claude-workspace');
     expect(errors).toEqual([]);

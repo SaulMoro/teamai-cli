@@ -2922,7 +2922,7 @@ export async function init(options: GlobalOptions & {
   }
 
   // Step 7: Inject built-in + team hooks into AI tools
-  const reloadedTeamConfig = await loadTeamConfig(localPath);
+  const reloadedTeamConfig = await loadTeamConfig(localPath, localConfig);
   // Only a stub that actually landed is announced as ready in the IDE.
   let stubDeployed = 0;
 

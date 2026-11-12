@@ -65,7 +65,7 @@ export async function cursorUserRulesContext(workspace: string, config: LocalCon
   const userConfig = config.scope === 'user' ? config : await loadLocalConfig();
 
   if (!userConfig || isAgentExcluded(userConfig, 'cursor')) return null;
-  const teamConfig = await loadTeamConfig(userConfig.repo.localPath);
+  const teamConfig = await loadTeamConfig(userConfig.repo.localPath, userConfig);
 
   if (!teamConfig) return null;
   const rulesDir = await cursorUserRulesDir(teamConfig, userConfig);

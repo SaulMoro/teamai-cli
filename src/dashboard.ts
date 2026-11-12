@@ -683,7 +683,7 @@ export async function startDashboard(port?: number): Promise<void> {
         // What pull delivers to a workspace includes its children's selections (#913).
         // Read here, for this request only: session and workspace listing never walk them.
         const config = await readWorkspaceChildren(ownConfig);
-        const teamConfig = await loadTeamConfig(config.repo.localPath);
+        const teamConfig = await loadTeamConfig(config.repo.localPath, config);
 
         // A scope whose clone carries no teamai.yaml pulls no rules.
         const rules = teamConfig
@@ -720,7 +720,7 @@ export async function startDashboard(port?: number): Promise<void> {
 
         // What pull delivers to a workspace includes its children's selections (#913).
         const config = ownConfig ? await readWorkspaceChildren(ownConfig) : null;
-        const teamConfig = config ? await loadTeamConfig(config.repo.localPath) : null;
+        const teamConfig = config ? await loadTeamConfig(config.repo.localPath, config) : null;
 
         res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
         res.end(JSON.stringify(config && teamConfig ? { configured: true, ...await collectLayeredResources(config, teamConfig) } : { configured: false }));
@@ -782,7 +782,7 @@ export async function startDashboard(port?: number): Promise<void> {
         ]);
 
         const config = await readWorkspaceChildren(ownConfig);
-        const teamConfig = await loadTeamConfig(config.repo.localPath);
+        const teamConfig = await loadTeamConfig(config.repo.localPath, config);
 
         const inventory = teamConfig
           ? await collectSkillsInventory(teamConfig, config, await buildRolePullContext(config))
@@ -821,7 +821,7 @@ export async function startDashboard(port?: number): Promise<void> {
         ]);
 
         const config = await readWorkspaceChildren(ownConfig);
-        const teamConfig = await loadTeamConfig(config.repo.localPath);
+        const teamConfig = await loadTeamConfig(config.repo.localPath, config);
 
         const skill = teamConfig
           ? await skillDetail(teamConfig, config, await buildRolePullContext(config), name, sourcePath)
@@ -877,7 +877,7 @@ export async function startDashboard(port?: number): Promise<void> {
         ]);
 
         const config = await readWorkspaceChildren(ownConfig);
-        const teamConfig = await loadTeamConfig(config.repo.localPath);
+        const teamConfig = await loadTeamConfig(config.repo.localPath, config);
 
         if (!teamConfig) {
           res.writeHead(400, { 'Content-Type': 'application/json' });

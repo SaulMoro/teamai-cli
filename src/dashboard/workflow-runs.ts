@@ -437,7 +437,7 @@ async function branchesOf(config: LocalConfig, run: RunState): Promise<Pick<RunD
   const branches = settledBranches(run);
 
   if (branches?.state !== 'kept') return branches ? { branches } : {};
-  const retention = await resolveRetention(config, await loadTeamConfig(config.repo.localPath));
+  const retention = await resolveRetention(config, await loadTeamConfig(config.repo.localPath, config));
   const kept: KeptRunBranches = { ...branches, retention };
   const ends = ownRunSweptAt(run, retention);
 

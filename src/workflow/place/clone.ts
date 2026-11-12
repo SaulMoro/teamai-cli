@@ -663,7 +663,7 @@ async function installTeam(input: {
     if (declaration.kind !== 'declared') return undelivered(role, { kind: 'undeclared', declaration, revision });
   }
 
-  const teamConfig = await loadTeamConfig(teamClone);
+  const teamConfig = await loadTeamConfig(teamClone, config);
 
   if (role !== undefined) {
     // Without a teamai.yaml that parses, where the clone's knowledge would land is unknown, so nothing is delivered.

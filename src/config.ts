@@ -287,22 +287,8 @@ function withAssignedRoles(config: LocalConfig, roles: string[], source: 'assign
 }
 
 /**
- * The member config a loader returned last for each team repo, by the repo's resolved path: whose roles and projects
- * select the namespaces `loadTeamConfig` reads tool instances from, and whose scope decides which of two scopes'
- * instances of one name applies. Written only by `remembered`, as each loader returns; read only by `loadTeamConfig`.
- */
-const membersByRepo = new Map<string, LocalConfig>();
-
-/** `config`, kept as the member of its team repo for the next `loadTeamConfig` of that repo. */
-function remembered(config: LocalConfig): LocalConfig {
-  membersByRepo.set(path.resolve(expandHome(config.repo.localPath)), config);
-
-  return config;
-}
-
-/**
  * The namespaces `member` receives tool instances from in the team repo at `repoPath` (`workflowNamespacesOf`). With no
- * member loaded for the repo, only a repo with no manifest to filter by reads its namespaces.
+ * member, only a repo with no manifest to filter by reads its namespaces.
  */
 async function memberNamespaces(repoPath: string, member: LocalConfig | undefined): Promise<readonly string[] | 'legacy'> {
   if (member === undefined) {
@@ -315,9 +301,10 @@ async function memberNamespaces(repoPath: string, member: LocalConfig | undefine
 }
 
 /**
- * Load the team config (teamai.yaml) from the team repo
+ * Load the team config (teamai.yaml) from the team repo, with the tool instances of `member`: the namespaces their roles
+ * and projects select, and their scope over another's instance of one name.
  */
-export async function loadTeamConfig(repoPath: string): Promise<TeamaiConfig | null> {
+export async function loadTeamConfig(repoPath: string, member?: LocalConfig): Promise<TeamaiConfig | null> {
   const content = await readFileSafe(path.join(repoPath, 'teamai.yaml'));
 
   if (!content) {
@@ -328,8 +315,6 @@ export async function loadTeamConfig(repoPath: string): Promise<TeamaiConfig | n
 
   try {
     const raw = parseYaml(content);
-
-    const member = membersByRepo.get(path.resolve(expandHome(repoPath)));
 
     return await withToolInstances({ root: repoPath, scope: member?.scope, namespaces: () => memberNamespaces(repoPath, member) }, TeamaiConfigSchema.parse(raw));
   } catch (e) {
@@ -717,7 +702,7 @@ export async function loadLocalConfig(options: LoadOptions = {}): Promise<LocalC
     if (isSettingsOnlyConfig(raw)) return null;
     const parsed = LocalConfigSchema.parse(raw);
 
-    return remembered(await withBranchHome(await migrateLegacyRoleConfig(await applyConfigOverlays(parsed), configPath, options), options));
+    return await withBranchHome(await migrateLegacyRoleConfig(await applyConfigOverlays(parsed), configPath, options), options);
   } catch (e) {
     log.error(`Invalid local config: ${describeConfigError(e)}`);
 
@@ -872,7 +857,7 @@ export async function requireInit(options: LoadOptions = {}): Promise<TeamaiInit
   const localConfig = await loadLocalConfig(options);
 
   if (!localConfig) return throwMissingOrInvalid(expandHome(getUserConfigPath()));
-  const teamConfig = await loadTeamConfig(localConfig.repo.localPath);
+  const teamConfig = await loadTeamConfig(localConfig.repo.localPath, localConfig);
 
   if (!teamConfig) return throwTeamConfigMissingOrInvalid(localConfig.repo.localPath);
 
@@ -953,10 +938,10 @@ export async function loadLocalConfigForScope(
 
     if (!detected) return null;
 
-    return remembered(await withBranchHome(
+    return await withBranchHome(
       await migrateLegacyRoleConfig(await applyRoleAssignment(detected), path.join(getDataHome(detected), 'config.yaml'), options),
       options,
-    ));
+    );
   }
 
   const dataHome = scope === 'user' && options.home !== undefined ? path.join(options.home, '.teamai') : undefined;
@@ -972,7 +957,7 @@ export async function loadLocalConfigForScope(
     const parsed = LocalConfigSchema.parse(raw);
     const loaded = await withBranchHome(await migrateLegacyRoleConfig(await applyConfigOverlays(parsed), configPath, options), options);
 
-    return remembered(dataHome !== undefined ? { ...loaded, dataHome } : loaded);
+    return dataHome !== undefined ? { ...loaded, dataHome } : loaded;
   } catch (e) {
     log.error(`Invalid ${installScopeName(scope)} config at ${configPath}: ${describeConfigError(e)}`);
 
@@ -1180,7 +1165,7 @@ export async function detectProjectConfig(
   // runs, which must not write the config. loadLocalConfigForScope persists it.
   const found = await findProjectConfig(cwd, onUnreadable, options);
 
-  return found && remembered(await resolveLegacyRole(found));
+  return found && resolveLegacyRole(found);
 }
 
 async function findProjectConfig(
@@ -1340,10 +1325,10 @@ export async function readConfigFrom(
       return null;
     }
 
-    return remembered(await withBranchHome(
+    return await withBranchHome(
       await applyMachineSettings(await applyRoleAssignment(anchorProjectConfig(config, dataHomeDir, projectRoot)), await loadMemberSettings()),
       options,
-    ));
+    );
   } catch (e) {
     onUnreadable?.(configPath, describeConfigError(e));
 
@@ -1494,7 +1479,7 @@ export async function requireInitForScope(
     return throwMissingOrInvalid(expandHome(getConfigPath(scope, projectRoot)));
   }
 
-  const teamConfig = await loadTeamConfig(localConfig.repo.localPath);
+  const teamConfig = await loadTeamConfig(localConfig.repo.localPath, localConfig);
 
   if (!teamConfig) return throwTeamConfigMissingOrInvalid(localConfig.repo.localPath);
 
@@ -1521,7 +1506,7 @@ export async function autoDetectInit(cwd?: string, options: LoadOptions & { chil
   if (unreadable) throw new UnreadableProjectConfigError(unreadable);
 
   if (projectConfig) {
-    const teamConfig = await loadTeamConfig(projectConfig.repo.localPath);
+    const teamConfig = await loadTeamConfig(projectConfig.repo.localPath, projectConfig);
 
     if (!teamConfig) return throwTeamConfigMissingOrInvalid(projectConfig.repo.localPath);
 

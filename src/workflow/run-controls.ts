@@ -643,7 +643,7 @@ export function retriedRunsAgain(answer: WorkflowEnvelope): string[] {
 
 /** Retries a step and its dependency cone, retaining pass history and reopening a settled run. */
 export async function retryStep(config: LocalConfig, runId: string, secrets: Record<string, string>, step: string): Promise<WorkflowEnvelope> {
-  const retention = await resolveRetention(config, await loadTeamConfig(config.repo.localPath));
+  const retention = await resolveRetention(config, await loadTeamConfig(config.repo.localPath, config));
 
   const reopen = isRunId(runId)
     ? {

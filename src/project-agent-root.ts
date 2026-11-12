@@ -68,7 +68,7 @@ export async function createProjectToolRoots(options: {
   if (!projectConfig) return;
 
   const enabled = projectConfig.enabledAgents ?? [];
-  const teamConfig = await loadTeamConfig(projectConfig.repo.localPath);
+  const teamConfig = await loadTeamConfig(projectConfig.repo.localPath, projectConfig);
   const baseDir = resolveBaseDir(projectConfig);
 
   const rootOf = (id: string): string | undefined => {

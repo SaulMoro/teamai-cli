@@ -143,7 +143,7 @@ export type SkillRootsInput = {
  */
 export async function skillRoots({ config, toolRoots, hookCwd, tool: callingTool }: SkillRootsInput): Promise<string[]> {
   const { installOf, locate, SHARED_AGENT_SKILLS_PATH, writesOf } = await import('./locate.js');
-  const team = { toolPaths: (await loadTeamConfig(config.repo.localPath))?.toolPaths ?? DEFAULT_TOOL_PATHS };
+  const team = { toolPaths: (await loadTeamConfig(config.repo.localPath, config))?.toolPaths ?? DEFAULT_TOOL_PATHS };
   const home = getUserHome();
   const roots = new Set([path.join(home, SHARED_AGENT_SKILLS_PATH)]);
   const installs = [installOf(team, { ...config, scope: 'user', toolRoots })];

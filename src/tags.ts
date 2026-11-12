@@ -307,7 +307,7 @@ export async function tagsRemove(
  * listing that is already on screen.
  */
 async function countUntaggedDeliveredSkills(localConfig: LocalConfig, tagsConfig: TagsConfig): Promise<number | null> {
-    const teamConfig = await loadTeamConfig(localConfig.repo.localPath);
+    const teamConfig = await loadTeamConfig(localConfig.repo.localPath, localConfig);
 
     if (!teamConfig) return null;
 

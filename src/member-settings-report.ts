@@ -249,7 +249,7 @@ export async function memberSettingsReport(ctx: { localConfig: LocalConfig; team
   // exists, it decides these values even while doctor is inspecting a project.
   // Load the same team file that pull/update use for that deciding install.
   const decidingTeam = userConfig?.scope === 'user'
-    ? await loadTeamConfig(userConfig.repo.localPath)
+    ? await loadTeamConfig(userConfig.repo.localPath, userConfig)
     : ctx.teamConfig;
 
   const reportKeys = new Set<string>(MEMBER_SETTING_REPORT_KEYS);

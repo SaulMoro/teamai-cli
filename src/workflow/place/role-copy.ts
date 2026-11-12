@@ -319,7 +319,7 @@ export async function setUpWorktreeRole(input: { dir: string; step: string; exec
   const { dir, step, role } = input;
   const install = await detectProjectConfig(dir);
   const project = install?.scope === 'project' ? install : undefined;
-  const team = project ? await loadTeamConfig(project.repo.localPath).catch(() => null) : null;
+  const team = project ? await loadTeamConfig(project.repo.localPath, project).catch(() => null) : null;
   const paths = [...AGENT_PATHS, ...project && team ? await copyKnowledgePaths({ team, install: project }) : []];
 
   if (role === undefined) {
@@ -420,7 +420,7 @@ export async function worktreeRoleProblem(input: { dir: string; step: string; ro
  */
 export async function cloneRoleProblem(input: { install: LocalConfig; step: string; role: string; tools: readonly string[] }): Promise<WorkflowFailure | undefined> {
   const { install, step, role, tools } = input;
-  const team = await loadTeamConfig(install.repo.localPath).catch(() => null);
+  const team = await loadTeamConfig(install.repo.localPath, install).catch(() => null);
 
   if (!team) {
     const revision = await getHeadCommit(install.repo.localPath) ?? 'HEAD';

@@ -337,7 +337,7 @@ async function followUpAfterValueChange(
 
 /** True when this scope's MCP configs were reconciled. False when they were left for a pull. */
 async function reconcileCurrentScopeMcp(localConfig: LocalConfig): Promise<boolean> {
-  const teamConfig = await loadTeamConfig(localConfig.repo.localPath);
+  const teamConfig = await loadTeamConfig(localConfig.repo.localPath, localConfig);
 
   if (!teamConfig) return false;
 

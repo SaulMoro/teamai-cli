@@ -453,7 +453,7 @@ export async function sourceAdd(repoUrl: string, options: { name?: string } & Gl
 }
 
 async function sourceAddLocked(repoUrl: string, options: { name?: string } & GlobalOptions, localConfig: LocalConfig, initialTeamConfig: TeamaiConfig): Promise<void> {
-  const teamConfig = await loadTeamConfig(localConfig.repo.localPath) ?? initialTeamConfig;
+  const teamConfig = await loadTeamConfig(localConfig.repo.localPath, localConfig) ?? initialTeamConfig;
   const repoPath = localConfig.repo.localPath;
 
   // Derive name from repo URL if not provided
@@ -550,7 +550,7 @@ export async function sourceRemove(name: string, options: GlobalOptions): Promis
 }
 
 async function sourceRemoveLocked(name: string, options: GlobalOptions, localConfig: LocalConfig, initialTeamConfig: TeamaiConfig): Promise<void> {
-  const teamConfig = await loadTeamConfig(localConfig.repo.localPath) ?? initialTeamConfig;
+  const teamConfig = await loadTeamConfig(localConfig.repo.localPath, localConfig) ?? initialTeamConfig;
   const repoPath = localConfig.repo.localPath;
 
   const existing = teamConfig.sources ?? [];
@@ -811,7 +811,7 @@ export async function sourceBrowse(name: string, options: GlobalOptions): Promis
 }
 
 async function sourceBrowseLocked(name: string, options: GlobalOptions, localConfig: LocalConfig, initialTeamConfig: TeamaiConfig): Promise<void> {
-  const teamConfig = await loadTeamConfig(localConfig.repo.localPath) ?? initialTeamConfig;
+  const teamConfig = await loadTeamConfig(localConfig.repo.localPath, localConfig) ?? initialTeamConfig;
   const sources = teamConfig.sources ?? [];
   const source = sources.find((s) => s.name === name);
 
@@ -881,7 +881,7 @@ async function sourceBrowseLocked(name: string, options: GlobalOptions, localCon
  * Called from pull() at the top level (not inside pullForScope).
  */
 export async function pullSources(localConfig: LocalConfig, options: GlobalOptions, recorder?: DeliveryRecorder): Promise<void> {
-  if (!(await loadTeamConfig(localConfig.repo.localPath))?.sources?.length) {
+  if (!(await loadTeamConfig(localConfig.repo.localPath, localConfig))?.sources?.length) {
     // No source configured delivers nothing: copies an earlier pull left stay
     // where they are, and are no longer teamai's to keep out of git (#915).
     recorder?.succeeded('sources');
@@ -898,7 +898,7 @@ export async function pullSources(localConfig: LocalConfig, options: GlobalOptio
 }
 
 async function pullSourcesLocked(localConfig: LocalConfig, options: GlobalOptions, recorder?: DeliveryRecorder): Promise<void> {
-  const teamConfig = await loadTeamConfig(localConfig.repo.localPath);
+  const teamConfig = await loadTeamConfig(localConfig.repo.localPath, localConfig);
 
   if (!teamConfig) {
     recorder?.failed('sources');

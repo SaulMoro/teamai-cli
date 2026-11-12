@@ -271,7 +271,7 @@ async function finishSessions(config: LocalConfig, mode: RunMode): Promise<Finis
     }
   }
 
-  const team = await loadTeamConfig(config.repo.localPath);
+  const team = await loadTeamConfig(config.repo.localPath, config);
   const driven = await driveRun(config, started.run, { kind: 'named', name: decided.driver }, { cwd: started.cwd, options: { toolPaths: team?.toolPaths } });
   const ran = await readRun(config, started.run);
 
@@ -377,7 +377,7 @@ async function run(configs: readonly LocalConfig[], { mode, clock = () => new Da
   const result: DrainResult = { ...nothing(), runRecordsPublished: 0, labelsPublished: 0, steps: [], dataPending: [], usage: [] };
 
   for (const config of configs) {
-    const team = await loadTeamConfig(config.repo.localPath);
+    const team = await loadTeamConfig(config.repo.localPath, config);
 
     if (mode === 'unattended') await finishUnattended(config, clock());
     const finished = await finishSessions(config, mode);
@@ -422,7 +422,7 @@ async function run(configs: readonly LocalConfig[], { mode, clock = () => new Da
  * unattended session scoring is not `off`. With both `off` it does nothing more than before #1385.
  */
 async function drainsUnattendedRun(config: LocalConfig): Promise<boolean> {
-  if (SessionPolicy.publish(config, await loadTeamConfig(config.repo.localPath)).policies.unattended.policy !== 'off') return true;
+  if (SessionPolicy.publish(config, await loadTeamConfig(config.repo.localPath, config)).policies.unattended.policy !== 'off') return true;
   const scoring = scoringUnavailable(config) ? undefined : await scopeScoring(config);
 
   if (scoring?.ok === false) log.warn(`[${config.scope}] Finished sessions are not judged here: ${scoring.reason}`);
