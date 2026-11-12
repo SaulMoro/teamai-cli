@@ -256,18 +256,20 @@ export async function locateSandboxProfile(driver: ResolvedDriver, named: string
  * `profile` option naming it. `given` is what the entry and the member's config pass it besides `max_parallel` and
  * `credentials`, which must be nothing now that a profile holds the provider's options; `from` names where they were set.
  */
-export async function sandboxOptions({ driver, named, given, from }: { driver: ResolvedDriver; named: string | undefined; given: RuntimeOptions; from: string }): Promise<{ ok: true; options: RuntimeOptions; profile: SandboxProfile } | { ok: false; failure: WorkflowFailure }> {
+export async function sandboxOptions({ driver, named, given, from, isEntryEditable }: { driver: ResolvedDriver; named: string | undefined; given: RuntimeOptions; from: string; isEntryEditable: boolean }): Promise<{ ok: true; options: RuntimeOptions; profile: SandboxProfile } | { ok: false; failure: WorkflowFailure }> {
   const [inline] = Object.keys(given);
 
   if (inline !== undefined) {
-    const name = named ?? (driver.name.startsWith(SHIPPED_PREFIX) ? driver.name.slice(SHIPPED_PREFIX.length) : driver.name);
+    // A profile can be named only on an entry the member or the team can edit; otherwise the fix is the one the entry runs.
+    const fix = named !== undefined
+      ? `move them to sandboxes/${named}.yaml in the team repo (or ~/.teamai/sandboxes/${named}.yaml for yourself), the profile the entry names`
+      : isEntryEditable
+        ? `move them to sandboxes/${driver.name}.yaml in the team repo (or ~/.teamai/sandboxes/${driver.name}.yaml for yourself), name it on the entry with sandbox: ${driver.name}`
+        : `move them to sandboxes/${DEFAULT_PROFILE}.yaml in the team repo (or ~/.teamai/sandboxes/${DEFAULT_PROFILE}.yaml for yourself), the profile an entry that names none runs`;
 
     return {
       ok: false,
-      failure: {
-        code: 'bad_option',
-        message: `Driver definition ${from} gives runtime "sandbox" the option "${inline}", and a sandbox's options live in a sandbox profile: move them to sandboxes/${name}.yaml in the team repo (or ~/.teamai/sandboxes/${name}.yaml for yourself), name it on the entry with sandbox: ${name}, and start again.`,
-      },
+      failure: { code: 'bad_option', message: `Driver definition ${from} gives runtime "sandbox" the option "${inline}", and a sandbox's options live in a sandbox profile: ${fix}, and start again.` },
     };
   }
 

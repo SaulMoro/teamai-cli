@@ -1117,6 +1117,39 @@ describe('a prompt attempt in a container', () => {
     expect(engine.containers()).toEqual([]);
   });
 
+  it('stops a place on the provider it was opened with, when the profile names another one by the time of the stop', async () => {
+    const first = start();
+    await init(first, { provider: 'docker', image: IMAGE });
+    await openPlace(first, place());
+    first.child.kill('SIGKILL');
+    await first.end();
+    const before = engine.calls().length;
+    const second = start();
+
+    expect(await init(second, { provider: 'podman', image: IMAGE }, 'recover')).toEqual({ type: 'init', ok: true, can: {} });
+    second.send({ type: 'close', handle: HANDLE });
+    expect(await second.next((message) => message.event === 'closed' || message.event === 'close_failed', 30_000)).toEqual({ event: 'closed', handle: HANDLE });
+
+    expect(engine.calls().slice(before).map(([name, command]) => `${name} ${command}`)).toEqual(['docker rm']);
+    expect(engine.containers()).toEqual([]);
+  });
+
+  it('stops a place on the options it was opened with when teamai, whose profile is gone, gives none', async () => {
+    const first = start();
+    await init(first, { provider: 'docker', image: IMAGE });
+    await openPlace(first, place());
+    first.child.kill('SIGKILL');
+    await first.end();
+    const before = engine.calls().length;
+    const second = start();
+
+    expect(await init(second, {}, 'recover')).toEqual({ type: 'init', ok: true, can: {} });
+    second.send({ type: 'close', handle: HANDLE });
+    expect(await second.next((message) => message.event === 'closed' || message.event === 'close_failed', 30_000)).toEqual({ event: 'closed', handle: HANDLE });
+
+    expect(engine.calls().slice(before).map(([name, command]) => `${name} ${command}`)).toEqual(['docker rm']);
+  });
+
   it('answers a recover cancel with the end the runtime that ran the exec recorded while the stop ran, never silence', async () => {
     const first = start();
     await init(first, { provider: 'docker', image: IMAGE });

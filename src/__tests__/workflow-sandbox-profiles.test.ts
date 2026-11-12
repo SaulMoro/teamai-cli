@@ -211,6 +211,31 @@ describe('a sandbox entry that gives its provider inline', () => {
     expect(stopping).toMatchObject({ ok: true });
     if (stopping.ok) await disposeDriver(stopping.opened);
   });
+
+  it('still stops a sandbox whose profile is gone, which the sandbox runtime reaches from its own record', async () => {
+    const { config } = await teamWith({ 'drivers/boxed.yaml': 'schemaVersion: v1alpha1\nname: boxed\nruntimes:\n  - use: sandbox\n    sandbox: gone\n' });
+    const runtime = path.join(getTeamaiHomeDir(), 'runtimes', 'sandbox');
+    fs.mkdirSync(runtime, { recursive: true });
+    fs.writeFileSync(path.join(runtime, 'RUNTIME.yaml'), 'protocol: 1\nentry: ./runtime\n');
+    // Stands in for the sandbox runtime, which opens in recover mode on whatever options it is given.
+    fs.writeFileSync(path.join(runtime, 'runtime'), '#!/bin/sh\nread -r line\ncase "$line" in\n  *\'"mode":"recover"\'*) echo \'{"type":"init","ok":true,"can":{}}\' ;;\n  *) echo \'{"type":"init","ok":false,"error":{"code":"bad_option","key":"provider","message":"not in recover mode"}}\' ;;\nesac\ncat > /dev/null\n', { mode: 0o755 });
+    const open = (purpose: 'run' | 'stop') => openDriver(config, 'boxed', { personal: true, mode: 'unattended', canAsk: false, purpose, checkout: config.repo.localPath });
+
+    expect(await open('run')).toMatchObject({ ok: false, failure: { code: 'sandbox_profile_not_found' } });
+    const stopping = await open('stop');
+    expect(stopping).toMatchObject({ ok: true });
+    if (stopping.ok) await disposeDriver(stopping.opened);
+  });
+
+  it('names the profile the entry already runs when the options come from where no profile can be named', async () => {
+    const { config } = await teamWith({ 'drivers/boxed.yaml': 'schemaVersion: v1alpha1\nname: boxed\nruntimes:\n  - use: sandbox\n' });
+    const overriding = { ...config, workflows: { tools: {}, runtimes: {}, drivers: { boxed: { runtimes: { sandbox: { image: 'ghcr.io/acme/agent:1' } } } } } };
+
+    expect(await openDriver(overriding, 'boxed', { personal: true, mode: 'unattended', canAsk: false, purpose: 'run', checkout: config.repo.localPath })).toEqual({ ok: false, failure: {
+      code: 'bad_option',
+      message: expect.stringContaining('or your workflows.drivers.boxed.runtimes.sandbox gives runtime "sandbox" the option "image", and a sandbox\'s options live in a sandbox profile: move them to sandboxes/default.yaml in the team repo (or ~/.teamai/sandboxes/default.yaml for yourself), the profile an entry that names none runs, and start again.'),
+    } });
+  });
 });
 
 describe('a profile teamai ships as an example to copy', () => {

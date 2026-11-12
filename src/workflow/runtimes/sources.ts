@@ -221,6 +221,11 @@ function optionsSource(driver: ResolvedDriver, use: string): string {
   return driver.config.workflows?.drivers?.[driver.name]?.runtimes?.[use] === undefined ? driver.file : `${driver.file} or your workflows.drivers.${driver.name}.runtimes.${use}`;
 }
 
+/** Whether the options of `driver`'s `use` entry come only from a definition the member or the team keeps. */
+function isEntryEditable(driver: ResolvedDriver, use: string): boolean {
+  return (driver.source === 'team' || driver.source === 'personal') && driver.config.workflows?.drivers?.[driver.name]?.runtimes?.[use] === undefined;
+}
+
 /** What the sandbox runtime refused of the profile its options came from, naming the profile's file. */
 function profileRefused(profile: SandboxProfile, key: string, message: string): WorkflowFailure {
   // teamai's own profiles are examples to name or copy, so the fix is the member's or the team's profile, not teamai.
@@ -336,13 +341,14 @@ async function openRuntime(driver: ResolvedDriver, { use, options, sandbox }: { 
 
   if (!accepted.ok) return accepted;
   // The sandbox runtime takes its provider's options from the sandbox profile the entry names. A stop of what an attempt
-  // started on options given inline, by a teamai that took them, reaches its sandbox on those options.
+  // started on options given inline, by a teamai that took them, reaches its sandbox on those options. A stop needs no
+  // profile: the runtime keeps the options each place was opened with, so one gone or broken since stops nothing.
   const isStoppingInline = purpose === 'stop' && Object.keys(split.runtime).length > 0;
-  const profiled = use === SANDBOX_RUNTIME && !isStoppingInline ? await sandboxOptions({ driver, named: sandbox, given: split.runtime, from: optionsSource(driver, use) }) : undefined;
+  const profiled = use === SANDBOX_RUNTIME && !isStoppingInline ? await sandboxOptions({ driver, named: sandbox, given: split.runtime, from: optionsSource(driver, use), isEntryEditable: isEntryEditable(driver, use) }) : undefined;
 
-  if (profiled?.ok === false) return profiled;
-  const initOptions = profiled?.options ?? split.runtime;
-  const profile = profiled?.profile;
+  if (profiled?.ok === false && purpose !== 'stop') return profiled;
+  const initOptions = profiled?.ok === true ? profiled.options : split.runtime;
+  const profile = profiled?.ok === true ? profiled.profile : undefined;
   const origin: RuntimeOrigin = { runtime: source.resource, layer: source.layer, location: source.location, revision: source.revision };
 
   // A runtime of the member or the team in place of teamai's own is never taken silently.

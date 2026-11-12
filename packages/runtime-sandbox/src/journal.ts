@@ -2,7 +2,7 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { z } from 'zod';
-import { OpIdSchema, OpStateSchema, type OpId } from '@teamai/runtime-protocol';
+import { OpIdSchema, OpStateSchema, RuntimeOptionsSchema, type OpId } from '@teamai/runtime-protocol';
 import { readRegularFileSync } from '@teamai/shared/regular-file';
 
 // ─── The journal ─────────────────────────────────────────
@@ -46,6 +46,8 @@ const PlaceRecordSchema = z.object({
    * reads, which a grant aims that variable at.
    */
   outer: z.object({ socket: z.string(), worktree: z.string(), toolHome: z.record(z.string(), z.string()) }).optional(),
+  /** The options teamai opened it with, so a stop reaches its sandbox on that provider after the profile names another. */
+  options: RuntimeOptionsSchema.optional(),
 });
 
 export type PlaceRecord = z.infer<typeof PlaceRecordSchema>;

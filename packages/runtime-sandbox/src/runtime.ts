@@ -2,7 +2,7 @@ import type { Readable } from 'node:stream';
 import { opLedger } from '@teamai/runtime-kit/ledger';
 import type { OuterHandle } from '@teamai/runtime-kit/outer';
 import { serveRuntime } from '@teamai/runtime-kit/serve';
-import type { Can, InitInstance, OpenRequestSchema, OpId, RuntimeDisplay, RuntimeFailure, RuntimeMessage, RuntimeRequest } from '@teamai/runtime-protocol';
+import type { Can, InitInstance, OpenRequestSchema, OpId, RuntimeDisplay, RuntimeFailure, RuntimeMessage, RuntimeOptions, RuntimeRequest } from '@teamai/runtime-protocol';
 import type { z } from 'zod';
 import { placeOf, socketPathOf } from './attempt-socket.js';
 import { BOUND_MS, by } from './deadline.js';
@@ -41,12 +41,21 @@ type OpenRequest = z.infer<typeof OpenRequestSchema>;
  */
 export interface Ready {
   provider: Provider;
+  /** The options teamai gave the init `provider` comes from, which each place it opens keeps. */
+  options?: RuntimeOptions;
   /** The sandbox profile the options came from, shown with every sandbox. */
   profile?: ProfileOption;
   can: Can;
   host: HostRoute;
   unusedGateways: UnusedGateways;
   instances: ReadonlyMap<string, InitInstance>;
+}
+
+/** Whether two inits' options reach the same sandboxes: the same provider options, whichever profile revision named them. */
+function sameOptions(kept: RuntimeOptions, given: RuntimeOptions): boolean {
+  const providerPart = (options: RuntimeOptions): string => JSON.stringify(Object.entries(options).filter(([key]) => key !== 'profile').sort(([a], [b]) => (a < b ? -1 : 1)));
+
+  return providerPart(kept) === providerPart(given);
 }
 
 /** What a person sees of the sandbox of `key`: the provider's display, with the profile it was built from and its revision. */
@@ -178,7 +187,7 @@ export function serve({ input, write: send, journal, warn, provider: providerFor
         return;
       }
 
-      journal.savePlace(handle, { ...key, confined: true });
+      journal.savePlace(handle, { ...key, confined: true, ...(current.options && { options: current.options }) });
       write({ op, event: 'accepted', handle });
       write({ op, event: 'ready', display: shown(current, key) });
 
@@ -199,7 +208,7 @@ export function serve({ input, write: send, journal, warn, provider: providerFor
       }
     }
 
-    journal.savePlace(handle, { ...key, toolHome: view.toolHome, ...(outer && { outer }) });
+    journal.savePlace(handle, { ...key, toolHome: view.toolHome, ...(outer && { outer }), ...(current.options && { options: current.options }) });
     write({ op, event: 'accepted', handle: outer === undefined ? handle : JSON.stringify({ place: handle, socket: outer.socket } satisfies OuterHandle) });
     // Its own place is saved first, so the sweep keeps it.
     void sweep({ provider, journal, warn });
@@ -240,7 +249,7 @@ export function serve({ input, write: send, journal, warn, provider: providerFor
         return { ok: false, failure: { code: 'sandbox_failed', message: `Attempt ${attempt} was closed while its sandbox was being made, ${removal}.` } };
       }
 
-      journal.savePlace(handle, { ...key, toolHome: view.toolHome, ...(outer && { outer }), id: created.id });
+      journal.savePlace(handle, { ...key, toolHome: view.toolHome, ...(outer && { outer }), ...(current.options && { options: current.options }), id: created.id });
 
       return created;
     };
@@ -423,6 +432,14 @@ export function serve({ input, write: send, journal, warn, provider: providerFor
   const init = async ({ options, credentials, mode, instances = [] }: Extract<RuntimeRequest, { type: 'init' }>): Promise<void> => {
     const parsed = parseOptions(options);
 
+    // A stop needs no options of teamai's: each place keeps those it was opened with, which reach its sandbox.
+    if (!parsed.ok && mode === 'recover') {
+      ready = { provider: unreachable(parsed.failure), options, can: {}, host: NOT_OFFERED, unusedGateways: {}, instances: new Map() };
+      write({ type: 'init', ok: true, can: {} });
+
+      return;
+    }
+
     if (!parsed.ok) {
       ready = { provider: unreachable(parsed.failure), can: {}, host: NOT_OFFERED, unusedGateways: {}, instances: new Map() };
       write({ type: 'init', ok: false, error: parsed.failure });
@@ -442,7 +459,7 @@ export function serve({ input, write: send, journal, warn, provider: providerFor
     }
 
     if (mode === 'recover') {
-      ready = { provider, ...(parsed.options.profile && { profile: parsed.options.profile }), can: {}, host: NOT_OFFERED, unusedGateways: {}, instances: new Map() };
+      ready = { provider, options, ...(parsed.options.profile && { profile: parsed.options.profile }), can: {}, host: NOT_OFFERED, unusedGateways: {}, instances: new Map() };
       write({ type: 'init', ok: true, can: {} });
 
       return;
@@ -460,7 +477,7 @@ export function serve({ input, write: send, journal, warn, provider: providerFor
     const { confined: offers = [], ...rest } = offered.can;
     const judges = credentials === undefined ? offers : offersSignedIn(offers, credentials.env);
     const can: Can = { ...rest, ...(judges.length > 0 && { confined: judges }) };
-    ready = { provider, ...(parsed.options.profile && { profile: parsed.options.profile }), can, host: offered.host, unusedGateways: offered.unusedGateways, instances: new Map(instances.map((instance) => [instance.name, instance])) };
+    ready = { provider, options, ...(parsed.options.profile && { profile: parsed.options.profile }), can, host: offered.host, unusedGateways: offered.unusedGateways, instances: new Map(instances.map((instance) => [instance.name, instance])) };
 
     // The wrapper runs a link named after an instance outside any attempt too (`--version`): it reads them here.
     if (instances.length > 0) {
@@ -484,6 +501,35 @@ export function serve({ input, write: send, journal, warn, provider: providerFor
 
   const prompt = prompts({ journal, ledger, env, execs, creation });
 
+  /**
+   * The provider that reaches the place of `handle`: the one its sandbox was opened with, when the options teamai gives
+   * now name another, such as after the member's own `default` profile came to replace the team's. A record that
+   * cannot be read leaves it to the request, which says so.
+   */
+  const providerOfPlace = (handle: string | undefined): Provider => {
+    let kept: RuntimeOptions | undefined;
+
+    try {
+      kept = handle === undefined ? undefined : journal.place(placeOf(handle))?.options;
+    } catch {
+      return ready.provider;
+    }
+
+    // Until an init succeeds, nothing is reached: `options` is set only by one that did.
+    if (kept === undefined || ready.options === undefined || sameOptions(kept, ready.options)) return ready.provider;
+    const parsed = parseOptions(kept);
+
+    return parsed.ok ? providerFor(parsed.options) : ready.provider;
+  };
+
+  const handleOfOp = (op: OpId): string | undefined => {
+    try {
+      return journal.exec(op)?.handle;
+    } catch {
+      return undefined;
+    }
+  };
+
   return serveRuntime({
     name: 'sandbox',
     input,
@@ -494,12 +540,12 @@ export function serve({ input, write: send, journal, warn, provider: providerFor
       open: (request) => open(request, ready),
       exec: (request) => execs.exec(request, ready),
       prompt: (request) => prompt(request, ready),
-      cancel: ({ op }) => execs.cancel(op, ready.provider),
-      collect: ({ handle }) => collect(handle, ready.provider),
-      reattach: ({ handle, credentials, unset }) => reattach(handle, ready.provider, credentials, unset),
+      cancel: ({ op }) => execs.cancel(op, providerOfPlace(handleOfOp(op))),
+      collect: ({ handle }) => collect(handle, providerOfPlace(handle)),
+      reattach: ({ handle, credentials, unset }) => reattach(handle, providerOfPlace(handle), credentials, unset),
       async close({ handle, release: isReleased }) {
         try {
-          await close(handle, ready.provider, isReleased === true);
+          await close(handle, providerOfPlace(handle), isReleased === true);
         } catch (error) {
           // A place the person released is forgotten all the same, however much of its record can be read, and its
           // sandbox is left. One not released stays in the journal for a close once its record can be read.
