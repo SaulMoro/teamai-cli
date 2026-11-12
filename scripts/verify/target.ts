@@ -9,7 +9,7 @@ import path from 'node:path';
 import { lineRedactor, worldRedactor } from './secrets.js';
 import { MEMBER_NAME } from './members.js';
 import { sandboxJournalRoot } from '../../packages/runtime-sandbox/src/journal-root.js';
-import { markDriverSeen, recordWriters, runtimeStateDirs, worldFiles, worldHomes, worldWritersFile, writeCommandLog, type Member, type World } from './world.js';
+import { markDriverSeen, recordWriters, runtimeStateDirs, updateWorld, worldFiles, worldHomes, worldWritersFile, writeCommandLog, type Member, type World } from './world.js';
 
 export type Target = { kind: 'world' } | { kind: 'member'; name: string };
 
@@ -114,6 +114,9 @@ export async function runOn(world: World, target: Target, argv: readonly string[
   const place = placeOf(world, target);
 
   if (pass.size > 0 && place.env === undefined) throw new Error(`World ${world.runId} was made before --pass, and its commands run with what bin/run sets. Make a new world.`);
+
+  // Names only, before the command runs: a value it leaves in a process or a file is masked in the ledger too.
+  if (pass.size > 0) updateWorld(world, (fresh) => ({ ...fresh, passed: [...new Set([...fresh.passed ?? [], ...pass.keys()])] }));
   const mask = worldRedactor({ passed: pass, harnessEnv: process.env });
   const before = worldFiles(place);
   const { command, args, env, cwd } = commandOf(world, place, argv, { pass });

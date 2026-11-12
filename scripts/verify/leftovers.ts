@@ -11,7 +11,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { z } from 'zod';
-import { worldRedactor } from './secrets.js';
+import { ledgerRedactor } from './secrets.js';
 import { markDriverSeen, runtimeStateDirs, worldHomes, WORLDS_ROOT, type World } from './world.js';
 
 /** Whose a leftover is: this world's (a LEAK), another world's, teamai's but no world's, or nothing of teamai's. */
@@ -314,7 +314,7 @@ export async function tiesOnThisMachine(world: World | undefined): Promise<{ sel
 /** Ledger section (f): each row the world's tier asks, its LEAK lines and notes. A world that ran no step runtime gets one line. */
 export async function leftoversSection(world: World): Promise<{ leaks: string[]; notes: string[] }> {
   const { context, tier } = await contextOf(world);
-  const mask = worldRedactor({ passed: new Map(), harnessEnv: process.env });
+  const mask = ledgerRedactor({ passedNames: world.passed ?? [], harnessEnv: process.env });
   const leaks: string[] = [];
   const notes: string[] = [];
 

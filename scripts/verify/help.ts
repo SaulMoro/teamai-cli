@@ -102,7 +102,8 @@ must be up; the first one builds the image teamai-verify-machine:node<major>.`;
 const KEYS = `A key reaches one command only when you pass it, by name: \`sh <run> --pass NAME[,NAME...] <cmd>\` or
 \`teamai <run> --pass NAME ...\` copies those variables from your shell into that command's environment.
 Its output in the terminal and in logs/ shows each passed value, and each secret-looking value of your shell, as
-<REDACTED:NAME>. A value typed on the command line is not passed: it lands in logs/ as typed.
+<REDACTED:NAME>, and the ledger masks each name the world's commands were given (world.json keeps the names, never
+a value). A value typed on the command line is not passed: it lands in logs/ as typed.
 \`doctor --drivers\` lists the keys your shell holds, by name.
 Prove a run kept a key out: \`grep -rF -c "$VALUE" <world> /tmp/teamai-verify-<run>*\` with a dummy value you made counts
 0 under the world's directory and each TMPDIR of the world. Count before cleanup: it removes the TMPDIRs.`;

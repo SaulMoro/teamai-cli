@@ -1,6 +1,6 @@
 import type { JsonObject } from '@teamai/shared/json';
 import { describe, expect, it } from 'vitest';
-import { declaredCredentialNames, judgeSandboxEnv, lineRedactor, parseEnviron, passedKeys, splitPassOption, worldRedactor } from './secrets.js';
+import { declaredCredentialNames, judgeSandboxEnv, ledgerRedactor, lineRedactor, parseEnviron, passedKeys, splitPassOption, worldRedactor } from './secrets.js';
 
 const TOKEN = 'tok-0123456789abcdef';
 
@@ -26,6 +26,12 @@ describe("a world's redaction", () => {
     const redact = worldRedactor({ passed: new Map([['GATEWAY_URL', 'https://gw.internal.example']]), harnessEnv: { ANTHROPIC_AUTH_TOKEN: TOKEN, HOME: '/Users/me' } });
 
     expect(redact(`calling https://gw.internal.example with ${TOKEN} from /Users/me`)).toBe('calling <REDACTED:GATEWAY_URL> with <REDACTED:ANTHROPIC_AUTH_TOKEN> from /Users/me');
+  });
+
+  it("masks in a ledger the value of every name the world's commands were given, whatever the name, and no other", () => {
+    const mask = ledgerRedactor({ passedNames: ['PLAIN_SETTING', 'GONE'], harnessEnv: { PLAIN_SETTING: 'plain-value-1234', OTHER: 'other-value-5678' } });
+
+    expect(mask('process 42 (tool --flag plain-value-1234 other-value-5678)')).toBe('process 42 (tool --flag <REDACTED:PLAIN_SETTING> other-value-5678)');
   });
 
   it('masks a value that arrives split across two chunks, line by line', () => {

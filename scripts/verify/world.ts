@@ -64,6 +64,8 @@ const WorldSchema = z.object({
   /** The project's bare origin behind a fake https URL, made on first need, and its refs once the harness set it up. */
   origin: z.object({ bare: z.string(), url: z.string(), refs: z.record(z.string(), z.string()) }).optional(),
   members: z.array(MemberSchema).optional(),
+  /** Every name a command of the world was given with --pass, never a value: the ledger masks what each holds in the harness. */
+  passed: z.array(z.string()).optional(),
   // Once a runtime outside teamai's process ran in the world: what uninstall deletes cannot lower the ledger's checks after it.
   driverSeen: z.literal(true).optional(),
   cleanedAt: z.string().optional(),
