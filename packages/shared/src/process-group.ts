@@ -275,6 +275,8 @@ export async function isSameProcess(recorded: ProcessIdentity, { signal }: { sig
   // Its pid names another process here, or none, so neither says anything of the recorded one.
   if (isOtherPidNamespace(recorded.pidNamespace, namespace)) return 'foreign';
 
+  if (!isSignallable(recorded.pid)) return 'other';
+
   try {
     process.kill(recorded.pid, 0);
   } catch (error) {
@@ -489,13 +491,28 @@ async function readGroup(file: string): Promise<Recorded | undefined> {
   }
 }
 
-/** Whether a signal reached any process of group `pid`. */
-function signalGroup(pid: number, name: NodeJS.Signals | 0): boolean {
+/**
+ * Whether `pid` may go to `kill`, which every call of it here checks first: an integer above 1, as `kill` reads 0 as
+ * this process's own group and -1 as every process it may signal, and 1 is init.
+ */
+function isSignallable(pid: number): boolean {
+  return Number.isSafeInteger(pid) && pid > 1;
+}
+
+/** Sends `name` to process `pid`, or with `isGroup` to the process group it leads. Whether the signal reached a process. */
+function sendSignal(pid: number, name: NodeJS.Signals | 0, { isGroup = false }: { isGroup?: boolean } = {}): boolean {
+  if (!isSignallable(pid)) return false;
+
   try {
-    return process.kill(-pid, name);
+    return process.kill(isGroup ? -pid : pid, name);
   } catch {
     return false;
   }
+}
+
+/** Whether a signal reached any process of group `pid`. */
+function signalGroup(pid: number, name: NodeJS.Signals | 0): boolean {
+  return sendSignal(pid, name, { isGroup: true });
 }
 
 /**
@@ -672,13 +689,7 @@ async function endProcesses(found: FoundProcess[]): Promise<boolean> {
   const signal = async (name: NodeJS.Signals | 0): Promise<boolean | undefined> => {
     const now = await runningProcesses();
 
-    return now === undefined ? undefined : found.filter(({ pid, start }) => isStillRunning(now, { pid, start })).reduce((reached, { pid }) => {
-      try {
-        return process.kill(pid, name) || reached;
-      } catch {
-        return reached;
-      }
-    }, false);
+    return now === undefined ? undefined : found.filter(({ pid, start }) => isStillRunning(now, { pid, start })).reduce((reached, { pid }) => sendSignal(pid, name) || reached, false);
   };
 
   if (await signal('SIGTERM') === undefined) return false;
@@ -702,7 +713,7 @@ export function stopProcess<T>(child: ChildProcess, exit: Promise<T>, detached: 
   /** Whether the signal reached any process in the group or tree. */
   const signal = async (name: NodeJS.Signals | 0): Promise<boolean> => {
     try {
-      if (detached && child.pid !== undefined) return process.kill(-child.pid, name);
+      if (detached && child.pid !== undefined) return signalGroup(child.pid, name);
       let targets = descendants;
 
       if ((name === 0 || name === 'SIGKILL') && descendants.length > 0) {
@@ -712,11 +723,7 @@ export function stopProcess<T>(child: ChildProcess, exit: Promise<T>, detached: 
         targets = descendants.filter((found) => isStillRunning(now, found));
       }
 
-      let reached = false;
-
-      for (const { pid } of targets) {
-        try { reached = process.kill(pid, name) || reached; } catch { /* Already exited. */ }
-      }
+      const reached = targets.reduce((any, { pid }) => sendSignal(pid, name) || any, false);
 
       return child.kill(name) || reached;
     } catch {
@@ -725,7 +732,10 @@ export function stopProcess<T>(child: ChildProcess, exit: Promise<T>, detached: 
   };
 
   const stop = async (initial: NodeJS.Signals): Promise<T> => {
-    if (process.platform === 'win32' && child.pid !== undefined) {
+    // A child whose spawn failed has no pid, and Node's kill of its handle signals pid 0: this process's whole group.
+    if (child.pid === undefined) return exit;
+
+    if (process.platform === 'win32') {
       execFile('taskkill', ['/pid', String(child.pid), '/T', '/F'], () => {});
 
       return exit;

@@ -26,6 +26,7 @@ import mockSource from './rules/mock-source.js';
 import untrustedFinishGit from './rules/untrusted-finish-git.js';
 import gitExitCode from './rules/git-exit-code.js';
 import processReads from './rules/process-reads.js';
+import unspawnedChild from './rules/unspawned-child.js';
 import readlineError from './rules/readline-error.js';
 import spawnCommand from './rules/spawn-command.js';
 import regularFileReads from './rules/regular-file-reads.js';
@@ -70,6 +71,7 @@ export default definePlugin({
     'git-exit-code': gitExitCode,
     'readline-error': readlineError,
     'process-reads': processReads,
+    'unspawned-child': unspawnedChild,
     'spawn-command': spawnCommand,
     'regular-file-reads': regularFileReads,
     'step-path-writes': stepPathWrites,
