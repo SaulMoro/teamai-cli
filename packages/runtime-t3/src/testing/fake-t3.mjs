@@ -25,7 +25,8 @@
 //                               links: the environments linked to this one, { environmentId, label, status }; unset: linked
 //                               environments are off; environments: each linked one's { projects, providers }, by its id
 //                               sendMs: a send answers this long after it started the turn; turnStartsLateMs: a send's turn starts this
-//                               long after T3 answered it
+//                               long after T3 answered it; sendHangs: a send never answers, and starts no turn
+//                               scratchFolder: the folder a launch with `scratch: true` binds in place of a new, empty one
 //   FAKE_T3_STATE/calls.jsonl   each tool call as { tool, args, bearer }; bearer is "valid" or "invalid", never the token
 //   FAKE_T3_STATE/pairings.jsonl   the pairing codes the harness's fake `t3` command minted: { credential, scopes, base }
 //   FAKE_T3_STATE/threads/      one JSON file per thread
@@ -323,7 +324,7 @@ function launch(args) {
   if (!provider) return fail(`No provider instance ${modelSelection.instanceId}.`);
 
   // A scratch thread gets a new, empty folder of its own.
-  const scratch = args.scratch === true ? path.join(T3_HOME, 'scratch', threadId.slice(-8)) : undefined;
+  const scratch = args.scratch === true ? config().scratchFolder ?? path.join(T3_HOME, 'scratch', threadId.slice(-8)) : undefined;
 
   if (scratch) fs.mkdirSync(scratch, { recursive: true });
   const idle = args.message === undefined;
@@ -496,6 +497,8 @@ const TOOLS = {
     if ((thread.sends ?? []).includes(args.clientRequestId)) return ok({ threadId: args.threadId, status: thread.status });
 
     if (thread.status !== 'idle' && !TERMINAL.has(thread.status)) return ok({ threadId: args.threadId, status: 'queued' });
+
+    if (config().sendHangs) return new Promise(() => {});
 
     const startTurn = () => {
       update(args.threadId, (now) => ({ message: args.message, status: 'starting', settled: false, runCount: (now.runCount ?? 0) + 1, sends: [...(now.sends ?? []), args.clientRequestId] }));

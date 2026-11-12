@@ -876,7 +876,7 @@ export function conversations({ serving, adder }: { serving: Serving; adder: Ins
 
       // A close that comes meanwhile waits for the launch, so it stops the thread the launch started.
       thread = await places.track(request.handle, work.kind === 'judge'
-        ? launchJudge({ t3: s.t3, request, confined: work.confined, opened, journalThread, thread: newThread, known, isReleased: () => places.isReleased(request.handle) })
+        ? launchJudge({ t3: s.t3, request, confined: work.confined, opened, journalThread, thread: newThread, known, isReleased: () => places.isReleased(request.handle), linkOf: (threadId) => threadLink(s.environment, threadId) })
         : known ? (known.turnOf ? sendTurn(s, request, work.place, known) : Promise.resolve(known)) : launchStep(s, request, work.place, newThread).then(({ threadId, model }) => journalThread(threadId, undefined, model)));
     } catch (error) {
       const why = error instanceof Error ? error.message : String(error);
