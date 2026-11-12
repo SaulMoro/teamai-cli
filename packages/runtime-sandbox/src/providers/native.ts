@@ -67,7 +67,9 @@ const SIGTERM_GRACE_MS = 2_000;
 /**
  * How an exec starts, in the process group of its own it leads: a background shell blocked on fd 3, the read end of a
  * pipe whose write end only the runtime holds, kills the whole group once that pipe ends (the exec ended, or the runtime
- * died, however it died), and the exec's command replaces the launching shell without fd 3. The watcher is in place
+ * died, however it died), and the exec's command replaces the launching shell without fd 3. Its first argument is the
+ * place's `pids` directory: the watcher removes the group's file there before its first kill, so a runtime that died
+ * leaves no file naming a number another group may hold later, which a stop would then signal. The watcher is in place
  * before the sandbox starts, outside it, so no SIGKILL of the runtime, however early, leaves the step running (after
  * sandcastle's `bwrapProcess.ts` watcher and `sandboxes/seatbelt.ts` watchdog). A process the step starts in a session
  * of its own (`setsid`) leaves the group, and outlives it.
@@ -78,7 +80,7 @@ const SIGTERM_GRACE_MS = 2_000;
  * its init included, stays in the group, as an exec goes without --new-session (bwrap.ts), so the group's kill ends it
  * however early it comes.
  */
-const LAUNCH = 'set -m 2>/dev/null\n{ read -r _ || :; n=0; while kill -9 -$$ 2>/dev/null && [ $n -lt 50 ]; do n=$((n+1)); sleep 0.1; done; } <&3 >/dev/null 2>&1 &\nset +m 2>/dev/null\nexec 3<&-\nexec "$@"';
+const LAUNCH = 'pids=$1; shift\nset -m 2>/dev/null\n{ read -r _ || :; rm -f "$pids/$$"; n=0; while kill -9 -$$ 2>/dev/null && [ $n -lt 50 ]; do n=$((n+1)); sleep 0.1; done; } <&3 >/dev/null 2>&1 &\nset +m 2>/dev/null\nexec 3<&-\nexec "$@"';
 
 /** The executable `name` as `pathVariable` finds it, or undefined. */
 export function onPath(name: string, pathVariable: string | undefined): string | undefined {
@@ -316,7 +318,7 @@ export function nativeProvider({ sandbox, state, env, home }: { sandbox: NativeS
       return new Promise((resolve) => {
         // A process group of its own, so a stop ends the step and whatever it started.
         // Found on the runtime's PATH, never on one the step sets.
-        const child = spawn('/bin/sh', ['-c', LAUNCH, 'sh', command, ...args], { cwd: spec.cwd, env: childEnv, detached: true, stdio: ['ignore', 'pipe', 'pipe', 'pipe'] });
+        const child = spawn('/bin/sh', ['-c', LAUNCH, 'sh', pidsOf(id), command, ...args], { cwd: spec.cwd, env: childEnv, detached: true, stdio: ['ignore', 'pipe', 'pipe', 'pipe'] });
         const pidFile = child.pid === undefined ? undefined : path.join(pidsOf(id), String(child.pid));
 
         if (pidFile) fs.writeFileSync(pidFile, '');

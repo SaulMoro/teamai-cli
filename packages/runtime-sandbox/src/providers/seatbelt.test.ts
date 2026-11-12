@@ -2,7 +2,7 @@ import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { bundleRuntime, tempDir, type Connection, type Message } from '../testing/harness.js';
 import { exec, failStandIn, HANDLE, init, nativeHost, openPlace, placeIn, startOn, type NativeHost } from '../testing/native-harness.js';
 import { closeLeftovers, expectNothingLeft } from '../testing/leaks.js';
@@ -184,10 +184,10 @@ describe('seatbelt: lifecycle', () => {
     const op = 'op-0000cafe';
     first.send({ type: 'exec', op, handle: HANDLE, argv: ['waits'], env: {}, unset: [], credentials: {}, cwd: at.worktree });
     await first.next((message) => message.op === op && message.event === 'output');
-    first.child.kill('SIGKILL');
-    await first.end();
     const pids = path.join(host.home, '.teamai', 'runtime-state', 'sandbox', 'seatbelt', HANDLE, 'pids');
     const [pgid] = fs.readdirSync(pids).map(Number);
+    first.child.kill('SIGKILL');
+    await first.end();
 
     const second = start();
     await init(second, { provider: 'seatbelt' });
@@ -195,6 +195,29 @@ describe('seatbelt: lifecycle', () => {
 
     expect(await second.next((message) => message.op === op && ['cancelled', 'failed'].includes(String(message.event)))).toMatchObject({ event: 'cancelled' });
     expect(signalGroup(Number(pgid), 0)).toBe('gone');
+  });
+
+  it("removes an exec's group file once a killed runtime's step is taken down, so no later stop signals that number", async () => {
+    host.tool('waits', WAITS);
+    const first = start();
+    await init(first, { provider: 'seatbelt' });
+    const at = placeIn(host.dir);
+    await openPlace(first, at);
+    const op = 'op-0000cafe';
+    first.send({ type: 'exec', op, handle: HANDLE, argv: ['waits'], env: {}, unset: [], credentials: {}, cwd: at.worktree });
+    await first.next((message) => message.op === op && message.event === 'output');
+    const pids = path.join(host.home, '.teamai', 'runtime-state', 'sandbox', 'seatbelt', HANDLE, 'pids');
+    const [pgid] = fs.readdirSync(pids).map(Number);
+    first.child.kill('SIGKILL');
+    await first.end();
+    await vi.waitFor(() => { expect(signalGroup(Number(pgid), 0)).toBe('gone'); }, { timeout: 10_000 });
+
+    // The number is free for another group of the member's from now on, so nothing of this place names it any more.
+    await vi.waitFor(() => { expect(fs.readdirSync(pids)).toEqual([]); }, { timeout: 5_000 });
+    const second = start();
+    await init(second, { provider: 'seatbelt' });
+    second.send({ type: 'close', handle: HANDLE });
+    await second.next((message) => message.event === 'closed' && message.handle === HANDLE);
   });
 
   it('leaves alone a process group whose number a step held before this machine started, at close', async () => {
