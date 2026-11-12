@@ -3,7 +3,8 @@ import { UNKNOWN, UNKNOWN_READS, type ToolDescriptor } from '@teamai/tool-core/d
 /** Claude Code and the two internal builds of it, which keep their own home, command and sessions. */
 export const tools = {
   claude: {
-    home: { dir: '.claude' },
+    // Claude Code keeps its sign-in, its settings and each project's state in ~/.claude.json.
+    home: { dir: '.claude', stateFiles: ['.claude.json'] },
     skillLoad: { calls: [{ name: 'Skill', evidence: 'verified' }] },
     skills: { user: [{ base: 'home', path: '.claude/skills', evidence: 'docs' }], project: 'unknown' },
     rules: {

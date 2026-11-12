@@ -12,6 +12,8 @@ import type { ToolId } from '../../src/tools.js';
 import { z } from 'zod';
 import { defaultToolHome, envToolHome, toolHome } from '../../src/tool-home.js';
 import { detectToolRoot, RELOCATABLE_TOOLS, TeamaiConfigBaseSchema } from '../../src/types.js';
+import { MCP_SERVER_KEY } from '../../src/resources/mcp-format.js';
+import type { Home, ToolDescriptor } from '@teamai/tool-core/definition';
 import { PERSONAL_DIRS } from '../../src/workflow/runtimes/layers.js';
 import { leftoversSection } from './leftovers.js';
 import { runOn, type Target } from './target.js';
@@ -235,6 +237,33 @@ const TEAMAI_HOME_WRITES = TOOL_READS.filter((read) => read.startsWith('home/'))
 /** A tool's home under HOME holds the tool's own state (sessions, caches, the runtime of a Codex teamai starts to trust its hooks) beside what teamai writes there. */
 const TOOL_HOMES = [...new Set(TOOL_ORDER.map((tool) => `home/${descriptorOf(tool).home.dir}`))];
 
+/**
+ * Each tool's own state file beside its home (`home.stateFiles`), with the key the tool's user MCP servers sit under,
+ * where teamai may have written them: Claude's ~/.claude.json is both.
+ */
+const TOOL_STATE_FILES = new Map(TOOL_ORDER.flatMap((tool) => {
+  const { home, mcp }: { home: Home; mcp: ToolDescriptor['mcp'] } = descriptorOf(tool);
+  const servers = typeof mcp.user === 'object' && mcp.user.format !== 'codex' ? MCP_SERVER_KEY[mcp.user.format] : undefined;
+
+  return (home.stateFiles ?? []).map((file): [string, string | undefined] => [`home/${file}`, servers]);
+}));
+
+/** Whether the JSON `text` holds a non-empty `key` object anywhere, as a server teamai wrote would leave; text that is not JSON counts as holding one. */
+function holdsUnder(text: string, key: string): boolean {
+  let parsed: unknown;
+
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    return true;
+  }
+
+  const holds = (value: unknown): boolean => typeof value === 'object' && value !== null
+    && Object.entries(value).some(([name, inner]) => (name === key && typeof inner === 'object' && inner !== null && Object.keys(inner).length > 0) || holds(inner));
+
+  return holds(parsed);
+}
+
 /** A run's branch, which a run that succeeded keeps as its result (docs/guide/workflow.md, The branches a run leaves). */
 const RUN_BRANCH = /^project\/\.git\/refs\/heads\/teamai(\/r[0-9a-f]{16}(\/[^/]+(\/p\d+)?)?)?$/;
 
@@ -384,6 +413,15 @@ async function reverseOf(world: World, place: LedgerPlace): Promise<{ leaks: str
     // A file teamai shares with a tool, such as Claude's ~/.claude.json, which keeps the tool's state once teamai's part is out.
     if (writer !== undefined && writer.value === after[entry] && /^[0-9a-f]{64}$/.test(after[entry]) && SHARED_FILES.has(entry) && !namesTeamai(entry)) {
       excuse(`left as ${writer.program} wrote it, with nothing of teamai's in it`, entry);
+      continue;
+    }
+
+    // A tool writes its own state there whether teamai launched it or the member did: what teamai adds is its servers.
+    const servers = TOOL_STATE_FILES.get(entry);
+
+    if (change === 'left behind' && TOOL_STATE_FILES.has(entry) && /^[0-9a-f]{64}$/.test(after[entry] ?? '') && !namesTeamai(entry)
+      && (servers === undefined || !holdsUnder(fs.readFileSync(entryPath(place, entry), 'utf8'), servers))) {
+      excuse("the tool's own state file, with no MCP server and nothing else of teamai's in it", entry);
       continue;
     }
 

@@ -77,9 +77,12 @@ export type HomeMove =
  * releases before #1221 wrote the tool's hooks (OpenCode's plugin, Pi's
  * extension, Muse's and CodeBuddy's settings.json hooks) and MCP servers under
  * the default home when the home moved, so uninstall and MCP ownership look there too.
+ * `stateFiles`: files beside `dir`, relative to `$HOME`, the tool writes its own state into, which stay after
+ * `teamai uninstall` once teamai's part is out of them.
  */
 export type Home = {
   readonly dir: string;
+  readonly stateFiles?: readonly string[];
   readonly moves?: { readonly root?: string; readonly by: readonly HomeMove[]; readonly defaultHomeLeftovers?: true };
 };
 
