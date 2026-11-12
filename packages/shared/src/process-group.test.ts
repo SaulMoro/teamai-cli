@@ -652,8 +652,8 @@ it.runIf(READS_PS)('keeps the record of an attached command whose stop ps stoppe
   }
 }, 20_000);
 
-it.runIf(READS_PS)('keeps the record of an attached command when ps fails only on the read of what the command started', async () => {
-  // The read that finds the command answers, the one that lists what it started does not, and every later one answers.
+it.runIf(READS_PS)('keeps the record of an attached command, with what it started, when ps fails on the read after the one that found it', async () => {
+  // The read that finds the command answers, the next one does not, and every later one answers.
   const { directory, bin } = psFailing((call) => call === 2);
   const { shell, deaf } = await shellLeavingDeafChild();
   const records = path.join(directory, 'records');
@@ -665,8 +665,11 @@ it.runIf(READS_PS)('keeps the record of an attached command when ps fails only o
     const left = await stopRecordedGroup(records);
     vi.unstubAllEnvs();
 
-    // A stop that leaves what the command started running keeps its record for a later stop.
-    expect(isRunning(deaf) ? left : [pid]).toEqual([pid]);
+    // Nothing is signalled blind, and the record names what the read that found the command found it had started.
+    expect(isRunning(deaf)).toBe(true);
+    expect(left).toEqual([pid]);
+    const kept = JSON.parse(fs.readFileSync(path.join(records, `group-${pid}.json`), 'utf8')) as { left?: { pid: number }[] };
+    expect(kept.left?.map(({ pid: found }) => found)).toContain(deaf);
   } finally {
     vi.unstubAllEnvs();
     for (const left of [deaf, pid]) try { process.kill(left, 'SIGKILL'); } catch { /* Already stopped. */ }
