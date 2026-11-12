@@ -2,8 +2,8 @@
 import { defineRule } from '@oxlint/plugins';
 import { repositoryPath, stringLiteralValue } from '../utils.js';
 
-/** A git command whose output one pipe, not `||`, hands to the next command. */
-const PIPED_GIT = /\bgit\s+[^;&|\n]*\|(?!\|)/;
+/** A git command whose output one pipe, not `||`, hands to the next command; a redirect such as `2>&1` stays in the command. */
+const PIPED_GIT = /\bgit\s+(?:[^;&|\n]|>&)*\|(?!\|)/;
 
 /**
  * The text of `node` when it is a string or template literal, an interpolation read as one word; undefined otherwise.
