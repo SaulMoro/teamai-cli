@@ -149,6 +149,9 @@ const VercelOptionsSchema = z.strictObject({
 
 export type VercelOptions = z.infer<typeof VercelOptionsSchema>;
 
+/** The variables a Vercel sign-in is read from, by `provider_auth` or the environment. */
+export const VERCEL_AUTH_KEYS = Object.keys(VercelOptionsSchema.shape.provider_auth.unwrap().shape);
+
 const SCHEMAS = { sbx: SbxOptionsSchema, docker: ContainerOptionsSchema, podman: ContainerOptionsSchema, seatbelt: NativeOptionsSchema, bwrap: NativeOptionsSchema, vercel: VercelOptionsSchema } satisfies Record<(typeof PROVIDERS)[number], z.ZodObject>;
 
 export type SandboxOptions = z.infer<typeof ContainerOptionsSchema> | z.infer<typeof SbxOptionsSchema> | z.infer<typeof NativeOptionsSchema> | VercelOptions;

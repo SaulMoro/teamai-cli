@@ -152,7 +152,7 @@ export function teamRefs(team: string) {
 
 const quote = (value: string): string => `'${value.replace(/'/g, `'\\''`)}'`;
 
-export const TOOL_COMMANDS = ['claude', 'codex', 'codebuddy', 'opencode'];
+export const TOOL_COMMANDS = ['claude', 'codex', 'codebuddy', 'opencode'] as const;
 
 /** Every command a world's PATH reaches on this machine: git, the tools, each sandbox provider's own and the driver apps'. */
 export function worldCommandNames(): string[] {

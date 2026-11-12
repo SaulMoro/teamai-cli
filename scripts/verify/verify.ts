@@ -120,10 +120,18 @@ async function main(): Promise<number> {
       return 0;
     }
 
-    case 'doctor':
-      doctor(rest[0] === undefined ? undefined : parseTarget(rest[0]).runId);
+    case 'doctor': {
+      const run = rest.find((arg) => arg !== '--drivers');
+      doctor(run === undefined ? undefined : parseTarget(run).runId);
+
+      if (rest.includes('--drivers')) {
+        const { doctorDrivers } = await import('./doctor.js');
+        doctorDrivers((good, text) => console.log(`${good ? 'ok  ' : 'warn'} ${text}`));
+      }
 
       return 0;
+    }
+
     case 'origin': {
       const world = ensureOrigin(loadWorld(parseTarget(rest[0]).runId));
       console.log(`${world.origin?.url ?? ''} -> ${world.origin?.bare ?? ''}`);
