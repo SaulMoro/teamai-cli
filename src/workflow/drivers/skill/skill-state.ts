@@ -114,7 +114,9 @@ const SessionHostRequestSchema = z.discriminatedUnion('kind', [
 ]) satisfies z.ZodType<SessionHostPlaceRequest>;
 
 const RunVersionSchema: z.ZodType<RunVersion> = z.object({ status: z.enum(['running', 'succeeded', 'failed', 'cancelled']), revision: z.number().int(), receipts: z.number().int(), creating: z.boolean(), branch: z.string().optional() });
-const AttemptBase = { attempt: AttemptIdSchema, step: z.string(), revision: z.number().int(), spawnedAt: z.string(), expiresAt: z.string().optional() };
+
+/** `restarts`: how many times C10 started the attempt's runner again after it was gone; absent before the first. */
+const AttemptBase = { attempt: AttemptIdSchema, step: z.string(), revision: z.number().int(), spawnedAt: z.string(), expiresAt: z.string().optional(), restarts: z.number().int().positive().optional() };
 
 /**
  * An open attempt: its runner prepares its place or runs its command; it waits for the place another attempt holds;

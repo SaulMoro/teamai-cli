@@ -1926,6 +1926,25 @@ const CASES: Array<{ name: string; rows: string[]; run: () => Promise<string[]> 
     },
   },
   {
+    name: 'a runner that exits at once every time is started again three times, then its step fails runner_crashed',
+    rows: ['C10', 'C14'],
+    run: async () => {
+      let spawns = 0;
+      // A runner that dies before it takes its lock, as one a step crashes at its start does, every time.
+      const crashing = (runners: Runners): Runners => ({ ...runners, spawn: async () => { spawns += 1; } });
+      const made = await harness({ check: CHECK }, { runners: crashing });
+      const { run } = await started(made);
+      const done = await polledToDone(made, run).catch((error: unknown) => ({ unfinished: String(error) }));
+      expect(spawns).toBe(4);
+      expect(done).toMatchObject({ actions: [{ kind: 'done', outcome: 'failed' }] });
+      const engine = await readRun(made.config, run);
+      expect(typeof engine === 'object' && engine.steps.find((step) => step.id === 'lint')).toMatchObject({
+        status: 'failed', failure: { code: 'runner_crashed', message: expect.stringContaining('started again 3 times') },
+      });
+      return made.rows;
+    },
+  },
+  {
     name: 'a runner killed while its command runs: the next tick stops the command it left, then starts the step again',
     rows: ['C10'],
     run: async () => {

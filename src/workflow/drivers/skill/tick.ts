@@ -191,9 +191,9 @@ async function scoringStates(context: SkillContext, state: SkillState): Promise<
 
 /**
  * The row an open attempt takes as a tick starts: its stored report is sent again (P11), it leaves a queue whose holder
- * closed (D9), or its runner is gone (C10, C11).
+ * closed (D9), or its runner is gone (C10, C11, C14).
  */
-async function attemptCheckRow(context: SkillContext, state: SkillState, open: AttemptState): Promise<MovedWithEffects<'P11' | 'D9' | 'C10' | 'C11'> | undefined> {
+async function attemptCheckRow(context: SkillContext, state: SkillState, open: AttemptState): Promise<MovedWithEffects<'P11' | 'D9' | 'C10' | 'C11' | 'C14'> | undefined> {
   switch (open.phase) {
     case 'reporting':
       return resendRow(state, open.attempt);

@@ -113,10 +113,11 @@ export const TRANSITIONS = [
   { id: 'C7', state: 'preparing', input: 'runner: prepare or setup failed', guard: '', effects: 'write-ahead `failed` with its failure', next: 'reporting', action: '' },
   { id: 'C8', state: 'running', input: 'runner: the command exited', guard: '', effects: 'write-ahead: `success` on exit 0, else `failed`; outputs, exit code, masked tail', next: 'reporting', action: '' },
   { id: 'C9', state: 'stopping by its runner', input: 'runner: its check every `RUNNER_POLL_MS` and at `expiresAt`, its setup ending, its command exiting, or its confined run ending', guard: '', effects: 'stop the setup, command or confined run and every process it started (`@teamai/shared/process-group`); write-ahead `released`', next: 'reporting', action: '' },
-  { id: 'C10', state: 'preparing, running', input: 'tick: its `runner.lock` is free', guard: 'it was spawned more than `WAIT_GRACE_MS` ago', effects: 'stop the process group its setup, command or judge left, then end the login that judge held; spawn the same job again (prepare is idempotent; a command restarts in its prepared place)', next: 'unchanged', action: 'event `restarted`' },
+  { id: 'C10', state: 'preparing, running', input: 'tick: its `runner.lock` is free', guard: 'it was spawned more than `WAIT_GRACE_MS` ago, and was started again fewer than `MAX_RUNNER_RESTARTS` times', effects: 'stop the process group its setup, command or judge left, then end the login that judge held; spawn the same job again (prepare is idempotent; a command restarts in its prepared place), counted in `restarts`', next: 'unchanged', action: 'event `restarted`' },
   { id: 'C11', state: 'stopping by its runner', input: 'tick: its `runner.lock` is free', guard: 'it was spawned more than `WAIT_GRACE_MS` ago', effects: 'stop the process group its setup, command or judge left, then end the login that judge held; write-ahead `released`', next: 'reporting', action: '' },
   { id: 'C12', state: 'preparing', input: 'runner: prepared', guard: 'attempt `runs: here`', effects: '`runConfinedStep` outside the lock, on the first of the lease\'s tools that resolves its model, in its directory, with no team env and no session kept', next: 'running', action: '' },
   { id: 'C13', state: 'running', input: 'runner: the confined run ended', guard: '', effects: 'write-ahead: `success` with the reply as outputs and what the run measured, else `failed` with its failure; `released` when no tool of the lease resolves its model here', next: 'reporting', action: '' },
+  { id: 'C14', state: 'preparing, running', input: 'tick: its `runner.lock` is free', guard: 'it was spawned more than `WAIT_GRACE_MS` ago, and C10 already started it again `MAX_RUNNER_RESTARTS` times', effects: 'stop the process group its setup, command or judge left, then end the login that judge held; write-ahead `failed` with `runner_crashed`', next: 'reporting', action: '' },
   { id: 'K1', state: 'drive', input: 'next `--ack dispatch.a`', guard: 'a offered', effects: 'phase dispatched', next: 'drive', action: 'the turn of a tick' },
   { id: 'K2', state: 'drive', input: 'next `--ack dispatch.a`', guard: 'a dispatched', effects: 'none', next: 'drive', action: 'the turn of a tick' },
   { id: 'K3', state: 'drive, done', input: 'next `--ack dispatch.a`', guard: 'a neither offered nor dispatched', effects: 'none', next: 'unchanged', action: 'error `unknown_offer`, next: the next literal' },
@@ -352,12 +353,14 @@ function withAttempt(state: SkillState, attempt: AttemptState): SkillState {
 }
 
 /** The attempt `open` with only what every phase keeps. */
-function baseOf(open: AttemptState): Pick<AttemptState, 'attempt' | 'step' | 'revision' | 'spawnedAt' | 'expiresAt'> {
-  const { attempt, step: id, revision, spawnedAt, expiresAt } = open;
+function baseOf(open: AttemptState): Pick<AttemptState, 'attempt' | 'step' | 'revision' | 'spawnedAt' | 'expiresAt' | 'restarts'> {
+  const { attempt, step: id, revision, spawnedAt, expiresAt, restarts } = open;
 
-  const base: Pick<AttemptState, 'attempt' | 'step' | 'revision' | 'spawnedAt' | 'expiresAt'> = { attempt, step: id, revision, spawnedAt };
+  const base: Pick<AttemptState, 'attempt' | 'step' | 'revision' | 'spawnedAt' | 'expiresAt' | 'restarts'> = { attempt, step: id, revision, spawnedAt };
 
   if (expiresAt !== undefined) base.expiresAt = expiresAt;
+
+  if (restarts !== undefined) base.restarts = restarts;
 
   return base;
 }
@@ -1168,11 +1171,18 @@ export function exitedRow(state: SkillState, input: { attempt: AttemptId; body: 
 }
 
 /**
- * C10 and C11: the `runner.lock` of `attempt` is free, and its runner was spawned more than `graceMs` before `at`, so it
- * is gone rather than not yet started. It was stopping the attempt, so the attempt is given up (C11), or it prepared or
- * ran it, so it starts again (C10).
+ * How many times C10 starts the runner of one attempt again. A runner a machine's sleep or a killed session took is
+ * back on the first; one its step kills at once would otherwise start again on every tick until the lease expires.
  */
-export function runnerFreeRow(state: SkillState, input: { attempt: AttemptId; at: string; graceMs: number }): MovedWithEffects<'C10' | 'C11'> | undefined {
+export const MAX_RUNNER_RESTARTS = 3;
+
+/**
+ * C10, C11 and C14: the `runner.lock` of `attempt` is free, and its runner was spawned more than `graceMs` before `at`,
+ * so it is gone rather than not yet started. It was stopping the attempt, so the attempt is given up (C11), or it
+ * prepared or ran it, so it starts again (C10), unless it was started again `MAX_RUNNER_RESTARTS` times, so the step
+ * fails (C14).
+ */
+export function runnerFreeRow(state: SkillState, input: { attempt: AttemptId; at: string; graceMs: number }): MovedWithEffects<'C10' | 'C11' | 'C14'> | undefined {
   const open = openAttempt(state, input.attempt);
 
   if (!open || Date.parse(input.at) - Date.parse(open.spawnedAt) <= input.graceMs) return undefined;
@@ -1184,7 +1194,19 @@ export function runnerFreeRow(state: SkillState, input: { attempt: AttemptId; at
   }
 
   if (open.phase !== 'preparing' && open.phase !== 'running') return undefined;
-  const respawned = withAttempt(state, { ...open, spawnedAt: input.at });
+  const restarts = open.restarts ?? 0;
+
+  if (restarts >= MAX_RUNNER_RESTARTS) {
+    const failure = { code: 'runner_crashed', message: `The runner of attempt ${open.attempt} of step "${open.step}" ended without finishing it, and was started again ${restarts} times, so the step failed. Run the step's setup or command by hand to see why it ends, then run teamai workflow retry ${state.run} ${open.step}.` };
+    const body: ReportBody = { attempt: open.attempt, revision: open.revision, driver: state.driver, outcome: 'failed', message: failure.message, failure };
+
+    return {
+      row: 'C14', state: withAttempt(state, { ...baseOf(open), phase: 'reporting', body }),
+      effects: [{ kind: 'stop-left', attempt: open.attempt }, { kind: 'send', attempt: open.attempt, body }],
+    };
+  }
+
+  const respawned = withAttempt(state, { ...open, spawnedAt: input.at, restarts: restarts + 1 });
 
   return {
     row: 'C10', state: withEvent(respawned, { kind: 'restarted', step: open.step, attempt: open.attempt }),
