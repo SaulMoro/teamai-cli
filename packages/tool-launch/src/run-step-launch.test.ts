@@ -104,6 +104,44 @@ describe('runStepLaunch', () => {
     }
   });
 
+  it('opens nothing for a step stopped before its launch, and ends it cancelled', async () => {
+    const controller = new AbortController();
+    controller.abort();
+    let starts = 0;
+    const { start: fake } = fakeLauncher([JSON.stringify({ type: 'result', subtype: 'success', result: 'Done.' })]);
+
+    const ran = await runStepLaunch({
+      tool: claude, input: { prompt: 'Fix it.', cwd: os.tmpdir(), resultPath: await resultPathIn(), secrets: {}, expected: 'a summary' },
+      start: (launch) => { starts++; return fake(launch); }, signal: controller.signal, interactive: false, host,
+    });
+
+    expect(starts).toBe(0);
+    expect(ran).toEqual({ started: false, exitCode: 1, failure: { code: 'cancelled', message: 'The step was stopped before claude started.' } });
+  });
+
+  it('ends cancelled, not failed, a step stopped while its runtime set up, before its tool started', async () => {
+    const controller = new AbortController();
+    let stops = 0;
+
+    // A runtime's port: it opens the place and sets it up before the exec, and a stop there sends no exec.
+    const start: ToolLauncher = () => {
+      let isStopRequested = false;
+      const closed = (async (): Promise<ToolClosed> => {
+        controller.abort();
+        await new Promise((resolve) => { setTimeout(resolve, 10); });
+
+        return isStopRequested ? { exitCode: 143, stdout: '' } : { exitCode: 0, stdout: '' };
+      })();
+
+      return { closed, started: () => false, stop: async () => { stops++; isStopRequested = true; } };
+    };
+
+    const ran = await runStepLaunch({ tool: claude, input: { prompt: 'Fix it.', cwd: os.tmpdir(), resultPath: await resultPathIn(), secrets: {}, expected: 'a summary' }, start, signal: controller.signal, interactive: false, host });
+
+    expect(stops).toBeGreaterThan(0);
+    expect(ran).toEqual({ started: false, exitCode: 143, failure: { code: 'cancelled', message: 'The step was stopped before claude started.' } });
+  });
+
   it('stops nothing at the timeout once the port\'s process end rejected', async () => {
     let stops = 0;
     const start: ToolLauncher = ({ onStart }) => {
