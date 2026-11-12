@@ -88,16 +88,26 @@ export function attemptsObserved(world: Pick<World, 'dir'>): { kind: 'read'; att
   return { kind: 'read', attempts };
 }
 
+/** What the observer's own shell in a sandbox carries, so that no observer, this command's or another's, reads it as a step's. */
+const OBSERVER_MARK = 'VERIFY_OBSERVER_SHELL=1';
+
 /**
  * The environment of each process a step runs inside a sandbox, one block per process, blocks split by an empty entry.
- * Never printed. Not the first process and its children, the loop a container idles in until teamai execs a step,
- * nor this shell and its children: an environment read is a step's.
+ * Never printed. Not the first process, the loop a container idles in until teamai execs a step, nor a child of it whose
+ * environment is its own but for what a shell adds (its sleep); a step's process it took over carries the step's. Nor
+ * an observer's shell: an environment read is a step's.
  */
 const ENVIRONS = [
+  `n() { tr '\\0' '\\n' < "$1" 2>/dev/null | grep -v -E '^(PWD|OLDPWD|SHLVL|_)=' | sort; }; idle=$(n /proc/1/environ)`,
   'for d in /proc/[0-9]*; do p=${d#/proc/}; s=$(cat "$d/stat" 2>/dev/null) || continue; s=${s##*) }; set -- $s',
-  '{ [ "$p" = 1 ] || [ "$2" = 1 ] || [ "$p" = $$ ] || [ "$2" = $$ ]; } && continue',
+  '[ "$p" = 1 ] && continue',
+  '[ "$2" = 1 ] && [ "$(n "$d/environ")" = "$idle" ] && continue',
+  `case "$(cat "$d/environ" 2>/dev/null)" in *${OBSERVER_MARK}*) continue ;; esac`,
   'cat "$d/environ" 2>/dev/null && printf "\\0\\0"; done',
 ].join('; ');
+
+/** The command that prints `ENVIRONS` in a sandbox, after the engine's own `exec <sandbox>`. */
+const READ_ENVIRONS = ['env', OBSERVER_MARK, 'sh', '-c', ENVIRONS];
 
 /** What one sandbox showed over a command: how many environments were read, and every leaking name among them. */
 interface Seen {
@@ -279,7 +289,7 @@ export function startObserver(world: World, { pass, label, listed = listedHere }
       const [id = '', name = '', owner = ''] = line.split('\t');
 
       if (id === '' || !owners.has(owner)) continue;
-      const environs = await listed([command, 'exec', id, 'sh', '-c', ENVIRONS]);
+      const environs = await listed([command, 'exec', id, ...READ_ENVIRONS]);
 
       judge(`${engine}:${name}`, environs);
     }
@@ -323,7 +333,7 @@ export function startObserver(world: World, { pass, label, listed = listedHere }
         continue;
       }
 
-      const environs = await listed([PROVIDER_COMMANDS.sbx, 'exec', sandbox.name, 'sh', '-c', ENVIRONS]);
+      const environs = await listed([PROVIDER_COMMANDS.sbx, 'exec', sandbox.name, ...READ_ENVIRONS]);
 
       judge(`sbx:${sandbox.name}`, environs);
     }

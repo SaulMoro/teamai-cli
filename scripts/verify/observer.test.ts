@@ -72,9 +72,9 @@ describe('the sandbox observer', () => {
       fs.writeFileSync(path.join(proc, String(pid), 'stat'), `${pid} (sh) S ${ppid} ${pid} ${pid} 0 -1\n`);
       fs.writeFileSync(path.join(proc, String(pid), 'environ'), `${env}\0`);
     };
-    // The container's idle loop and its sleep, as teamai starts every container.
-    process_(1, 0, 'HOME=/tmp/teamai-home');
-    process_(7, 1, 'HOME=/tmp/teamai-home');
+    // The container's idle loop and its sleep, as teamai starts every container: the shell hands its sleep PWD and SHLVL.
+    process_(1, 0, 'PATH=/usr/bin\0HOME=/tmp/teamai-home');
+    process_(7, 1, 'SHLVL=1\0HOME=/tmp/teamai-home\0PATH=/usr/bin\0PWD=/');
     const observe = async (): Promise<string[]> => startObserver(world, {
       pass: new Map(),
       label: 'teamai workflow start',
@@ -91,7 +91,16 @@ describe('the sandbox observer', () => {
       },
     }).stop();
 
+    // Another command's observer, looking at the same container at once.
+    process_(30, 0, 'HOME=/tmp/teamai-home\0VERIFY_OBSERVER_SHELL=1');
+
     expect(await observe()).toEqual(["[verify] observed docker:teamai-r0123abcd-a0123abcd: NOT OBSERVED, no step's environment could be read"]);
+
+    // A step's process left running when its step ended: the container's first process takes it over.
+    process_(36, 1, `HOME=/tmp/teamai-home\0VERIFY_WORLD_CANARY=${world.env?.VERIFY_WORLD_CANARY ?? ''}`);
+
+    expect(await observe()).toEqual(['[verify] observed docker:teamai-r0123abcd-a0123abcd: ENV LEAK VERIFY_WORLD_CANARY']);
+    fs.rmSync(path.join(proc, '36'), { recursive: true });
 
     // A step `docker exec` started, which the container's namespace shows with no parent.
     process_(42, 0, `HOME=/tmp/teamai-home\0VERIFY_WORLD_CANARY=${world.env?.VERIFY_WORLD_CANARY ?? ''}`);
