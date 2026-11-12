@@ -126,14 +126,14 @@ export function probeHere(argv: readonly string[], { timeoutMs = 30_000 }: { tim
   return { kind: 'ran', code: ran.error === undefined ? ran.status : null, stdout: ran.stdout ?? '', why: ran.error?.message ?? ran.stderr?.trim().split('\n').at(-1) ?? '' };
 }
 
-/** The data homes under `home` whose runs teamai keeps: user scope's ~/.teamai and each workspace's ~/.teamai/projects/<slug>. */
-function runsDirsUnder(home: string): string[] {
-  const teamai = path.join(home, '.teamai');
-  const projects = path.join(teamai, 'projects');
-  const dataHomes = [teamai, ...(fs.existsSync(projects) ? fs.readdirSync(projects).map((slug) => path.join(projects, slug)) : [])];
+/** The data homes under `home` whose runs teamai keeps: user scope's ~/.teamai and each workspace's ~/.teamai/projects/<slug>, read with the product's own layout. */
+async function runsDirsUnder(home: string): Promise<string[]> {
+  const [{ runsDirIn }, { projectsRootDir }] = await Promise.all([import('../../src/workflow/store.js'), import('../../src/utils/partition.js')]);
+  const projects = projectsRootDir(home);
+  const dataHomes = [path.join(home, '.teamai'), ...(fs.existsSync(projects) ? fs.readdirSync(projects).map((slug) => path.join(projects, slug)) : [])];
 
-  return dataHomes.flatMap((dir) => {
-    const runs = path.join(dir, 'workflows', 'runs');
+  return dataHomes.flatMap((dataHome) => {
+    const runs = runsDirIn(dataHome);
 
     return fs.existsSync(runs) ? [runs] : [];
   });
@@ -146,15 +146,19 @@ export interface RecordScan {
   readonly runtimeJournals: number;
 }
 
-function scanRecords(world: World): RecordScan {
+async function scanRecords(world: World): Promise<RecordScan> {
+  const { attemptsDirIn, RunIdSchema } = await import('../../src/workflow/store.js');
   const files: string[] = [];
   const runs: string[] = [];
 
-  for (const runsDir of worldHomes(world).flatMap(runsDirsUnder)) {
+  for (const runsDir of (await Promise.all(worldHomes(world).map(runsDirsUnder))).flat()) {
     for (const run of fs.readdirSync(runsDir, { withFileTypes: true })) {
       if (!run.isDirectory()) continue;
       runs.push(run.name);
-      const attempts = path.join(runsDir, run.name, 'attempts');
+      const id = RunIdSchema.safeParse(run.name);
+
+      if (!id.success) continue;
+      const attempts = attemptsDirIn(runsDir, id.data);
 
       for (const attempt of fs.existsSync(attempts) ? fs.readdirSync(attempts) : []) {
         const file = path.join(attempts, attempt, 'runtime.json');
@@ -283,7 +287,7 @@ async function rowsFor(tier: Tier): Promise<LeftoverKind[]> {
 
 /** The context every row reads, built once per ledger or cleanup. */
 async function contextOf(world: World): Promise<{ context: LeftoverContext; tier: Tier }> {
-  const records = scanRecords(world);
+  const records = await scanRecords(world);
   const placements = records.files.length === 0 ? [] : await (await import('./leftovers/places.js')).readPlacements(records.files);
 
   const tier = worldTier({
@@ -306,7 +310,7 @@ export async function tiesOnThisMachine(world: World | undefined): Promise<{ sel
   const journalOf = await sandboxJournalIds();
 
   return {
-    self: world === undefined ? undefined : tiesOf(world, scanRecords(world).runs, journalOf),
+    self: world === undefined ? undefined : tiesOf(world, (await scanRecords(world)).runs, journalOf),
     others: otherWorlds(world, journalOf),
   };
 }
