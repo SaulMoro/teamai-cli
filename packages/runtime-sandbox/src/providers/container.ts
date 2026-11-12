@@ -448,7 +448,7 @@ export function containerProvider({ engine, image, owner, host, warm, profile }:
     client(id, spec) {
       // A sandbox an app's tool runs in reaches nothing of this machine: one not behind the filter runs none.
       if (!steps.isFiltered) {
-        return { ok: false, failure: { code: 'isolation_unproven', message: `teamai keeps a container from this machine only behind its network filter, which runs on docker, not podman, with node in the image, so it runs no app's tool in this one (${engine}, image ${image}). Use docker with node in the image, or provider: sbx.` } };
+        return { ok: false, failure: { code: 'isolation_unproven', message: `teamai keeps a container from this machine only behind its network filter, which runs on docker 26.0.0 or later (25.0.5, 23.0.11), not podman, with node in the image, so it runs no app's tool in this one (${engine}, image ${image}). Use such a docker with node in the image, or provider: sbx.` } };
       }
 
       return { ok: true, ...signalled({ exec: [executable, ...execArgs(id, { ...spec, argv: [] }, { isInteractive: true })], argv: spec.argv }), env: definedOnly(execEnv(spec)) };
