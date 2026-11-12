@@ -3522,12 +3522,16 @@ describe('uninstall', () => {
     await fse.outputJson(path.join(untold, 'owner.json'), { pid: copier.pid, host: os.hostname() });
     mockAutoDetectInit.mockResolvedValue({ localConfig: makeLocalConfig(homeDir, repoPath), teamConfig: makeTeamConfig() });
     commitTeamRepo(repoPath);
+    vi.mocked(log.warn).mockClear();
 
     await uninstall({ force: true });
 
     expect(await fse.pathExists(path.join(homeDir, '.claude', 'skills', 'team-skill'))).toBe(false);
     expect(await fse.pathExists(writing)).toBe(true);
     expect(await fse.pathExists(untold)).toBe(true);
+    // Each is named, so the member knows why the skills directory stays.
+    const warnings = vi.mocked(log.warn).mock.calls.map(([message]) => String(message));
+    expect(warnings).toEqual(expect.arrayContaining([expect.stringContaining(`Kept ${writing}:`), expect.stringContaining(`Kept ${untold}:`)]));
   });
 
   it('keeps an empty folder of the member\'s in the skills directory, and the directory with it', async () => {

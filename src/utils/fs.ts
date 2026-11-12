@@ -500,19 +500,21 @@ async function removeLeftStaging(dest: string): Promise<void> {
 }
 
 /**
- * The staging folders in `parent` no copy on this host still writes into, or may, whatever their age: what an
- * uninstall removes with the copies, since the member asked for all of it to go.
+ * The staging folders in `parent`, whatever their age: `left`, those no copy on this host still writes into, which an
+ * uninstall removes with the copies since the member asked for all of it to go, and `inUse`, those a copy still
+ * writes into, or may.
  */
-export async function stagingLeftIn(parent: string): Promise<string[]> {
+export async function stagingLeftIn(parent: string): Promise<{ left: string[]; inUse: string[] }> {
   const left: string[] = [];
+  const inUse: string[] = [];
 
   for (const entry of await fse.readdir(parent, { withFileTypes: true }).catch(() => [])) {
     const staging = path.join(parent, entry.name);
 
-    if (entry.isDirectory() && isStagingName(entry.name) && !['copying', 'unknown'].includes(await copierOf(staging))) left.push(staging);
+    if (entry.isDirectory() && isStagingName(entry.name)) (['copying', 'unknown'].includes(await copierOf(staging)) ? inUse : left).push(staging);
   }
 
-  return left;
+  return { left, inUse };
 }
 
 /**

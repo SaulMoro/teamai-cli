@@ -841,7 +841,11 @@ async function discoverToolResources(
           }
         }
 
-        for (const staging of await stagingLeftIn(skillsDir)) res.skillDirs.push({ dir: staging, baseDir: rootBase });
+        const staging = await stagingLeftIn(skillsDir);
+
+        for (const dir of staging.left) res.skillDirs.push({ dir, baseDir: rootBase });
+
+        for (const dir of staging.inUse) res.keptSkillDirs.push(`Kept ${dir}: a teamai copy on this machine may still write into it. Run \`teamai uninstall\` again once it ends.`);
       }
     }
   }
