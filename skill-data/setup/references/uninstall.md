@@ -67,7 +67,7 @@ and give it your team repo URL."*
 
 ## Notes
 
-- If no valid configuration is found and TeamAI reports "home directory only," uninstall removes `~/.teamai` but keeps each project still set up (or registered in `~/.teamai/env-scopes`) and the shared files it reads, as a user-scope uninstall does.
+- If no valid configuration is found and TeamAI reports "home directory only," uninstall removes `~/.teamai` but keeps each project still set up (or registered in `~/.teamai/env-scopes`), the shared files it reads, and the user's own `drivers/`, `runtimes/`, `sandboxes/` and `tools/`, as a user-scope uninstall does.
 - Project uninstall keeps the shared Claude/Codex team hooks in the main checkout
   while another checkout uses them. A targeted uninstall releases only the selected
   tool. Checkouts that exclude a tool do not retain its shared hook. Bare-repository
@@ -161,7 +161,8 @@ and give it your team repo URL."*
   `Git exclude blocks (teamai's):`. An incomplete uninstall keeps the line of
   every file still on disk until the retry. With no configuration found (a
   machine set up only with `init --http`, uninstall run outside its projects),
-  uninstall removes `~/.teamai/` and the HTTP source, and first teamai's lines
+  uninstall removes `~/.teamai/` (but the user's own `drivers/`, `runtimes/`,
+  `sandboxes/` and `tools/`) and the HTTP source, and first teamai's lines
   from every exclude file its records name, but the line of a file it leaves on
   disk (named), and the local agent's MCP servers in Claude's and CodeBuddy's
   local scopes that are still as it wrote them (a changed copy stays, named).

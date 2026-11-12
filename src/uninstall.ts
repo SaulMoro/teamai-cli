@@ -1559,12 +1559,7 @@ async function buildRemovalPlan(
 
   // Read before anything is deleted: what the projects still set up need stays.
   const projectsKept = includeShared && globalAdapters ? await keptForProjects() : { projects: [], paths: [] };
-  const { PERSONAL_DIRS } = await import('./workflow/runtimes/layers.js');
-
-  const keptOwn = includeShared
-    ? (await Promise.all(Object.values(PERSONAL_DIRS).map((dir) => path.join(getTeamaiHomeDir(), dir))
-      .map(async (dir) => (dir.startsWith(teamaiHome + path.sep) && await pathExists(dir) ? [dir] : [])))).flat()
-    : [];
+  const keptOwn = includeShared ? await ownFoldersIn(teamaiHome) : [];
 
   // The worktree's .teamai/delivered/ (#1787): the rule, agent and MCP folders of a project scope, and a self-mode scope's hook folders.
   const worktreeDelivered = DeliveredFolders.worktreeRoot(localConfig);
@@ -2178,9 +2173,7 @@ function printSummary(plan: RemovalPlan, agentFilter?: string): void {
     console.log('   TeamAI home directory:');
     console.log(`     ${plan.teamaiHome}/`);
 
-    if (plan.keptOwn.length > 0) console.log('   but your own drivers, runtimes, sandbox profiles and tool instances in it, which teamai never writes:');
-
-    for (const dir of plan.keptOwn) console.log(`     ${dir}`);
+    printOwnFolders(plan.keptOwn);
     console.log('');
   }
 
@@ -3963,6 +3956,20 @@ async function stopCodexDispatch(teamConfig: TeamaiConfig, localConfig: LocalCon
   }
 }
 
+/** The member's own resource folders that exist in `teamaiHome`, which teamai reads and never writes, so an uninstall keeps them. */
+async function ownFoldersIn(teamaiHome: string): Promise<string[]> {
+  const { PERSONAL_DIRS } = await import('./workflow/runtimes/layers.js');
+  const dirs = Object.values(PERSONAL_DIRS).map((dir) => path.join(getTeamaiHomeDir(), dir));
+
+  return (await Promise.all(dirs.map(async (dir) => (dir.startsWith(teamaiHome + path.sep) && await pathExists(dir) ? [dir] : [])))).flat();
+}
+
+function printOwnFolders(dirs: readonly string[]): void {
+  if (dirs.length > 0) console.log('   but your own drivers, runtimes, sandbox profiles and tool instances in it, which teamai never writes:');
+
+  for (const dir of dirs) console.log(`     ${dir}`);
+}
+
 /** No valid configuration: remove ~/.teamai/ only. */
 async function uninstallHomeOnly(opts: UninstallOptions): Promise<void> {
   if (opts.agent) {
@@ -3984,6 +3991,8 @@ async function uninstallHomeOnly(opts: UninstallOptions): Promise<void> {
   console.log('⚠  Uninstalling user scope (no valid configuration detected — home directory only)');
   console.log('⚠  The following TeamAI home directory will be removed:');
   console.log(`     ${home}/`);
+  const keptOwn = await ownFoldersIn(home);
+  printOwnFolders(keptOwn);
   console.log('');
   // Read before anything is deleted, as for a user-scope uninstall (#1025).
   const kept = await keptForProjects();
@@ -4049,9 +4058,13 @@ async function uninstallHomeOnly(opts: UninstallOptions): Promise<void> {
     if (kept.paths.length > 0) {
       const { forgetUserEnvScope } = await import('./resources/env-loader.js');
       await forgetUserEnvScope();
-      await removeAllBut(home, kept.paths);
-    } else await remove(home);
-    log.success(kept.paths.length > 0 ? `Removed ${home}/ but ${kept.paths.join(', ')}` : `Removed ${home}/`);
+    }
+
+    const keep = [...kept.paths, ...keptOwn];
+
+    if (keep.length > 0) await removeAllBut(home, keep);
+    else await remove(home);
+    log.success(keep.length > 0 ? `Removed ${home}/ but ${keep.join(', ')}` : `Removed ${home}/`);
     log.success('teamai uninstalled');
   } catch (e) {
     log.warn(`Failed to remove ${home}: ${e instanceof Error ? e.message : String(e)}`);

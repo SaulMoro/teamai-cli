@@ -1732,20 +1732,24 @@ describe('uninstall', () => {
     ]).toEqual([true, '- name every endpoint\n', false]);
   });
 
-  it('keeps, in the data home it removes, the drivers, runtimes, sandbox profiles and tool instances the member wrote there, and its preview names them', async () => {
+  it.each([
+    { uninstalling: 'the user scope', detects: true },
+    { uninstalling: 'with no valid configuration', detects: false },
+  ])('keeps, in the data home it removes, the drivers, runtimes, sandbox profiles and tool instances the member wrote there, and its preview names them, uninstalling $uninstalling', async ({ detects }) => {
     const { homeDir, repoPath, teamaiHome } = await setupFixture(tmpDir);
     vi.stubEnv('HOME', homeDir);
     vi.stubEnv('SHELL', '/bin/zsh');
     const own = ['drivers/gpu/DRIVER.yaml', 'runtimes/acme.yaml', 'sandboxes/default.yaml', 'tools/acme-claude.yaml'];
     for (const file of own) await fse.outputFile(path.join(teamaiHome, file), 'mine\n');
     await fse.outputFile(path.join(teamaiHome, 'rules', 'testing', 'RULE.md'), 'Test first.\n');
-    mockAutoDetectInit.mockResolvedValue({ localConfig: makeLocalConfig(homeDir, repoPath), teamConfig: makeTeamConfig() });
+    if (detects) mockAutoDetectInit.mockResolvedValue({ localConfig: makeLocalConfig(homeDir, repoPath), teamConfig: makeTeamConfig() });
+    else mockAutoDetectInit.mockRejectedValue(new Error('no configuration'));
     const printed: string[] = [];
     vi.spyOn(console, 'log').mockImplementation((line?: unknown) => { printed.push(String(line ?? '')); });
 
     await uninstall({ dryRun: true, force: true });
 
-    expect(printed.join('\n')).toContain(`   TeamAI home directory:\n     ${teamaiHome}/\n   but your own drivers, runtimes, sandbox profiles and tool instances in it, which teamai never writes:\n`
+    expect(printed.join('\n')).toContain(`     ${teamaiHome}/\n   but your own drivers, runtimes, sandbox profiles and tool instances in it, which teamai never writes:\n`
       + ['drivers', 'runtimes', 'sandboxes', 'tools'].map((dir) => `     ${path.join(teamaiHome, dir)}\n`).join(''));
 
     await uninstall({ force: true });
