@@ -192,6 +192,11 @@ function hostCommand(name: string): string | undefined {
 function linkHostCommands(tools: string): void {
   fs.mkdirSync(tools, { recursive: true });
 
+  // The Node the harness runs on, and its npm and npx, which teamai's update check runs: never Node's folder, where every global npm command sits.
+  for (const [name, found] of [['node', process.execPath], ...['npm', 'npx'].map((name) => [name, path.join(path.dirname(process.execPath), name)])]) {
+    if (fs.existsSync(found)) fs.symlinkSync(found, path.join(tools, name));
+  }
+
   for (const name of worldCommandNames()) {
     const found = hostCommand(name);
 
@@ -213,8 +218,8 @@ export function runtimeStateDirs(world: Pick<World, 'home' | 'members'>): string
 export const CANARY_NAME = 'VERIFY_WORLD_CANARY';
 
 /** The only variables a world's commands get. Anything else, a tool home or a teamai setting, must be set on the command line. */
-function worldEnv(home: string, tmp: string, bin: string, fakes: string, tools: string, npmCache: string) {
-  const search = [fakes, bin, path.dirname(process.execPath), tools, '/usr/bin', '/bin', '/usr/sbin', '/sbin'];
+export function worldEnv({ home, tmp, bin, fakes, tools, npmCache }: { home: string; tmp: string; bin: string; fakes: string; tools: string; npmCache: string }) {
+  const search = [fakes, bin, tools, '/usr/bin', '/bin', '/usr/sbin', '/sbin'];
 
   return {
     HOME: home,
@@ -298,7 +303,7 @@ function buildWorld(runId: string, dir: string, tmp: string): World {
   fs.mkdirSync(bin);
   writeFakeGh(at('fakes'));
   linkHostCommands(at('tools'));
-  const env = worldEnv(at('home'), tmp, path.join(at('install'), 'node_modules', '.bin'), at('fakes'), at('tools'), at('npm-cache'));
+  const env = worldEnv({ home: at('home'), tmp, bin: path.join(at('install'), 'node_modules', '.bin'), fakes: at('fakes'), tools: at('tools'), npmCache: at('npm-cache') });
   const run = path.join(bin, 'run');
   fs.writeFileSync(
     run,

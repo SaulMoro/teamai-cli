@@ -2,7 +2,7 @@ import { spawnSync } from 'node:child_process';
 import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { socketPathOf } from '../../packages/runtime-sandbox/src/attempt-socket.js';
-import { REPO_ROOT, worldCommandNames, worldTmpDir } from './world.js';
+import { REPO_ROOT, worldCommandNames, worldEnv, worldTmpDir } from './world.js';
 
 afterEach(() => {
   vi.unstubAllEnvs();
@@ -12,6 +12,12 @@ describe('the commands a world puts on PATH', () => {
   it('are git, every tool, every sandbox provider teamai runs on this machine, and the T3 and Paseo commands', () => {
     // docs/dev/glossary.md, Sandbox provider: docker, podman, sbx, seatbelt (macOS's /usr/bin/sandbox-exec), bwrap; vercel runs elsewhere.
     expect(worldCommandNames()).toEqual(expect.arrayContaining(['git', 'claude', 'codex', 'codebuddy', 'opencode', 'docker', 'podman', 'sbx', '/usr/bin/sandbox-exec', 'bwrap', 't3', 'paseo']));
+  });
+
+  it("reach Node through the world's own tools folder, never Node's folder, which holds every global npm command", () => {
+    const env = worldEnv({ home: '/w/home', tmp: '/tmp/w', bin: '/w/install/node_modules/.bin', fakes: '/w/fakes', tools: '/w/tools', npmCache: '/w/npm-cache' });
+
+    expect(env.PATH.split(':')).toEqual(['/w/fakes', '/w/install/node_modules/.bin', '/w/tools', '/usr/bin', '/bin', '/usr/sbin', '/sbin']);
   });
 });
 
