@@ -4,9 +4,7 @@
  * the report the engine takes. The local driver runs every prompt step through it, and a fleet member runs the prompt
  * an owner offered through it, on a lease it rebuilt from its own definitions.
  */
-import type { Dirent } from 'node:fs';
 import fs from 'node:fs/promises';
-import path from 'node:path';
 import { toolExtrasFor, type AgentSpec } from '../../resources/agent-format.js';
 import { observeLaunch, type ToolLaunch, type Used } from '../../agent-observation.js';
 import { detectProjectConfig } from '../../config.js';
@@ -14,7 +12,7 @@ import { type WorkflowEnv } from '../../env-resolution.js';
 import { launchEnv, workflowLaunch, type RunMode } from '../../launch-context.js';
 import type { LocalConfig, TeamaiConfig } from '../../types.js';
 import { writeJsonAtomic } from '../../utils/fs.js';
-import { entriesUnder } from '@teamai/shared/entries-under';
+import { keptLocksNotice, settleGitLocks, type GitLockPlace } from './git-locks.js';
 import { log } from '@teamai/shared/log';
 import { AgentSession, type AgentSessionRef } from '../../session-flow/agent-session.js';
 import { type SessionArchive } from '../../session-flow/archive.js';
@@ -580,6 +578,7 @@ export async function runPromptStep({ config, lock, driver, lease, adapter = ste
     input,
     signal,
     unfinished: `${launched} could not complete the workflow step`,
+    lockPlace: lease.cwd === undefined || !contract ? 'member' : contractClone(contract) || contract.mode === 'team' ? 'clone' : 'worktree',
   });
 
   const end: StepEnd = { outcome: result.exitCode === 0 && !result.failure ? 'success' : 'failed' };
@@ -725,15 +724,16 @@ async function promptPickedThere({ config, lock, driver, lease, onRuntime, signa
 
 /**
  * Runs a prompt's tool, timed around the tool's run alone. A launch that throws fails `tool_failed` with `unfinished`.
- * The adapter returns once the tool's process group is gone, so when its timeout or budget stopped it, no lock git left
- * in the checkout is held any more, and they are removed.
+ * The adapter returns once the tool's process group is gone, so when a limit or the engine stopped it, no lock git left
+ * where it ran is held any more: they are settled for `lockPlace`, and the ones kept are named with how to remove them.
  */
-async function timedLaunch({ launch, tool, input, signal, unfinished }: {
+async function timedLaunch({ launch, tool, input, signal, unfinished, lockPlace }: {
   launch: StepLauncher['run'];
   tool: LaunchTool;
   input: StepRun;
   signal: AbortSignal;
   unfinished: string;
+  lockPlace: GitLockPlace;
 }): Promise<{ result: StepRunResult; durationMs: number }> {
   const started = performance.now();
   let result: StepRunResult;
@@ -745,38 +745,16 @@ async function timedLaunch({ launch, tool, input, signal, unfinished }: {
   }
 
   const durationMs = Math.round(performance.now() - started);
+  const isStopped = result.started && result.stopUnconfirmed !== true && (result.stoppedBy === 'timeout' || result.stoppedBy === 'budget' || signal.aborted);
+  const kept = isStopped ? await settleGitLocks({ cwd: input.cwd, place: lockPlace }) : [];
 
-  if (result.started && (result.stoppedBy === 'timeout' || result.stoppedBy === 'budget')) await removeGitLocks(path.join(input.cwd, '.git'));
+  if (kept.length > 0) {
+    const notice = keptLocksNotice(kept, tool);
+    // The engine closed a step it stopped, so its record takes no failure from here: the warning is where it shows.
+    log.warn(notice);
+
+    if (result.failure) result = { ...result, failure: { ...result.failure, message: `${result.failure.message}. ${notice}` } };
+  }
 
   return { result, durationMs };
-}
-
-/**
- * Removes the locks a git process leaves when it is killed mid-write, on which the report's commit of the clone would
- * fail: those directly under `gitDir`, such as `index.lock` and `HEAD.lock`, and those of its refs. None under
- * `objects/` blocks the commit. The agent shaped the clone, so a `gitDir` or `refs` that is not a real directory, such
- * as a link out of the clone, is left alone.
- */
-async function removeGitLocks(gitDir: string): Promise<void> {
-  const isDirectory = async (at: string): Promise<boolean> => (await fs.lstat(at).catch(() => undefined))?.isDirectory() === true;
-
-  if (!await isDirectory(gitDir)) return;
-  const top = await fs.readdir(gitDir, { withFileTypes: true }).catch((): Dirent[] => []);
-  // The walk enters no link under refs, which the agent may have made too: one out of the clone would lose a lock there.
-  const refs = await isDirectory(path.join(gitDir, 'refs')) ? refsUnder(path.join(gitDir, 'refs')) : [];
-
-  // A folder the agent named like a lock is none of git's, and rm would refuse it.
-  const locks = [...top.map((entry) => ({ at: path.join(gitDir, entry.name), entry })), ...refs.map(({ relative, entry }) => ({ at: path.join(gitDir, 'refs', relative), entry }))]
-    .filter(({ at, entry }) => at.endsWith('.lock') && !entry.isDirectory());
-
-  await Promise.all(locks.map(({ at }) => fs.rm(at, { force: true })));
-}
-
-/** The entries under `refs`; none when it cannot be read, such as when it went away. */
-function refsUnder(refs: string): ReturnType<typeof entriesUnder> {
-  try {
-    return entriesUnder(refs);
-  } catch {
-    return [];
-  }
 }

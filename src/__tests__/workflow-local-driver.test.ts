@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { spawn } from 'node:child_process';
+import { execFileSync, spawn } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -574,46 +574,65 @@ sandbox_mode = "read-only"
     });
   });
 
-  it('removes the git locks a timed-out tool left in its checkout, and none behind a link it made under .git/refs', async () => {
-    const { config, workspace, runId } = await fixture();
-    const outside = path.join(path.dirname(workspace), 'outside');
-    fs.mkdirSync(outside);
-    fs.writeFileSync(path.join(outside, 'kept.lock'), '');
+  it('removes the git locks a timed-out tool left in its worktree, and names the ones it left in the member\'s checkout', async () => {
+    const { config, workspace, runId } = await workflowFixture(`schemaVersion: v1alpha1
+name: build
+description: Change the project.
+steps:
+  - id: change
+    workspace: new
+    prompt: Change this project.
+`);
+    const warn = vi.spyOn(log, 'warn').mockImplementation(() => undefined);
+    const ref = path.join(workspace, '.git', 'refs', 'heads', 'main.lock');
+    let own = '';
     const adapter: StepLauncher = {
       runInteractive: vi.fn(),
       run: vi.fn(async (_tool, input) => {
-        const refs = path.join(input.cwd, '.git', 'refs');
-        fs.writeFileSync(path.join(input.cwd, '.git', 'index.lock'), '');
-        fs.writeFileSync(path.join(refs, 'heads', 'main.lock'), '');
-        fs.symlinkSync(outside, path.join(refs, 'outside'));
+        own = execFileSync('git', ['rev-parse', '--path-format=absolute', '--git-path', 'index.lock'], { cwd: input.cwd, encoding: 'utf8' }).trim();
+        fs.writeFileSync(own, '');
+        fs.writeFileSync(ref, '');
+
         return { started: true as const, exitCode: 143, stoppedBy: 'timeout' as const };
       }),
     };
 
     await runLocalDriver(config, runId, workspace, { adapter, toolPaths });
 
-    expect(adapter.run).toHaveBeenCalledTimes(1);
-    expect([fs.existsSync(path.join(workspace, '.git', 'index.lock')), fs.existsSync(path.join(workspace, '.git', 'refs', 'heads', 'main.lock'))]).toEqual([false, false]);
-    expect(fs.readdirSync(outside)).toEqual(['kept.lock']);
+    expect(own).toContain(path.join('.git', 'worktrees'));
+    expect([fs.existsSync(own), fs.existsSync(ref)]).toEqual([false, true]);
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining(`rm '${ref}'`));
+    expect(warn).not.toHaveBeenCalledWith(expect.stringContaining(own));
   });
 
-  it('removes the git locks a timed-out tool left beside a folder it named like a lock, and leaves that folder', async () => {
-    const { config, workspace, runId } = await fixture();
+  it('keeps the git locks a tool stopped at its step\'s deadline left in the member\'s checkout, and names them with the command that removes them', async () => {
+    const { config, workspace, runId } = await workflowFixture(`schemaVersion: v1alpha1
+name: build
+description: Review the project.
+steps:
+  - id: review
+    prompt: Review this project.
+    timeout: 1s
+    output:
+      ok: boolean
+`);
+    const lock = path.join(workspace, '.git', 'index.lock');
+    const warn = vi.spyOn(log, 'warn').mockImplementation(() => undefined);
     const adapter: StepLauncher = {
       runInteractive: vi.fn(),
-      run: vi.fn(async (_tool, input) => {
+      run: vi.fn(async (_tool, input, signal) => {
         fs.writeFileSync(path.join(input.cwd, '.git', 'index.lock'), '');
-        fs.mkdirSync(path.join(input.cwd, '.git', 'refs', 'heads', 'wip.lock'));
-        fs.mkdirSync(path.join(input.cwd, '.git', 'modules.lock'));
-        return { started: true as const, exitCode: 143, stoppedBy: 'timeout' as const };
+        await new Promise((resolve) => { signal?.addEventListener('abort', resolve, { once: true }); });
+
+        return { started: true as const, exitCode: 143 };
       }),
     };
 
     await runLocalDriver(config, runId, workspace, { adapter, toolPaths });
 
-    expect(fs.existsSync(path.join(workspace, '.git', 'index.lock'))).toBe(false);
-    expect([fs.statSync(path.join(workspace, '.git', 'refs', 'heads', 'wip.lock')).isDirectory(), fs.statSync(path.join(workspace, '.git', 'modules.lock')).isDirectory()]).toEqual([true, true]);
-    expect(await readRun(config, runId)).toMatchObject({ steps: [{ status: 'failed' }] });
+    expect(fs.existsSync(lock)).toBe(true);
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining(`rm '${lock}'`));
+    expect(await readRun(config, runId)).toMatchObject({ steps: [{ status: 'failed', failure: { code: 'timeout' } }] });
   });
 
   it('publishes the failure code it sets when the tool is not on PATH', async () => {

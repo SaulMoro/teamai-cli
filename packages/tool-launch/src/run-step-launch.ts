@@ -133,6 +133,8 @@ export type StepLaunchResult =
      * the turn cap, at which headless Claude ends itself with `error_max_turns`.
      */
     stoppedBy?: StepStop;
+    /** A stop was sent and its process group may still run, so what it held, such as a git lock, may still be held. */
+    stopUnconfirmed?: true;
     /** The run was asked to resume a session, and its runtime started a new one instead. */
     startedFresh?: true;
     failure?: StepFailure;
@@ -390,12 +392,15 @@ export async function runStepLaunch({ tool, input, start, canReattach = false, l
   if (!canReattach) await removeLeftResult(input.resultPath);
   const processRun = start({ executable: tool.executable, args, cwd: input.cwd, env, interactive, onStart: started, onStdout });
 
+  let isStopUnconfirmed = false;
+
   // Every stop goes through here. The port's `stop` never rejects by its contract, which nothing enforces at run time:
   // one that rejects anyway is reported rather than left to end teamai as an unhandled rejection.
   const stopTool = async (forwarded?: NodeJS.Signals): Promise<void> => {
     try {
       await processRun.stop(forwarded);
     } catch (error) {
+      isStopUnconfirmed = true;
       log.warn(`teamai could not confirm that ${name} stopped: ${error instanceof Error ? error.message : String(error)}`);
     }
   };
@@ -427,17 +432,18 @@ export async function runStepLaunch({ tool, input, start, canReattach = false, l
   }
 
   if (stopCause !== undefined) await stopTool();
+  const settled = isStopUnconfirmed ? { ...applied, stopUnconfirmed: true as const } : applied;
 
   if (stopCause === 'idle' && idleMs !== undefined) {
     return {
-      started: processRun.started(), exitCode: 'exitCode' in completed ? completed.exitCode : 1, ...applied,
+      started: processRun.started(), exitCode: 'exitCode' in completed ? completed.exitCode : 1, ...settled,
       failure: { code: 'tool_failed', message: `${name} printed nothing for ${idleMs / 1000}s, longer than its idle limit (workflows.idle_timeout). Raise the limit if this tool works silently for longer.` },
     };
   }
 
   const stopped = stopCause === 'aborted' || stopCause === 'idle' ? undefined : stopCause;
 
-  if ('failure' in completed) return { started: processRun.started(), exitCode: 1, ...applied, failure: completed.failure };
+  if ('failure' in completed) return { started: processRun.started(), exitCode: 1, ...settled, failure: completed.failure };
 
   if (!processRun.started() || completed.error?.code === 'ENOENT') {
     return {
@@ -451,7 +457,7 @@ export async function runStepLaunch({ tool, input, start, canReattach = false, l
   }
 
   if (completed.error) {
-    const failed: StepLaunchResult = { started: true, exitCode: completed.exitCode, ...applied };
+    const failed: StepLaunchResult = { started: true, exitCode: completed.exitCode, ...settled };
 
     if (stopped) failed.stoppedBy = stopped;
     failed.failure = { code: 'tool_failed', message: `${name} could not be started` };
@@ -471,21 +477,21 @@ export async function runStepLaunch({ tool, input, start, canReattach = false, l
   const ended = stoppedBy ? { stoppedBy } : {};
 
   if (read.kind === 'not_a_file') {
-    return { started: true, exitCode: completed.exitCode, ...applied, ...ended, failure: { code: 'tool_failed', message: `${name} left ${read.error.kind} at its result path, ${input.resultPath}, not a regular file, so teamai did not read it` } };
+    return { started: true, exitCode: completed.exitCode, ...settled, ...ended, failure: { code: 'tool_failed', message: `${name} left ${read.error.kind} at its result path, ${input.resultPath}, not a regular file, so teamai did not read it` } };
   }
 
   // OpenCode 1.x exits 0 on a provider's error, a spent limit among them, and writes no result.
-  if (!fileResult && isUsageLimit(printed)) return { started: true, exitCode: completed.exitCode, ...applied, ...ended, failure: usageLimited(name, printed.error, input) };
+  if (!fileResult && isUsageLimit(printed)) return { started: true, exitCode: completed.exitCode, ...settled, ...ended, failure: usageLimited(name, printed.error, input) };
 
   if (!fileResult && completed.exitCode === 0 && printed?.error !== undefined && opencode) {
-    return { started: true, exitCode: 0, ...applied, ...ended, failure: { code: 'tool_failed', message: `${name} ended on an error: ${withoutPrompt(printed.error, input)}` } };
+    return { started: true, exitCode: 0, ...settled, ...ended, failure: { code: 'tool_failed', message: `${name} ended on an error: ${withoutPrompt(printed.error, input)}` } };
   }
 
   if (!result) {
     return {
       started: true,
       exitCode: completed.exitCode,
-      ...applied,
+      ...settled,
       ...ended,
       failure: { code: 'tool_failed', message: `${name} did not write a valid workflow result` },
     };
@@ -510,5 +516,5 @@ export async function runStepLaunch({ tool, input, start, canReattach = false, l
 
   if (!fileResult) await persistFallback(host, input, result);
 
-  return { started: true, exitCode: completed.exitCode, ...applied, ...ended, ...result, ...(told && { failure: told }) };
+  return { started: true, exitCode: completed.exitCode, ...settled, ...ended, ...result, ...(told && { failure: told }) };
 }

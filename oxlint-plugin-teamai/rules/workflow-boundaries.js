@@ -114,7 +114,8 @@ const ENTRIES = [
       'prompt.ts': ['src/workflow/drivers/local/local-driver.ts', 'src/workflow/fleet/member.ts', 'src/workflow-published-runs.ts'],
       'runtime-steps.ts': ['src/workflow/drivers/local/local-driver.ts'],
     },
-    testEntries: ['prompt.ts', 'runtime-steps.ts'],
+    // A test settles git locks in each kind of place directly, which a run removes before anything can look.
+    testEntries: ['prompt.ts', 'runtime-steps.ts', 'git-locks.ts'],
   },
   // The fleet: the owner's side is a step runtime, the member's a command's; the records are read by publish too.
   {
