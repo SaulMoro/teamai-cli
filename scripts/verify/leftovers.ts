@@ -90,6 +90,8 @@ export interface Finding {
   readonly attribution: Attribution;
   /** The command that removes it, for a kind cleanup may remove; a process has none: cleanup never signals one. */
   readonly remove?: readonly string[];
+  /** What the person does to end it, for a kind cleanup refuses over: its refusal prints it beside the finding. */
+  readonly next?: string;
 }
 
 /** What a row saw: its findings and notes, or that it could not look and why, which proves nothing for that part. */
@@ -105,11 +107,16 @@ export interface LeftoverContext {
   readonly records: RecordScan;
 }
 
+/**
+ * What cleanup does with a row's findings of this world's own. remove: runs each one's `remove`; keep: leaves it to the
+ * ledger or reap; refuse: stops while one is there, saying `found`, or while the row could not look, saying `unseen`.
+ */
+export type CleanupRule = { kind: 'remove' } | { kind: 'keep' } | { kind: 'refuse'; found: string; unseen: string };
+
 /** One kind of leftover: what it is called, how it is looked for, and what cleanup does with this world's own. */
 export interface LeftoverKind {
   readonly title: string;
-  /** remove: cleanup runs each finding's `remove`; refuse: cleanup stops while one lives; keep: cleanup leaves it to the ledger or reap. */
-  readonly onCleanup: 'remove' | 'refuse' | 'keep';
+  readonly onCleanup: CleanupRule;
   observe(context: LeftoverContext): Promise<Observed[]>;
 }
 
@@ -335,33 +342,34 @@ export async function leftoversSection(world: World): Promise<{ leaks: string[];
 }
 
 /**
- * What cleanup does: refuse while a process of the world lives, naming each, or while it could not look for one, saying
- * where; otherwise remove the world's own removable leftovers.
+ * What cleanup does: refuse while a row that refuses found this world's own, or could not look, each refusal with its
+ * row's reason and every line it names; otherwise remove the world's own removable leftovers.
  */
 export type CleanupPlan =
-  | { kind: 'refuse'; processes: string[]; unseen: string[] }
+  | { kind: 'refuse'; refusals: Array<{ why: string; items: string[] }> }
   | { kind: 'remove'; removals: Array<{ what: string; command: readonly string[] }>; unobserved: string[] };
 
 /** The plan for what each row observed, judged by the row's `onCleanup`: only this world's own findings count. */
-export function cleanupPlan(rows: ReadonlyArray<{ onCleanup: LeftoverKind['onCleanup']; observed: readonly Observed[] }>): CleanupPlan {
-  const processes: string[] = [];
-  const unseen: string[] = [];
+export function cleanupPlan(rows: ReadonlyArray<{ onCleanup: CleanupRule; observed: readonly Observed[] }>): CleanupPlan {
+  const refusals = new Map<string, string[]>();
   const removals: Array<{ what: string; command: readonly string[] }> = [];
   const unobserved: string[] = [];
+  const refuse = (why: string, item: string): void => void refusals.set(why, [...refusals.get(why) ?? [], item]);
 
   for (const { onCleanup, observed } of rows) {
     for (const seen of observed) {
       if (seen.kind === 'not_observed') {
-        (onCleanup === 'refuse' ? unseen : unobserved).push(`${seen.what}, ${seen.why}`);
+        if (onCleanup.kind === 'refuse') refuse(onCleanup.unseen, `NOT OBSERVED: ${seen.what}, ${seen.why}`);
+        else unobserved.push(`${seen.what}, ${seen.why}`);
         continue;
       }
 
       for (const finding of seen.findings) {
         if (finding.attribution.kind !== 'own') continue;
 
-        switch (onCleanup) {
+        switch (onCleanup.kind) {
           case 'refuse':
-            processes.push(finding.what);
+            refuse(onCleanup.found, finding.next === undefined ? finding.what : `${finding.what}: ${finding.next}`);
             break;
           case 'remove':
             if (finding.remove !== undefined) removals.push({ what: finding.what, command: finding.remove });
@@ -377,7 +385,7 @@ export function cleanupPlan(rows: ReadonlyArray<{ onCleanup: LeftoverKind['onCle
     }
   }
 
-  return processes.length > 0 || unseen.length > 0 ? { kind: 'refuse', processes, unseen } : { kind: 'remove', removals, unobserved };
+  return refusals.size > 0 ? { kind: 'refuse', refusals: [...refusals].map(([why, items]) => ({ why, items })) } : { kind: 'remove', removals, unobserved };
 }
 
 /** Cleanup's plan for `world`, from every row a world of its tier needs, each line it prints masked as the ledger's. */
@@ -388,6 +396,6 @@ export async function planCleanup(world: World): Promise<CleanupPlan> {
   const { mask } = ledgerRedactor({ passedNames: world.passed ?? [], harnessEnv: process.env });
 
   return plan.kind === 'refuse'
-    ? { ...plan, processes: plan.processes.map(mask), unseen: plan.unseen.map(mask) }
+    ? { ...plan, refusals: plan.refusals.map((refusal) => ({ ...refusal, items: refusal.items.map(mask) })) }
     : { ...plan, removals: plan.removals.map((removal) => ({ ...removal, what: mask(removal.what) })), unobserved: plan.unobserved.map(mask) };
 }

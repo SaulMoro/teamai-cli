@@ -1,10 +1,13 @@
 /**
  * The attempt places teamai's own records say an external step runtime still keeps open, under every HOME of the world,
- * and each attempt that ran on seatbelt. The record is the product's (`readAttemptPlacementAt`), read the way a cancel reads it.
+ * and each attempt that ran on seatbelt. The record is the product's (`readAttemptPlacementAt`), read the way a cancel
+ * reads it, and judged open by the predicate `teamai uninstall` refuses with (`isPlaceLeftOpen`): cleanup refuses while
+ * one is open or unreadable, since the record it would remove is what closes the place.
  */
 import path from 'node:path';
 import { isPlaceLeftOpen, readAttemptPlacementAt, type AttemptPlacement } from '../../../src/workflow/runtimes/attempt.js';
 import type { LeftoverKind } from '../leftovers.js';
+import type { World } from '../world.js';
 
 /** Each record file's placement, in the order given. */
 export function readPlacements(files: readonly string[]): Promise<AttemptPlacement[]> {
@@ -13,16 +16,32 @@ export function readPlacements(files: readonly string[]): Promise<AttemptPlaceme
 
 /** `<run> attempt <attempt>` from `.../runs/<run>/attempts/<attempt>/runtime.json`. */
 function attemptOf(file: string): string {
+  const { run, attempt } = keyOf(file);
+
+  return `${run} attempt ${attempt}`;
+}
+
+function keyOf(file: string) {
   const attempt = path.dirname(file);
 
-  return `${path.basename(path.dirname(path.dirname(attempt)))} attempt ${path.basename(attempt)}`;
+  return { run: path.basename(path.dirname(path.dirname(attempt))), attempt: path.basename(attempt) };
+}
+
+/** The verb that cancels the run of record `file` from the install whose HOME holds it: the world's own or a member's. */
+function cancelOf(world: Pick<World, 'runId' | 'home' | 'members'>, file: string): string {
+  const member = (world.members ?? []).find((each) => file.startsWith(`${each.home}${path.sep}`));
+
+  return `\`npm run -s verify -- teamai ${world.runId}${member === undefined ? '' : `@${member.name}`} workflow cancel ${keyOf(file).run}\``;
 }
 
 export const places: LeftoverKind = {
   title: 'open attempt place',
-  // A record is the run's history: the ledger reports an open one, and cleanup removes the world with it.
-  onCleanup: 'keep',
-  async observe({ records }) {
+  onCleanup: {
+    kind: 'refuse',
+    found: 'an attempt place of the world is still open, and its record, which cleanup would remove, is what closes it. Close each one as its line says, then run cleanup again',
+    unseen: 'cleanup could not read every attempt record of the world, so a place may still be open. Fix what failed, then run cleanup again',
+  },
+  async observe({ world, records }) {
     const placements = await readPlacements(records.files);
 
     const findings = records.files.flatMap((file, index) => {
@@ -31,13 +50,13 @@ export const places: LeftoverKind = {
       if (placement === undefined) return [];
       const own = { kind: 'own' as const, why: `teamai's record ${file}` };
 
-      if (placement.kind === 'unreadable') return [{ what: `the runtime record of run ${attemptOf(file)}, which cannot be read (${placement.why}), so whether its place is open is unknown`, attribution: own }];
+      if (placement.kind === 'unreadable') return [{ what: `the runtime record of run ${attemptOf(file)}, which cannot be read (${placement.why}), so whether its place is open is unknown`, attribution: own, next: `close what it can with ${cancelOf(world, file)}, or fix that record` }];
 
       if (!isPlaceLeftOpen(placement)) return [];
       const { record } = placement;
       const held = record.heldFor === undefined ? '' : `, held for a ${record.heldFor.conversation.tool} conversation`;
 
-      return [{ what: `run ${attemptOf(file)}'s place on ${record.driver}/${record.runtime}${record.open.handle === undefined ? '' : ` (${record.open.handle})`}, ${record.phase}${held}`, attribution: own }];
+      return [{ what: `run ${attemptOf(file)}'s place on ${record.driver}/${record.runtime}${record.open.handle === undefined ? '' : ` (${record.open.handle})`}, ${record.phase}${held}`, attribution: own, next: `close it with ${cancelOf(world, file)}` }];
     });
 
     // The record keeps the provider once the place closes, which a short step does before the observer looks.

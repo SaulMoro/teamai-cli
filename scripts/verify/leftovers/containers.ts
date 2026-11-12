@@ -74,7 +74,7 @@ function onEngine(engine: (typeof CONTAINER_ENGINES)[number], self: WorldTies, o
 
 export const containers: LeftoverKind = {
   title: 'teamai container, network or image',
-  onCleanup: 'remove',
+  onCleanup: { kind: 'remove' },
   observe({ self, others }) {
     return Promise.resolve(CONTAINER_ENGINES.flatMap((engine) => onEngine(engine, self, others)));
   },

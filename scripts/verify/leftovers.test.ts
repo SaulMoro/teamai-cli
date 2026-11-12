@@ -119,30 +119,32 @@ describe("a row's lines in section (f)", () => {
 describe('what cleanup does with what the rows found', () => {
   const own = { kind: 'own', why: 'names the world' } as const;
   const theirs = { kind: 'other_world', runId: OTHER.runId } as const;
+  const refuse = { kind: 'refuse', found: 'a process still runs', unseen: 'cleanup could not look' } as const;
+  const remove = { kind: 'remove' } as const;
 
   it('refuses while a process of the world lives, naming each, and removes nothing', () => {
     const plan = cleanupPlan([
-      { onCleanup: 'refuse', observed: [{ kind: 'observed', findings: [{ what: 'process 42 on this machine (sleep 900)', attribution: own }, { what: 'process 43 on this machine (x)', attribution: theirs }], notes: [] }] },
-      { onCleanup: 'remove', observed: [{ kind: 'observed', findings: [{ what: 'docker container c', attribution: own, remove: ['docker', 'rm', '-f', 'c'] }], notes: [] }] },
+      { onCleanup: refuse, observed: [{ kind: 'observed', findings: [{ what: 'process 42 on this machine (sleep 900)', attribution: own }, { what: 'process 43 on this machine (x)', attribution: theirs }], notes: [] }] },
+      { onCleanup: remove, observed: [{ kind: 'observed', findings: [{ what: 'docker container c', attribution: own, remove: ['docker', 'rm', '-f', 'c'] }], notes: [] }] },
     ]);
 
-    expect(plan).toEqual({ kind: 'refuse', processes: ['process 42 on this machine (sleep 900)'], unseen: [] });
+    expect(plan).toEqual({ kind: 'refuse', refusals: [{ why: 'a process still runs', items: ['process 42 on this machine (sleep 900)'] }] });
   });
 
   it('refuses when it could not look at the processes, since one of the world may still run there', () => {
     const plan = cleanupPlan([
-      { onCleanup: 'refuse', observed: [{ kind: 'observed', findings: [], notes: [] }, { kind: 'not_observed', what: 'working directories on this machine', why: 'lsof listed none' }] },
-      { onCleanup: 'remove', observed: [{ kind: 'observed', findings: [{ what: 'docker container c', attribution: own, remove: ['docker', 'rm', '-f', 'c'] }], notes: [] }] },
+      { onCleanup: refuse, observed: [{ kind: 'observed', findings: [], notes: [] }, { kind: 'not_observed', what: 'working directories on this machine', why: 'lsof listed none' }] },
+      { onCleanup: remove, observed: [{ kind: 'observed', findings: [{ what: 'docker container c', attribution: own, remove: ['docker', 'rm', '-f', 'c'] }], notes: [] }] },
     ]);
 
-    expect(plan).toEqual({ kind: 'refuse', processes: [], unseen: ['working directories on this machine, lsof listed none'] });
+    expect(plan).toEqual({ kind: 'refuse', refusals: [{ why: 'cleanup could not look', items: ['NOT OBSERVED: working directories on this machine, lsof listed none'] }] });
   });
 
   it("removes only the world's own removable leftovers, keeps what a row keeps, and says what it could not look at", () => {
     const plan = cleanupPlan([
-      { onCleanup: 'refuse', observed: [{ kind: 'observed', findings: [], notes: [] }] },
-      { onCleanup: 'keep', observed: [{ kind: 'observed', findings: [{ what: 'run r attempt a place', attribution: own }], notes: [] }] },
-      { onCleanup: 'remove', observed: [
+      { onCleanup: refuse, observed: [{ kind: 'observed', findings: [], notes: [] }] },
+      { onCleanup: { kind: 'keep' }, observed: [{ kind: 'observed', findings: [{ what: 'vercel sandbox v', attribution: own }], notes: [] }] },
+      { onCleanup: remove, observed: [
         { kind: 'observed', findings: [{ what: 'docker container mine', attribution: own, remove: ['docker', 'rm', '-f', 'mine'] }, { what: 'docker container theirs', attribution: theirs, remove: ['docker', 'rm', '-f', 'theirs'] }], notes: [] },
         { kind: 'not_observed', what: 'podman containers', why: 'podman info failed' },
       ] },
@@ -174,8 +176,9 @@ describe('what cleanup prints when it refuses', () => {
 
       expect(plan.kind).toBe('refuse');
       if (plan.kind !== 'refuse') return;
-      expect(plan.processes.join('\n')).toContain(String(left.pid));
-      expect(plan.processes.join('\n')).toContain('<REDACTED:VERIFY_PLANNED_TOKEN>');
+      const lines = plan.refusals.flatMap((refusal) => refusal.items).join('\n');
+      expect(lines).toContain(String(left.pid));
+      expect(lines).toContain('<REDACTED:VERIFY_PLANNED_TOKEN>');
       expect(JSON.stringify(plan)).not.toContain('pl4nned-s3cret');
     } finally {
       signalChild(left, 'SIGKILL');

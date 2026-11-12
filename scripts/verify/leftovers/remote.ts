@@ -3,7 +3,7 @@ import type { LeftoverKind } from '../leftovers.js';
 
 export const remoteSandboxes: LeftoverKind = {
   title: 'remote sandbox',
-  onCleanup: 'keep',
+  onCleanup: { kind: 'keep' },
   observe() {
     return Promise.resolve([{ kind: 'not_observed', what: 'remote sandboxes (vercel)', why: 'the ledger asks no remote service; run `npm run -s verify -- reap` with the key' }]);
   },
