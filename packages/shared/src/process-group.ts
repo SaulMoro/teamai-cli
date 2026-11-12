@@ -268,8 +268,8 @@ function verdictOf(recorded: ProcessIdentity, live: ProcessStart | undefined, na
 
 /**
  * Whether the process with `recorded`'s pid now is the one `recorded` names: by its start ticks on Linux, else by the
- * start or time the record keeps. A pid another user's process has (EPERM) is live. A ps read `signal` cuts short, as a
- * wait with a budget does, tells nothing: `unknown`.
+ * start or time the record keeps. A pid another user's process has (EPERM) is live, and so is a pid below 2. A ps read
+ * `signal` cuts short, as a wait with a budget does, tells nothing: `unknown`.
  */
 export async function isSameProcess(recorded: ProcessIdentity, { signal }: { signal?: AbortSignal } = {}): Promise<ProcessVerdict> {
   const namespace = await namespaceHere();
@@ -277,10 +277,13 @@ export async function isSameProcess(recorded: ProcessIdentity, { signal }: { sig
   // Its pid names another process here, or none, so neither says anything of the recorded one.
   if (isOtherPidNamespace(recorded.pidNamespace, namespace)) return 'foreign';
 
-  // `denied`: a process has the pid, another user's.
+  // `denied`: a process has the pid, another user's. `refused`: a pid no probe may be sent to, below 2, which a teamai
+  // running as pid 1 in a container records, so it is taken as live, as `mayBeRunning` takes it.
   const probe = signalPid(recorded.pid, 0);
 
-  if (probe === 'gone' || probe === 'refused') return 'other';
+  if (probe === 'gone') return 'other';
+
+  if (probe === 'refused') return 'same';
 
   if (!keepsStart(recorded)) return 'unknown';
 

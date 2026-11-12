@@ -566,10 +566,11 @@ it.skipIf(process.platform === 'win32')('tells the process a record names from a
     expect(await isSameProcess({ pid })).toBe('unknown');
     expect(await isSameProcess({ pid: 2147483646 })).toBe('other');
 
-    // kill(0) reads this process's own group and kill(1) init, so neither is probed, and neither is a process teamai started.
+    // kill(0) reads this process's own group and kill(1) init, so neither is probed. teamai runs as pid 1 in a container,
+    // so a record of either is taken as live, as mayBeRunning takes it, and what it holds is never taken from it.
     const probe = vi.spyOn(process, 'kill');
-    expect(await isSameProcess({ pid: 0, spawnedAt })).toBe('other');
-    expect(await isSameProcess({ pid: 1, spawnedAt })).toBe('other');
+    expect(await isSameProcess({ pid: 0, spawnedAt })).toBe('same');
+    expect(await isSameProcess({ pid: 1, spawnedAt })).toBe('same');
     expect(probe).not.toHaveBeenCalled();
   } finally {
     child.kill('SIGKILL');
