@@ -8,7 +8,8 @@
 // FAKE_ENGINE_LOG as one JSON line; no environment value is written.
 //
 //   FAKE_ENGINE_STATE   its state directory; a file `down` there makes it answer as a stopped daemon, a file
-//                       `rm-fails` makes `rm` fail as a daemon that cannot remove the container, a file `no-policy`
+//                       `rm-fails` makes `rm` fail as a daemon that cannot remove the container, `filter-fails` makes
+//                       `run` of a network filter (`<name>-proxy`) fail as a daemon that cannot start it, a file `no-policy`
 //                       makes sbx answer as one whose network policy was never initialized, and a file
 //                       `secrets/<service>` is an sbx secret its proxy holds; a file `stop-lag` holding a number of
 //                       milliseconds makes an `exec` whose process was stopped end that much later, as a real exec
@@ -341,6 +342,7 @@ function docker() {
 
       const name = one(found, '--name');
 
+      if (name?.endsWith('-proxy') && fs.existsSync(path.join(state, 'filter-fails'))) fail(`docker: Error response from daemon: failed to create task for container: failed to create shim task: OCI runtime create failed: ${name}.`, 125);
       if (name && readContainer(name)) fail(`Conflict. The container name "/${name}" is already in use.`, 125);
       const network = one(found, '--network');
 

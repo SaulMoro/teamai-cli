@@ -155,10 +155,28 @@ export function containerProvider({ engine, image, owner, host, warm, profile }:
    */
   let steps: StepNetwork = { isFiltered: false, alias: undefined };
 
+  /** Removes the filter of `key` and its network, ok when it has none. */
+  const release = async (key: PlaceKey): Promise<{ ok: true } | { ok: false; failure: RuntimeFailure }> => {
+    const filter = await cli(['rm', '--force', filterOf(key)], { timeoutMs: COMMAND_MS });
+
+    if (!(filter.kind === 'ran' && (filter.code === 0 || said(filter, /no such container/i)))) {
+      return { ok: false, failure: { code: 'sandbox_failed', message: `${engine} could not remove the network filter ${filterOf(key)}: ${why(filter)}. Remove it with \`${engine} rm --force ${filterOf(key)}\`.` } };
+    }
+
+    const network = await cli(['network', 'rm', networkOf(key)], { timeoutMs: COMMAND_MS });
+
+    if (!(network.kind === 'ran' && (network.code === 0 || said(network, /not found|no such network/i)))) {
+      return { ok: false, failure: { code: 'sandbox_failed', message: `${engine} could not remove the network ${networkOf(key)}: ${why(network)}. Remove it with \`${engine} network rm ${networkOf(key)}\`.` } };
+    }
+
+    return { ok: true };
+  };
+
   /**
    * Makes the internal network of `key` and the filter in front of it, which lets through what `rules` name (judge.ts),
    * and is labelled by the run only, so the attempt's labels find its sandbox alone; a sweep reads its attempt from
-   * teamai.filter. What it made stays for `release` when a later step fails.
+   * teamai.filter. What it made stays for `release` when a later step fails; a network it made itself, it removes when
+   * it fails, as no sweep finds a network.
    */
   const filtered = async (key: PlaceKey, rules: string[]): Promise<{ ok: true } | { ok: false; failure: RuntimeFailure }> => {
     // No address of the host on the bridge either, so the host's own services are out of reach too.
@@ -167,10 +185,17 @@ export function containerProvider({ engine, image, owner, host, warm, profile }:
     if (!(network.kind === 'ran' && (network.code === 0 || said(network, /already exists/i)))) return sandboxFailed(`${engine} could not create the network ${networkOf(key)} of attempt ${key.attempt}: ${why(network)}`);
     const filter = await cli(['run', '-d', '--name', filterOf(key), '--label', `teamai.run=${key.run}`, '--label', `teamai.filter=${key.attempt}`, '--label', `teamai.owner=${owner}`, ...user(), ...LOCKED, '--entrypoint', 'node', image, '-e', FILTER_SCRIPT, String(FILTER_PORT), ...rules]);
 
-    if (!(filter.kind === 'ran' && (filter.code === 0 || said(filter, /already in use/i)))) return sandboxFailed(`${engine} could not start the network filter ${filterOf(key)}: ${why(filter)}`);
-    const joined = await cli(['network', 'connect', networkOf(key), filterOf(key)]);
+    const joined = filter.kind === 'ran' && (filter.code === 0 || said(filter, /already in use/i)) ? await cli(['network', 'connect', networkOf(key), filterOf(key)]) : undefined;
 
-    return joined.kind === 'ran' && (joined.code === 0 || said(joined, /already exists|already attached/i)) ? { ok: true } : sandboxFailed(`${engine} could not connect the network filter to ${networkOf(key)}: ${why(joined)}`);
+    if (joined?.kind === 'ran' && (joined.code === 0 || said(joined, /already exists|already attached/i))) return { ok: true };
+    const failed = joined === undefined
+      ? sandboxFailed(`${engine} could not start the network filter ${filterOf(key)}: ${why(filter)}`)
+      : sandboxFailed(`${engine} could not connect the network filter to ${networkOf(key)}: ${why(joined)}`);
+    // A network an earlier open made is that open's place's, which a failed open again keeps.
+    if (network.code !== 0) return failed;
+    const released = await release(key);
+
+    return released.ok ? failed : { ok: false, failure: { ...failed.failure, message: `${failed.failure.message} ${released.failure.message}` } };
   };
 
   /** Makes the warm image of `plan` from `image` with its `cache` files, in a scratch container or build. */
@@ -434,21 +459,7 @@ export function containerProvider({ engine, image, owner, host, warm, profile }:
     },
     },
 
-    async release(key) {
-      const filter = await cli(['rm', '--force', filterOf(key)], { timeoutMs: COMMAND_MS });
-
-      if (!(filter.kind === 'ran' && (filter.code === 0 || said(filter, /no such container/i)))) {
-        return { ok: false, failure: { code: 'sandbox_failed', message: `${engine} could not remove the network filter ${filterOf(key)}: ${why(filter)}. Remove it with \`${engine} rm --force ${filterOf(key)}\`.` } };
-      }
-
-      const network = await cli(['network', 'rm', networkOf(key)], { timeoutMs: COMMAND_MS });
-
-      if (!(network.kind === 'ran' && (network.code === 0 || said(network, /not found|no such network/i)))) {
-        return { ok: false, failure: { code: 'sandbox_failed', message: `${engine} could not remove the network ${networkOf(key)}: ${why(network)}. Remove it with \`${engine} network rm ${networkOf(key)}\`.` } };
-      }
-
-      return { ok: true };
-    },
+    release,
 
     client(id, spec) {
       // A sandbox an app's tool runs in reaches nothing of this machine: one not behind the filter runs none.

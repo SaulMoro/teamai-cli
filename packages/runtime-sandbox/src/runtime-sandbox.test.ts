@@ -1194,6 +1194,17 @@ describe('a prompt attempt in a container', () => {
     expect(await connection.next((message) => message.event === 'closed' || message.event === 'close_failed', 30_000)).toEqual({ event: 'closed', handle: HANDLE });
   });
 
+  it('leaves no network of a first open whose network filter could not start, which no sweep would find', async () => {
+    engine.image(IMAGE, { claude: CLAUDE, node: '' });
+    engine.failFilter(true);
+    const connection = start();
+    await init(connection, { provider: 'docker', image: IMAGE });
+
+    expect((await openPlace(connection, place())).ready).toMatchObject({ event: 'failed', failure: { code: 'sandbox_failed', message: expect.stringContaining('could not start the network filter') } });
+    expect(engine.networks()).toEqual([]);
+    expect(engine.containers()).toEqual([]);
+  });
+
   it('stops a place on the options it was opened with when teamai, whose profile is gone, gives none', async () => {
     const first = start();
     await init(first, { provider: 'docker', image: IMAGE });
