@@ -498,6 +498,15 @@ export function markDriverSeen(world: Pick<World, 'runId' | 'driverSeen'>): void
   updateWorld(loadWorld(world.runId), (fresh) => ({ ...fresh, driverSeen: true }));
 }
 
+/** Each TMPDIR of `world` outside its directory, its own and each member's, by whose it is: what cleanup removes besides world.dir. */
+export function tmpDirsOutside(world: Pick<World, 'dir' | 'tmp' | 'members'>) {
+  return [{ tmp: world.tmp, member: undefined }, ...(world.members ?? []).map((each) => ({ tmp: each.tmp, member: each.name }))].filter(({ tmp }) => {
+    const relative = path.relative(world.dir, tmp);
+
+    return relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative);
+  });
+}
+
 export function loadWorld(runId: string | undefined): World {
   if (!runId) throw new Error('Name the world: every verb after `world` takes its run id first. List them with `npm run -s verify -- dir --all`.');
 
@@ -523,10 +532,8 @@ export function loadWorld(runId: string | undefined): World {
   if (world.dir !== path.join(fs.realpathSync.native(WORLDS_ROOT), runId)) throw new Error(`${file} names ${world.dir}, which is not world ${runId}'s directory.`);
 
   // cleanup removes each TMPDIR outside world.dir too, so one there must be the one made for this run or member.
-  for (const { tmp, member } of [{ tmp: world.tmp, member: undefined }, ...(world.members ?? []).map((each) => ({ tmp: each.tmp, member: each.name }))]) {
-    if (path.relative(world.dir, tmp).startsWith('..') && tmp !== worldTmpDir({ root: shortTmpRoot(), runId, member })) {
-      throw new Error(`${file} names ${tmp} as a TMPDIR, which is not one of world ${runId}'s own: cleanup would remove it.`);
-    }
+  for (const { tmp, member } of tmpDirsOutside(world)) {
+    if (tmp !== worldTmpDir({ root: shortTmpRoot(), runId, member })) throw new Error(`${file} names ${tmp} as a TMPDIR, which is not one of world ${runId}'s own: cleanup would remove it.`);
   }
 
   return world;

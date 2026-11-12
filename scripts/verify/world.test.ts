@@ -252,6 +252,7 @@ describe("a world's TMPDIRs, which cleanup removes", () => {
 
     expect(load(own, [member('bob', tmpOf({ root: shortTmpRoot(), runId, member: 'bob' }))])).not.toThrow();
     expect(load(`${dir}/tmp`)).not.toThrow();
+    expect(load(`${dir}/..tmp`)).not.toThrow();
     expect(load(shortTmpRoot())).toThrow(`names ${shortTmpRoot()} as a TMPDIR, which is not one of world ${runId}'s own`);
     expect(load(os.homedir())).toThrow(`names ${os.homedir()} as a TMPDIR`);
     expect(load(own, [member('bob', own)])).toThrow(`names ${own} as a TMPDIR`);

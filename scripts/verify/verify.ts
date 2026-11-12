@@ -7,7 +7,7 @@ import { planCleanup } from './leftovers.js';
 import { passedKeys, splitPassOption } from './secrets.js';
 import { addMember, ensureOrigin, memberLayout, parseMachine, removeMachines } from './members.js';
 import { memberOf, parseTarget, runOn } from './target.js';
-import { checkoutStatus, createWorld, git, liveWorlds, loadWorld, REPO_ROOT, TOOL_COMMANDS, updateWorld, type World } from './world.js';
+import { checkoutStatus, createWorld, git, liveWorlds, loadWorld, REPO_ROOT, tmpDirsOutside, TOOL_COMMANDS, updateWorld, type World } from './world.js';
 
 const [verb, ...rest] = process.argv.slice(2);
 
@@ -79,10 +79,8 @@ async function cleanup(world: World): Promise<boolean> {
     fs.rmSync(path.join(world.dir, name), { recursive: true, force: true });
   }
 
-  // A world made since its TMPDIR moved out of its directory, to /tmp; each member's sits beside it.
-  for (const tmp of [world.tmp, ...(world.members ?? []).map((member) => member.tmp)]) {
-    if (path.relative(world.dir, tmp).startsWith('..')) fs.rmSync(tmp, { recursive: true, force: true });
-  }
+  // A world made since its TMPDIR moved out of its directory, to /tmp; each member's sits beside it. loadWorld vouched for each.
+  for (const { tmp } of tmpDirsOutside(world)) fs.rmSync(tmp, { recursive: true, force: true });
 
   updateWorld(world, (fresh) => ({ ...fresh, cleanedAt: new Date().toISOString() }));
   console.log(`Cleaned ${world.runId}. Evidence kept in ${world.dir}`);
