@@ -89,6 +89,9 @@ export interface Judges {
 export type HostRoute = { ok: true; alias: string } | { ok: false; refusal: string };
 
 /** What every provider does, whichever way its sandbox sees the place. */
+/** The image `warm` made or found for one open, which that open's `create` starts from rather than working the key out again. */
+export interface WarmedImage { image: string }
+
 interface Sandboxing {
   /**
    * Checks the technology is usable on this machine and says what it offers, or fails `sandbox_unavailable` with the
@@ -114,14 +117,16 @@ interface Sandboxing {
    * Creates the attempt's sandbox with the view at its host paths and no credential, and returns its id. `tool` is the
    * attempt's prompt tool, as `open` names it (none for a command step), which picks sbx's template when no agent is set.
    * `deadline` is the open's, the latest time the attempt's limits allow, which a hosted sandbox's lifetime must reach.
+   * `warmed` is what `warm` answered for this open, when it named the image the sandbox starts from.
    */
-  create(key: PlaceKey, view: PlaceView, tool: string | undefined, deadline?: string): Promise<{ ok: true; id: string } | { ok: false; failure: RuntimeFailure }>;
+  create(key: PlaceKey, view: PlaceView, tool: string | undefined, deadline?: string, warmed?: WarmedImage): Promise<{ ok: true; id: string } | { ok: false; failure: RuntimeFailure }>;
   /**
    * On a provider with a warm image: makes the one an attempt with `view` and `tool` starts from, when it is not there
-   * yet, before `create`, which then finds it. It may take minutes, and nothing but its open waits for it. `deadline` is
-   * `create`'s, for a provider that refuses a sandbox past its lifetime before it makes anything.
+   * yet, before `create`, which then finds it, or starts from the image it names. It may take minutes, and nothing but
+   * its open waits for it. `deadline` is `create`'s, for a provider that refuses a sandbox past its lifetime before it
+   * makes anything.
    */
-  warm?(view: PlaceView, tool: string | undefined, deadline: string | undefined): Promise<{ ok: true } | { ok: false; failure: RuntimeFailure }>;
+  warm?(view: PlaceView, tool: string | undefined, deadline: string | undefined): Promise<{ ok: true; warmed?: WarmedImage } | { ok: false; failure: RuntimeFailure }>;
   /**
    * On a provider whose own network policy decides what a sandbox reaches (sbx): whether it lets one reach `port` of
    * this machine, or how to allow it, naming the credential `variable` that needs it. The policy is never edited.

@@ -3,7 +3,7 @@ import type { ContainerEngine, WarmOptions } from '../options.js';
 import type { JournalId } from '../journal.js';
 import type { Can, ConfinedOffer, RuntimeFailure } from '@teamai/runtime-protocol';
 import { EVIDENCE_DIR, FILTER_PORT, FILTER_SCRIPT, judgeTool } from '../judge.js';
-import { COMMAND_MS, handleOf, type ExecEnd, type ExecSpec, type HostRoute, type PlaceKey, type Provider } from '../provider.js';
+import { COMMAND_MS, handleOf, type ExecEnd, type ExecSpec, type HostRoute, type PlaceKey, type Provider, type WarmedImage } from '../provider.js';
 import { offerSignedIn } from '../sign-in.js';
 import { isLeftBehind, oneBuildPerKey, planWarm, scratchOf, WARM_BY, warmFailed, type WarmPlan } from '../warm.js';
 import { cliOf, commandsOf, definedOnly, heldProbe, signalled, LAUNCHABLE, mountsOf, unmountable, WORKSPACES, type Ran } from './cli.js';
@@ -185,12 +185,6 @@ export function containerProvider({ engine, image, owner, host, warm }: { engine
     return present.kind === 'ran' && present.code === 0;
   };
 
-  /**
-   * The warm image `warm` made or found for each attempt, by its result directory: its sandbox's creation starts from
-   * that one, not from the key worked out again, which a base pulled again meanwhile would move.
-   */
-  const warmedFor = new Map<string, string>();
-
   /** The image an attempt in `checkout` starts from: the warm image, made first when it is not there yet, else `image`. */
   const warmImageFor = async (checkout: string): Promise<{ ok: true; image: string } | { ok: false; failure: RuntimeFailure }> => {
     if (warm === undefined) return { ok: true, image };
@@ -204,15 +198,13 @@ export function containerProvider({ engine, image, owner, host, warm }: { engine
   };
 
   /**
-   * The image attempt `attempt`'s sandbox, whose result directory is `result`, starts from: the warm image `warm` made
-   * for it, still there, else `image`. Its creation, which a close waits for, neither builds nor pulls.
+   * The image attempt `attempt`'s sandbox starts from: the warm image `warm` made for its open, still there, not the key
+   * worked out again, which a base pulled again meanwhile would move; else `image`. Its creation, which a close waits
+   * for, neither builds nor pulls.
    */
-  const createdFrom = async (result: string, attempt: string): Promise<{ ok: true; image: string } | { ok: false; failure: RuntimeFailure }> => {
-    const tag = warmedFor.get(result);
-    // Read once: another open of the attempt makes or finds its warm image again first.
-    warmedFor.delete(result);
-
+  const createdFrom = async (warmed: WarmedImage | undefined, attempt: string): Promise<{ ok: true; image: string } | { ok: false; failure: RuntimeFailure }> => {
     if (warm === undefined) return { ok: true, image };
+    const tag = warmed?.image;
 
     if (tag === undefined) return sandboxFailed(`No warm image was made for attempt ${attempt} in this runtime, so no sandbox was made for it. Start the step again.`);
 
@@ -309,17 +301,14 @@ export function containerProvider({ engine, image, owner, host, warm }: { engine
     async warm(view) {
       const from = await warmImageFor(view.worktree);
 
-      if (!from.ok) return from;
-      warmedFor.set(view.result, from.image);
-
-      return { ok: true };
+      return from.ok ? { ok: true, warmed: { image: from.image } } : from;
     },
 
-    async create(key, view) {
+    async create(key, view, _tool, _deadline, warmed) {
       const mounted = mountsOf(engine, view);
 
       if (!mounted.ok) return mounted;
-      const from = await createdFrom(view.result, key.attempt);
+      const from = await createdFrom(warmed, key.attempt);
 
       if (!from.ok) return from;
       const label = host.selinux ? ',z' : '';
