@@ -375,13 +375,13 @@ async function commandReport(config: LocalConfig, lock: RunLock, driver: DriverI
   const result = { ...exited, stderr: withoutStreamMarks(exited.stderr) };
   const end = lease.workflow ? wholeReport(result) : commandEnd(result);
   await AttemptResult.write(attemptResultPath(config, lock.run, lease.attempt), end.outputs !== undefined ? { output: end.outputs } : {}, secrets);
-  // A whole workflow answers on stdout, which is never text it printed.
-  const printed = !lease.workflow && end.outputs === undefined ? result.stdout.split(/\r?\n/).filter((line) => line.trim() !== '').slice(-STDOUT_LINES) : [];
+  // A whole workflow answers on stdout, which is never text it printed. Masked whole, so a secret over lines is too.
+  const printed = !lease.workflow && end.outputs === undefined ? masked(result.stdout, secrets).split(/\r?\n/).filter((line) => line.trim() !== '').slice(-STDOUT_LINES) : [];
   const attempt = AttemptIdSchema.safeParse(lease.attempt);
 
   if (printed.length > 0 && attempt.success) {
     const file = attemptStdoutPath(config, lock.run, attempt.data);
-    await writeRegularFile(file, `${printed.map((line) => masked(line, secrets)).join('\n')}\n`, { mode: 0o600 });
+    await writeRegularFile(file, `${printed.join('\n')}\n`, { mode: 0o600 });
     onStdoutKept?.(file);
   }
 

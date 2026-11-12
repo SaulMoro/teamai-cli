@@ -1108,7 +1108,8 @@ steps:
 `);
     fs.mkdirSync(path.join(config.repo.localPath, 'env'), { recursive: true });
     fs.writeFileSync(path.join(config.repo.localPath, 'env', 'secrets.yaml'), 'secrets:\n  - key: DEPLOY_TOKEN\n');
-    vi.stubEnv('DEPLOY_TOKEN', 'deploy-secret-value');
+    // A key over two lines, as a PEM key is, is masked whole.
+    vi.stubEnv('DEPLOY_TOKEN', 'deploy-secret-value\nits-second-line');
     onTestFinished(() => { vi.unstubAllEnvs(); });
     const info = vi.spyOn(log, 'info').mockImplementation(() => undefined);
     onTestFinished(() => { info.mockRestore(); });
