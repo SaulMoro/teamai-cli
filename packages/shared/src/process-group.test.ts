@@ -5,7 +5,7 @@ import path from 'node:path';
 import { afterEach, expect, it, vi } from 'vitest';
 import { z } from 'zod';
 import diagnostics from 'node:diagnostics_channel';
-import { identityOf, isSameProcess, ownGroups, PROCESS_READ_CHANNEL, recordGroup, stopGroup, stopProcess, stopRecordedGroup } from './process-group.js';
+import { identityOf, isSameProcess, ownGroups, PROCESS_READ_CHANNEL, recordGroup, signalGroup, signalPid, stopGroup, stopProcess, stopRecordedGroup } from './process-group.js';
 
 /** Whether this platform tells start times through ps rather than `/proc`, so a fake ps on PATH is what is read. */
 const READS_PS = process.platform !== 'win32' && process.platform !== 'linux';
@@ -21,6 +21,53 @@ function unspawnedChild(pid: number): ChildProcess {
   Object.defineProperty(child, 'pid', { value: pid });
   return child;
 }
+
+// kill(0) and kill(-0) signal the caller's own group, kill(-1) every process it may signal, and kill(1) init.
+it.each([0, -0, 1, -1, -4242, Number.NaN, 2.5, Number.MAX_SAFE_INTEGER + 1])('sends no signal to pid %s, nor to a group of that id', (pid) => {
+  // Spied, so a regression reaches no process: these targets would signal the whole test run, or every process of its user.
+  const processKill = vi.spyOn(process, 'kill').mockReturnValue(true);
+
+  expect(signalPid(pid, 'SIGTERM')).toBe('refused');
+  expect(signalPid(pid, 0)).toBe('refused');
+  expect(signalGroup(pid, 'SIGKILL')).toBe('refused');
+  expect(processKill).not.toHaveBeenCalled();
+});
+
+it('tells a pid another user\'s process has from one no process has', () => {
+  vi.spyOn(process, 'kill').mockImplementationOnce(() => { throw Object.assign(new Error('kill EPERM'), { code: 'EPERM' }); })
+    .mockImplementationOnce(() => { throw Object.assign(new Error('kill ESRCH'), { code: 'ESRCH' }); });
+
+  expect(signalPid(4242, 0)).toBe('denied');
+  expect(signalPid(4242, 0)).toBe('gone');
+});
+
+it.skipIf(process.platform === 'win32')('signals the group it is given and no process outside it, then tells the group is gone', async () => {
+  // The bystander shares this test run's group, which a signal to pid 0 would reach.
+  const bystander = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore' });
+  const group = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { detached: true, stdio: 'ignore' });
+  const ended = new Promise<NodeJS.Signals | null>((resolve) => { group.once('close', (_code, signal) => resolve(signal)); });
+  try {
+    await Promise.all([bystander, group].map((child) => new Promise<void>((resolve, reject) => { child.once('spawn', resolve); child.once('error', reject); })));
+    const pgid = group.pid ?? Number.NaN;
+
+    expect(signalGroup(pgid, 0)).toBe('sent');
+    expect(signalGroup(pgid, 'SIGKILL')).toBe('sent');
+    expect(await ended).toBe('SIGKILL');
+    expect(signalGroup(pgid, 0)).toBe('gone');
+    expect(signalPid(pgid, 0)).toBe('gone');
+    expect(signalPid(bystander.pid ?? Number.NaN, 0)).toBe('sent');
+  } finally {
+    bystander.kill('SIGKILL');
+    group.kill('SIGKILL');
+  }
+});
+
+it.runIf(process.platform === 'win32')('signals no group on Windows, which has none', () => {
+  const processKill = vi.spyOn(process, 'kill').mockReturnValue(true);
+
+  expect(signalGroup(4242, 'SIGTERM')).toBe('refused');
+  expect(processKill).not.toHaveBeenCalled();
+});
 
 it('stops an attached child through child.kill without probing other PIDs', async () => {
   const child = unspawnedChild(2147483647);
