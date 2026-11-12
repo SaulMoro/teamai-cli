@@ -186,8 +186,8 @@ export function containerProvider({ engine, image, owner, host, warm }: { engine
   };
 
   /**
-   * The warm image `warm` made or found for each attempt's checkout: its sandbox's creation starts from that one, not
-   * from the key worked out again, which a base pulled again meanwhile would move.
+   * The warm image `warm` made or found for each attempt, by its result directory: its sandbox's creation starts from
+   * that one, not from the key worked out again, which a base pulled again meanwhile would move.
    */
   const warmedFor = new Map<string, string>();
 
@@ -200,19 +200,19 @@ export function containerProvider({ engine, image, owner, host, warm }: { engine
     const { plan } = planned;
     const made = await once(plan.key, async () => (await isPresent(plan.tag) ? { ok: true } : makeWarm(plan)));
 
-    if (!made.ok) return made;
-    warmedFor.set(checkout, plan.tag);
-
-    return { ok: true, image: plan.tag };
+    return made.ok ? { ok: true, image: plan.tag } : made;
   };
 
   /**
-   * The image attempt `attempt`'s sandbox in `checkout` starts from: the warm image `warm` made for it, still there, else
-   * `image`. Its creation, which a close waits for, neither builds nor pulls.
+   * The image attempt `attempt`'s sandbox, whose result directory is `result`, starts from: the warm image `warm` made
+   * for it, still there, else `image`. Its creation, which a close waits for, neither builds nor pulls.
    */
-  const createdFrom = async (checkout: string, attempt: string): Promise<{ ok: true; image: string } | { ok: false; failure: RuntimeFailure }> => {
+  const createdFrom = async (result: string, attempt: string): Promise<{ ok: true; image: string } | { ok: false; failure: RuntimeFailure }> => {
+    const tag = warmedFor.get(result);
+    // Read once: another open of the attempt makes or finds its warm image again first.
+    warmedFor.delete(result);
+
     if (warm === undefined) return { ok: true, image };
-    const tag = warmedFor.get(checkout);
 
     if (tag === undefined) return sandboxFailed(`No warm image was made for attempt ${attempt} in this runtime, so no sandbox was made for it. Start the step again.`);
 
@@ -309,14 +309,17 @@ export function containerProvider({ engine, image, owner, host, warm }: { engine
     async warm(view) {
       const from = await warmImageFor(view.worktree);
 
-      return from.ok ? { ok: true } : from;
+      if (!from.ok) return from;
+      warmedFor.set(view.result, from.image);
+
+      return { ok: true };
     },
 
     async create(key, view) {
       const mounted = mountsOf(engine, view);
 
       if (!mounted.ok) return mounted;
-      const from = await createdFrom(view.worktree, key.attempt);
+      const from = await createdFrom(view.result, key.attempt);
 
       if (!from.ok) return from;
       const label = host.selinux ? ',z' : '';
