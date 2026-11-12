@@ -24,6 +24,14 @@ describe('when a usage limit resets', () => {
     expect(UsageLimits.resetOf(text, { now, zone })).toBe(Date.parse(expected));
   });
 
+  // New York leaves daylight time at 2am on Sunday, Nov 1, 2026: noon on the Saturday is 16:00 UTC, 9am on the Sunday 14:00 UTC.
+  it.each([
+    ['a reset the next morning', 'You\'ve hit your limit · resets 9am (America/New_York)', '2026-11-01T14:00:00Z'],
+    ['a dated reset', 'You\'ve hit your weekly limit · resets Nov 1, 9am (America/New_York)', '2026-11-01T14:00:00Z'],
+  ])('reads %s across a daylight saving change', (_case, text, expected) => {
+    expect(UsageLimits.resetOf(text, { now: Date.parse('2026-10-31T16:00:00Z'), zone })).toBe(Date.parse(expected));
+  });
+
   it.each([
     ['an API rate limit', 'claude hit its usage limit: API Error: Request rejected (429) · Rate limit exceeded'],
     ['OpenCode\'s free limit', 'opencode hit its usage limit: Free usage limit reached. Connect a provider or subscribe to OpenCode Go to keep going, or switch models.'],
