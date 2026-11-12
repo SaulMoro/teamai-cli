@@ -10,6 +10,7 @@ import { resolveRunMode, type RunMode } from '../../../launch-context.js';
 import type { LocalConfig, TeamaiConfig } from '../../../types.js';
 import { log, PROGRESS_STREAMS_ENV, streamOfLine, withoutStreamMarks } from '@teamai/shared/log';
 import { redact } from '@teamai/shared/redact';
+import { writeRegularFile } from '@teamai/shared/regular-file';
 import { openSessionArchive } from '../../../session-flow/archive.js';
 import { agentEvidence, attemptEnv } from '../../attempt-marker.js';
 import { continuedConversations, leaseNext, promptTool, type PersonHandoff, type ReportInput, type ToolFor } from '../../engine.js';
@@ -31,7 +32,7 @@ import { toolsLaunchDeps, type EngineOptions, type OpenedDriver } from '../../ru
 import { newOpId, type ExecAnswer, type ExecQuestion, type StepRuntime } from '@teamai/runtime-protocol/step-runtime';
 import { resumeOrPublish, retryCommand } from '../../runtimes/retry-command.js';
 import type { RuntimeOffer, SoleDriver } from '../../engine.js';
-import { attemptDir, AttemptIdSchema, attemptResultPath, readRun, RunIdSchema, runScratchDir, updateRun, withRunLock, type AttemptId, type RunId, type RunLock } from '../../store.js';
+import { attemptDir, AttemptIdSchema, attemptResultPath, attemptStdoutPath, readRun, RunIdSchema, runScratchDir, updateRun, withRunLock, type AttemptId, type RunId, type RunLock } from '../../store.js';
 import { abandonPlace, isSetupCutShort, placeLeaseOf, placeOf, placeRoot, preparePlace, refuseDirtyAdoptedCommand, releaseUnlaunchedPlace, runPlaceSetup, sweepClones } from '../../place/place.js';
 import { commandEnd, commandOutputs, managedReport, StartedRunSchema, unreadablePlace, type StartedRun } from '../../protocol.js';
 import { WholeEndSchema } from '../../whole-workflow.js';
@@ -275,9 +276,11 @@ const LocalLeaseSchema = LeaseWireSchema.or(z.preprocess((raw) => (isRecord(raw)
  * then fails, and the workspace it was preparing is removed. A prompt step's place is prepared for `launches`, the tool
  * `promptReport` launches there, when the lease names none.
  */
-async function stageLease(lease: StagedLease, { config, lock, root, env, mode, signal, launches, setUpOn, runsOn }: {
+async function stageLease(lease: StagedLease, { config, lock, root, env, mode, signal, launches, setUpOn, runsOn, leftRunning }: {
   config: LocalConfig;
   lock: RunLock;
+  /** The attempts whose earlier run left a process no stop here confirms ended, which `stopLeftHere` adds to. */
+  leftRunning: Set<string>;
   root: string;
   env: WorkflowEnv;
   mode: RunMode;
@@ -291,7 +294,9 @@ async function stageLease(lease: StagedLease, { config, lock, root, env, mode, s
   if (lease.unreadableWorkspace) return unreadablePlace(lock.run);
   // A lease is handed back to a driver after one of this run was killed: the setup or command that one left running
   // in the attempt's place is stopped before the attempt is staged again.
-  await stopRecordedGroup(attemptDir(config, lock.run, lease.attempt));
+  const leftHere = await stopLeftHere({ config, run: lock.run, attempt: lease.attempt, step: lease.step, leftRunning });
+
+  if (leftHere) return leftHere;
   // So is what a killed teamai left on a step runtime, which may write into the place by its path: on another runtime,
   // through the driver recorded for it; on this one, its setup here.
   const moved = await stopLeftElsewhere({ config, run: lock.run, attempt: lease.attempt, runsOn, checkout: root });
@@ -328,6 +333,23 @@ async function stageLease(lease: StagedLease, { config, lock, root, env, mode, s
 }
 
 /**
+ * Stops what a killed teamai left running in attempt `attempt`'s place here before the attempt runs again. A process
+ * no stop confirms ended may still run, its tool on the login the attempt holds: the attempt does not run beside it, and
+ * is added to `leftRunning`, whose close stops that process again and keeps the login while it may still run.
+ */
+async function stopLeftHere({ config, run, attempt, step, leftRunning }: { config: LocalConfig; run: RunId; attempt: StagedLease['attempt']; step: string; leftRunning: Set<string> }): Promise<WorkflowFailure | undefined> {
+  const left = await stopRecordedGroup(attemptDir(config, run, attempt));
+
+  if (left.length === 0) return undefined;
+  leftRunning.add(attempt);
+
+  return {
+    code: 'runtime_lost',
+    message: `teamai could not confirm that process ${left.join(', ')}, which an earlier run of attempt ${attempt} of run ${run} left, ended, so the step did not run again beside it. Once that process has ended, run teamai workflow retry ${run} ${step}.`,
+  };
+}
+
+/**
  * Stops what a killed teamai left of attempt `attempt` open on a step runtime other than `runsOn`, the one this driver
  * gives it (undefined: this host), through the driver recorded for it, as `teamai workflow cancel` does. Once that place
  * is closed, the attempt starts again here: its record of the other runtime goes. Answers why the stop is not confirmed,
@@ -348,10 +370,23 @@ async function stopLeftElsewhere({ config, run, attempt, runsOn, checkout }: { c
   return undefined;
 }
 
-async function commandReport(config: LocalConfig, lock: RunLock, driver: DriverIdentity, lease: StagedLease, exited: GroupedCommandExit, secrets: Record<string, string>): Promise<ReportBody> {
+/** How many of the last lines a command wrote to stdout, besides its outputs, its attempt keeps. */
+const STDOUT_LINES = 200;
+
+async function commandReport(config: LocalConfig, lock: RunLock, driver: DriverIdentity, lease: StagedLease, exited: GroupedCommandExit, secrets: Record<string, string>, onStdoutKept?: (file: string) => void): Promise<ReportBody> {
   const result = { ...exited, stderr: withoutStreamMarks(exited.stderr) };
   const end = lease.workflow ? wholeReport(result) : commandEnd(result);
   await AttemptResult.write(attemptResultPath(config, lock.run, lease.attempt), end.outputs !== undefined ? { output: end.outputs } : {}, secrets);
+  // A whole workflow answers on stdout, which is never text it printed. Masked whole, so a secret over lines is too.
+  const printed = !lease.workflow && end.outputs === undefined ? masked(result.stdout, secrets).split(/\r?\n/).filter((line) => line.trim() !== '').slice(-STDOUT_LINES) : [];
+  const attempt = AttemptIdSchema.safeParse(lease.attempt);
+
+  if (printed.length > 0 && attempt.success) {
+    const file = attemptStdoutPath(config, lock.run, attempt.data);
+    await writeRegularFile(file, `${printed.join('\n')}\n`, { mode: 0o600 });
+    onStdoutKept?.(file);
+  }
+
   // What a command says as it runs goes to its stderr, so its stdout stays the step's outputs.
   const progress = result.stderr.split(/\r?\n/).filter((line) => line.trim() !== '').map((line) => masked(line, secrets));
   const body: ReportBody = { attempt: lease.attempt, revision: lease.revision, driver, ...end };
@@ -713,6 +748,7 @@ async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, given: 
   // The runtime each open attempt runs on, and the handle of its place, until its report is recorded or its place abandoned.
   const slotOf = new Map<string, RuntimeSlot>();
   const attemptRuns = new Map<string, AttemptRun>();
+  const leftRunning = new Set<string>();
   // The place of each attempt on a runtime in this process, by the runtime that opened it.
   const localHandles = new Map<string, { runtime: StepRuntime<DriverCan>; handle: string }>();
 
@@ -800,6 +836,14 @@ async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, given: 
     // A closed attempt holds no login, whatever stopped it before its write-back. One whose place stays open may
     // still run its tool, so it keeps the login until a person stops that tool.
     if (notClosed) log.warn(notClosed.message);
+
+    // One that did not run again beside what its earlier run left here keeps its login while that may still use it,
+    // whatever runtime it was to run on.
+    if (leftRunning.has(attempt)) {
+      await stopLeftInProcess(config, runId, attempt);
+
+      return;
+    }
 
     // One in teamai's process left its tool home under the attempt, which a killed judge refreshed its login in.
     if (slot?.kind !== 'external') return endLeftLogins(config, runId, attempt);
@@ -1411,7 +1455,7 @@ async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, given: 
         inFlight.set(lease.attempt, { lease, command: stageThenStart(
           lease,
           async (signal) => {
-            const staged = await stageLease(lease, { config, lock, root, env: turn, mode, signal, setUpOn: runOf(lease), runsOn: externalOf(lease) });
+            const staged = await stageLease(lease, { config, lock, root, env: turn, mode, signal, setUpOn: runOf(lease), runsOn: externalOf(lease), leftRunning });
 
             return staged ?? refuseDirtyAdoptedCommand({ config, run: lock.run, attempt: lease.attempt });
           },
@@ -1484,7 +1528,7 @@ async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, given: 
           const { confined: place, prompt } = lease;
 
           if (lease.answer && prompt !== undefined) {
-            const failure = await stageLease(lease, { config, lock, root, env: turn, mode, signal: controller.signal, runsOn: externalOf(lease) });
+            const failure = await stageLease(lease, { config, lock, root, env: turn, mode, signal: controller.signal, runsOn: externalOf(lease), leftRunning });
             const before = await beforeLaunch(lease, { signal: controller.signal, failure, slot: slotOf.get(lease.attempt) });
 
             if (before.kind !== 'launch') return before.kind === 'ends' ? before.report : undefined;
@@ -1498,8 +1542,8 @@ async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, given: 
             const slot = slotOf.get(lease.attempt);
             const onRuntime = runOf(lease);
 
-            if (!onRuntime) await stopRecordedGroup(attemptDir(config, runId, lease.attempt));
-            const moved = await stopLeftElsewhere({ config, run: runId, attempt: lease.attempt, runsOn: externalOf(lease), checkout: root });
+            const leftHere = onRuntime ? undefined : await stopLeftHere({ config, run: runId, attempt: lease.attempt, step: lease.step, leftRunning });
+            const moved = leftHere ?? await stopLeftElsewhere({ config, run: runId, attempt: lease.attempt, runsOn: externalOf(lease), checkout: root });
 
             if (!startable(lease, controller.signal)) return undefined;
 
@@ -1521,7 +1565,7 @@ async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, given: 
           // A role copy is checked and delivered for the tool the step launches, so another tool the member enables does not refuse it.
           const slot = slotOf.get(lease.attempt);
           const launch = lease.role !== undefined ? launchToolFor({ agent: lease.agent, tool: lease.tool }, config, options.tools ?? {}, await memberTools(config), slot?.can.default_tool) : undefined;
-          const failure = await stageLease(lease, { config, lock, root, env: turn, mode, signal: controller.signal, launches: launch?.ok ? launch.target.name : undefined, setUpOn: runOf(lease), runsOn: externalOf(lease) });
+          const failure = await stageLease(lease, { config, lock, root, env: turn, mode, signal: controller.signal, launches: launch?.ok ? launch.target.name : undefined, setUpOn: runOf(lease), runsOn: externalOf(lease), leftRunning });
 
           const before = await beforeLaunch(lease, { signal: controller.signal, failure, slot });
 
@@ -1746,7 +1790,9 @@ async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, given: 
 
       const body = staged.kind === 'unstaged'
         ? unstaged(exited.lease, staged.failure)
-        : await commandReport(config, lock, driver, exited.lease, staged.result, turn.secrets);
+        : await commandReport(config, lock, driver, exited.lease, staged.result, turn.secrets, options.progress ? undefined : (file) => {
+          log.info(`Step "${exited.lease.step}" printed text on stdout, which is not its outputs: its last lines are in ${file}.`);
+        });
 
       // The command did not start. An empty list keeps a host file written after adopt out of the commit.
       const failed = await report(body, exited.lease, staged.kind === 'unstaged' ? [] : undefined);

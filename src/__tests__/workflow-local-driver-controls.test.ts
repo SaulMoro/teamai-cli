@@ -21,7 +21,7 @@ import { hostStepRuntime } from '../workflow/runtimes/host.js';
 import type { ExecEnd, StepRuntime } from '@teamai/runtime-protocol/step-runtime';
 import type { DriverCan } from '../workflow/requirements.js';
 import { driverIdentity } from '../driver-identity.js';
-import { driverLockPath, readRun } from '../workflow/store.js';
+import { AttemptIdSchema, attemptStdoutPath, driverLockPath, readRun, RunIdSchema } from '../workflow/store.js';
 import type { DriverIdentity } from '../workflow/types.js';
 import { git } from './helpers/delivered-checkout.js';
 import { knownSecrets, resolveWorkflowEnv } from '../env-resolution.js';
@@ -1591,4 +1591,35 @@ steps:
     expect(done).toMatchObject({ data: { done: { outcome: 'failed' } } });
     expect(await readRun(config, runId)).toMatchObject({ steps: [{ id: 'work', failure: { code: 'timeout' } }], releasedTokens: [{ step: 'work', tokens: { input: 4, output: 2 } }] });
   }, 30_000);
+
+  it('keeps no stdout of a workflow with no outputs as text it printed, since that stdout is how it answers', async () => {
+    const { config, workspace, runId } = await workflowFixture(`schemaVersion: v1alpha1
+name: build
+description: Reviews the project whole.
+steps:
+  - id: work
+    workspace: new
+    workflow:
+      steps:
+        - id: review
+          workspace: continue
+          command: echo reviewed
+`);
+    const local = hostStepRuntime();
+    const runtime: StepRuntime<DriverCan> = {
+      ...local,
+      exec: async (request, events, kind) => (kind !== 'workflow' ? local.exec(request, events, kind) : { kind: 'exited', code: 0, stdout: JSON.stringify({ outcome: 'succeeded', tokens: { input: 4, output: 2 } }) }),
+    };
+
+    const done = await runLocalDriver(config, runId, workspace, {
+      runtimes: { driver: 'whole', asked: 'whole', runtimes: [{ kind: 'external', use: 'whole', runtime, can: { workflow: true, tokens: true, workspace: ['new', 'continue'] }, launchesAgents: false, engine: { logins: [] }, credentials: {}, found: [], masks: {}, optionsFrom: 'test' }] },
+    });
+
+    expect(done).toMatchObject({ data: { done: { outcome: 'succeeded' } } });
+    const state = await readRun(config, runId);
+    if (state === 'missing' || state === 'corrupt') throw new Error(`run ${runId} is ${state}`);
+    const [step] = state.steps;
+    if (step === undefined || !('attempt' in step)) throw new Error('the step ran no attempt');
+    expect(fs.existsSync(attemptStdoutPath(config, RunIdSchema.parse(runId), AttemptIdSchema.parse(step.attempt)))).toBe(false);
+  });
 });

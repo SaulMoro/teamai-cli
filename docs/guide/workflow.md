@@ -44,7 +44,7 @@ a value that matches this JSON Schema: `{"type":"object","properties":{"summary"
 
 A step with no `output` is asked for a short summary of what it did, as a JSON string.
 
-Local command steps read stdout and stderr as UTF-8. Non-ASCII JSON string values are preserved in stored outputs and when later steps read them. A command that runs `teamai` runs the teamai that drives the step.
+Local command steps read stdout and stderr as UTF-8. Non-ASCII JSON string values are preserved in stored outputs and when later steps read them. A command that runs `teamai` runs the teamai that drives the step. A command step's stdout that is JSON is its outputs. Other text it prints there stays on your machine: its last 200 lines, with known secrets masked, go to `stdout.log` in the attempt's directory, which `workflow start` and `workflow resume` name on stderr. The run record never holds them.
 
 A prompt step can set `model`: an alias from `models/aliases.yaml` or a model name, without spaces, or a template that renders one when the step is leased, such as `"{{ item.model }}"` in a [`for_each`](workflow-advanced.md#run-a-step-once-per-item) step. A model template reads only inputs, `item`, and the outputs of steps the step needs. `defaults: { model: fast }` at the top of a file sets one for its prompt steps, and takes no template. A prompt step runs on the first of these that is set:
 

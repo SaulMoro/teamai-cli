@@ -44,7 +44,7 @@ a value that matches this JSON Schema: `{"type":"object","properties":{"summary"
 
 没有 `output` 的步骤会被要求用一个 JSON 字符串简述做了什么。
 
-本地命令步骤以 UTF-8 读取 stdout 和 stderr。JSON 字符串中的非 ASCII 文本会原样保存到输出中，后续步骤读取时也保持原文。运行 `teamai` 的命令运行的是驱动该步骤的那个 teamai。
+本地命令步骤以 UTF-8 读取 stdout 和 stderr。JSON 字符串中的非 ASCII 文本会原样保存到输出中，后续步骤读取时也保持原文。运行 `teamai` 的命令运行的是驱动该步骤的那个 teamai。命令步骤的 stdout 如果是 JSON，就是它的输出。它打印的其他文本只留在你的机器上：最后 200 行（已知密钥会被遮盖）写入该尝试目录下的 `stdout.log`，`workflow start` 和 `workflow resume` 会在 stderr 上给出这个路径。运行记录从不包含这些内容。
 
 提示词步骤可以设置 `model`：`models/aliases.yaml` 中的别名或模型名，不能含空格；也可以是在步骤被租出时渲染出别名或模型名的模板，例如 [`for_each`](workflow-advanced.md#对每一项运行一次步骤) 步骤中的 `"{{ item.model }}"`。模型模板只能读取输入、`item`，以及该步骤所需步骤的输出。文件顶层的 `defaults: { model: fast }` 为其中的提示词步骤设置模型，它不能用模板。提示词步骤使用以下第一个已设置的模型：
 

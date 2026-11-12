@@ -19,12 +19,15 @@ import { spentTokens, startLimits } from './limits.js';
 import { publishRunRecords, removeQueuedEndRecord } from './records.js';
 import { resolveRetention, runRetainedUntil, type ResolvedRetention } from './retention.js';
 import { contextOf, localId, statesIn, type Scope } from './scope.js';
-import { isRunId, readRun, runScratchDir, withCleanupLock } from './store.js';
+import { attemptDir, AttemptIdSchema, isRunId, readRun, RunIdSchema, runScratchDir, withCleanupLock, type RunId } from './store.js';
 import { answerHitl, cancel, cancellable, redeliver, repend, resetIteration, resetPending, settled, start, stopAttempt, stopWhere, stopped, type HitlAnswer, type StepState } from './step-state.js';
 import { parseTemplate, templatePaths, templatedTexts } from './template.js';
 import type { DriverIdentity, RunState, WorkflowEnvelope, WorkflowFailure } from './types.js';
 import { isIsolated } from './workspace.js';
 import { retryCommand } from './runtimes/retry-command.js';
+import { stopLeftInProcess } from './runtimes/cancelled.js';
+import { LOGIN_TOOLS, loginHolder } from './runtimes/login.js';
+import { stopRecordedGroup } from '@teamai/shared/process-group';
 
 async function controlRun(
   config: LocalConfig,
@@ -585,6 +588,31 @@ function retryRefusal(run: RunState, step: string, retention: ResolvedRetention,
 }
 
 /** The step a retry runs again and the workflows it runs again in, or why it cannot. */
+/**
+ * Why step `target` may not run again yet: it failed rather than run again beside a process a killed driver left of its
+ * attempt, which no stop confirms ended and which may still use the login that attempt holds. Once one confirms it, the
+ * attempt lets its login go.
+ */
+async function leftBeside(config: LocalConfig, run: RunId, target: StepState): Promise<WorkflowEnvelope | undefined> {
+  const attempt = target.status === 'failed' && target.failure?.code === 'runtime_lost' ? AttemptIdSchema.safeParse(target.attempt) : undefined;
+
+  if (!attempt?.success) return undefined;
+  const left = await stopRecordedGroup(attemptDir(config, run, attempt.data));
+
+  if (left.length === 0) {
+    await stopLeftInProcess(config, run, attempt.data);
+
+    return undefined;
+  }
+
+  const holders = await Promise.all(LOGIN_TOOLS.map((tool) => loginHolder(tool)));
+  const held = LOGIN_TOOLS.filter((_, index) => holders[index]?.run === run && holders[index]?.attempt === attempt.data);
+
+  if (held.length === 0) return undefined;
+
+  return error('not_retryable', `Step "${target.id}" cannot run again yet: teamai could not confirm that process ${left.join(', ')}, which attempt ${attempt.data} left, ended, and it may still use the ${held.join(' and ')} login that attempt holds. Once it has ended, run ${retryCommand({ run, step: target.id })} again; if teamai still cannot tell, teamai workflow cancel ${run} --release ${attempt.data} lets the login go.`);
+}
+
 function retryTarget(config: LocalConfig, run: RunState, step: string): { target: StepState; containers: RetryContainer[] } | WorkflowEnvelope {
   const target = run.steps.find((state) => state.id === step);
 
@@ -671,6 +699,10 @@ export async function retryStep(config: LocalConfig, runId: string, secrets: Rec
 
     if (!('target' in planned)) return planned;
     const { target, containers } = planned;
+    const id = RunIdSchema.safeParse(runId);
+    const left = id.success ? await leftBeside(config, id.data, target) : undefined;
+
+    if (left) return left;
     const reopened = run.status !== 'running';
     const again = new Set<StepState>();
 
