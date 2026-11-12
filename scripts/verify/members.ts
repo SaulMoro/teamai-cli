@@ -6,6 +6,7 @@
 import { execFileSync, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
+import { errnoCode } from '../../src/utils/fs.js';
 import { gitconfigText, refuseCleaned, shortTmpRoot, TEAM_URL, teamRefs, updateWorld, worldFiles, worldTmpDir, type Member, type World } from './world.js';
 
 /** A member's name: a path segment, a hostname and a container name alike. */
@@ -77,6 +78,14 @@ export function ensureOrigin(world: World): World {
 
   // One setting added, so what a command of the world set in ~/.gitconfig before stays.
   const mapping = `url.file://${bare}.insteadOf`;
+
+  // Made alone, so of two commands giving the world its origin at once, the second neither uses nor undoes the first's.
+  try {
+    fs.mkdirSync(bare);
+  } catch (error) {
+    if (errnoCode(error) !== 'EEXIST') throw error;
+    throw new Error(`Another command of the world is giving it its origin, or gave it one since this command started: run this again once it ends. If no command of the world runs, remove ${bare} and the project's remote origin first.`, { cause: error });
+  }
 
   try {
     setupGit(env, ['init', '--quiet', '--bare', bare], world.dir);

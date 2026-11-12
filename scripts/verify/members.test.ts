@@ -69,7 +69,8 @@ describe("a world's origin", () => {
     for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true });
   });
 
-  it("keeps every setting already in the world HOME's ~/.gitconfig", () => {
+  /** A world with a project of one commit and a ~/.gitconfig with one setting of the member's own. */
+  function originWorld() {
     const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'world-origin-')));
     roots.push(dir);
     const home = path.join(dir, 'home');
@@ -88,9 +89,27 @@ describe("a world's origin", () => {
     };
     fs.writeFileSync(path.join(dir, 'world.json'), JSON.stringify(world));
 
+    return { world, env, project, dir };
+  }
+
+  it("keeps every setting already in the world HOME's ~/.gitconfig", () => {
+    const { world, env, project } = originWorld();
+
     ensureOrigin(world);
 
     expect(execFileSync('git', ['config', '--global', 'alias.co'], { env, encoding: 'utf8' }).trim()).toBe('checkout');
     expect(execFileSync('git', ['ls-remote', 'origin', 'main'], { cwd: project, env, encoding: 'utf8' })).toMatch(/refs\/heads\/main/);
+  });
+
+  it('leaves alone the origin another command of the world is making, and says so', () => {
+    const { world, env, project, dir } = originWorld();
+    const bare = path.join(dir, 'origin.git');
+    // Another `origin` or `member` of this world, halfway through: its bare repository and remote are there, world.json says nothing yet.
+    execFileSync('git', ['init', '--quiet', '--bare', bare], { env });
+    execFileSync('git', ['remote', 'add', 'origin', 'https://teamai.test/world/project.git'], { cwd: project, env });
+
+    expect(() => ensureOrigin(world)).toThrow('Another command of the world is giving it its origin');
+    expect(fs.existsSync(path.join(bare, 'HEAD'))).toBe(true);
+    expect(execFileSync('git', ['remote'], { cwd: project, env, encoding: 'utf8' }).trim()).toBe('origin');
   });
 });
