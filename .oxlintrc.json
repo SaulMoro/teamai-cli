@@ -94,6 +94,7 @@
     // A step's work is committed with untrustedGit, so no hook it planted runs on the host.
     "teamai/untrusted-finish-git": "error",
     "teamai/git-exit-code": "error",
+    "teamai/piped-git": "error",
     "teamai/spawn-command": "error",
     // readline re-emits a socket's or stream's errors on its interface, and throws them when nothing listens there.
     "teamai/readline-error": "error",

@@ -570,7 +570,8 @@ describe('workflow handoff through teamai-reports', () => {
     const acme = team();
     const alice = await acme.member('alice');
     const runId = await start(alice);
-    receiveHook(acme.origin, `while read old new ref; do git diff --name-only "$old" "$new" | grep -q "workflows/runs/${runId}.json" && { echo "run records are held back" >&2; exit 1; }; done; exit 0`);
+    // A new branch has no old commit: its files are compared with the empty tree.
+    receiveHook(acme.origin, `while read old new ref; do case "$old" in *[!0]*) base="$old";; *) base=$(git hash-object -t tree /dev/null) || exit 1;; esac; changed=$(git diff --name-only "$base" "$new") || exit 1; case "$changed" in *"workflows/runs/${runId}.json"*) echo "run records are held back" >&2; exit 1;; esac; done; exit 0`);
     await runStep(alice, runId);
     await runStep(alice, runId);
     await settle(alice, runId);

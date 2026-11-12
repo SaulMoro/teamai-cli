@@ -617,7 +617,7 @@ describe('a member taking a prompt attempt', () => {
       await useClaude(members);
       // Origin refuses the member's work on the attempt's branch, as a protected branch would.
       const origin = git(members.bob.checkout, 'remote', 'get-url', 'origin');
-      fs.writeFileSync(path.join(origin, 'hooks', 'pre-receive'), '#!/bin/sh\nwhile read old new ref; do git log -1 --format=%s "$new" | grep -q "^\\[teamai\\] write" && exit 1; done\nexit 0\n', { mode: 0o755 });
+      receiveHook(origin, 'while read old new ref; do subject=$(git log -1 --format=%s "$new") || exit 1; case "$subject" in "[teamai] write"*) exit 1;; esac; done\nexit 0');
     }, PROMPTED);
 
     expect(record).toMatchObject({ state: 'finished', result: { failure: { code: 'push_failed' } } });
@@ -1576,7 +1576,7 @@ describe('a cancel the owner cannot write into the attempt\'s record at once', (
 
     await recordIn(alice, run, attempt, 'claimed');
     // origin refuses each cancel, as when the member's progress lands before every one.
-    receiveHook(origin, 'while read old new ref; do git log --format=%s "$old..$new" | grep -q "^\\[teamai\\] Cancel attempt" && exit 1; done; exit 0');
+    receiveHook(origin, 'while read old new ref; do subjects=$(git log --format=%s "$old..$new") || exit 1; echo "$subjects" | grep -q "^\\[teamai\\] Cancel attempt" && exit 1; done; exit 0');
     vi.useFakeTimers({ toFake: ['Date'], shouldAdvanceTime: true });
     const cancelled = runtime.cancel(op);
 

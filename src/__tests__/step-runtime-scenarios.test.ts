@@ -2970,7 +2970,8 @@ steps:
     fs.writeFileSync(refusing, '');
     // teamai-reports refuses the push of the owner's answer while `refusing` is there.
     receiveHook(origin, `while read old new ref; do
-  if [ -f ${JSON.stringify(refusing)} ] && git log -1 --format=%s "$new" | grep -q 'Answer attempt'; then touch ${JSON.stringify(refused)}; echo busy >&2; exit 1; fi
+  subject=$(git log -1 --format=%s "$new") || exit 1
+  case "$subject" in *'Answer attempt'*) if [ -f ${JSON.stringify(refusing)} ]; then touch ${JSON.stringify(refused)}; echo busy >&2; exit 1; fi;; esac
 done`);
     const { exec } = await owner.open(place);
     const ended = exec(newOpId(), 'workflow', { ask: async () => ({ choice: 'yes' }) });

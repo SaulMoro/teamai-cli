@@ -25,6 +25,7 @@ import toolRegistry from './rules/tool-registry.js';
 import mockSource from './rules/mock-source.js';
 import untrustedFinishGit from './rules/untrusted-finish-git.js';
 import gitExitCode from './rules/git-exit-code.js';
+import pipedGit from './rules/piped-git.js';
 import processReads from './rules/process-reads.js';
 import unspawnedChild from './rules/unspawned-child.js';
 import signalOwner from './rules/signal-owner.js';
@@ -70,6 +71,7 @@ export default definePlugin({
     'mock-source': mockSource,
     'untrusted-finish-git': untrustedFinishGit,
     'git-exit-code': gitExitCode,
+    'piped-git': pipedGit,
     'readline-error': readlineError,
     'process-reads': processReads,
     'unspawned-child': unspawnedChild,
