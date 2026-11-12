@@ -146,16 +146,17 @@ export function readRegularFileSync(file: string, encoding?: BufferEncoding): st
 // ─── Writing where a step may have left something else ───
 //
 //  Opening a FIFO for writing waits for a reader as a read waits for a writer. Opened without blocking, a FIFO no one
-//  reads fails at once (ENXIO), and one a reader holds is caught by the handle's own type, as for a read.
+//  reads fails at once (ENXIO), and one a reader holds is caught by the handle's own type, as for a read. A link at the
+//  path fails the open (ELOOP), so nothing is written through it to a file of the member's, or created where it points.
 //
 
-/** Opening without waiting, creating a missing file. Windows has no flag, and no FIFO a path opens. */
-const NONBLOCKING_CREATE = (process.platform === 'win32' ? 0 : fs.constants.O_NONBLOCK) | fs.constants.O_CREAT;
+/** Opening without waiting or following a link, creating a missing file. Windows has neither flag, and no FIFO a path opens. */
+const NONBLOCKING_CREATE = (process.platform === 'win32' ? 0 : fs.constants.O_NONBLOCK | fs.constants.O_NOFOLLOW) | fs.constants.O_CREAT;
 
 /**
  * The open handle of `file` for writing, created when missing, with `mode` when given: at its end when `append`, else
  * emptied; with `read`, it reads as well, as an append that looks at the file's last byte first does. Anything but a
- * regular file there rejects with `NotRegularFileError`, and is left as it was.
+ * regular file there, a link to one included, rejects with `NotRegularFileError`, and is left as it was.
  */
 export async function openRegularFileForWrite(file: string, { append, mode, read = false }: { append: boolean; mode?: number; read?: boolean }): Promise<FileHandle> {
   let handle: FileHandle;
@@ -166,6 +167,8 @@ export async function openRegularFileForWrite(file: string, { append, mode, read
   } catch (error) {
     // A FIFO no process reads, or a device with nothing behind it.
     if (error instanceof Error && 'code' in error && error.code === 'ENXIO') throw new NotRegularFileError(file, await fs.promises.stat(file), 'write');
+
+    if (error instanceof Error && 'code' in error && error.code === 'ELOOP') throw new NotRegularFileError(file, await fs.promises.lstat(file), 'write');
     throw error;
   }
 

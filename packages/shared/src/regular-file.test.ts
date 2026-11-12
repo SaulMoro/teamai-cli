@@ -133,6 +133,24 @@ describe.skipIf(process.platform === 'win32')('writing to a file a step may have
     expect(fs.statSync(created).mode & 0o777).toBe(0o600);
   });
 
+  it('refuses a link at the target in a write, an append and an open, leaving what it points at as it was, and creates nothing through a dangling one', async () => {
+    const dir = scratch();
+    const member = path.join(dir, 'zshrc');
+    fs.writeFileSync(member, 'the member\'s own\n');
+    const planted = path.join(dir, 'result.json');
+    fs.symlinkSync(member, planted);
+    const dangling = path.join(dir, 'outcomes.jsonl');
+    const missing = path.join(dir, 'missing');
+    fs.symlinkSync(missing, dangling);
+
+    await expect(writeRegularFile(planted, '{}')).rejects.toMatchObject({ kind: 'a link', message: `${planted} is a link, not a regular file, so teamai does not write it` });
+    await expect(appendRegularFile(planted, 'line\n')).rejects.toMatchObject({ kind: 'a link' });
+    await expect(openRegularFileForWrite(planted, { append: true, read: true })).rejects.toMatchObject({ kind: 'a link' });
+    await expect(appendRegularFile(dangling, 'line\n')).rejects.toMatchObject({ kind: 'a link' });
+    expect(fs.readFileSync(member, 'utf8')).toBe('the member\'s own\n');
+    expect(fs.existsSync(missing)).toBe(false);
+  });
+
   it.skipIf(process.platform === 'win32')('refuses a FIFO no one reads at once in a whole-file write too, as a plain write would wait for a reader', async () => {
     const at = fifo();
 
