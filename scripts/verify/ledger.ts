@@ -248,23 +248,31 @@ const TOOL_HOMES = [...new Set(TOOL_ORDER.map((tool) => `home/${descriptorOf(too
  */
 const TOOL_STATE_FILES = new Map(TOOL_ORDER.flatMap((tool) => {
   const { home, mcp }: { home: Home; mcp: ToolDescriptor['mcp'] } = descriptorOf(tool);
-  const servers = typeof mcp.user === 'object' && mcp.user.format !== 'codex' ? MCP_SERVER_KEY[mcp.user.format] : undefined;
+  const servers = mcp.user instanceof Object && mcp.user.format !== 'codex' ? MCP_SERVER_KEY[mcp.user.format] : undefined;
 
   return (home.stateFiles ?? []).map((file): [string, string | undefined] => [`home/${file}`, servers]);
 }));
 
+type Json = z.infer<ReturnType<typeof z.json>>;
+
+const JsonObject = z.record(z.string(), z.json());
+
 /** Whether the JSON `text` holds a non-empty `key` object anywhere, as a server teamai wrote would leave; text that is not JSON counts as holding one. */
 function holdsUnder(text: string, key: string): boolean {
-  let parsed: unknown;
+  let parsed: Json;
 
   try {
-    parsed = JSON.parse(text);
+    parsed = z.json().parse(JSON.parse(text));
   } catch {
     return true;
   }
 
-  const holds = (value: unknown): boolean => typeof value === 'object' && value !== null
-    && Object.entries(value).some(([name, inner]) => (name === key && typeof inner === 'object' && inner !== null && Object.keys(inner).length > 0) || holds(inner));
+  const holds = (value: Json): boolean => {
+    if (Array.isArray(value)) return value.some(holds);
+    const object = JsonObject.safeParse(value);
+
+    return object.success && Object.entries(object.data).some(([name, inner]) => (name === key && Object.keys(JsonObject.safeParse(inner).data ?? {}).length > 0) || holds(inner));
+  };
 
   return holds(parsed);
 }

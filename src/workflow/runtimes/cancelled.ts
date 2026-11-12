@@ -137,10 +137,15 @@ type Stopped = ({ ended: Exclude<AttemptStop, 'running'> } | { ended: 'running';
  */
 export async function runsWithPlacesLeftOpen(config: LocalConfig): Promise<Array<{ run: RunId; attempts: AttemptId[] }>> {
   // A runs folder that is there but cannot be read may hold one: the caller learns that rather than none.
-  const names = await fs.readdir(runsDir(config)).catch((error: unknown) => {
-    if (errnoCode(error) === 'ENOENT') return [];
-    throw error;
-  });
+  let names: string[];
+
+  try {
+    names = await fs.readdir(runsDir(config));
+  } catch (cause) {
+    if (errnoCode(cause) !== 'ENOENT') throw cause;
+    names = [];
+  }
+
   const runs: Array<{ run: RunId; attempts: AttemptId[] }> = [];
 
   for (const name of names.sort()) {

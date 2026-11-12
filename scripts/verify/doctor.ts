@@ -78,7 +78,7 @@ const CHEAPEST_MODEL = {
 } satisfies Record<(typeof TOOL_COMMANDS)[number], () => string | undefined>;
 
 /** The line `doctor <run> --drivers` gives sbx from what `sbx ls --no-input` answered in world `runId`. */
-export function sbxInWorld(runId: string, ran: { code: number | null; why: string }): { good: boolean; text: string } {
+export function sbxInWorld(runId: string, ran: { code: number | null; why: string }) {
   if (ran.code === 0) return { good: true, text: 'sandbox sbx: signed in in this world' };
 
   // sbx ends its refusal with the command that signs in: `try: sbx login`.
@@ -91,7 +91,7 @@ export function sbxInWorld(runId: string, ran: { code: number | null; why: strin
  * Asks sbx in `world`, from its own HOME, whether it is signed in there. What sbx writes there is its own, as when a
  * maintainer runs it with `sh`, so it is recorded as sbx's.
  */
-function askSbxIn(world: World): { good: boolean; text: string } {
+function askSbxIn(world: World) {
   const argv = [PROVIDER_COMMANDS.sbx, 'ls', '--json', '--no-input'];
   const before = worldFiles(world);
   const ran = captureOn(world, { kind: 'world' }, argv);

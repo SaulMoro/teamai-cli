@@ -41,7 +41,7 @@ type Captured = ReturnType<typeof captureOn>;
  * The processes `ps` printed on macOS (`ps`, its stdout), each with the working directory `lsof` gives it, and what
  * of them could not be looked at: an lsof that did not end with 0, on a timeout too, listed only part of them.
  */
-export function readDarwinTable({ label, ps, lsof }: { label: string; ps: string; lsof: Captured }): { procs: Proc[]; unseen: Observed[] } {
+export function readDarwinTable({ label, ps, lsof }: { label: string; ps: string; lsof: Captured }) {
   const cwdOf = parseLsofCwd(lsof.stdout);
   const what = `working directories on ${label}`;
 

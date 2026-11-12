@@ -12,6 +12,7 @@ import { fileURLToPath } from 'node:url';
 import { pathToFileURL } from 'node:url';
 import { z } from 'zod';
 import { runtimeStateRoot } from '@teamai/runtime-protocol/state-root';
+import { signalPid } from '@teamai/shared/process-group';
 
 export const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 export const WORLDS_ROOT = path.join(os.tmpdir(), 'teamai-verify');
@@ -219,7 +220,7 @@ async function linkHostCommands(tools: string): Promise<void> {
   fs.mkdirSync(tools, { recursive: true });
 
   // The Node the harness runs on, and its npm and npx, which teamai's update check runs: never Node's folder, where every global npm command sits.
-  for (const [name, found] of [['node', process.execPath], ...['npm', 'npx'].map((name) => [name, path.join(path.dirname(process.execPath), name)])]) {
+  for (const [name, found] of [['node', process.execPath], ...['npm', 'npx'].map((command) => [command, path.join(path.dirname(process.execPath), command)])]) {
     if (fs.existsSync(found)) fs.symlinkSync(found, path.join(tools, name));
   }
 
@@ -415,8 +416,8 @@ export function updateWorld(world: Pick<World, 'dir'>, change: (fresh: World) =>
       const holder = Number(fs.readFileSync(lock, 'utf8'));
 
       // A holder that died leaves its lock: no write of it can still come.
-      if (Number.isInteger(holder) && holder > 0 && !isAlive(holder)) fs.rmSync(lock, { force: true });
-      else if (waited >= 30_000) throw new Error(`${lock} is held by process ${holder} for 30 s. If no command of the world runs, remove that file.`);
+      if (Number.isInteger(holder) && signalPid(holder, 0) === 'gone') fs.rmSync(lock, { force: true });
+      else if (waited >= 30_000) throw new Error(`${lock} is held by process ${holder} for 30 s. If no command of the world runs, remove that file.`, { cause: error });
       else pause(20);
     }
   }
@@ -430,17 +431,6 @@ export function updateWorld(world: Pick<World, 'dir'>, change: (fresh: World) =>
     return next;
   } finally {
     fs.rmSync(lock, { force: true });
-  }
-}
-
-/** Whether process `pid` still runs on this machine. */
-function isAlive(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-
-    return true;
-  } catch (error) {
-    return !(error instanceof Error && 'code' in error && error.code === 'ESRCH');
   }
 }
 

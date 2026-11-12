@@ -161,6 +161,7 @@ export function machineName(world: Pick<World, 'runId'>, name: string): string {
  */
 export function addMember(world: World, { name, machine = 'host' }: { name: string; machine?: 'host' | 'container' }): World {
   refuseCleaned(world);
+
   if (!MEMBER_NAME.test(name)) throw new Error(`${name} is not a member name: a lowercase letter, then up to 11 lowercase letters, digits or dashes.`);
 
   if (world.members?.some((member) => member.name === name)) throw new Error(`World ${world.runId} already has member ${name}.`);
@@ -192,5 +193,6 @@ export function addMember(world: World, { name, machine = 'host' }: { name: stri
   const { root: _root, ...own } = layout;
   const place = { name, ...own, env, baseline: { files: worldFiles(layout) } };
   const member: Member = machine === 'container' ? { machine: 'container', container, ...place } : { machine: 'host', ...place };
+
   return updateWorld(withOrigin, (fresh) => ({ ...fresh, members: [...fresh.members ?? [], member] }));
 }
