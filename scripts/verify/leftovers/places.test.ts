@@ -136,6 +136,15 @@ describe("a sandboxed attempt's environment in section (f)", () => {
     expect(await places.observe(contextOf([closedRecord('docker')], world))).toEqual([{ kind: 'observed', findings: [], notes: [] }]);
   });
 
+  it("is NOT OBSERVED, and refuses no cleanup, when the observer's records cannot be read", async () => {
+    const world = sandboxWorld();
+    fs.mkdirSync(path.join(world.dir, 'observed.jsonl'));
+    const observed = await places.observe(contextOf([closedRecord('docker')], world));
+
+    expect(observed).toEqual([{ kind: 'observed', findings: [], notes: [expect.stringMatching(/^NOT OBSERVED: run r0123abcd attempt a0123abcd's environment on docker, since observed\.jsonl could not be read \(EISDIR/)] }]);
+    expect(cleanupPlan([{ onCleanup: places.onCleanup, observed }]).kind).toBe('remove');
+  });
+
   it('is NOT OBSERVED on a provider no observer reads', async () => {
     expect(await places.observe(contextOf([closedRecord('seatbelt')]))).toEqual([
       { kind: 'observed', findings: [], notes: ["NOT OBSERVED: run r0123abcd attempt a0123abcd's environment on seatbelt, which no observer reads: the env check proves nothing for it"] },

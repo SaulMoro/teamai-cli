@@ -70,12 +70,14 @@ export const places: LeftoverKind = {
       return provider === undefined ? [] : [{ file, provider }];
     });
 
-    const observed = sandboxed.length === 0 ? new Set<string>() : (await import('../observer.js')).attemptsObserved(world);
+    const observed = sandboxed.length === 0 ? undefined : (await import('../observer.js')).attemptsObserved(world);
 
     const notes = sandboxed.flatMap(({ file, provider }) => {
       const { run, attempt } = keyOf(file);
 
-      if (observed.has(`${run}/${attempt}`)) return [];
+      if (observed?.kind === 'unreadable') return [`NOT OBSERVED: run ${attemptOf(file)}'s environment on ${provider}, since observed.jsonl could not be read (${observed.why})`];
+
+      if (observed?.attempts.has(`${run}/${attempt}`) === true) return [];
 
       return [UNWATCHED.has(provider)
         ? `NOT OBSERVED: run ${attemptOf(file)}'s environment on ${provider}, which no observer reads: the env check proves nothing for it`

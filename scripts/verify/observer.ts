@@ -47,19 +47,20 @@ const ObservedRecordSchema = z.looseObject({ what: z.string(), read: z.number() 
 
 /**
  * The attempts, as `<run>/<attempt>`, whose sandbox environment an observer line of `world` read: its records in
- * observed.jsonl with an environment read. A line this harness cannot parse names none.
+ * observed.jsonl with an environment read, or why that file cannot be read. A line this harness cannot parse names none.
  */
-export function attemptsObserved(world: Pick<World, 'dir'>): Set<string> {
+export function attemptsObserved(world: Pick<World, 'dir'>): { kind: 'read'; attempts: Set<string> } | { kind: 'unreadable'; why: string } {
   let text: string;
 
   try {
     text = fs.readFileSync(path.join(world.dir, OBSERVED_FILE), 'utf8');
   } catch (error) {
-    if (errnoCode(error) === 'ENOENT') return new Set();
-    throw error;
+    if (errnoCode(error) === 'ENOENT') return { kind: 'read', attempts: new Set() };
+
+    return { kind: 'unreadable', why: error instanceof Error ? error.message : String(error) };
   }
 
-  return new Set(text.split('\n').flatMap((line) => {
+  const attempts = new Set(text.split('\n').flatMap((line) => {
     let record: z.infer<typeof ObservedRecordSchema>;
 
     try {
@@ -72,6 +73,8 @@ export function attemptsObserved(world: Pick<World, 'dir'>): Set<string> {
 
     return attempt === undefined || record.read === 0 ? [] : [attempt];
   }));
+
+  return { kind: 'read', attempts };
 }
 
 /**
