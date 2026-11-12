@@ -183,11 +183,12 @@ describe('team tool instances', () => {
     expect(registry.toolOf('acme-claude')?.instance?.command).toBe('acme-claude-web');
   });
 
-  it('reads an instance in a namespace only for the member it is given, whose project or role selects it, as drivers and workflows are, until another member is given', async () => {
+  it('reads an instance in a namespace only for the member it is given, whose project or role selects it, as drivers and workflows are, until another member is given, under any spelling of the repo', async () => {
     const repo = teamRepo({
       'manifest/projects.yaml': 'version: 1\nprojects:\n  - id: checkout\n    resources: { workflows: [web] }\n  - id: billing\n    resources: { workflows: [mobile] }\n',
       'tools/web/web-claude.yaml': ACME_CLAUDE.replaceAll('acme-claude', 'web-claude'),
       'tools/mobile/mobile-claude.yaml': ACME_CLAUDE.replaceAll('acme-claude', 'mobile-claude'),
+      'tools/acme-claude.yaml': ACME_CLAUDE,
     });
     memberOf(repo, { projects: ['checkout'] });
     const { loadLocalConfig } = await import('../config.js');
@@ -202,6 +203,12 @@ describe('team tool instances', () => {
     // A later load that reads only a field of teamai.yaml, given no member, leaves the member's instances in place.
     await load(repo);
     expect(registry.toolOf('mobile-claude')?.instance?.command).toBe('mobile-claude');
+    // So does one through another spelling of the repo, which reads a root instance changed since as another repo's.
+    const linked = path.join(root, 'linked-repo');
+    fs.symlinkSync(repo, linked);
+    fs.writeFileSync(path.join(repo, 'tools', 'acme-claude.yaml'), ACME_CLAUDE.replace('command: acme-claude', 'command: acme-claude-2'));
+    const { errors } = await load(linked);
+    expect([registry.toolOf('mobile-claude')?.instance?.command, registry.toolOf('acme-claude')?.instance?.command, errors]).toEqual(['mobile-claude', 'acme-claude', []]);
   });
 
   it('reads only the root instances of a team repo whose manifest selects namespaces, when given no member', async () => {

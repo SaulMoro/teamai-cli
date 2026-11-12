@@ -252,7 +252,7 @@ export async function personalToolInstances(): Promise<ResolvedToolInstance[]> {
 
 // ─── The instances this process sees ─────────────────────
 
-/** The instances read from each team repo this process loaded, by repo path, with the scope that repo serves. */
+/** The instances read from each team repo this process loaded, by the repo's real path, with the scope that repo serves. */
 const teamByRepo = new Map<string, { readonly scope: Scope | undefined; readonly instances: readonly ResolvedToolInstance[]; readonly isForMember: boolean }>();
 let personal: readonly ResolvedToolInstance[] = [];
 let readsPersonal = true;
@@ -325,10 +325,15 @@ export function defaultPathsOf(instance: ResolvedToolInstance): z.infer<typeof T
  * every lookup of a tool name seeing them, and their tool paths in `toolPaths`. A member's instance replaces the team's.
  */
 export async function withToolInstances(tree: TeamToolTree, config: TeamaiConfig): Promise<TeamaiConfig> {
-  const [team, own] = await Promise.all([teamToolInstances(tree), readsPersonal ? personalToolInstances() : []]);
+  const [team, own, repo] = await Promise.all([
+    teamToolInstances(tree),
+    readsPersonal ? personalToolInstances() : [],
+    // Two spellings of one repo, through a link or /tmp against /private/tmp, are one repo.
+    fs.realpath(tree.root).catch(() => path.resolve(tree.root)),
+  ]);
 
   // A read for no member never replaces the member's instances, which another loader of this process published.
-  if (tree.isForMember || teamByRepo.get(tree.root)?.isForMember !== true) teamByRepo.set(tree.root, { scope: tree.scope, instances: team, isForMember: tree.isForMember });
+  if (tree.isForMember || teamByRepo.get(repo)?.isForMember !== true) teamByRepo.set(repo, { scope: tree.scope, instances: team, isForMember: tree.isForMember });
 
   personal = own;
   publish();
