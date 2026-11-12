@@ -4,6 +4,7 @@
  * the report the engine takes. The local driver runs every prompt step through it, and a fleet member runs the prompt
  * an owner offered through it, on a lease it rebuilt from its own definitions.
  */
+import type { Dirent } from 'node:fs';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { toolExtrasFor, type AgentSpec } from '../../resources/agent-format.js';
@@ -760,17 +761,21 @@ async function removeGitLocks(gitDir: string): Promise<void> {
   const isDirectory = async (at: string): Promise<boolean> => (await fs.lstat(at).catch(() => undefined))?.isDirectory() === true;
 
   if (!await isDirectory(gitDir)) return;
-  const top = await fs.readdir(gitDir).catch((): string[] => []);
+  const top = await fs.readdir(gitDir, { withFileTypes: true }).catch((): Dirent[] => []);
   // The walk enters no link under refs, which the agent may have made too: one out of the clone would lose a lock there.
   const refs = await isDirectory(path.join(gitDir, 'refs')) ? refsUnder(path.join(gitDir, 'refs')) : [];
-  const locks = [...top.map((name) => path.join(gitDir, name)), ...refs.map((name) => path.join(gitDir, 'refs', name))].filter((at) => at.endsWith('.lock'));
-  await Promise.all(locks.map((lock) => fs.rm(lock, { force: true })));
+
+  // A folder the agent named like a lock is none of git's, and rm would refuse it.
+  const locks = [...top.map((entry) => ({ at: path.join(gitDir, entry.name), entry })), ...refs.map(({ relative, entry }) => ({ at: path.join(gitDir, 'refs', relative), entry }))]
+    .filter(({ at, entry }) => at.endsWith('.lock') && !entry.isDirectory());
+
+  await Promise.all(locks.map(({ at }) => fs.rm(at, { force: true })));
 }
 
-/** The paths under `refs`, from it; none when it cannot be read, such as when it went away. */
-function refsUnder(refs: string): string[] {
+/** The entries under `refs`; none when it cannot be read, such as when it went away. */
+function refsUnder(refs: string): ReturnType<typeof entriesUnder> {
   try {
-    return entriesUnder(refs).map(({ relative }) => relative);
+    return entriesUnder(refs);
   } catch {
     return [];
   }
