@@ -1,5 +1,9 @@
+import { execFileSync } from 'node:child_process';
 import { describe, expect, it } from 'vitest';
 import { UsageLimits } from '../workflow/usage-limits.js';
+import { runtimeStepEnv } from '../workflow/steps/runtime-steps.js';
+import { AttemptIdSchema, RunIdSchema } from '../workflow/store.js';
+import type { LocalConfig } from '../types.js';
 
 // 13:30 in Madrid, which is UTC+1 in November.
 const now = Date.parse('2026-11-08T12:30:00Z');
@@ -18,6 +22,14 @@ describe('when a usage limit resets', () => {
     ['Codex, after a while', 'You\'ve hit your usage limit. Try again in 2 days 3 hours 4 minutes.', '2026-11-10T15:34:00Z'],
   ])('reads %s', (_case, text, expected) => {
     expect(UsageLimits.resetOf(text, { now, zone })).toBe(Date.parse(expected));
+  });
+
+  // New York leaves daylight time at 2am on Sunday, Nov 1, 2026: noon on the Saturday is 16:00 UTC, 9am on the Sunday 14:00 UTC.
+  it.each([
+    ['a reset the next morning', 'You\'ve hit your limit · resets 9am (America/New_York)', '2026-11-01T14:00:00Z'],
+    ['a dated reset', 'You\'ve hit your weekly limit · resets Nov 1, 9am (America/New_York)', '2026-11-01T14:00:00Z'],
+  ])('reads %s across a daylight saving change', (_case, text, expected) => {
+    expect(UsageLimits.resetOf(text, { now: Date.parse('2026-10-31T16:00:00Z'), zone })).toBe(Date.parse(expected));
   });
 
   it.each([
@@ -58,6 +70,19 @@ describe('usage limits of one drive', () => {
     limits.hit({ tool: 'claude', message, now: now + 60_000 });
     expect(limits.whenIdle(now + 60_000, ['claude'])).toMatchObject({ kind: 'wait', until: now + 180_000 });
     expect(limits.whenIdle(now + 6 * hour, ['claude'])).toEqual({ kind: 'past_cap', tool: 'claude', reason: 'claude hit its usage limit at 13:30 (Europe/Madrid) and gave no reset time, and it held for the 6 hours an unattended run waits for it' });
+  });
+
+  it('tries a limit whose given reset is already past again a little later, not at once, a little later each time', () => {
+    const limits = UsageLimits.open({ capMs: 6 * hour, zone });
+    // The older Claude Code form, an epoch a minute past: the server still refuses for a while after it.
+    const message = `Claude AI usage limit reached|${(now - 60_000) / 1000}`;
+    limits.hit({ tool: 'claude', message, now });
+
+    expect(limits.whenIdle(now, ['claude'])).toMatchObject({ kind: 'wait', until: now + 60_000 });
+    expect(limits.held(now)).toEqual({ claude: 'claude hit its usage limit, which it said resets at 13:29 (Europe/Madrid), already past, so teamai tries it again at 13:31 (Europe/Madrid)' });
+    limits.hit({ tool: 'claude', message, now: now + 60_000 });
+    expect(limits.whenIdle(now + 60_000, ['claude'])).toMatchObject({ kind: 'wait', until: now + 180_000 });
+    expect(limits.whenIdle(now + 6 * hour, ['claude'])).toEqual({ kind: 'past_cap', tool: 'claude', reason: 'claude hit its usage limit at 13:30 (Europe/Madrid) and still held past the reset it gave, for the 6 hours an unattended run waits for it' });
   });
 
   it('holds a tool a fleet member met the limit of on the fleet only, where a limit met here holds it on the fleet within the cap', () => {
@@ -107,5 +132,29 @@ describe('usage limits of one drive', () => {
     limits.hit({ tool: 'claude', message, now: now + hour });
 
     expect(limits.whenIdle(now + hour, ['claude'])).toMatchObject({ kind: 'wait', until: now + hour + 60_000 });
+  });
+});
+
+describe('a reset time without a zone, printed on a step runtime', () => {
+  it('reads as the instant the limit resets when the runtime\'s own zone is not the member\'s', () => {
+    const member = Intl.DateTimeFormat().resolvedOptions().timeZone;
+    const wallOf = (zoned: string, at: number): string => new Intl.DateTimeFormat('en-US', { timeZone: zoned, hour: 'numeric', minute: 'numeric' }).format(at);
+    const at = Math.floor(Date.now() / 60_000) * 60_000;
+    // A container runs in a zone of its own, UTC unless told otherwise: here one whose clock is not the member's.
+    const runtimeZone = ['Asia/Tokyo', 'America/New_York'].find((each) => wallOf(each, at) !== wallOf(member, at))!;
+    const resetsAt = at + 2 * 3_600_000;
+    const config: LocalConfig = { repo: { localPath: '/team', remote: 'local', kind: 'self' }, username: 'tester', scope: 'project', additionalRoles: [], projectRoot: '/work', dataHome: '/data' };
+    const step = runtimeStepEnv({ attempt: AttemptIdSchema.parse('a0c1d2e3f') }, {}, { config, run: RunIdSchema.parse('r0c1d2e3f'), mode: 'unattended' });
+
+    // The tool prints its reset as Codex does, in the zone of the process the runtime starts with the step's env.
+    const printed = execFileSync(process.execPath, ['-e', [
+      'const at = new Date(Number(process.argv[1]));',
+      'const hour = at.getHours();',
+      "console.log(`try again at ${hour % 12 || 12}:${String(at.getMinutes()).padStart(2, '0')} ${hour < 12 ? 'AM' : 'PM'}`);",
+    ].join(' '), String(resetsAt)], { env: { PATH: process.env.PATH, TZ: runtimeZone, ...step.env }, encoding: 'utf8' }).trim();
+    const limits = UsageLimits.open();
+    limits.hit({ tool: 'codex', message: `You've hit your usage limit. Upgrade to Pro (https://chatgpt.com/explore/pro), or ${printed}.`, now: at });
+
+    expect(limits.whenIdle(at, ['codex'])).toMatchObject({ kind: 'wait', until: resetsAt });
   });
 });

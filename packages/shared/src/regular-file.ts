@@ -54,7 +54,7 @@ export async function openRegularFile(file: string): Promise<FileHandle> {
 }
 
 async function openRegularFileWith(file: string, flags: number): Promise<FileHandle> {
-  // oxlint-disable-next-line teamai/regular-file-reads -- the helper's own open: nonblocking, and its handle is checked before a byte is read
+  // oxlint-disable-next-line teamai/regular-file-reads, teamai/step-path-writes -- the helper's own open: nonblocking, and its handle is checked before a byte is read
   const handle = await fs.promises.open(file, flags);
 
   try {
@@ -114,7 +114,7 @@ export async function readRegularFileNoLink(file: string, encoding?: BufferEncod
  * `openRegularFile`. Reading a regular file ends at its end, so only the open could block, and it does not here.
  */
 export function openRegularFileSync(file: string): number {
-  // oxlint-disable-next-line teamai/regular-file-reads -- the helper's own open: nonblocking, and its descriptor is checked before a byte is read
+  // oxlint-disable-next-line teamai/regular-file-reads, teamai/step-path-writes -- the helper's own open: nonblocking, and its descriptor is checked before a byte is read
   const fd = fs.openSync(file, NONBLOCKING_READ);
 
   try {
@@ -146,26 +146,29 @@ export function readRegularFileSync(file: string, encoding?: BufferEncoding): st
 // ─── Writing where a step may have left something else ───
 //
 //  Opening a FIFO for writing waits for a reader as a read waits for a writer. Opened without blocking, a FIFO no one
-//  reads fails at once (ENXIO), and one a reader holds is caught by the handle's own type, as for a read.
+//  reads fails at once (ENXIO), and one a reader holds is caught by the handle's own type, as for a read. A link at the
+//  path fails the open (ELOOP), so nothing is written through it to a file of the member's, or created where it points.
 //
 
-/** Opening without waiting, creating a missing file. Windows has no flag, and no FIFO a path opens. */
-const NONBLOCKING_CREATE = (process.platform === 'win32' ? 0 : fs.constants.O_NONBLOCK) | fs.constants.O_CREAT;
+/** Opening without waiting or following a link, creating a missing file. Windows has neither flag, and no FIFO a path opens. */
+const NONBLOCKING_CREATE = (process.platform === 'win32' ? 0 : fs.constants.O_NONBLOCK | fs.constants.O_NOFOLLOW) | fs.constants.O_CREAT;
 
 /**
  * The open handle of `file` for writing, created when missing, with `mode` when given: at its end when `append`, else
  * emptied; with `read`, it reads as well, as an append that looks at the file's last byte first does. Anything but a
- * regular file there rejects with `NotRegularFileError`, and is left as it was.
+ * regular file there, a link to one included, rejects with `NotRegularFileError`, and is left as it was.
  */
 export async function openRegularFileForWrite(file: string, { append, mode, read = false }: { append: boolean; mode?: number; read?: boolean }): Promise<FileHandle> {
   let handle: FileHandle;
 
   try {
-    // oxlint-disable-next-line teamai/regular-file-reads -- the helper's own open: nonblocking, and its handle is checked before a byte is read or written
+    // oxlint-disable-next-line teamai/regular-file-reads, teamai/step-path-writes -- the helper's own open: nonblocking, and its handle is checked before a byte is read or written
     handle = await fs.promises.open(file, NONBLOCKING_CREATE | (read ? fs.constants.O_RDWR : fs.constants.O_WRONLY) | (append ? fs.constants.O_APPEND : fs.constants.O_TRUNC), mode);
   } catch (error) {
     // A FIFO no process reads, or a device with nothing behind it.
     if (error instanceof Error && 'code' in error && error.code === 'ENXIO') throw new NotRegularFileError(file, await fs.promises.stat(file), 'write');
+
+    if (error instanceof Error && 'code' in error && error.code === 'ELOOP') throw new NotRegularFileError(file, await fs.promises.lstat(file), 'write');
     throw error;
   }
 

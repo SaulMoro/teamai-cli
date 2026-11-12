@@ -79,7 +79,7 @@ export async function runDeclaredPostPull(
   }: { interactive?: boolean; localConfig?: LocalConfig } = {},
 ): Promise<void> {
   try {
-    const teamConfig = await loadTeamConfig(repoPath, localConfig);
+    const teamConfig = await loadTeamConfig(repoPath, localConfig ?? null);
 
     if (!teamConfig) return;
     const scriptPath = resolvePostPullScript(teamConfig, repoPath);

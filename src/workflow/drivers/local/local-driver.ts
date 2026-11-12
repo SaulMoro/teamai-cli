@@ -371,7 +371,7 @@ async function stopLeftElsewhere({ config, run, attempt, runsOn, checkout }: { c
 
 async function commandReport(config: LocalConfig, lock: RunLock, driver: DriverIdentity, lease: StagedLease, exited: GroupedCommandExit, secrets: Record<string, string>, onStdoutKept?: (file: string) => void): Promise<ReportBody> {
   const result = { ...exited, stderr: withoutStreamMarks(exited.stderr) };
-  const end = lease.workflow ? wholeReport(result) : commandEnd(result);
+  const end = lease.workflow ? wholeReport(result, lease.step) : commandEnd(result);
   await AttemptResult.write(attemptResultPath(config, lock.run, lease.attempt), end.outputs !== undefined ? { output: end.outputs } : {}, secrets);
   // A whole workflow answers on stdout, which is never text it printed.
   const attempt = AttemptIdSchema.safeParse(lease.attempt);
@@ -391,10 +391,16 @@ async function commandReport(config: LocalConfig, lock: RunLock, driver: DriverI
 /**
  * How a workflow step leased whole ended, from what its runtime's exec answered on stdout (`WholeEndSchema`): the
  * outcome, end, outputs and failure of the workflow it ran. An exec that answered none, as one stopped early, ends as
- * the command it then was.
+ * the command it then was, and one that exited 0 without an answer fails: nothing says the workflow's steps ran.
  */
-function wholeReport(result: GroupedCommandExit): Omit<ReportBody, 'attempt' | 'revision' | 'driver'> {
+function wholeReport(result: GroupedCommandExit, step: string): Omit<ReportBody, 'attempt' | 'revision' | 'driver'> {
   const parsed = WholeEndSchema.safeParse(commandOutputs(result.stdout));
+
+  if (!parsed.success && result.exitCode === 0) {
+    const message = `Step "${step}" was leased whole, and its runtime's exec exited 0 without saying how the workflow ended, so teamai cannot tell whether its steps ran. Check the runtime's log, then run the workflow again.`;
+
+    return { outcome: 'failed', exitCode: result.exitCode, message, failure: { code: 'runtime_protocol', message } };
+  }
 
   if (!parsed.success) return commandEnd(result);
   const { outcome, end, outputs, failure, tokens } = parsed.data;

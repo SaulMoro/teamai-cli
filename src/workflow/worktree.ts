@@ -11,7 +11,7 @@ import path from 'node:path';
 import { z } from 'zod';
 import { stopProcess } from '@teamai/shared/process-group';
 import { TeamaiConfigBaseSchema } from '../types.js';
-import { pathExists, writeJsonAtomic } from '../utils/fs.js';
+import { pathExists, symlinkTarget, writeJsonAtomic } from '../utils/fs.js';
 import { MAX_TIMER_MS } from '@teamai/shared/timer';
 import { appendRegularFile, readRegularFile, writeRegularFile } from '@teamai/shared/regular-file';
 
@@ -627,9 +627,11 @@ const EXCLUDE_BLOCK = `${EXCLUDE_MARKER}\n.teamai/workflow-worktrees/\n.teamai/w
 
 /** Keeps TeamAI worktrees out of `git status` in the active checkout. */
 async function hideTeamaiWorktrees(main: string): Promise<void> {
-  const exclude = await gitPath(main, 'info/exclude');
+  const excludePath = await gitPath(main, 'info/exclude');
 
-  if (!exclude) return;
+  if (!excludePath) return;
+  // The member's own file, which a dotfile manager may link: edit the file it leads to, as `writeFileAtomic` does.
+  const exclude = await symlinkTarget(excludePath);
   const current = await readRegularFile(exclude, 'utf8').catch(() => '');
 
   if (current.includes(EXCLUDE_MARKER)) return;
@@ -668,7 +670,8 @@ export async function removeWorktreeSetup(checkout: string, { dryRun = false } =
     if (await removeEmptyDir(dir, dryRun)) removed.push(dir);
   }
 
-  const exclude = await gitPath(checkout, 'info/exclude');
+  const excludePath = await gitPath(checkout, 'info/exclude');
+  const exclude = excludePath === undefined ? undefined : await symlinkTarget(excludePath);
   const current = exclude === undefined ? '' : await readRegularFile(exclude, 'utf8').catch(() => '');
 
   if (exclude !== undefined && current.includes(EXCLUDE_BLOCK)) {

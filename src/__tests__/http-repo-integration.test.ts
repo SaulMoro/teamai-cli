@@ -73,7 +73,7 @@ describe('teamai init --http (read-only onboarding)', () => {
       const { loadLocalConfigForScope, loadTeamConfig } = await import('../config.js');
       const config = await loadLocalConfigForScope('project', project);
       if (!config) throw new Error('HTTP init did not write its project config');
-      const teamConfig = await loadTeamConfig(config.repo.localPath);
+      const teamConfig = await loadTeamConfig(config.repo.localPath, null);
       if (!teamConfig) throw new Error('HTTP init did not write its team config');
       const { readCodexHookTrustForScope } = await import('../hooks.js');
       expect(await readCodexHookTrustForScope(teamConfig, config)).toMatchObject({ kind: 'listed', notTrusted: [] });

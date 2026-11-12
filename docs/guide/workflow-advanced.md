@@ -2002,27 +2002,27 @@ teamai writes each operation id to `attempts/<attempt>/runtime.json` before it s
 A runtime that cannot stop the work says why. teamai then keeps the place, its records and the login, and prints the runtime's advice:
 
 ```text
-⚠ Could not stop attempt a3f0c2b1d of run r48201aa on step runtime "sandbox" of driver "containers": its exec or prompt may still run, since the runtime did not confirm it stopped (cancel_failed): docker could not stop container teamai-r48201aa-a3f0: the daemon is not running. Start Docker, then run teamai workflow cancel r48201aa again.
-⚠ The codex login teamai keeps stays held by attempt a3f0c2b1d of run r48201aa, whose tool may still run. Stop that tool on its step runtime, then run teamai workflow cancel r48201aa --release a3f0c2b1d, which lets the attempt go and ends its login.
+⚠ Could not stop attempt a3f0c2b1d of run r48201aa5c3e9d10b on step runtime "sandbox" of driver "containers": its exec or prompt may still run, since the runtime did not confirm it stopped (cancel_failed): docker could not stop container teamai-r48201aa5c3e9d10b-a3f0c2b1d: the daemon is not running. Start Docker, then run teamai workflow cancel r48201aa5c3e9d10b again.
+⚠ The codex login teamai keeps stays held by attempt a3f0c2b1d of run r48201aa5c3e9d10b, whose tool may still run. Stop that tool on its step runtime, then run teamai workflow cancel r48201aa5c3e9d10b --release a3f0c2b1d, which lets the attempt go and ends its login.
 ```
 
-Fix the cause, then run the same `teamai workflow cancel r48201aa` again. The run is already cancelled, so it stops the attempt, closes its place, releases the login, and answers with the run and the attempt it closed. With nothing left to stop, it answers `run_settled`:
+Fix the cause, then run the same `teamai workflow cancel r48201aa5c3e9d10b` again. The run is already cancelled, so it stops the attempt, closes its place, releases the login, and answers with the run and the attempt it closed. With nothing left to stop, it answers `run_settled`:
 
 ```text
-ℹ Stopped attempt a3f0c2b1d of run r48201aa on step runtime "sandbox" and closed its place.
-ℹ Released the codex login teamai keeps, which attempt a3f0c2b1d of run r48201aa held.
-{"data":{"run":{"id":"r48201aa","status":"cancelled"},"closed":["a3f0c2b1d"]}}
+ℹ Stopped attempt a3f0c2b1d of run r48201aa5c3e9d10b on step runtime "sandbox" and closed its place.
+ℹ Released the codex login teamai keeps, which attempt a3f0c2b1d of run r48201aa5c3e9d10b held.
+{"data":{"run":{"id":"r48201aa5c3e9d10b","status":"cancelled"},"closed":["a3f0c2b1d"]}}
 ```
 
-When only the close had failed, the line names the place it closed instead: `Closed the place of attempt a3f0c2b1d of run r48201aa on step runtime "sandbox", which an earlier close had kept.`
+When only the close had failed, the line names the place it closed instead: `Closed the place of attempt a3f0c2b1d of run r48201aa5c3e9d10b on step runtime "sandbox", which an earlier close had kept.`
 
 A driver that still runs when you cancel, and a `workflow resume` that finds such an exec still running, fail the step `runtime_lost` with the same advice, and keep the place and the login the same way. `teamai workflow cancel` of that run stops it once the runtime can.
 
 A `workflow resume` with a driver that does not use the runtime an attempt ran on, `--driver local` included, first stops what the killed driver left there through the driver recorded for it, as `teamai workflow cancel` does, then runs the step again on its own runtime:
 
 ```console
-$ teamai workflow resume r48201aa --driver local
-ℹ Stopped attempt a3f0c2b1d of run r48201aa on step runtime "sandbox" and closed its place.
+$ teamai workflow resume r48201aa5c3e9d10b --driver local
+ℹ Stopped attempt a3f0c2b1d of run r48201aa5c3e9d10b on step runtime "sandbox" and closed its place.
 ```
 
 When that runtime cannot confirm the stop, the step fails `runtime_lost`, names the driver to resume with, and keeps the place.

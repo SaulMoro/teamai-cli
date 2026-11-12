@@ -1996,27 +1996,27 @@ teamai 在发送每个操作之前，把它的操作 id 写入 `attempts/<attemp
 无法停止工作的运行时会说明原因。teamai 随后保留位置、记录和登录，并打印运行时给出的建议：
 
 ```text
-⚠ Could not stop attempt a3f0c2b1d of run r48201aa on step runtime "sandbox" of driver "containers": its exec or prompt may still run, since the runtime did not confirm it stopped (cancel_failed): docker could not stop container teamai-r48201aa-a3f0: the daemon is not running. Start Docker, then run teamai workflow cancel r48201aa again.
-⚠ The codex login teamai keeps stays held by attempt a3f0c2b1d of run r48201aa, whose tool may still run. Stop that tool on its step runtime, then run teamai workflow cancel r48201aa --release a3f0c2b1d, which lets the attempt go and ends its login.
+⚠ Could not stop attempt a3f0c2b1d of run r48201aa5c3e9d10b on step runtime "sandbox" of driver "containers": its exec or prompt may still run, since the runtime did not confirm it stopped (cancel_failed): docker could not stop container teamai-r48201aa5c3e9d10b-a3f0c2b1d: the daemon is not running. Start Docker, then run teamai workflow cancel r48201aa5c3e9d10b again.
+⚠ The codex login teamai keeps stays held by attempt a3f0c2b1d of run r48201aa5c3e9d10b, whose tool may still run. Stop that tool on its step runtime, then run teamai workflow cancel r48201aa5c3e9d10b --release a3f0c2b1d, which lets the attempt go and ends its login.
 ```
 
-解决原因后，再运行一次同样的 `teamai workflow cancel r48201aa`。这个运行已经取消，所以它会停止这次尝试、关闭它的位置、释放登录，并回答这个运行以及它关闭的尝试。没有可停止的内容时，它回答 `run_settled`：
+解决原因后，再运行一次同样的 `teamai workflow cancel r48201aa5c3e9d10b`。这个运行已经取消，所以它会停止这次尝试、关闭它的位置、释放登录，并回答这个运行以及它关闭的尝试。没有可停止的内容时，它回答 `run_settled`：
 
 ```text
-ℹ Stopped attempt a3f0c2b1d of run r48201aa on step runtime "sandbox" and closed its place.
-ℹ Released the codex login teamai keeps, which attempt a3f0c2b1d of run r48201aa held.
-{"data":{"run":{"id":"r48201aa","status":"cancelled"},"closed":["a3f0c2b1d"]}}
+ℹ Stopped attempt a3f0c2b1d of run r48201aa5c3e9d10b on step runtime "sandbox" and closed its place.
+ℹ Released the codex login teamai keeps, which attempt a3f0c2b1d of run r48201aa5c3e9d10b held.
+{"data":{"run":{"id":"r48201aa5c3e9d10b","status":"cancelled"},"closed":["a3f0c2b1d"]}}
 ```
 
-如果之前失败的只是 close，这一行改为说明它关闭的位置：`Closed the place of attempt a3f0c2b1d of run r48201aa on step runtime "sandbox", which an earlier close had kept.`
+如果之前失败的只是 close，这一行改为说明它关闭的位置：`Closed the place of attempt a3f0c2b1d of run r48201aa5c3e9d10b on step runtime "sandbox", which an earlier close had kept.`
 
 你取消时仍在运行的驱动，以及发现这样的 exec 仍在运行的 `workflow resume`，都会让步骤失败为 `runtime_lost` 并给出同样的建议，同样保留位置和登录。运行时能够停止它之后，对这个运行执行 `teamai workflow cancel` 就会停止它。
 
 用一个不使用某个尝试所在运行时的驱动执行 `workflow resume`（包括 `--driver local`）时，会先通过为它记录的驱动停止被杀掉的驱动留在那里的东西，和 `teamai workflow cancel` 一样，然后在自己的运行时上重新运行这个步骤：
 
 ```console
-$ teamai workflow resume r48201aa --driver local
-ℹ Stopped attempt a3f0c2b1d of run r48201aa on step runtime "sandbox" and closed its place.
+$ teamai workflow resume r48201aa5c3e9d10b --driver local
+ℹ Stopped attempt a3f0c2b1d of run r48201aa5c3e9d10b on step runtime "sandbox" and closed its place.
 ```
 
 那个运行时无法确认停止时，步骤失败为 `runtime_lost`，给出应该用来恢复的驱动，并保留位置。

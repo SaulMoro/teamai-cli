@@ -626,10 +626,10 @@ teamai workflow retry r7c41d09e2b6a5f13 review      # 从被停止的那一轮�
 
 ```sh
 docker ps -a --filter label=teamai.owner --format '{{.Names}} {{.Label "teamai.owner"}}'
-# teamai-r7c41d09e2b6a5f13-a3b90c2f 5f0c2a9e1d7b4c38    它落地前尝试已经关闭：docker 上的下一个步骤会删除它
+# teamai-r7c41d09e2b6a5f13-a3b90c2f0 5f0c2a9e1d7b4c38    它落地前尝试已经关闭：docker 上的下一个步骤会删除它
 sbx ls -q
-# teamai-5f0c2a9e1d7b4c38-r7c41d09e2b6a5f13-a3b90c2f   sbx 上的同样情况：sbx 上的下一个步骤会删除它
-# teamai-r7c41d09e2b6a5f13-a3b90c2f                    旧版 teamai 起的名字：保留；用 sbx rm --force 删除
+# teamai-5f0c2a9e1d7b4c38-r7c41d09e2b6a5f13-a3b90c2f0   sbx 上的同样情况：sbx 上的下一个步骤会删除它
+# teamai-r7c41d09e2b6a5f13-a3b90c2f0                    旧版 teamai 起的名字：保留；用 sbx rm --force 删除
 ```
 
 ## 错误

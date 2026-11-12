@@ -570,6 +570,69 @@ describe('uninstall', () => {
     expect(await fse.pathExists(path.join(homeDir, '.claude', 'skills', 'team-skill')), 'delivered skill').toBe(true);
   });
 
+  it('refuses when a step runtime opens a place while the person confirms, and removes nothing', async () => {
+    const { homeDir, repoPath, teamaiHome } = await setupFixture(tmpDir);
+    vi.stubEnv('HOME', homeDir);
+    const dataHome = path.join(teamaiHome, 'projects', 'current');
+    const record = path.join(dataHome, 'workflows', 'runs', 'r0123456789abcdef', 'attempts', 'a01234567', 'runtime.json');
+    mockAutoDetectInit.mockResolvedValue({
+      localConfig: makeLocalConfig(homeDir, repoPath, { scope: 'project', projectRoot: homeDir, dataHome }),
+      teamConfig: makeTeamConfig(),
+    });
+    const prompts = await import('../utils/prompt.js');
+    vi.spyOn(prompts, 'askConfirmation').mockImplementation(async () => {
+      await fse.outputJson(record, { runtime: 'box', driver: 'box', phase: 'running', open: { op: newOpId(), handle: 'teamai-r0123456789abcdef-a01234567' } });
+
+      return true;
+    });
+    const previousExitCode = process.exitCode;
+
+    await uninstall({});
+
+    expect(process.exitCode).toBe(1);
+    process.exitCode = previousExitCode;
+    expect(log.error).toHaveBeenCalledWith(expect.stringContaining('`teamai workflow cancel r0123456789abcdef`'));
+    expect(await fse.pathExists(record), 'run record').toBe(true);
+    expect(await fse.pathExists(path.join(homeDir, '.claude', 'skills', 'team-skill')), 'delivered skill').toBe(true);
+  });
+
+  it('previews what it would remove in a dry run while a step runtime holds a place, warning that the uninstall would refuse', async () => {
+    const { homeDir, repoPath, teamaiHome } = await setupFixture(tmpDir);
+    vi.stubEnv('HOME', homeDir);
+    const dataHome = path.join(teamaiHome, 'projects', 'current');
+    const record = path.join(dataHome, 'workflows', 'runs', 'r0123456789abcdef', 'attempts', 'a01234567', 'runtime.json');
+    await fse.outputJson(record, { runtime: 'box', driver: 'box', phase: 'running', open: { op: newOpId(), handle: 'teamai-r0123456789abcdef-a01234567' } });
+    mockAutoDetectInit.mockResolvedValue({
+      localConfig: makeLocalConfig(homeDir, repoPath, { scope: 'project', projectRoot: homeDir, dataHome }),
+      teamConfig: makeTeamConfig(),
+    });
+    const previousExitCode = process.exitCode;
+    process.exitCode = undefined;
+
+    await uninstall({ dryRun: true });
+
+    const exitCode = process.exitCode;
+    process.exitCode = previousExitCode;
+    expect(exitCode).toBeUndefined();
+    expect(log.error).not.toHaveBeenCalledWith(expect.stringContaining('Cannot uninstall'));
+    expect(log.warn).toHaveBeenCalledWith(expect.stringContaining('`teamai workflow cancel r0123456789abcdef`'));
+    expect(log.info).toHaveBeenCalledWith('Dry run — no changes made');
+    expect(await fse.pathExists(record), 'run record').toBe(true);
+  });
+
+  it('previews the home it would remove in a dry run with no valid configuration, warning of a place a step runtime holds there', async () => {
+    const { homeDir, teamaiHome } = await setupFixture(tmpDir);
+    vi.stubEnv('HOME', homeDir);
+    const record = path.join(teamaiHome, 'projects', 'gone-checkout', 'workflows', 'runs', 'r0123456789abcdef', 'attempts', 'a01234567', 'runtime.json');
+    await fse.outputJson(record, { runtime: 'box', driver: 'box', phase: 'running', open: { op: newOpId(), handle: 'teamai-r0123456789abcdef-a01234567' } });
+    mockAutoDetectInit.mockRejectedValue(new Error('no configuration'));
+
+    await uninstall({ dryRun: true });
+
+    expect(log.warn).toHaveBeenCalledWith(expect.stringContaining('`teamai workflow cancel r0123456789abcdef`'));
+    expect(log.info).toHaveBeenCalledWith('Dry run — no changes made');
+  });
+
   it('refuses with no valid configuration too, while a step runtime holds a place of a run in the home it removes', async () => {
     const { homeDir, teamaiHome } = await setupFixture(tmpDir);
     vi.stubEnv('HOME', homeDir);
@@ -3817,7 +3880,7 @@ describe('uninstall', () => {
     expect(await fse.pathExists(path.join(homeDir, '.claude'))).toBe(true);
   });
 
-  it('keeps a staging folder a copy on this host still writes, or may, and the skills directory with it', async () => {
+  it('keeps a staging folder a copy on this host or another sharing the home still writes, or may, and the skills directory with it', async () => {
     const { homeDir, repoPath } = await setupFixture(tmpDir);
     vi.stubEnv('HOME', homeDir);
     vi.stubEnv('SHELL', '/bin/zsh');
@@ -3830,6 +3893,14 @@ describe('uninstall', () => {
     // An owner whose pid runs but whose start nothing records: whether it still copies cannot be told.
     const untold = path.join(homeDir, '.claude', 'skills', '.review.0c1d2e3f.staging');
     await fse.outputJson(path.join(untold, 'owner.json'), { pid: copier.pid, host: os.hostname() });
+    // A container sharing this home copies a skill now: its pid names nothing here, and its folder is fresh.
+    const elsewhere = path.join(homeDir, '.claude', 'skills', '.review.7d8e9f0a.staging');
+    await fse.outputJson(path.join(elsewhere, 'owner.json'), { pid: 4242, startedAt: new Date().toISOString(), host: 'teamai-container' });
+    // One another host left two hours ago is a copy that died there.
+    const leftElsewhere = path.join(homeDir, '.claude', 'skills', '.review.9a0b1c2d.staging');
+    await fse.outputJson(path.join(leftElsewhere, 'owner.json'), { pid: 4242, startedAt: new Date().toISOString(), host: 'teamai-container' });
+    const twoHoursAgo = new Date(Date.now() - 2 * 3_600_000);
+    await fse.utimes(leftElsewhere, twoHoursAgo, twoHoursAgo);
     mockAutoDetectInit.mockResolvedValue({ localConfig: makeLocalConfig(homeDir, repoPath), teamConfig: makeTeamConfig() });
     commitTeamRepo(repoPath);
     vi.mocked(log.warn).mockClear();
@@ -3839,9 +3910,11 @@ describe('uninstall', () => {
     expect(await fse.pathExists(path.join(homeDir, '.claude', 'skills', 'team-skill'))).toBe(false);
     expect(await fse.pathExists(writing)).toBe(true);
     expect(await fse.pathExists(untold)).toBe(true);
+    expect(await fse.pathExists(elsewhere)).toBe(true);
+    expect(await fse.pathExists(leftElsewhere)).toBe(false);
     // Each is named, so the member knows why the skills directory stays.
     const warnings = vi.mocked(log.warn).mock.calls.map(([message]) => String(message));
-    expect(warnings).toEqual(expect.arrayContaining([expect.stringContaining(`Kept ${writing}:`), expect.stringContaining(`Kept ${untold}:`)]));
+    expect(warnings).toEqual(expect.arrayContaining([expect.stringContaining(`Kept ${writing}:`), expect.stringContaining(`Kept ${untold}:`), expect.stringContaining(`Kept ${elsewhere}:`)]));
   });
 
   it('keeps an empty folder of the member\'s in the skills directory, and the directory with it', async () => {

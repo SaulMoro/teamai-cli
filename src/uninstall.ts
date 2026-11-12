@@ -838,7 +838,7 @@ async function discoverToolResources(
 
         for (const dir of staging.left) res.skillDirs.push({ dir, baseDir: rootBase });
 
-        for (const dir of staging.inUse) res.keptSkillDirs.push(`Kept ${dir}: a teamai copy on this machine may still write into it. Delete it by hand once no teamai command runs here: a later uninstall no longer looks for it.`);
+        for (const dir of staging.inUse) res.keptSkillDirs.push(`Kept ${dir}: a teamai copy may still write into it, on this machine or another sharing this home. Delete it by hand once no teamai command runs there: a later uninstall no longer looks for it.`);
       }
     }
   }
@@ -3641,7 +3641,7 @@ export async function uninstall(opts: UninstallOptions): Promise<void> {
       return;
     }
 
-    if (plan.includeShared && await refusedForHeldPlaces(async () => [getDataHome(localConfig)])) return;
+    if (plan.includeShared && await refusedForHeldPlaces(async () => [getDataHome(localConfig)], { dryRun: opts.dryRun === true })) return;
 
     printSummary(plan, agentKey);
 
@@ -3678,6 +3678,8 @@ export async function uninstall(opts: UninstallOptions): Promise<void> {
     }
 
     try {
+      // Again once confirmed: a run may have opened a place while the person answered.
+      if (plan.includeShared && await refusedForHeldPlaces(async () => [getDataHome(localConfig)])) return;
       await removeConfirmed(localConfig, teamConfig, plan, agentKey, !!exclusionOnly);
     } finally {
       if (syncLock) {
@@ -3693,17 +3695,20 @@ export async function uninstall(opts: UninstallOptions): Promise<void> {
 /**
  * Refuses an uninstall that removes the workflow runs of the data homes `dataHomes` lists while a step runtime may still hold a place of one:
  * those records, and what the runtime keeps of the place, are what `teamai workflow cancel` closes it with. Answers
- * whether it refused.
+ * whether it refused. A dry run is never refused: it warns of what the uninstall would refuse for, and previews.
  */
-async function refusedForHeldPlaces(dataHomes: () => Promise<readonly string[]>): Promise<boolean> {
+async function refusedForHeldPlaces(dataHomes: () => Promise<readonly string[]>, { dryRun = false }: { dryRun?: boolean } = {}): Promise<boolean> {
   const { placesMaybeHeld } = await import('./workflow/runtimes/cancelled.js');
   const { runsDirIn } = await import('./workflow/store.js');
   const held: Awaited<ReturnType<typeof placesMaybeHeld>> = [];
+  const refuse = (message: string): void => (dryRun ? log.warn(message) : log.error(message));
 
   try {
     for (const dataHome of await dataHomes()) held.push(...await placesMaybeHeld(runsDirIn(dataHome)));
   } catch (e) {
-    log.error(`Cannot uninstall: teamai could not read this scope's workflow runs (${e instanceof Error ? e.message : String(e)}), so it cannot tell whether a step runtime still holds a place of one. Fix what keeps it from being read, then run \`teamai uninstall\` again.`);
+    refuse(`Cannot uninstall: teamai could not read this scope's workflow runs (${e instanceof Error ? e.message : String(e)}), so it cannot tell whether a step runtime still holds a place of one. Fix what keeps it from being read, then run \`teamai uninstall\` again.`);
+
+    if (dryRun) return false;
     process.exitCode = 1;
 
     return true;
@@ -3711,16 +3716,16 @@ async function refusedForHeldPlaces(dataHomes: () => Promise<readonly string[]>)
 
   for (const place of held) {
     if (place.held === 'unreadable') {
-      log.error(`Cannot uninstall: the record of attempt ${place.attempt} of run ${place.run} cannot be read (${place.why}), so a step runtime may still hold its place. `
+      refuse(`Cannot uninstall: the record of attempt ${place.attempt} of run ${place.run} cannot be read (${place.why}), so a step runtime may still hold its place. `
         + `Run \`teamai workflow cancel ${place.run}\` to close what it can, or fix that record, then \`teamai uninstall\` again.`);
       continue;
     }
 
-    log.error(`Cannot uninstall while a step runtime holds a place of run ${place.run} (attempt ${place.attempt}): removing teamai's records would leave it with nothing to close it. `
+    refuse(`Cannot uninstall while a step runtime holds a place of run ${place.run} (attempt ${place.attempt}): removing teamai's records would leave it with nothing to close it. `
       + `Let the run end, or run \`teamai workflow cancel ${place.run}\` to stop it, then \`teamai uninstall\` again.`);
   }
 
-  if (held.length === 0) return false;
+  if (held.length === 0 || dryRun) return false;
   process.exitCode = 1;
 
   return true;
@@ -4080,6 +4085,7 @@ async function uninstallHomeOnly(opts: UninstallOptions): Promise<void> {
   printKeptForProjects(kept);
 
   if (opts.dryRun) {
+    await refusedForHeldPlaces(() => removedDataHomes(home, kept), { dryRun: true });
     log.info('Dry run — no changes made');
 
     return;

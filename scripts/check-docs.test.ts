@@ -217,6 +217,22 @@ it('write changes only its generated files', () => {
   }
 });
 
+it('check refuses a run id or attempt id the CLI refuses on any guide page, a new one too, and leaves hex that is no id alone', () => {
+  const root = checkout();
+  fs.writeFileSync(path.join(root, 'docs/guide/new-page.md'), [
+    'Run `teamai workflow cancel r48201aa --release a3f0c2b1d`.',
+    '# teamai-r7c41d09e2b6a5f13-a3b90c2f  a container',
+    'Landed in a16e6e2 as op-a3d5c18e02f9, thread af508185-8908-4575-a1d0-f3c6f67cddec, in teamai-rd573bcff8eef4e10-fix-p1-a04485788cc1, run rd4894….',
+    '',
+  ].join('\n'));
+  const checked = run(root, '--only=workflow-docs-examples');
+  expect(checked.status).toBe(1);
+  expect(checked.output).toContain('docs/guide/new-page.md:1: r48201aa: Run id must look like r followed by 8 or 16 hex digits');
+  expect(checked.output).toContain('docs/guide/new-page.md:2: a3b90c2f: Attempt id must look like a followed by 8 hex digits');
+  expect(checked.output).not.toContain('new-page.md:3');
+  expect(checked.output).not.toContain('a3f0c2b1d:');
+});
+
 it('check executes the advanced lease examples and rejects changed engine output', () => {
   const root = checkout();
   const page = path.join(root, 'docs/guide/workflow-advanced.md');

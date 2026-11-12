@@ -1,8 +1,5 @@
 /** @import { ESTree } from '@oxlint/plugins' */
-import fs from 'node:fs';
-
 import { defineRule } from '@oxlint/plugins';
-import { z } from 'zod';
 
 import { lintedPath, stringLiteralValue } from '../utils.js';
 
@@ -15,27 +12,20 @@ const ENDS = new Set(['exited', 'finished', 'cancelled', 'failed']);
 /** The modules that read lines: only the runtime kit reads a runtime's input, and a socket's lines go through its `eachLine`. */
 const LINE_READERS = new Set(['readline', 'node:readline', 'readline/promises', 'node:readline/promises']);
 
-/** The rule's option, as `meta.schema` lets it be written; unset lists nothing. */
-const OptionsSchema = z.tuple([z.object({ notYetOnTheKit: z.array(z.string()) })]).or(z.tuple([]));
-
 /** The module whose `stdin` is the process input. */
 const PROCESS_MODULES = new Set(['process', 'node:process']);
 
 /**
- * The linted file's path from the repository root, as `{ relative, root, src }`, when it is a runtime package's
- * production source, else undefined. `root` is the repository's directory, and `src` the runtime's source directory
- * from it.
+ * Whether the linted file, by its path, is a runtime package's production source.
  * @param {string} file
  */
-function runtimeSource(file) {
-  const match = /(?:^|\/)(packages\/(runtime-[^/]+)\/src\/(.+))$/.exec(file);
+function isRuntimeSource(file) {
+  const match = /(?:^|\/)packages\/(runtime-[^/]+)\/src\/(.+)$/.exec(file);
 
-  if (!match) return undefined;
-  const [, relative = '', folder = '', rest = ''] = match;
+  if (!match) return false;
+  const [, folder = '', rest = ''] = match;
 
-  if (PROTOCOL_PACKAGES.has(folder) || rest.startsWith('testing/') || /\.test\.[cm]?[jt]sx?$/.test(rest)) return undefined;
-
-  return { relative, root: file.slice(0, file.length - relative.length), src: `packages/${folder}/src/` };
+  return !PROTOCOL_PACKAGES.has(folder) && !rest.startsWith('testing/') && !/\.test\.[cm]?[jt]sx?$/.test(rest);
 }
 
 /**
@@ -59,27 +49,13 @@ export default defineRule({
   meta: {
     type: 'problem',
     docs: { description: 'Serve runtime protocol 1 only through the runtime kit: no runtime reads its input, imports a line reader, parses requests or writes an op\'s end itself.' },
-    // `notYetOnTheKit`: files, from the repository root, that still read requests or write an op's end themselves, until
-    // their runtime adopts the kit. A new runtime starts on the kit; the list only shrinks: an entry that no longer does
-    // either, or whose file is gone, fails until it is removed.
-    schema: [{ type: 'object', properties: { notYetOnTheKit: { type: 'array', items: { type: 'string' } } }, required: ['notYetOnTheKit'], additionalProperties: false }],
+    // No option: every runtime serves the protocol through the kit, with no file let off.
+    schema: [],
   },
   create(context) {
-    const source = runtimeSource(lintedPath(context));
-
-    if (source === undefined) return {};
-    const listed = OptionsSchema.parse(context.options)[0]?.notYetOnTheKit ?? [];
-    const isBaseline = listed.includes(source.relative);
-    // Each source of a runtime checks its entries, so a renamed or removed file fails lint instead of staying listed.
-    const gone = listed.filter((file) => file.startsWith(source.src) && !fs.existsSync(`${source.root}${file}`));
-    let serves = false;
-
+    if (!isRuntimeSource(lintedPath(context))) return {};
     /** @param {ESTree.Node} node @param {string} message */
-    const report = (node, message) => {
-      serves = true;
-
-      if (!isBaseline) context.report({ node, message });
-    };
+    const report = (node, message) => context.report({ node, message });
 
     const readsLines = (/** @type {ESTree.Node} */ node) => report(node, 'Leave reading lines to the runtime kit: serveRuntime from @teamai/runtime-kit/serve reads requests, and eachLine from the same module reads a socket\'s lines. A runtime that imports a line reader can serve the protocol around the kit.');
     const readsInput = (/** @type {ESTree.Node} */ node) => report(node, 'Leave the process input to serveRuntime from @teamai/runtime-kit/serve, which reads requests from it: a runtime that reads its input itself serves the protocol around the kit.');
@@ -137,16 +113,6 @@ export default defineRule({
 
         if (ended !== undefined && ENDS.has(ended) && property(node, 'op') !== undefined) {
           report(node, `End an operation through the runtime kit's ledger (ledger.end or ledger.settle from @teamai/runtime-kit/ledger), not a '${ended}' line of its own: the ledger writes each op's end once, and keeps one it could not journal.`);
-        }
-      },
-      /** @param {ESTree.Program} node */
-      'Program:exit'(node) {
-        if (isBaseline && !serves) {
-          context.report({ node, message: `${source.relative} no longer reads requests or writes an op's end itself: remove it from notYetOnTheKit, teamai/runtime-serve's option in .oxlintrc.json.` });
-        }
-
-        for (const file of gone) {
-          context.report({ node, message: `${file} is listed in notYetOnTheKit but does not exist: remove it from teamai/runtime-serve's option in .oxlintrc.json, or point it at the file's new path.` });
         }
       },
     };

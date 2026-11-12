@@ -33,6 +33,7 @@ import { parseOptions as parseSandboxOptions } from '../../packages/runtime-sand
 import { parseOptions as parseT3Options } from '../../packages/runtime-t3/src/options.js';
 import type { RuntimeOptions } from '@teamai/runtime-protocol';
 import { RESOURCE_LAYOUTS } from '../../src/resources/resolver.js';
+import { AttemptIdSchema, RunIdSchema } from '../../src/workflow/store.js';
 
 const ROOT = process.cwd();
 
@@ -929,4 +930,43 @@ await check('every driver definition and sandbox profile a guide page shows pass
   }
 
   assert.deepEqual(failures, []);
+});
+
+/**
+ * What looks like a run id (`r…`) or an attempt id (`a…`) on a guide page: hex with a digit, 8 characters or more, so a
+ * git short sha of 7 is left out. Not one elided with `…`, an op id's tail (`op-…`), a UUID's first part, or the tail of
+ * a hyphenated name other than a sandbox's `teamai-[<owner>-]<run>-<attempt>`, such as a worktree's hash.
+ */
+const SHOWN_RUN_OR_ATTEMPT_ID = /(?<![\w-])(?:(?<handle>teamai-(?:[0-9a-f]{16}-)?)(?<handleRun>r[0-9a-f]+)-(?<handleAttempt>a[0-9a-f]+)|(?<id>[ra](?=[0-9a-f]*\d)[0-9a-f]{7,}))(?![\w…-])/g;
+
+/** Each id a guide page shows that the CLI would refuse, with its page and line, and how many it checked. */
+function invalidIds(pages: readonly string[]) {
+  let checked = 0;
+  const invalid: string[] = [];
+
+  for (const page of pages) {
+    fs.readFileSync(path.join(ROOT, page), 'utf8').split('\n').forEach((text, index) => {
+      for (const match of text.matchAll(SHOWN_RUN_OR_ATTEMPT_ID)) {
+        const { handleRun, handleAttempt, id } = match.groups ?? {};
+
+        for (const shown of [handleRun, handleAttempt, id]) {
+          if (shown === undefined) continue;
+          checked += 1;
+          const parsed = (shown.startsWith('r') ? RunIdSchema : AttemptIdSchema).safeParse(shown);
+
+          if (!parsed.success) invalid.push(`${page}:${index + 1}: ${shown}: ${parsed.error.issues[0]?.message}`);
+        }
+      }
+    });
+  }
+
+  return { checked, invalid };
+}
+
+// Every guide page, in every language: a member copies a command from any of them.
+await check('every run id and attempt id a guide page shows is one the CLI takes', () => {
+  const { checked, invalid } = invalidIds(guidePages(/\.md$/));
+
+  assert.ok(checked > 0, 'no guide page shows a run id or an attempt id, so the check matched nothing');
+  assert.deepEqual(invalid, []);
 });

@@ -40,9 +40,27 @@ function wallAt(at: number, zone: string): Wall | undefined {
   return { year: part('year'), month: part('month'), day: part('day'), hour: part('hour'), minute: part('minute') };
 }
 
-/** Minutes since the epoch of a wall clock, as if it were UTC: differences between two of one zone are real minutes. */
+/** Minutes since the epoch of a wall clock, as if it were UTC. */
 function wallMinutes({ year, month, day, hour, minute }: Wall): number {
   return Date.UTC(year, month - 1, day, hour, minute) / 60_000;
+}
+
+/** The instant whose wall clock in `zone` reads `wall`, through the zone's offset at that instant, not at another. */
+function instantOf(wall: Wall, zone: string): number | undefined {
+  const asUtc = wallMinutes(wall) * 60_000;
+
+  const offsetAt = (at: number): number | undefined => {
+    const there = wallAt(at, zone);
+
+    return there && wallMinutes(there) * 60_000 - Math.floor(at / 60_000) * 60_000;
+  };
+
+  const guess = offsetAt(asUtc);
+
+  if (guess === undefined) return undefined;
+  const offset = offsetAt(asUtc - guess);
+
+  return offset === undefined ? undefined : asUtc - offset;
 }
 
 /** The hour of a 12-hour clock with its `meridiem`, or of a 24-hour one without. */
@@ -63,13 +81,13 @@ function nextWall({ now, zone, hour, minute, date }: { now: number; zone: string
 
   if (!current) return undefined;
   const target: Wall = { year: date?.year ?? current.year, month: date?.month ?? current.month, day: date?.day ?? current.day, hour, minute };
-  let ahead = wallMinutes(target) - wallMinutes(current);
+  const at = instantOf(target, zone);
 
-  if (ahead <= 0 && date === undefined) ahead += 24 * 60;
+  if (at === undefined || at > now) return at;
 
-  if (ahead <= 0 && date !== undefined && date.year === undefined) ahead = wallMinutes({ ...target, year: target.year + 1 }) - wallMinutes(current);
+  if (date === undefined) return instantOf({ ...target, day: target.day + 1 }, zone);
 
-  return Math.floor(now / 60_000) * 60_000 + ahead * 60_000;
+  return date.year === undefined ? instantOf({ ...target, year: target.year + 1 }, zone) : at;
 }
 
 const TIME = String.raw`(\d{1,2})(?::(\d{2}))?\s*(am|pm)?`;
@@ -108,7 +126,7 @@ function resetOf(text: string, { now, zone }: { now: number; zone: string }): nu
   return nextWall({ now, zone: named ?? zone, hour: hourOf({ hour, meridiem }), minute: minute === undefined ? 0 : Number(minute), ...(date && { date }) });
 }
 
-/** The member's own time zone, which a tool's times without one are in. */
+/** The member's own time zone, which a tool's times without one are in: a step on a step runtime runs with it as `TZ`. */
 function memberZone(): string {
   return Intl.DateTimeFormat().resolvedOptions().timeZone;
 }
@@ -133,7 +151,7 @@ export const KeptLimitSchema = z.object({
   hitAt: z.number(),
   resetsAt: z.number().optional(),
   tryAt: z.number(),
-  /** Limits in a row with no reset given, which space the tries apart. */
+  /** Limits in a row with no reset given, or one already past, which space the tries apart. */
   tries: z.number().int(),
   isWaitChosen: z.boolean(),
 });
@@ -183,15 +201,23 @@ function open({ capMs = WAIT_CAP_MS, zone = memberZone(), kept = [] }: { capMs?:
     return `${isToday ? time : `${wall.year}-${pad(wall.month)}-${pad(wall.day)} ${time}`} (${zone})`;
   };
 
-  const reasonOf = (tool: string, limit: KeptLimit, now: number): string => (limit.resetsAt === undefined
-    ? `${tool} hit its usage limit and gave no reset time, so teamai tries it again at ${clock({ at: limit.tryAt, now })}`
-    : `${tool} hit its usage limit, which resets at ${clock({ at: limit.resetsAt, now })}`);
+  const reasonOf = (tool: string, limit: KeptLimit, now: number): string => {
+    if (limit.resetsAt === undefined) return `${tool} hit its usage limit and gave no reset time, so teamai tries it again at ${clock({ at: limit.tryAt, now })}`;
+
+    if (limit.resetsAt < limit.tryAt) return `${tool} hit its usage limit, which it said resets at ${clock({ at: limit.resetsAt, now })}, already past, so teamai tries it again at ${clock({ at: limit.tryAt, now })}`;
+
+    return `${tool} hit its usage limit, which resets at ${clock({ at: limit.resetsAt, now })}`;
+  };
 
   const capText = capMs % 3_600_000 === 0 ? `${capMs / 3_600_000} hour${capMs === 3_600_000 ? '' : 's'}` : `${Math.ceil(capMs / 60_000)} minutes`;
 
-  const pastCapReason = (tool: string, limit: KeptLimit, now: number): string => (limit.resetsAt === undefined
-    ? `${tool} hit its usage limit at ${clock({ at: limit.since, now })} and gave no reset time, and it held for the ${capText} an unattended run waits for it`
-    : `${tool} hit its usage limit, which resets at ${clock({ at: limit.resetsAt, now })}, past the ${capText} an unattended run waits for it`);
+  const pastCapReason = (tool: string, limit: KeptLimit, now: number): string => {
+    if (limit.resetsAt === undefined) return `${tool} hit its usage limit at ${clock({ at: limit.since, now })} and gave no reset time, and it held for the ${capText} an unattended run waits for it`;
+
+    if (limit.resetsAt < limit.tryAt) return `${tool} hit its usage limit at ${clock({ at: limit.since, now })} and still held past the reset it gave, for the ${capText} an unattended run waits for it`;
+
+    return `${tool} hit its usage limit, which resets at ${clock({ at: limit.resetsAt, now })}, past the ${capText} an unattended run waits for it`;
+  };
 
   const isPastCap = (limit: KeptLimit, now: number): boolean => now >= limit.since + capMs || limit.tryAt > limit.since + capMs;
 
@@ -212,8 +238,9 @@ function open({ capMs = WAIT_CAP_MS, zone = memberZone(), kept = [] }: { capMs?:
     hit({ tool, message, now, on = 'here' }) {
       const earlier = limits.get(keyOf(tool, on));
       const resetsAt = resetOf(message, { now, zone });
-      const tries = resetsAt === undefined ? (earlier?.tries ?? -1) + 1 : 0;
-      const tryAt = resetsAt ?? now + Math.min(FIRST_TRY_MS * 2 ** tries, LONGEST_TRY_MS);
+      // A reset already past, as a server still refusing just after it or a clock behind, is spaced as no reset is.
+      const tries = resetsAt !== undefined && resetsAt > now ? 0 : (earlier?.tries ?? -1) + 1;
+      const tryAt = resetsAt !== undefined && resetsAt > now ? resetsAt : now + Math.min(FIRST_TRY_MS * 2 ** tries, LONGEST_TRY_MS);
 
       limits.set(keyOf(tool, on), { tool, on, since: earlier?.since ?? now, hitAt: now, tryAt, tries, isWaitChosen: earlier?.isWaitChosen ?? false, ...(resetsAt !== undefined && { resetsAt }) });
     },
@@ -263,4 +290,6 @@ export const UsageLimits = {
   resetOf,
   /** The usage limits of one drive, empty, or as a driver kept them (`kept`). */
   open,
+  /** The zone a tool's time without one is read in. */
+  memberZone,
 } as const;

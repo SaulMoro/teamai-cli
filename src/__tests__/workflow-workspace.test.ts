@@ -525,10 +525,11 @@ steps:
   });
 
   it.each([
-    ['', [], 4],
-    [' and the member\'s own extensions.worktreeConfig', [['extensions.worktreeConfig', 'true']], 3],
-    [' and the member\'s extensions.worktreeConfig=false and hooks', [['extensions.worktreeConfig', 'false'], ['core.hooksPath', 'member-hooks']], 4],
-  ])('undoes what its worktrees set up in the checkout once none is left, and keeps it while one is%s', async (_name, memberSettings, undone) => {
+    ['', [], 4, false],
+    [' and the member\'s own extensions.worktreeConfig', [['extensions.worktreeConfig', 'true']], 3, false],
+    [' and the member\'s extensions.worktreeConfig=false and hooks', [['extensions.worktreeConfig', 'false'], ['core.hooksPath', 'member-hooks']], 4, false],
+    [' and the member\'s exclude a link to a file of theirs', [], 4, true],
+  ])('undoes what its worktrees set up in the checkout once none is left, and keeps it while one is%s', async (_name, memberSettings, undone, isExcludeLinked) => {
     const { config, workspace, runId } = await fixture(`schemaVersion: v1alpha1
 name: build
 description: One change on its own branch.
@@ -539,6 +540,13 @@ steps:
 `);
     const exclude = path.join(workspace, '.git', 'info', 'exclude');
     const excludeBefore = fs.readFileSync(exclude, 'utf8');
+
+    if (isExcludeLinked) {
+      // As a dotfile manager links it: teamai edits the member's file the link leads to, and keeps the link.
+      fs.renameSync(exclude, path.join(workspace, '.git', 'member-exclude'));
+      fs.symlinkSync('../member-exclude', exclude);
+    }
+
     for (const [key, value] of memberSettings) git(['config', key, value], workspace);
     const configBefore = git(['config', '--local', '--list'], workspace);
     expect(await runLocalDriver(config, runId, workspace)).toMatchObject({ data: { done: { outcome: 'succeeded' } } });
@@ -552,6 +560,7 @@ steps:
     expect(await removeWorktreeSetup(workspace, { dryRun: true })).toHaveLength(undone);
     expect(await removeWorktreeSetup(workspace)).toHaveLength(undone);
     expect(fs.readFileSync(exclude, 'utf8')).toBe(excludeBefore);
+    expect(fs.lstatSync(exclude).isSymbolicLink()).toBe(isExcludeLinked);
     expect(git(['config', '--local', '--list'], workspace)).toBe(configBefore);
     expect(fs.existsSync(path.join(workspace, '.teamai'))).toBe(false);
     expect(git(['status', '--porcelain'], workspace)).toBe('');

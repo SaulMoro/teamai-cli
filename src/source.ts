@@ -507,7 +507,7 @@ async function sourceAddLocked(repoUrl: string, options: { name?: string } & Glo
   // source's `publicSkills` declaration, so a repo without a teamai.yaml (or
   // with an empty publicSkills list) syncs 0 skills. Say so here, at add time,
   // instead of letting pull skip it silently later.
-  const sourceConfig = await loadTeamConfig(cloneResult);
+  const sourceConfig = await loadTeamConfig(cloneResult, null);
 
   for (const line of sourceSyncWarnings(name, sourceConfig)) {
     log.warn(line);
@@ -830,7 +830,7 @@ async function sourceBrowseLocked(name: string, options: GlobalOptions, localCon
     return;
   }
 
-  const sourceTeamConfig = await loadTeamConfig(repoDir);
+  const sourceTeamConfig = await loadTeamConfig(repoDir, null);
 
   if (!sourceTeamConfig) {
     log.warn(`Source "${name}" has no teamai.yaml.`);
@@ -943,7 +943,7 @@ async function pullSingleSource(
   if (!repoDir) return false;
 
   // Load source's teamai.yaml
-  const sourceTeamConfig = await loadTeamConfig(repoDir);
+  const sourceTeamConfig = await loadTeamConfig(repoDir, null);
 
   if (!sourceTeamConfig) {
     log.debug(`[source:${source.name}] No teamai.yaml, skipping`);

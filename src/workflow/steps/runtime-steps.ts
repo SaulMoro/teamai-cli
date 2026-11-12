@@ -14,6 +14,7 @@ import { WorkflowFolder } from '../folder.js';
 import { attemptResultPath, runScratchDir, type RunId } from '../store.js';
 import type { WorkflowFailure } from '../types.js';
 import { git } from '../worktree.js';
+import { UsageLimits } from '../usage-limits.js';
 import type { LocalConfig } from '../../types.js';
 import { stepPrompt, withoutPrompt, type ToolClosed, type ToolLauncher } from '@teamai/tool-launch/run-step-launch';
 import type { StepLauncher, StepRun, StepRunResult } from '@teamai/runtime-tools';
@@ -63,7 +64,9 @@ export interface StepEnv {
 /**
  * The names a step's process gets over the runtime's own environment: each key the lease provides, with its value
  * here, the lease's `env`, and the attempt's marker. Never this process's environment: `unset` lists the names the
- * lease withholds, which the runtime removes from its own.
+ * lease withholds, which the runtime removes from its own. `TZ` is the member's zone unless the step sets one, so on a
+ * runtime that passes a step's env to its tool, a usage limit's reset printed without a zone is in the zone teamai
+ * reads it in; a runtime that offers no `can.env` runs its tool in its own zone.
  */
 export function runtimeStepEnv(lease: Pick<LeaseWire, 'envScope' | 'env' | 'attempt'>, scoped: NodeJS.ProcessEnv, { config, run, mode }: { config: LocalConfig; run: RunId; mode: RunMode }): StepEnv {
   const env: Record<string, string> = {};
@@ -74,7 +77,7 @@ export function runtimeStepEnv(lease: Pick<LeaseWire, 'envScope' | 'env' | 'atte
     if (value !== undefined) env[key] = value;
   }
 
-  const own = { ...lease.env, ...attemptEnv(config, run, lease.attempt, mode) };
+  const own = { TZ: UsageLimits.memberZone(), ...lease.env, ...attemptEnv(config, run, lease.attempt, mode) };
   const provided = Object.keys(env).filter((key) => !(key in own));
   Object.assign(env, own);
 

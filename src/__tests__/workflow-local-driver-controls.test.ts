@@ -1622,4 +1622,30 @@ steps:
     if (step === undefined || !('attempt' in step)) throw new Error('the step ran no attempt');
     expect(fs.existsSync(attemptStdoutPath(config, RunIdSchema.parse(runId), AttemptIdSchema.parse(step.attempt)))).toBe(false);
   });
+  it('fails the step when its exec exits 0 without saying how the workflow ended, rather than counting it succeeded', async () => {
+    const { config, workspace, runId } = await workflowFixture(`schemaVersion: v1alpha1
+name: build
+description: Reviews the project whole.
+steps:
+  - id: work
+    workspace: new
+    workflow:
+      steps:
+        - id: review
+          workspace: continue
+          command: echo reviewed
+`);
+    const local = hostStepRuntime({ config });
+    const runtime: StepRuntime<DriverCan> = {
+      ...local,
+      exec: async (request, events, kind) => (kind !== 'workflow' ? local.exec(request, events, kind) : { kind: 'exited', code: 0, stdout: JSON.stringify({ reviewed: true }) }),
+    };
+
+    const done = await runLocalDriver(config, runId, workspace, {
+      runtimes: { driver: 'whole', asked: 'whole', runtimes: [{ kind: 'external', use: 'whole', runtime, can: { workflow: true, tokens: true, workspace: ['new', 'continue'] }, launchesAgents: false, engine: { logins: [] }, credentials: {}, found: [], masks: {}, optionsFrom: 'test' }] },
+    });
+
+    expect(done).toMatchObject({ data: { done: { outcome: 'failed' } } });
+    expect(await readRun(config, runId)).toMatchObject({ steps: [{ id: 'work', status: 'failed', failure: { code: 'runtime_protocol' } }] });
+  });
 });

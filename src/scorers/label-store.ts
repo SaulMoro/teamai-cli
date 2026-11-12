@@ -281,7 +281,7 @@ export const LabelStore = {
     if (pending.length === 0) return { files: [], labels: 0 };
 
     // A teamai.yaml that cannot be read says nothing of usage reporting, so it stages nothing rather than read as none.
-    if (!isUsageReportEnabled(config, (await loadTeamConfigIfPresent(config.repo.localPath)) ?? {})) return { files: [], labels: 0, reason: 'Usage reporting is off, so labels stay on this machine.' };
+    if (!isUsageReportEnabled(config, (await loadTeamConfigIfPresent(config.repo.localPath, null)) ?? {})) return { files: [], labels: 0, reason: 'Usage reporting is off, so labels stay on this machine.' };
     const username = config.username ?? 'unknown';
     const byFile = new Map<string, Array<{ id: string; label: ScoreLabel }>>();
 

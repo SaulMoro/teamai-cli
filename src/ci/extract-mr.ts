@@ -399,7 +399,7 @@ async function start(opts: CiExtractMrOptions): Promise<void> {
   const teamRepo = opts.teamRepo === undefined ? undefined : path.resolve(opts.teamRepo);
   // The team repo's `language: en` makes the learning English (#1187).
   const { loadTeamConfig } = await import('../config.js');
-  const language = (teamRepo === undefined ? undefined : (await loadTeamConfig(teamRepo))?.language) ?? 'zh';
+  const language = (teamRepo === undefined ? undefined : (await loadTeamConfig(teamRepo, null))?.language) ?? 'zh';
   const { runShortcut } = await import('../workflow-commands.js');
 
   await runShortcut({

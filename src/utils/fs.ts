@@ -500,9 +500,9 @@ async function removeLeftStaging(dest: string): Promise<void> {
 }
 
 /**
- * The staging folders in `parent`, whatever their age: `left`, those no copy on this host still writes into, which an
- * uninstall removes with the copies since the member asked for all of it to go, and `inUse`, those a copy still
- * writes into, or may.
+ * The staging folders in `parent`: `left`, those no copy still writes into, which an uninstall removes with the copies
+ * since the member asked for all of it to go, whatever their age, and `inUse`, those a copy still writes into, or may:
+ * one on this host, or one another host sharing this home named within the hour.
  */
 export async function stagingLeftIn(parent: string): Promise<{ left: string[]; inUse: string[] }> {
   const left: string[] = [];
@@ -511,7 +511,10 @@ export async function stagingLeftIn(parent: string): Promise<{ left: string[]; i
   for (const entry of await fse.readdir(parent, { withFileTypes: true }).catch(() => [])) {
     const staging = path.join(parent, entry.name);
 
-    if (entry.isDirectory() && isStagingName(entry.name)) (['copying', 'unknown'].includes(await copierOf(staging)) ? inUse : left).push(staging);
+    if (!entry.isDirectory() || !isStagingName(entry.name)) continue;
+    const copier = await copierOf(staging);
+    const mayCopy = copier === 'copying' || copier === 'unknown' || (copier === 'elsewhere' && !await isStale(staging));
+    (mayCopy ? inUse : left).push(staging);
   }
 
   return { left, inUse };
@@ -519,14 +522,17 @@ export async function stagingLeftIn(parent: string): Promise<{ left: string[]; i
 
 /**
  * Whether a copy still writes into `staging`, from the owner file it holds: `copying` when the process it names runs on
- * this host, `gone` when it does not, `unknown` when its pid runs but nothing tells it is that process, and `untold`
- * when no owner here is named: none written yet, one from a teamai that wrote none, or another host's.
+ * this host, `gone` when it does not, `unknown` when its pid runs but nothing tells it is that process, `elsewhere`
+ * when another host's process is named, as a container sharing the home names one, and `untold` when none is: none
+ * written yet, or one from a teamai that wrote none.
  */
-async function copierOf(staging: string): Promise<'copying' | 'gone' | 'unknown' | 'untold'> {
+async function copierOf(staging: string): Promise<'copying' | 'gone' | 'unknown' | 'elsewhere' | 'untold'> {
   const owner = StagingOwnerSchema.safeParse(await readRegularFile(path.join(staging, STAGING_OWNER), 'utf8').then(parseJson).catch(() => undefined));
 
-  // A pid another host recorded, as a container sharing the home does, names nothing here.
-  if (!owner.success || owner.data.host !== os.hostname()) return 'untold';
+  if (!owner.success) return 'untold';
+
+  // A pid another host recorded names nothing here.
+  if (owner.data.host !== os.hostname()) return 'elsewhere';
 
   // This process's pid in another pid namespace, as a container on the host's network writes it, is another process.
   if (owner.data.pid === process.pid && owner.data.pidNamespace === (await identityOf(process.pid)).pidNamespace) {
@@ -538,15 +544,20 @@ async function copierOf(staging: string): Promise<'copying' | 'gone' | 'unknown'
   return verdict === 'same' ? 'copying' : verdict === 'other' ? 'gone' : 'unknown';
 }
 
-async function isLeftBehind(staging: string): Promise<boolean> {
-  const left = await fse.lstat(staging).catch(() => undefined);
+/** Whether `staging` is older than a copy takes, so one a crash left; a folder already gone is not. */
+async function isStale(staging: string): Promise<boolean> {
+  const there = await fse.lstat(staging).catch(() => undefined);
 
-  if (left === undefined) return false;
+  return there !== undefined && there.mtimeMs + STALE_STAGING_MS < Date.now();
+}
+
+async function isLeftBehind(staging: string): Promise<boolean> {
+  if (!await fse.pathExists(staging)) return false;
   const copier = await copierOf(staging);
 
-  if (copier !== 'unknown' && copier !== 'untold') return copier === 'gone';
+  if (copier === 'copying' || copier === 'gone') return copier === 'gone';
 
-  return left.mtimeMs + STALE_STAGING_MS < Date.now();
+  return isStale(staging);
 }
 
 /**
