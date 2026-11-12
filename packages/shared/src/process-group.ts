@@ -69,7 +69,9 @@ async function readProcesses<T>({ args, fromPs, fromProc, signal }: {
  * container whose BusyBox `ps` prints no start time still has; elsewhere as `ps -o lstart=` prints it, to the second.
  * `at` is that time in milliseconds since the epoch.
  */
-type ProcessStart = { ticks: number; at: number } | { lstart: string; at: number };
+const ProcessStartSchema = z.union([z.object({ ticks: z.number(), at: z.number() }), z.object({ lstart: z.string(), at: z.number() })]);
+
+type ProcessStart = z.infer<typeof ProcessStartSchema>;
 
 /** Whether `a` and `b` are the start of one process, read at two times. */
 function isSameStart(a: ProcessStart, b: ProcessStart): boolean {
@@ -297,11 +299,17 @@ export async function identityOf(pid: number): Promise<ProcessIdentity> {
  * and is reached as the process and its descendants. It tells that process by `startTicks`, `start` or `spawnedAt`.
  * `starterGroup`, kept only beside `tree`, is the group the command shares with its starter when the starter led it, as
  * a terminal's job does: once that leader is gone, what is left in the group is what the starter left, children the
- * command's shell left included, which no tree from the command's pid reaches once the shell is gone.
+ * command's shell left included, which no tree from the command's pid reaches once the shell is gone. `left`, kept
+ * beside `tree` by a stop that could not confirm its end, is what that stop found the command had started, which a
+ * later stop ends though the command itself is gone by then.
  */
 const RecordedSchema = ProcessIdentitySchema.omit({ startedAt: true })
   .and(z.union([
-    z.object({ tree: z.literal(true), starterGroup: z.number().int().positive().optional() }),
+    z.object({
+      tree: z.literal(true),
+      starterGroup: z.number().int().positive().optional(),
+      left: z.array(z.object({ pid: z.number().int().positive(), start: ProcessStartSchema })).optional(),
+    }),
     z.object({ tree: z.undefined().optional() }),
   ]))
   .refine(keepsStart);
@@ -441,9 +449,11 @@ export async function stopRecordedGroup(dir: string): Promise<number[]> {
 
     if (recorded !== undefined) {
       // A pid recorded in another pid namespace names another process here: the record is left for a stop there.
-      const ended = isOtherPidNamespace(recorded.pidNamespace, namespace) ? 'unconfirmed' : recorded.tree ? await stopTree(recorded) : await endGroup(recorded);
+      const ended = isOtherPidNamespace(recorded.pidNamespace, namespace) ? { end: 'unconfirmed' as const } : recorded.tree ? await stopTree(recorded) : { end: await endGroup(recorded) };
 
-      if (ended === 'unconfirmed') {
+      if (ended.end === 'unconfirmed') {
+        // What it found running is kept, so a later stop still reaches it once the command's shell is gone.
+        if ('found' in ended && ended.found.length > 0) writeGroup(file, JSON.stringify({ ...recorded, left: ended.found }));
         left.add(recorded.pid);
         continue;
       }
@@ -619,31 +629,37 @@ function descendantsIn(running: Map<number, RunningProcess>, pid: number): Found
  * alone, as `stopGroup` leaves a group. Then the group it shared with the starter that led it, once that leader is
  * gone, which reaches what the command's shell left after it died. POSIX only.
  */
-async function stopTree(recorded: Recorded & { tree: true }): Promise<StopEnd> {
-  if (process.platform === 'win32') return 'unreachable';
+async function stopTree(recorded: Recorded & { tree: true }): Promise<{ end: StopEnd; found: FoundProcess[] }> {
+  if (process.platform === 'win32') return { end: 'unreachable', found: [] };
   const ended = await stopRecordedTree(recorded);
 
-  if (recorded.starterGroup !== undefined && !await stopLeftStarterGroup(recorded, recorded.starterGroup)) return 'unconfirmed';
+  if (recorded.starterGroup !== undefined && !await stopLeftStarterGroup(recorded, recorded.starterGroup)) {
+    return { end: 'unconfirmed', found: ended.end === 'unconfirmed' ? ended.found : [] };
+  }
 
   return ended;
 }
 
-/** Stops the attached command `recorded` names and the processes it started that still descend from it. */
-async function stopRecordedTree(recorded: Recorded): Promise<StopEnd> {
+/**
+ * Stops the attached command `recorded` names, the processes it started that still descend from it, and those an
+ * earlier stop found it had started. With what it found running, for the record a later stop reads.
+ */
+async function stopRecordedTree(recorded: Recorded & { tree: true }): Promise<{ end: StopEnd; found: FoundProcess[] }> {
+  const earlier = recorded.left ?? [];
   const running = await runningProcesses();
 
-  if (running === undefined) return 'unconfirmed';
+  if (running === undefined) return { end: 'unconfirmed', found: earlier };
   const rootStart = running.get(recorded.pid)?.start;
+  const verdict = rootStart === undefined ? 'other' : verdictOf(recorded, rootStart, await namespaceHere());
 
-  if (rootStart === undefined) return 'gone';
-  const verdict = verdictOf(recorded, rootStart, await namespaceHere());
-
-  if (verdict === 'other') return 'gone';
-
-  if (verdict !== 'same') return 'unconfirmed';
-
+  if (verdict === 'unknown' || verdict === 'foreign') return { end: 'unconfirmed', found: earlier };
   // What it started comes from the table that found it: a second read that failed would read as nothing started.
-  return await endProcesses([...descendantsIn(running, recorded.pid), { pid: recorded.pid, start: rootStart }]) ? 'stopped' : 'unconfirmed';
+  const descendants = rootStart === undefined || verdict === 'other' ? [] : [...descendantsIn(running, recorded.pid), { pid: recorded.pid, start: rootStart }];
+  const found = [...earlier.filter((kept) => isStillRunning(running, kept) && !descendants.some(({ pid }) => pid === kept.pid)), ...descendants];
+
+  if (found.length === 0) return { end: 'gone', found };
+
+  return { end: await endProcesses(found) ? 'stopped' : 'unconfirmed', found };
 }
 
 /**

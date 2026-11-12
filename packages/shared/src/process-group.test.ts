@@ -642,6 +642,10 @@ it.runIf(READS_PS)('keeps the record of an attached command whose stop ps stoppe
     expect(isRunning(deaf)).toBe(true);
     expect(left).toEqual([pid]);
     expect(fs.existsSync(path.join(records, `group-${pid}.json`))).toBe(true);
+
+    // A later stop, ps answering again, still reaches what the command started, though the command itself is gone.
+    expect(await stopRecordedGroup(records)).toEqual([]);
+    expect(isRunning(deaf)).toBe(false);
   } finally {
     try { process.kill(deaf, 'SIGKILL'); } catch { /* Already stopped. */ }
     fs.rmSync(directory, { recursive: true, force: true });
