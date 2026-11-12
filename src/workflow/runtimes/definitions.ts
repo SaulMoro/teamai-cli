@@ -2,17 +2,15 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { z } from 'zod';
 import { loadLocalConfigForScope } from '../../config.js';
-import { shippedDriverFile } from '../../default-drivers.js';
-import { workflowNamespacesOf } from '../../resource-namespaces.js';
 import { FOLDER_MARKERS } from '../../folder-markers.js';
-import { isSymlink, RESOURCE_LAYOUTS, Resources, type TeamTree } from '../../resources/resolver.js';
-import { getKnowledgeDir, getTeamaiHomeDir, type LocalConfig } from '../../types.js';
+import type { LocalConfig } from '../../types.js';
 import { JsonValueSchema } from '@teamai/shared/json';
 import { parseYaml } from '@teamai/shared/yaml';
 import { HOST_DRIVER, LOCAL_DRIVER, parseDriver, type DriverName } from '../driver-name.js';
 import { isReservedDriver } from '../reserved-drivers.js';
 import type { WorkflowFailure } from '../types.js';
 import { readRegularFileNoLink } from '@teamai/shared/regular-file';
+import { findInLayers, namesOf, personalDir, SHIPPED_PREFIX, type Layer, type LayerFind, type LayerItem } from './layers.js';
 
 // ─── Driver definitions ──────────────────────────────────
 //
@@ -23,9 +21,6 @@ import { readRegularFileNoLink } from '@teamai/shared/regular-file';
 //  `--driver x` and `--driver teamai-x` both run the shipped teamai-x when no definition is named x. `--driver host` runs
 //  the definition teamai builds in, with no runtime, and reads no file.
 //
-
-/** The prefix of every definition, runtime and sandbox profile teamai ships, as of every default workflow. */
-export const SHIPPED_PREFIX = 'teamai-';
 
 const RUNTIME_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 
@@ -99,35 +94,8 @@ export interface ResolvedDriver {
   unread?: string[];
 }
 
-/** The member's own directories, which teamai reads and never writes, so team code it caches never reads as the member's. */
-export const PERSONAL_DIRS = { drivers: 'drivers', runtimes: 'runtimes', sandboxes: 'sandboxes', tools: 'tools' } as const;
-
 /** The marker of a driver definition kept as a folder, `drivers/<name>/DRIVER.yaml`, which takes the folder's name. */
 const DRIVER_MARKER = FOLDER_MARKERS.drivers.marker;
-
-export function personalDir(kind: keyof typeof PERSONAL_DIRS): string {
-  return path.join(getTeamaiHomeDir(), PERSONAL_DIRS[kind]);
-}
-
-/**
- * The member's own item `name` of `kind`, as a file `<name>.yaml` or a folder `<name>/` holding `marker`, in their own
- * directory, which teamai reads and never writes; `duplicate` when both are there.
- */
-export async function personalItem(kind: keyof typeof PERSONAL_DIRS, name: string, marker: string): Promise<{ kind: 'file'; file: string } | { kind: 'folder'; folder: string } | { kind: 'missing' } | { kind: 'duplicate'; file: string; folder: string }> {
-  const file = path.join(personalDir(kind), `${name}.yaml`);
-  const folder = path.join(personalDir(kind), name);
-
-  const [isFile, isFolder] = await Promise.all([
-    fs.stat(file).then((stat) => stat.isFile(), () => false),
-    fs.stat(path.join(folder, marker)).then((stat) => stat.isFile(), () => false),
-  ]);
-
-  if (isFile && isFolder) return { kind: 'duplicate', file, folder: `${folder}${path.sep}` };
-
-  if (isFile) return { kind: 'file', file };
-
-  return isFolder ? { kind: 'folder', folder } : { kind: 'missing' };
-}
 
 async function readText(file: string): Promise<string | undefined> {
   try {
@@ -172,97 +140,49 @@ export function parseDriverDefinition(file: string, text: string): { ok: true; d
   return { ok: true, definition };
 }
 
-type Lookup = { kind: 'found'; driver: ResolvedDriver } | { kind: 'missing' } | { kind: 'failed'; failure: WorkflowFailure };
-
-async function read(file: string, source: DefinitionSource, config: LocalConfig): Promise<Lookup> {
+/** The definition in `file`, of `source`, read for `config`, or why it cannot run. */
+async function readDefinition(file: string, source: DefinitionSource, config: LocalConfig): Promise<{ ok: true; driver: ResolvedDriver } | { ok: false; failure: WorkflowFailure }> {
   const text = await readText(file);
 
-  if (text === undefined) return { kind: 'missing' };
+  if (text === undefined) return invalid(file, 'it cannot be read as a file of its own');
   const parsed = parseDriverDefinition(file, text);
 
-  return parsed.ok ? { kind: 'found', driver: { name: parsed.definition.name, definition: parsed.definition, source, file, config } } : { kind: 'failed', failure: parsed.failure };
+  return parsed.ok ? { ok: true, driver: { name: parsed.definition.name, definition: parsed.definition, source, file, config } } : parsed;
 }
 
-/**
- * `config`'s team tree as the resolver reads drivers, runtimes and sandboxes from it: the root, and each namespace active
- * for the member's workflows.
- */
-export function teamTreeOf(config: LocalConfig): TeamTree {
-  return { root: getKnowledgeDir(config), namespaces: () => workflowNamespacesOf(config) };
+const SOURCE_OF = { personal: 'personal', team: 'team', teamai: 'shipped' } as const satisfies Record<Layer, DefinitionSource>;
+
+/** The definition file of `item`: the file form itself, or the folder's `DRIVER.yaml`. */
+function definitionFile(item: LayerItem): string {
+  return item.form === 'folder' ? path.join(item.at, DRIVER_MARKER) : item.at;
 }
 
-/**
- * The one team definition named `name` in `config`'s team tree, by its file; the two active namespaces that both define
- * it; or `linked` when the tree's `drivers` folder is a link, whose definitions are not the team repo's.
- */
-async function teamDefinition(config: LocalConfig, name: string): Promise<{ kind: 'found'; file: string } | { kind: 'missing' } | { kind: 'conflict'; reason: 'duplicate' | 'two-namespaces'; first: string; second: string } | { kind: 'linked' }> {
-  const tree = teamTreeOf(config);
+/** The failure of a lookup of driver `name` that the first layer holding it refused. */
+function refusalOf(name: string, { refusal, layer, location }: Extract<LayerFind, { kind: 'refused' }>): WorkflowFailure {
+  const fix = layer === 'personal' ? 'Fix it, and start again.' : 'Fix it, push it, run teamai pull, and start again.';
 
-  if (await isSymlink(path.join(tree.root, RESOURCE_LAYOUTS.drivers.dir))) return { kind: 'linked' };
-  const resolution = await Resources.resolve(RESOURCE_LAYOUTS.drivers, name, { team: tree });
-
-  switch (resolution.kind) {
-    case 'missing':
-      return resolution;
-    case 'conflict':
-      return { kind: 'conflict', reason: resolution.reason, first: resolution.first.source.path, second: resolution.second.source.path };
-    case 'resolved': {
-      const { source } = resolution.item;
-
-      return { kind: 'found', file: source.kind === 'folder' ? path.join(source.full, DRIVER_MARKER) : source.full };
-    }
-
-    default: {
-      const unhandled: never = resolution;
-
-      return unhandled;
-    }
-  }
-}
-
-async function fromTeam(config: LocalConfig, name: string): Promise<Lookup> {
-  const found = await teamDefinition(config, name);
-
-  switch (found.kind) {
-    case 'missing':
-      return found;
-    case 'linked':
-      return { kind: 'failed', failure: { code: 'driver_invalid', message: 'drivers in the team repo is a link, and teamai reads the team\'s driver definitions only from a folder the team repo holds, so it reads none of them. Replace the link with the folder, push it, run teamai pull, and start again.' } };
-    case 'conflict':
-      return {
-        kind: 'failed',
-        failure: {
-          code: 'driver_namespace_conflict',
-          message: found.reason === 'duplicate'
-            ? `Driver "${name}" is defined twice in one place (${found.first} and ${found.second}). Keep one, push it, run teamai pull, and start again.`
-            : `Driver "${name}" is defined in two active namespaces (${found.first} and ${found.second}). Keep it in one namespace, push it, run teamai pull, and start again.`,
-        },
-      };
-    case 'found':
-      return read(found.file, 'team', config);
-    default: {
-      const unhandled: never = found;
-
-      return unhandled;
-    }
-  }
-}
-
-/** The member's own definition `name`, `~/.teamai/drivers/<name>.yaml` or `<name>/DRIVER.yaml`. */
-async function fromPersonal(config: LocalConfig, name: string): Promise<Lookup> {
-  const found = await personalItem('drivers', name, DRIVER_MARKER);
-
-  switch (found.kind) {
-    case 'missing':
-      return found;
+  switch (refusal.kind) {
     case 'duplicate':
-      return { kind: 'failed', failure: { code: 'driver_namespace_conflict', message: `Driver "${name}" is defined twice in your own drivers (${found.file} and ${found.folder}). Keep one, and start again.` } };
-    case 'file':
-      return read(found.file, 'personal', config);
-    case 'folder':
-      return read(path.join(found.folder, DRIVER_MARKER), 'personal', config);
+      return {
+        code: 'driver_namespace_conflict',
+        message: layer === 'personal'
+          ? `Driver "${name}" is defined twice in your own drivers (${refusal.first} and ${refusal.second}). Keep one, and start again.`
+          : `Driver "${name}" is defined twice in one place (${refusal.first} and ${refusal.second}). Keep one, push it, run teamai pull, and start again.`,
+      };
+    case 'two-namespaces':
+      return { code: 'driver_namespace_conflict', message: `Driver "${name}" is defined in two active namespaces (${refusal.first} and ${refusal.second}). Keep it in one namespace, push it, run teamai pull, and start again.` };
+    case 'linked-dir':
+      return { code: 'driver_invalid', message: `${refusal.dir} in the team repo is a link, and teamai reads the team's driver definitions only from a folder the team repo holds, so it reads none of them. Replace the link with the folder, push it, run teamai pull, and start again.` };
+    case 'linked-folder':
+      return { code: 'driver_invalid', message: `Driver "${name}": its folder ${refusal.folder} in the team repo is a link, and teamai reads a team driver definition only from a folder the team repo holds. Replace the link with the folder, push it, run teamai pull, and start again.` };
+    case 'holds-link':
+      return { code: 'driver_invalid', message: `Driver definition ${location} is not valid: it holds the link ${refusal.link}, and teamai reads a driver only from what its folder itself holds. ${fix}` };
+    case 'unreadable':
+      return { code: 'driver_invalid', message: `Driver definition ${location} is not valid: ${refusal.reason}. ${fix}` };
+    case 'no-marker':
+      return { code: 'driver_invalid', message: `Driver definition ${location} is not valid: it holds no ${refusal.marker}, the file that defines a driver kept as a folder. ${fix}` };
     default: {
-      const unhandled: never = found;
+      const unhandled: never = refusal;
 
       return unhandled;
     }
@@ -287,9 +207,11 @@ async function hostDriver(config: LocalConfig, { personal, user }: { personal: b
   const own = personal ? mine.filter((_, index) => present[index]) : [];
 
   const teams = await Promise.all([config, ...(user ? [user] : [])].map(async (scope) => {
-    const found = await teamDefinition(scope, HOST_DRIVER);
+    const found = await findInLayers('drivers', [HOST_DRIVER], { personal: false, teams: [scope], teamai: false });
 
-    return found.kind === 'found' ? [found.file] : found.kind === 'conflict' ? [found.first, found.second] : [];
+    if (found.kind === 'found') return [definitionFile(found.item)];
+
+    return found.kind === 'refused' && (found.refusal.kind === 'duplicate' || found.refusal.kind === 'two-namespaces') ? [found.refusal.first, found.refusal.second] : [];
   }));
 
   return { name: HOST_DRIVER, definition: HOST_DEFINITION, source: 'builtin', file: 'teamai\'s built-in host driver', config, unread: [...own, ...teams.flat()] };
@@ -300,27 +222,32 @@ async function hostDriver(config: LocalConfig, { personal, user }: { personal: b
  * definitions, for a run handed over from another member.
  */
 export async function resolveDriver(config: LocalConfig, name: string, { personal }: { personal: boolean }): Promise<{ ok: true; driver: ResolvedDriver } | { ok: false; failure: WorkflowFailure }> {
-  // `local` is no definition's name: it runs `teamai-local`, the member's, then the team's, then teamai's.
   const user = config.scope === 'project' ? await loadLocalConfigForScope('user', undefined, { dryRun: true }) : null;
 
   if (name === HOST_DRIVER) return { ok: true, driver: await hostDriver(config, { personal, user }) };
   const named = name === LOCAL_DRIVER ? { ok: true as const } : definitionName(name);
 
   if (!named.ok) return { ok: false, failure: { code: 'driver_not_found', message: `No driver definition can be named "${name}": ${named.reason}.` } };
-  const shipped = name.startsWith(SHIPPED_PREFIX) ? name : `${SHIPPED_PREFIX}${name}`;
+  // `local` is no definition's name: it runs `teamai-local`, the member's, then the team's, then teamai's.
+  const found = await findInLayers('drivers', name === LOCAL_DRIVER ? [`${SHIPPED_PREFIX}${LOCAL_DRIVER}`] : namesOf(name), { personal, teams: [config, ...(user ? [user] : [])] });
 
-  const sources = (candidate: string): Array<() => Promise<Lookup>> => [
-    ...(personal ? [() => fromPersonal(config, candidate)] : []),
-    () => fromTeam(config, candidate),
-    ...(user ? [() => fromTeam(user, candidate)] : []),
-  ];
+  switch (found.kind) {
+    case 'found': {
+      const { item } = found;
+      const read = await readDefinition(definitionFile(item), SOURCE_OF[item.layer], item.config ?? config);
 
-  for (const lookup of [...(name === LOCAL_DRIVER ? [] : sources(name)), ...(shipped === name ? [] : sources(shipped)), () => read(shippedDriverFile(shipped), 'shipped', config)]) {
-    const found = await lookup();
+      return read.ok ? { ok: true, driver: read.driver } : read;
+    }
 
-    if (found.kind === 'found') return { ok: true, driver: found.driver };
+    case 'refused':
+      return { ok: false, failure: refusalOf(name, found) };
+    case 'missing':
+      break;
+    default: {
+      const unhandled: never = found;
 
-    if (found.kind === 'failed') return { ok: false, failure: found.failure };
+      return unhandled;
+    }
   }
 
   return {

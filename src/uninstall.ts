@@ -1559,7 +1559,7 @@ async function buildRemovalPlan(
 
   // Read before anything is deleted: what the projects still set up need stays.
   const projectsKept = includeShared && globalAdapters ? await keptForProjects() : { projects: [], paths: [] };
-  const { PERSONAL_DIRS } = await import('./workflow/runtimes/definitions.js');
+  const { PERSONAL_DIRS } = await import('./workflow/runtimes/layers.js');
 
   const keptOwn = includeShared
     ? (await Promise.all(Object.values(PERSONAL_DIRS).map((dir) => path.join(getTeamaiHomeDir(), dir))

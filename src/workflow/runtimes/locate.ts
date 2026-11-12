@@ -7,15 +7,16 @@ import { RUNTIME_PROTOCOL } from '@teamai/runtime-protocol';
 import { resolvePathCommand } from '@teamai/shared/cli-path';
 import { readRegularFile, readRegularFileNoLink } from '@teamai/shared/regular-file';
 import { parseYaml } from '@teamai/shared/yaml';
-import { teamaiBin, teamaiPackageDir } from '../../default-drivers.js';
+import { teamaiBin } from '../../default-drivers.js';
 import type { RunMode } from '../../launch-context.js';
-import { isSymlink, RESOURCE_LAYOUTS, Resources, type ShippedFile } from '../../resources/resolver.js';
+import { isSymlink, RESOURCE_LAYOUTS } from '../../resources/resolver.js';
 import { acceptTeamCommand } from '../../tool-instances.js';
-import { getKnowledgeDir, getTeamaiHomeDir } from '../../types.js';
+import { getTeamaiHomeDir } from '../../types.js';
 import { writeJsonAtomic } from '../../utils/fs.js';
 import type { WorkflowFailure } from '../types.js';
-import { personalItem, SHIPPED_PREFIX, teamTreeOf, type ResolvedDriver } from './definitions.js';
-import { firstLink, folderEntries, folderRevision } from './resource-folder.js';
+import type { ResolvedDriver } from './definitions.js';
+import { findInLayers, namesOf, type Layer, type LayerFind, type LayerItem } from './layers.js';
+import { folderEntries, folderRevision } from './resource-folder.js';
 
 // ─── Where a step runtime comes from ─────────────────────
 //
@@ -43,7 +44,7 @@ const RuntimeMarkerSchema = z.object({
 }).strict();
 
 /** The layer a runtime was found in, which decides what a person accepts before it runs. */
-export type RuntimeLayer = 'personal' | 'team' | 'teamai';
+export type RuntimeLayer = Layer;
 
 /** How teamai starts a runtime: the Node that runs teamai runs a built file of teamai's own package, or the runtime's executable runs. */
 export type RuntimeLaunch = { readonly kind: 'node'; readonly file: string } | { readonly kind: 'executable'; readonly executable: string };
@@ -79,27 +80,8 @@ export interface ExternalRuntime {
 /** Where a runtime was found: the built-in `tools`, or an external one. */
 export type RuntimeSource = { readonly kind: 'builtin'; readonly name: 'tools' } | ExternalRuntime;
 
-/**
- * What one layer gives for one name: the runtime; nothing; a definition whose marker or entry cannot run (`unusable`);
- * or one the run refuses outright, such as one reached through a link. Either of the last two fails the run.
- */
-type LayerLookup =
-  | { readonly kind: 'found'; readonly source: ExternalRuntime }
-  | { readonly kind: 'missing' }
-  | { readonly kind: 'unusable'; readonly failure: WorkflowFailure }
-  | { readonly kind: 'refused'; readonly failure: WorkflowFailure };
-
-/** A definition of one name in one layer, as the lookup reads it before its marker is parsed. */
-interface Definition {
-  readonly layer: RuntimeLayer;
-  readonly resource: string;
-  readonly form: 'file' | 'folder';
-  /** The file form itself, or the folder. */
-  readonly at: string;
-  readonly location: string;
-  /** The marker's text, as the teamai layer holds it read; read from `at` otherwise. */
-  readonly text?: string;
-}
+/** The runtime a definition declares, or why its marker or entry cannot run, which fails the run. */
+type DefinitionRead = { readonly kind: 'found'; readonly source: ExternalRuntime } | { readonly kind: 'unusable'; readonly failure: WorkflowFailure };
 
 function sha256(text: string): string {
   return createHash('sha256').update(text).digest('hex');
@@ -127,18 +109,18 @@ export function fixOf(layer: RuntimeLayer): string {
  * entry its form allows that is there: a path inside the folder, an executable on PATH for a file of the member's or
  * the team's, a program of teamai's own package for teamai's.
  */
-async function readDefinition(driver: ResolvedDriver, use: string, definition: Definition): Promise<LayerLookup> {
+async function readDefinition(driver: ResolvedDriver, use: string, definition: LayerItem): Promise<DefinitionRead> {
   const markerFile = definition.form === 'folder' ? path.join(definition.at, RUNTIME_MARKER) : definition.at;
   // What the marker itself says wrong names the marker; what the folder holds names the folder.
   const markerLocation = definition.form === 'folder' && /[\\/]$/.test(definition.location) ? `${definition.location}${RUNTIME_MARKER}` : definition.location;
 
-  const refuse = (at: string, reason: string): LayerLookup => ({
+  const refuse = (at: string, reason: string): DefinitionRead => ({
     kind: 'unusable',
     failure: { code: 'runtime_not_found', message: `Driver "${driver.name}" uses runtime "${use}", and ${at} cannot run it: ${reason}. ${fixOf(definition.layer)}` },
   });
 
-  const unusable = (reason: string): LayerLookup => refuse(definition.location, reason);
-  const badMarker = (reason: string): LayerLookup => refuse(markerLocation, reason);
+  const unusable = (reason: string): DefinitionRead => refuse(definition.location, reason);
+  const badMarker = (reason: string): DefinitionRead => refuse(markerLocation, reason);
 
   let text = definition.text;
 
@@ -195,7 +177,7 @@ async function readDefinition(driver: ResolvedDriver, use: string, definition: D
 type RuntimeEntry = z.infer<typeof RuntimeMarkerSchema>['entry'];
 
 /** How `definition`'s `entry` starts it, and what a person accepts first, or why it cannot: each form and layer takes one kind of entry. */
-async function launchOf(definition: Definition, entry: RuntimeEntry): Promise<{ ok: true; launch: RuntimeLaunch; trust: RuntimeTrust } | { ok: false; reason: string }> {
+async function launchOf(definition: LayerItem, entry: RuntimeEntry): Promise<{ ok: true; launch: RuntimeLaunch; trust: RuntimeTrust } | { ok: false; reason: string }> {
   const isTeam = definition.layer === 'team';
 
   switch (entry.kind) {
@@ -238,92 +220,38 @@ async function launchOf(definition: Definition, entry: RuntimeEntry): Promise<{ 
   }
 }
 
-/** The member's own runtime named `name`, in ~/.teamai/runtimes/. */
-async function fromPersonal(driver: ResolvedDriver, use: string, name: string): Promise<LayerLookup> {
-  const found = await personalItem('runtimes', name, RUNTIME_MARKER);
+/** The failure of a lookup the first layer holding `use`'s runtime refused. */
+function refusalOf(driver: ResolvedDriver, use: string, found: Extract<LayerFind, { kind: 'refused' }>): WorkflowFailure {
+  const { refusal, layer, location, resource } = found;
+  const opening = `Driver "${driver.name}" uses runtime "${use}"`;
+  const unusable = (reason: string): WorkflowFailure => ({ code: 'runtime_not_found', message: `${opening}, and ${location} cannot run it: ${reason}. ${fixOf(layer)}` });
 
-  switch (found.kind) {
-    case 'missing':
-      return found;
+  switch (refusal.kind) {
     case 'duplicate':
-      return { kind: 'refused', failure: { code: 'runtime_namespace_conflict', message: `Runtime "${name}" is defined twice in your own runtimes (${found.file} and ${found.folder}). Keep one, and start again.` } };
-    case 'file':
-    case 'folder':
-      return readDefinition(driver, use, { layer: 'personal', resource: name, form: found.kind, at: found.kind === 'file' ? found.file : found.folder, location: found.kind === 'file' ? found.file : `${found.folder}${path.sep}` });
+      return {
+        code: 'runtime_namespace_conflict',
+        message: layer === 'personal'
+          ? `Runtime "${resource}" is defined twice in your own runtimes (${refusal.first} and ${refusal.second}). Keep one, and start again.`
+          : `Runtime "${resource}" is defined twice in one place (${refusal.first} and ${refusal.second}). Keep one, push it, run teamai pull, and start again.`,
+      };
+    case 'two-namespaces':
+      return { code: 'runtime_namespace_conflict', message: `Runtime "${resource}" is defined in two active namespaces (${refusal.first} and ${refusal.second}). Keep one, push it, run teamai pull, and start again.` };
+    case 'linked-dir':
+      return { code: 'runtime_not_found', message: `${opening}, and ${refusal.dir} in the team repo is a link, and teamai runs a team runtime only from a folder the team repo holds. Replace the link with the folder, push it, run teamai pull, and start again.` };
+    case 'linked-folder':
+      return { code: 'runtime_not_found', message: `${opening}, whose folder ${refusal.folder} in the team repo is a link, and teamai runs a team runtime only from a folder the team repo holds. Replace the link with the folder, push it, run teamai pull, and start again.` };
+    case 'holds-link':
+      return { code: 'runtime_not_found', message: `${opening}, whose folder ${location.slice(0, -1)} in the team repo holds the link ${refusal.link}, and teamai runs a team runtime only when its folder holds no link, so the revision you accept is all it runs. Replace the link with what it names, push it, run teamai pull, and start again.` };
+    case 'unreadable':
+      return unusable(refusal.reason);
+    case 'no-marker':
+      return unusable(`it holds no ${refusal.marker}, the marker that names its protocol and its code, such as protocol: 1 and entry: ./runtime`);
     default: {
-      const unhandled: never = found;
+      const unhandled: never = refusal;
 
       return unhandled;
     }
   }
-}
-
-/** The team's runtime named `name` in `driver`'s team tree, among the root and the active namespaces. */
-async function fromTeam(driver: ResolvedDriver, use: string, name: string): Promise<LayerLookup> {
-  const tree = teamTreeOf(driver.config);
-  const base = getKnowledgeDir(driver.config);
-  const refused = (message: string): LayerLookup => ({ kind: 'refused', failure: { code: 'runtime_not_found', message } });
-
-  if (await isSymlink(path.join(base, RESOURCE_LAYOUTS.runtimes.dir))) {
-    return refused(`Driver "${driver.name}" uses runtime "${use}", and runtimes in the team repo is a link, and teamai runs a team runtime only from a folder the team repo holds. Replace the link with the folder, push it, run teamai pull, and start again.`);
-  }
-
-  const { resolutions, diagnostics } = await Resources.survey(RESOURCE_LAYOUTS.runtimes, { team: tree });
-  // A folder that is a link holds code the team repo does not, so it is refused rather than passed over.
-  const linked = diagnostics.find((diagnostic) => diagnostic.kind === 'invalid' && path.posix.basename(diagnostic.path) === name && diagnostic.path.endsWith('/'));
-
-  if (linked) {
-    const relative = linked.path.slice(0, -1);
-
-    return refused(`Driver "${driver.name}" uses runtime "${use}", whose folder ${relative} in the team repo is a link, and teamai runs a team runtime only from a folder the team repo holds. Replace the link with the folder, push it, run teamai pull, and start again.`);
-  }
-
-  const resolution = resolutions.find((candidate) => candidate.name === name);
-
-  if (resolution === undefined) {
-    // A folder in the layout before the marker holds its code and nothing that says it is a runtime, which the resolver
-    // reads as a namespace: it fails rather than lets another layer's runtime of that name run.
-    const folder = path.join(base, RESOURCE_LAYOUTS.runtimes.dir, name);
-    const isOldLayout = (await fs.lstat(path.join(folder, 'runtime')).catch(() => undefined))?.isFile() === true;
-
-    if (!isOldLayout) return { kind: 'missing' };
-
-    return { kind: 'refused', failure: { code: 'runtime_not_found', message: `Driver "${driver.name}" uses runtime "${use}", and ${RESOURCE_LAYOUTS.runtimes.dir}/${name}/ cannot run it: it holds no ${RUNTIME_MARKER}, the marker that names its protocol and its code, such as protocol: 1 and entry: ./runtime. ${fixOf('team')}` } };
-  }
-
-  if (resolution.kind === 'conflict') {
-    const where = resolution.reason === 'duplicate' ? 'twice in one place' : 'in two active namespaces';
-
-    return { kind: 'refused', failure: { code: 'runtime_namespace_conflict', message: `Runtime "${name}" is defined ${where} (${resolution.first.source.path} and ${resolution.second.source.path}). Keep one, push it, run teamai pull, and start again.` } };
-  }
-
-  const { source } = resolution.item;
-
-  if (source.kind === 'folder') {
-    const found = await firstLink(source.full);
-
-    if (!found.ok) return refused(`Driver "${driver.name}" uses runtime "${use}", and ${source.path} cannot run it: ${found.reason}. ${fixOf('team')}`);
-    const { link } = found;
-
-    if (link !== undefined) {
-      return refused(`Driver "${driver.name}" uses runtime "${use}", whose folder ${source.path.slice(0, -1)} in the team repo holds the link ${link}, and teamai runs a team runtime only when its folder holds no link, so the revision you accept is all it runs. Replace the link with what it names, push it, run teamai pull, and start again.`);
-    }
-  }
-
-  return readDefinition(driver, use, { layer: 'team', resource: name, form: source.kind === 'folder' ? 'folder' : 'file', at: source.full, location: source.path });
-}
-
-/** teamai's own runtime named `name`, in `runtimes/` of its package. */
-async function fromTeamai(driver: ResolvedDriver, use: string, name: string): Promise<LayerLookup> {
-  const root = teamaiPackageDir();
-  const resolution = await Resources.resolve(RESOURCE_LAYOUTS.runtimes, name, { teamai: { root, read: (file: ShippedFile) => file } });
-
-  if (resolution.kind !== 'resolved' || resolution.item.layer !== 'teamai') return { kind: 'missing' };
-  const { item } = resolution;
-
-  return readDefinition(driver, use, {
-    layer: 'teamai', resource: name, form: item.source.kind === 'folder' ? 'folder' : 'file', at: item.source.full, location: `teamai's ${item.shipped.relativePath}`, text: item.shipped.content,
-  });
 }
 
 /** The runtime `use` names for `driver`, or why there is none. */
@@ -339,56 +267,35 @@ export async function locateRuntime(driver: ResolvedDriver, use: string): Promis
     return { ok: false, failure: { code: 'runtime_not_found', message: `Driver "${driver.name}" uses runtime "host", the name teamai gives the command slot it adds to every definition. Name the runtime otherwise, or use tools.` } };
   }
 
-  const names = use.startsWith(SHIPPED_PREFIX) ? [use] : [use, `${SHIPPED_PREFIX}${use}`];
+  const found = await findInLayers('runtimes', namesOf(use), { personal: true, teams: [driver.config] });
 
-  for (const name of names) {
-    for (const layer of [fromPersonal, fromTeam, fromTeamai]) {
-      const found = await layer(driver, use, name);
+  switch (found.kind) {
+    case 'found': {
+      // A definition that cannot run fails the run: another layer's never stands in for the one the member was given.
+      const read = await readDefinition(driver, use, found.item);
 
-      switch (found.kind) {
-        case 'found': {
-          const replaced = found.source.layer === 'teamai' ? undefined : await shippedRuntime(names);
+      if (read.kind !== 'found') return { ok: false, failure: read.failure };
 
-          return { ok: true, source: replaced === undefined ? found.source : { ...found.source, replaces: replaced } };
-        }
+      return { ok: true, source: found.replaces === undefined ? read.source : { ...read.source, replaces: found.replaces } };
+    }
 
-        // A definition that cannot run fails the run: another layer's never stands in for the one the member was given.
-        case 'refused':
-        case 'unusable':
-          return { ok: false, failure: found.failure };
-        case 'missing':
-          break;
-        default: {
-          const unhandled: never = found;
+    case 'refused':
+      return { ok: false, failure: refusalOf(driver, use, found) };
+    case 'missing':
+      return {
+        ok: false,
+        failure: {
+          code: 'runtime_not_found',
+          message: `Driver "${driver.name}" uses runtime "${use}", and none is declared: add runtimes/${use}.yaml (or runtimes/${use}/${RUNTIME_MARKER} with its code) to the team repo and run teamai pull, or add ~/.teamai/runtimes/${use}.yaml for yourself.`,
+        },
+      };
+    default: {
+      const unhandled: never = found;
 
-          return unhandled;
-        }
-      }
+      return unhandled;
     }
   }
-
-  return {
-    ok: false,
-    failure: {
-      code: 'runtime_not_found',
-      message: `Driver "${driver.name}" uses runtime "${use}", and none is declared: add runtimes/${use}.yaml (or runtimes/${use}/${RUNTIME_MARKER} with its code) to the team repo and run teamai pull, or add ~/.teamai/runtimes/${use}.yaml for yourself.`,
-    },
-  };
 }
-
-/** The first of `names` teamai ships a runtime by, or none. */
-async function shippedRuntime(names: readonly string[]): Promise<string | undefined> {
-  const teamai = { root: teamaiPackageDir(), read: (file: ShippedFile) => file };
-
-  for (const name of names) {
-    const resolution = await Resources.resolve(RESOURCE_LAYOUTS.runtimes, name, { teamai });
-
-    if (resolution.kind === 'resolved' && resolution.item.layer === 'teamai') return name;
-  }
-
-  return undefined;
-}
-
 
 const TrustFileSchema = z.object({ accepted: z.array(z.object({ dir: z.string(), revision: z.string(), acceptedAt: z.string() })) });
 

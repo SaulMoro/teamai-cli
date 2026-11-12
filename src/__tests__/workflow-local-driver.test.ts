@@ -21,7 +21,7 @@ import { attemptDir, AttemptIdSchema, attemptResultPath, readRun, RunIdSchema } 
 import { recordGroup } from '@teamai/shared/process-group';
 import { attemptRuntimePath, attemptToolHome, readAttemptPlacement, recordInProcessAttempt } from '../workflow/runtimes/attempt.js';
 import { openDriver } from '../workflow/runtimes/sources.js';
-import { personalDir } from '../workflow/runtimes/definitions.js';
+import { personalDir } from '../workflow/runtimes/layers.js';
 import { cancelRun } from '../workflow/run-controls.js';
 import { stdioStepRuntime } from '../workflow/runtimes/stdio.js';
 import type { DriverRuntimes } from '../workflow/drivers/local/local-driver.js';
