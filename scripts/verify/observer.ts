@@ -96,12 +96,26 @@ export interface ProcEntry {
 
 /**
  * Each bwrap step in `procs` whose arguments name a path under one of `roots`: its outermost bwrap, and the first of
- * its descendants that are not bwrap, whose environment is the step's. A bwrap inside another is that step's own.
+ * its descendants that are not bwrap, whose environment is the step's. A bwrap anywhere below another is that step's own.
  */
 export function bwrapSteps(procs: readonly ProcEntry[], roots: readonly string[]): Array<{ bwrap: string; steps: string[] }> {
   const isBwrap = (args: readonly string[]): boolean => path.basename(args[0] ?? '') === 'bwrap';
   const bwrapPids = new Set(procs.flatMap((proc) => (isBwrap(proc.args) ? [proc.pid] : [])));
-  const outermost = procs.filter((proc) => bwrapPids.has(proc.pid) && !bwrapPids.has(proc.ppid) && proc.args.some((arg) => roots.some((root) => arg.startsWith(root))));
+  const parentOf = new Map(procs.map((proc) => [proc.pid, proc.ppid]));
+
+  // A bwrap with a bwrap anywhere above it is that step's own, as one its tool runs.
+  const isUnderBwrap = (pid: string): boolean => {
+    const seen = new Set<string>();
+
+    for (let at = parentOf.get(pid); at !== undefined && !seen.has(at); at = parentOf.get(at)) {
+      if (bwrapPids.has(at)) return true;
+      seen.add(at);
+    }
+
+    return false;
+  };
+
+  const outermost = procs.filter((proc) => bwrapPids.has(proc.pid) && !isUnderBwrap(proc.pid) && proc.args.some((arg) => roots.some((root) => arg.startsWith(root))));
 
   return outermost.flatMap((outer) => {
     for (let frontier = [outer.pid]; frontier.length > 0;) {

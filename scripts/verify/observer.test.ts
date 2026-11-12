@@ -68,4 +68,15 @@ describe('the sandbox observer', () => {
       { pid: '201', ppid: '200', args: ['sh'] },
     ], ['/w/x'])).toEqual([{ bwrap: '100', steps: ['102'] }]);
   });
+
+  it("reads no second step from a bwrap the step's own tool runs further down", () => {
+    const args = ['/usr/bin/bwrap', '--bind', '/w/x/project', '/w/x/project', 'sh', '-c', 'step'];
+
+    expect(bwrapSteps([
+      { pid: '100', ppid: '50', args },
+      { pid: '102', ppid: '100', args: ['node', 'tool.js'] },
+      { pid: '103', ppid: '102', args: ['/usr/bin/bwrap', '--ro-bind', '/w/x/project', '/w/x/project', 'sh'] },
+      { pid: '104', ppid: '103', args: ['sh'] },
+    ], ['/w/x'])).toEqual([{ bwrap: '100', steps: ['102'] }]);
+  });
 });
