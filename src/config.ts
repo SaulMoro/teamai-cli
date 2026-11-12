@@ -41,7 +41,7 @@ import { loadRoleAssignmentsIfPresent, resolveAssignedRoles, ROLE_ASSIGNMENTS_FI
 import { warnOnce } from './utils/warn-once.js';
 import { AllowSchema } from './workflow/requirements.js';
 import { withToolInstances } from './tool-instances.js';
-import { resolveResourceNamespaces } from './resource-namespaces.js';
+import { workflowNamespacesOf } from './resource-namespaces.js';
 
 /**
  * Loads that serve a --dry-run write nothing: the legacy role migration, the
@@ -301,9 +301,8 @@ function remembered(config: LocalConfig): LocalConfig {
 }
 
 /**
- * The namespaces `member` receives drivers, runtimes and tool instances from in the team repo at `repoPath`: the workflow
- * namespaces its roles and projects activate, or every namespace on disk when nothing filters. A manifest that cannot be
- * read activates none. With no member loaded for the repo, only a repo with no manifest to filter by reads its namespaces.
+ * The namespaces `member` receives tool instances from in the team repo at `repoPath` (`workflowNamespacesOf`). With no
+ * member loaded for the repo, only a repo with no manifest to filter by reads its namespaces.
  */
 async function memberNamespaces(repoPath: string, member: LocalConfig | undefined): Promise<readonly string[] | 'legacy'> {
   if (member === undefined) {
@@ -312,13 +311,7 @@ async function memberNamespaces(repoPath: string, member: LocalConfig | undefine
     return manifests.some(Boolean) ? [] : 'legacy';
   }
 
-  try {
-    const resolved = await resolveResourceNamespaces(member);
-
-    return resolved === null ? 'legacy' : resolved.activeNamespaces.workflows ?? [];
-  } catch {
-    return [];
-  }
+  return workflowNamespacesOf(member);
 }
 
 /**
