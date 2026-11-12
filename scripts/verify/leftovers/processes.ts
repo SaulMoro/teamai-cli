@@ -39,17 +39,25 @@ type Captured = ReturnType<typeof captureOn>;
 
 /**
  * The processes `ps` printed on macOS (`ps`, its stdout), each with the working directory `lsof` gives it, and what
- * of them could not be looked at: an lsof that did not end with 0, on a timeout too, listed only part of them.
+ * of them could not be looked at: an lsof that did not end with 0, on a timeout too, or wrote a note on stderr,
+ * listed only part of them.
  */
 export function readDarwinTable({ label, ps, lsof }: { label: string; ps: string; lsof: Captured }) {
   const cwdOf = parseLsofCwd(lsof.stdout);
-  const what = `working directories on ${label}`;
-
-  const unseen: Observed[] = lsof.stdout === ''
-    ? [{ kind: 'not_observed', what, why: `lsof listed none (${lsof.why})` }]
-    : lsof.code === 0 ? [] : [{ kind: 'not_observed', what, why: `lsof ended with ${lsof.code ?? 'no exit code'} after listing ${cwdOf.size} (${lsof.why}), so a process it missed may be the world's` }];
+  const gap = lsofGap(lsof, cwdOf.size);
+  const unseen: Observed[] = gap === undefined ? [] : [{ kind: 'not_observed', what: `working directories on ${label}`, why: gap }];
 
   return { procs: parsePs(ps).map((proc) => ({ ...proc, cwd: cwdOf.get(proc.pid) })), unseen };
+}
+
+/** Why `lsof`, which listed `count` working directories, may have missed some; undefined when it saw them all. */
+function lsofGap(lsof: Captured, count: number): string | undefined {
+  if (lsof.stdout === '') return `lsof listed none (${lsof.why})`;
+
+  if (lsof.code !== 0) return `lsof ended with ${lsof.code ?? 'no exit code'} after listing ${count} (${lsof.why}), so a process it missed may be the world's`;
+
+  // lsof that sees everything says nothing on stderr; a note there, such as a permission one, is a partial answer.
+  return lsof.why === '' ? undefined : `lsof listed ${count} but said ${lsof.why}, so a process it missed may be the world's`;
 }
 
 /** One line per process from /proc: pid, ppid, cwd and the arguments joined by spaces, tab-separated. Reads no environ. */

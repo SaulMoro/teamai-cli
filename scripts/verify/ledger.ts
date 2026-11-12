@@ -13,7 +13,7 @@ import { z } from 'zod';
 import { defaultToolHome, envToolHome, toolHome } from '../../src/tool-home.js';
 import { detectToolRoot, RELOCATABLE_TOOLS, TeamaiConfigBaseSchema } from '../../src/types.js';
 import { MCP_SERVER_KEY } from '../../src/resources/mcp-format.js';
-import type { Home, ToolDescriptor } from '@teamai/tool-core/definition';
+import type { ToolDescriptor } from '@teamai/tool-core/definition';
 import { isJsonObject, parseJson, type JsonValue } from '@teamai/shared/json';
 import { PERSONAL_DIRS } from '../../src/workflow/runtimes/layers.js';
 import { leftoversSection } from './leftovers.js';
@@ -248,7 +248,7 @@ const TOOL_HOMES = [...new Set(TOOL_ORDER.map((tool) => `home/${descriptorOf(too
  * where teamai may have written them: Claude's ~/.claude.json is both.
  */
 const TOOL_STATE_FILES = new Map(TOOL_ORDER.flatMap((tool) => {
-  const { home, mcp }: { home: Home; mcp: ToolDescriptor['mcp'] } = descriptorOf(tool);
+  const { home, mcp }: Pick<ToolDescriptor, 'home' | 'mcp'> = descriptorOf(tool);
   const servers = mcp.user instanceof Object && mcp.user.format !== 'codex' ? MCP_SERVER_KEY[mcp.user.format] : undefined;
 
   return (home.stateFiles ?? []).map((file): [string, string | undefined] => [`home/${file}`, servers]);

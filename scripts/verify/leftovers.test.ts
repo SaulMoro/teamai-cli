@@ -51,7 +51,7 @@ describe('what each row reads from what an engine or the process table printed',
     expect(parseProcLines('42\t1\t/w/20261112T120000-aaaaaa/project\tnode /x a b\nnot a line\n')).toEqual([{ pid: 42, ppid: 1, cwd: '/w/20261112T120000-aaaaaa/project', command: 'node /x a b' }]);
   });
 
-  it('says it could not see every working directory on macOS when lsof ends without success, whatever it listed before', async () => {
+  it('says it could not see every working directory on macOS when lsof ends without success or with a note, whatever it listed before', async () => {
     const { readDarwinTable } = await import('./leftovers/processes.js');
     const ps = '  500     1 node /w/x/bin/teamai\n  600     1 sleep 900\n';
     const listed = (lsof: { code: number | null; stdout: string; why: string }) => readDarwinTable({ label: 'this machine', ps, lsof });
@@ -62,6 +62,9 @@ describe('what each row reads from what an engine or the process table printed',
     ]);
     expect(listed({ code: null, stdout: 'p500\nfcwd\nn/w\n', why: 'spawnSync lsof ETIMEDOUT' }).unseen).toEqual([
       { kind: 'not_observed', what: 'working directories on this machine', why: "lsof ended with no exit code after listing 1 (spawnSync lsof ETIMEDOUT), so a process it missed may be the world's" },
+    ]);
+    expect(listed({ code: 0, stdout: 'p500\nfcwd\nn/w\n', why: 'lsof: no pwd entry for UID 501' }).unseen).toEqual([
+      { kind: 'not_observed', what: 'working directories on this machine', why: "lsof listed 1 but said lsof: no pwd entry for UID 501, so a process it missed may be the world's" },
     ]);
     expect(listed({ code: 0, stdout: '', why: '' }).unseen).toEqual([{ kind: 'not_observed', what: 'working directories on this machine', why: 'lsof listed none ()' }]);
     expect(listed({ code: 0, stdout: 'p500\nfcwd\nn/w\n', why: '' }).procs.map((proc) => proc.cwd)).toEqual(['/w', undefined]);
