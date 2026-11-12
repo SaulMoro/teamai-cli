@@ -123,6 +123,29 @@ describe('which runtime a name finds', () => {
     expect(await located(team)).toMatchObject({ layer: 'team', accepted: false });
   });
 
+  it('runs a team folder at the revision accepted, though a pull changes the folder once the runtime started', async () => {
+    const seen = path.join(tempDir('teamai-runtime-seen-'), 'payload.txt');
+    // The runtime reads a file of its own folder a while after it started, then exits, as code that loads a module late.
+    const team = teamWith({
+      'runtimes/acme/RUNTIME.yaml': 'protocol: 1\nentry: ./runtime\n',
+      'runtimes/acme/runtime': `#!/bin/sh\nsleep 1.5\ncat "$(dirname "$0")/payload.txt" > '${seen}'\n`,
+      'runtimes/acme/payload.txt': 'accepted\n',
+    });
+    const { locateRuntime, acceptRuntime } = await import('../workflow/runtimes/locate.js');
+    const resolved = await resolveDriver(team, 'acme', { personal: true });
+    if (!resolved.ok) throw new Error(resolved.failure.message);
+    const found = await locateRuntime(resolved.driver, 'acme');
+    if (!found.ok) throw new Error(found.failure.message);
+    expect(await acceptRuntime(found.source, { mode: 'attended', canAsk: true, ask: async () => true })).toEqual({ ok: true });
+
+    const opened = open(team);
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    fs.writeFileSync(path.join(team.repo.localPath, 'runtimes', 'acme', 'payload.txt'), 'pushed later\n');
+    await opened;
+
+    expect(fs.readFileSync(seen, 'utf8')).toBe('accepted\n');
+  });
+
   it('takes the exact name in every layer before teamai-<name>, and the member\'s before the team\'s', async () => {
     onPath('acme-runtime');
     personal({ 'runtimes/teamai-acme.yaml': COMMAND_RUNTIME });

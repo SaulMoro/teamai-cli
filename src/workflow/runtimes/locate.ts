@@ -1,11 +1,12 @@
 import { createHash } from 'node:crypto';
 import fs from 'node:fs/promises';
+import os from 'node:os';
 import path from 'node:path';
 import { createInterface } from 'node:readline/promises';
 import { z } from 'zod';
 import { RUNTIME_PROTOCOL } from '@teamai/runtime-protocol';
 import { resolvePathCommand } from '@teamai/shared/cli-path';
-import { readRegularFile, readRegularFileNoLink } from '@teamai/shared/regular-file';
+import { copyRegularTree, readRegularFile, readRegularFileNoLink } from '@teamai/shared/regular-file';
 import { parseYaml } from '@teamai/shared/yaml';
 import { teamaiBin } from '../../default-drivers.js';
 import type { RunMode } from '../../launch-context.js';
@@ -16,7 +17,7 @@ import { writeJsonAtomic } from '../../utils/fs.js';
 import type { WorkflowFailure } from '../types.js';
 import type { ResolvedDriver } from './definitions.js';
 import { findInLayers, namesOf, type Layer, type LayerFind, type LayerItem } from './layers.js';
-import { folderEntries, folderRevision } from './resource-folder.js';
+import { firstLink, folderEntries, folderRevision } from './resource-folder.js';
 
 // ─── Where a step runtime comes from ─────────────────────
 //
@@ -334,6 +335,44 @@ function unanswered(source: ExternalRuntime): Acceptance {
   return { ok: false, failure: { code: 'interrupted', message: `The question to accept step runtime "${source.name}" closed without an answer, so it did not run and nothing was accepted. Run the same command again to answer it.` } };
 }
 
+/** The runtime a source runs as, and what removes the copy it runs from once nothing runs it. */
+export type PinnedRuntime = { ok: true; source: ExternalRuntime; remove: () => Promise<void> };
+
+/**
+ * `source` as it runs: a team runtime folder copied where no pull reaches it, with the revision of that copy, so the
+ * revision a person accepts is all that runs, for as long as it runs. Any other runtime runs where it was found, with
+ * nothing to remove.
+ */
+export async function pinRuntime(source: ExternalRuntime): Promise<PinnedRuntime | { ok: false; failure: WorkflowFailure }> {
+  const { trust, launch } = source;
+
+  if (trust.kind !== 'folder' || launch.kind !== 'executable') return { ok: true, source, remove: async () => undefined };
+
+  const copy = await fs.mkdtemp(path.join(os.tmpdir(), 'teamai-runtime-'));
+  const remove = async (): Promise<void> => fs.rm(copy, { recursive: true, force: true });
+
+  const refused = async (reason: string): Promise<{ ok: false; failure: WorkflowFailure }> => {
+    await remove();
+
+    return { ok: false, failure: { code: 'runtime_not_found', message: `Step runtime "${source.name}" from the team repo (${source.location}) did not run: ${reason}. ${fixOf(source.layer)}` } };
+  };
+
+  try {
+    await copyRegularTree(trust.dir, copy);
+  } catch (error) {
+    return refused(`its folder could not be copied to run from (${error instanceof Error ? error.message : String(error)})`);
+  }
+
+  // A link a pull added since the folder was found: the revision accepted would not be all it runs.
+  const link = await firstLink(copy);
+
+  if (!link.ok) return refused(link.reason);
+
+  if (link.link !== undefined) return refused(`its folder now holds the link ${link.link}, and teamai runs a team runtime only when its folder holds no link`);
+
+  return { ok: true, source: { ...source, revision: await folderRevision(copy), launch: { kind: 'executable', executable: path.join(copy, path.relative(trust.dir, launch.executable)) } }, remove };
+}
+
 /** Whether `source` was accepted here, asking no one: for a decision that must not wait on a person. */
 export async function isRuntimeAccepted(source: ExternalRuntime): Promise<boolean> {
   return (await acceptRuntime(source, { mode: 'unattended', canAsk: false })).ok;
@@ -380,9 +419,9 @@ export async function acceptRuntime(source: RuntimeSource, { mode, canAsk, ask =
   }
 }
 
-/** Whether the runtime folder `dir` of `source` was accepted here at its revision, asking when `isAsking`. */
+/** Whether the runtime folder `dir` of `source` was accepted here at `source`'s revision, asking when `isAsking`. */
 async function acceptFolder(source: ExternalRuntime, dir: string, { isAsking, ask }: { isAsking: boolean; ask: (question: string) => Promise<boolean | undefined> }): Promise<Acceptance> {
-  const revision = await folderRevision(dir);
+  const { revision } = source;
   const trust = await readTrust();
 
   if (trust.accepted.some((entry) => entry.dir === dir && entry.revision === revision)) return { ok: true };

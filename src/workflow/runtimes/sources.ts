@@ -5,7 +5,7 @@ import { type LocalConfig } from '../../types.js';
 import type { DriverCan } from '../requirements.js';
 import type { WorkflowFailure } from '../types.js';
 import { resolveDriver, SANDBOX_RUNTIME, type DriverDefinition, type ResolvedDriver } from './definitions.js';
-import { acceptRuntime, fixOf, isRuntimeAccepted, locateRuntime } from './locate.js';
+import { acceptRuntime, fixOf, isRuntimeAccepted, locateRuntime, pinRuntime } from './locate.js';
 import { DEFAULT_PROFILE, locateSandboxProfile, sandboxOptions, type SandboxProfile } from './sandbox-profiles.js';
 import { LOCAL_DRIVER } from '../driver-name.js';
 import { fleetStepRuntime, shadowedFleetEntries, type OpenWake } from '../fleet/owner.js';
@@ -345,17 +345,27 @@ async function openRuntime(driver: ResolvedDriver, { use, options, sandbox }: { 
   const values = purpose === 'stop' ? { ok: true as const, values: {} } : credentialValues(driver, use, split.credentials, process.env);
 
   if (!values.ok) return values;
-  const accepted = await acceptRuntime(source, purpose === 'check' ? { mode: 'unattended', canAsk: false } : { mode, canAsk });
+  // What is accepted is the copy it runs from, which no pull changes while it runs.
+  const pinned = await pinRuntime(source);
 
-  if (!accepted.ok) return accepted;
+  if (!pinned.ok) return pinned;
+  const runs = pinned.source;
+  const accepted = await acceptRuntime(runs, purpose === 'check' ? { mode: 'unattended', canAsk: false } : { mode, canAsk });
+
+  if (!accepted.ok) {
+    await pinned.remove();
+
+    return accepted;
+  }
+
   const initOptions = profiled?.ok === true ? profiled.options : split.runtime;
   const profile = profiled?.ok === true ? profiled.profile : undefined;
-  const origin: RuntimeOrigin = { runtime: source.resource, layer: source.layer, location: source.location, revision: source.revision };
+  const origin: RuntimeOrigin = { runtime: source.resource, layer: source.layer, location: source.location, revision: runs.revision };
 
   // A runtime of the member or the team in place of teamai's own is never taken silently.
   if (purpose === 'run' && source.replaces !== undefined) {
     const whose = source.layer === 'team' ? `Runtime "${use}" of the team` : `Your runtime "${use}"`;
-    warnOnce(`${whose} (${source.location}, revision ${source.revision.slice(0, 12)}) replaces teamai's.`);
+    warnOnce(`${whose} (${source.location}, revision ${runs.revision.slice(0, 12)}) replaces teamai's.`);
   }
 
   if (purpose === 'run' && profile?.replaces !== undefined) {
@@ -371,9 +381,21 @@ async function openRuntime(driver: ResolvedDriver, { use, options, sandbox }: { 
   // the values the member's environment holds for them, which what the attempt left may echo.
   const masks = credentialSecrets(source.name, { ...values.values, ...found, ...(purpose === 'stop' && valuesSet(split.credentials, process.env)) });
 
-  const spawned = (): StepRuntime<DriverCan> => (source.launch.kind === 'node'
-    ? stdioStepRuntime({ name: source.name, command: process.execPath, args: [source.launch.file], cwd: checkout, secrets: masks })
-    : stdioStepRuntime({ name: source.name, command: source.launch.executable, cwd: checkout, secrets: masks }));
+  const spawned = (): StepRuntime<DriverCan> => (runs.launch.kind === 'node'
+    ? stdioStepRuntime({ name: source.name, command: process.execPath, args: [runs.launch.file], cwd: checkout, secrets: masks })
+    : stdioStepRuntime({ name: source.name, command: runs.launch.executable, cwd: checkout, secrets: masks }));
+
+  // Whoever disposes the runtime this returns, or that fails here, removes the copy it ran from.
+  const removingCopy = (runtime: StepRuntime<DriverCan>): StepRuntime<DriverCan> => ({
+    ...runtime,
+    dispose: async () => {
+      try {
+        await runtime.dispose();
+      } finally {
+        await pinned.remove();
+      }
+    },
+  });
 
   let notRecovered: RuntimeFailure | undefined;
 
@@ -382,12 +404,12 @@ async function openRuntime(driver: ResolvedDriver, { use, options, sandbox }: { 
     const recovered = await recovering.init({ options: initOptions, mode: 'recover', checkout });
 
     // It offers nothing in this mode: it is asked only to stop, collect and close what it ran.
-    if (recovered.ok) return { ok: true, opened: { kind: 'external', use, runtime: recovering, can: recovered.can, launchesAgents: recovered.launchesAgents, ...(recovered.keepsConversations && { keepsConversations: true }), ...(recovered.runsOnToolHome && { runsOnToolHome: true }), engine: split.engine, credentials: {}, found: [], masks, optionsFrom: optionsSource(driver, use), sources: [origin] } };
+    if (recovered.ok) return { ok: true, opened: { kind: 'external', use, runtime: removingCopy(recovering), can: recovered.can, launchesAgents: recovered.launchesAgents, ...(recovered.keepsConversations && { keepsConversations: true }), ...(recovered.runsOnToolHome && { runsOnToolHome: true }), engine: split.engine, credentials: {}, found: [], masks, optionsFrom: optionsSource(driver, use), sources: [origin] } };
     await recovering.dispose();
     notRecovered = recovered.failure;
   }
 
-  const runtime = spawned();
+  const runtime = removingCopy(spawned());
   const credentials = { env: [...split.credentials.map((credential) => credential.name), ...Object.keys(found)], logins: split.engine.logins };
 
   const ready = await runtime.init({
