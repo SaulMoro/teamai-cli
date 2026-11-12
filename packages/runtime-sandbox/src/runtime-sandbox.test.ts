@@ -1236,7 +1236,7 @@ describe('a prompt attempt in a container', () => {
     expect(await second.next((message) => message.event === 'closed' || message.event === 'close_failed', 30_000)).toEqual({ event: 'closed', handle: HANDLE });
   });
 
-  it('leaves no network of a first open whose network filter could not start, which no sweep would find', async () => {
+  it('leaves no network of a first open whose network filter could not start, for no later open to sweep', async () => {
     engine.image(IMAGE, { claude: CLAUDE, node: '' });
     engine.failFilter(true);
     const connection = start();
@@ -1647,6 +1647,22 @@ describe("the containers of one runtime's journal", () => {
       expect(engine.containers().sort()).toEqual(named('a00000001', 'a00000003'));
       expect(engine.networks()).toEqual([]);
     }, { timeout: 10_000 });
+    expect(connection.stderr()).toBe('');
+  }, 60_000);
+
+  it('removes a network a runtime killed before its container left, and never another journal\'s or an unlabelled one', async () => {
+    const connection = start();
+    await init(connection, { provider: 'docker', image: IMAGE });
+    await openAttempt(connection, 'a00000001');
+    const owner = engine.labelsOf(`teamai-${RUN}-a00000001`)?.['teamai.owner'] ?? '';
+    const docker = (...args: string[]): void => { execFileSync(path.join(engine.bin, 'docker'), args, { env: engine.env() }); };
+    const network = (attempt: string, labels: string[]): void => docker('network', 'create', '--internal', ...labels, `teamai-${RUN}-${attempt}-net`);
+    network('a00000002', ['--label', `teamai.run=${RUN}`, '--label', 'teamai.attempt=a00000002', '--label', `teamai.owner=${owner}`]);
+    network('a00000003', ['--label', `teamai.run=${RUN}`, '--label', 'teamai.attempt=a00000003', '--label', 'teamai.owner=0123456789abcdef']);
+    network('a00000004', []);
+
+    expect(await openAttempt(connection, 'a00000005')).toMatchObject({ event: 'ready' });
+    await vi.waitFor(() => { expect(engine.networks()).toEqual([`teamai-${RUN}-a00000003-net`, `teamai-${RUN}-a00000004-net`]); }, { timeout: 10_000 });
     expect(connection.stderr()).toBe('');
   }, 60_000);
 

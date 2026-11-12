@@ -168,8 +168,10 @@ interface Sandboxing {
    * name a run and an attempt (a judge's filter: the attempt it filters for), each with them, within COMMAND_MS. A
    * provider that cannot tell its journal's sandboxes from another's has none: nothing of it is ever swept. `leftWarm`:
    * the ids of the scratch sandboxes of warm builds whose process no longer runs (warm.ts), which `destroy` removes.
+   * `released`: the attempts this journal owns a network of, which `release` removes, as one killed before its container
+   * leaves it.
    */
-  owned?(): Promise<{ ok: true; sandboxes: Array<PlaceKey & { id: string }>; leftWarm?: string[] } | { ok: false; failure: RuntimeFailure }>;
+  owned?(): Promise<{ ok: true; sandboxes: Array<PlaceKey & { id: string }>; leftWarm?: string[]; released?: PlaceKey[] } | { ok: false; failure: RuntimeFailure }>;
   /** Creates the attempt's sandbox with the view at its host paths and no credential, and returns its id. */
   create(key: PlaceKey, open: SandboxOpen): Promise<{ ok: true; id: string } | { ok: false; failure: RuntimeFailure }>;
   /**

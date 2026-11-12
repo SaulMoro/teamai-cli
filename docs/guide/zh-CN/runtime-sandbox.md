@@ -639,7 +639,7 @@ teamai workflow resume r7c41d09e2b6a5f13 --driver containers
 teamai workflow retry r7c41d09e2b6a5f13 review      # 从被停止的那一轮保留下来的工作继续
 ```
 
-如果运行时在 `docker run`、`podman run` 或 `sbx create` 创建沙箱时被终止，可能会留下一个已经不属于任何尝试的沙箱。每个容器都带有 `teamai.owner` 标签，标明创建它的 teamai 主目录；sbx 不支持标签，所以每个 sbx 沙箱的名字以这个 id 开头（`teamai-<home id>-<run>-<attempt>`）。在同一提供方上打开沙箱的下一个步骤被接受之后，teamai 会用 `--force` 删除这个主目录下所有已经没有尝试记录的容器或沙箱，评判容器的过滤器和网络也一起删除。这个清理在后台进行：步骤、取消和关闭都不会等它。其他成员或其他主目录的容器、没有 `teamai.owner` 标签的容器，以及名字不以这个主目录 id 开头的 sbx 沙箱，都不会被动到。列出或删除失败时，会在 stderr 输出一条警告，步骤照常继续。
+如果运行时在 `docker run`、`podman run` 或 `sbx create` 创建沙箱时被终止，可能会留下一个已经不属于任何尝试的沙箱。每个容器都带有 `teamai.owner` 标签，标明创建它的 teamai 主目录；sbx 不支持标签，所以每个 sbx 沙箱的名字以这个 id 开头（`teamai-<home id>-<run>-<attempt>`）。在同一提供方上打开沙箱的下一个步骤被接受之后，teamai 会用 `--force` 删除这个主目录下所有已经没有尝试记录的容器或沙箱，评判容器的过滤器和网络也一起删除；这个主目录下已经没有尝试记录的网络也会删除，运行时在启动容器之前被终止时就会留下这样的网络。这个清理在后台进行：步骤、取消和关闭都不会等它。其他成员或其他主目录的容器和网络、没有 `teamai.owner` 标签的容器和网络，以及名字不以这个主目录 id 开头的 sbx 沙箱，都不会被动到。列出或删除失败时，会在 stderr 输出一条警告，步骤照常继续。
 
 ```sh
 docker ps -a --filter label=teamai.owner --format '{{.Names}} {{.Label "teamai.owner"}}'

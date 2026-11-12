@@ -470,10 +470,11 @@ function docker() {
       fs.mkdirSync(networks, { recursive: true });
 
       if (action === 'create') {
-        const { rest: [name] } = options(more, ['--label', '-o'], ['--internal']);
+        const { found, rest: [name] } = options(more, ['--label', '-o'], ['--internal']);
 
         if (fs.existsSync(path.join(networks, name))) fail(`Error response from daemon: network with name ${name} already exists`);
-        fs.writeFileSync(path.join(networks, name), '');
+        // A network keeps its labels, which `network ls --filter label=` reads.
+        fs.writeFileSync(path.join(networks, name), JSON.stringify(Object.fromEntries(all(found, '--label').map((label) => label.split(/=(.*)/s).slice(0, 2)))));
         process.stdout.write(`${crypto.randomBytes(16).toString('hex')}\n`);
       } else if (action === 'connect') {
         const [name, ref] = more;
@@ -481,6 +482,17 @@ function docker() {
         if (!fs.existsSync(path.join(networks, name))) fail(`Error response from daemon: network ${name} not found`);
 
         if (!readContainer(ref)) fail(`Error response from daemon: No such container: ${ref}`);
+      } else if (action === 'ls') {
+        // `network ls --filter label=<key>=<value> --format {{.Name}}`, the one listing the providers make.
+        const { found } = options(more, ['--filter', '--format']);
+        const wanted = all(found, '--filter').map((filter) => filter.replace(/^label=/, '').split(/=(.*)/s).slice(0, 2));
+
+        for (const name of fs.readdirSync(networks).sort()) {
+          const text = fs.readFileSync(path.join(networks, name), 'utf8');
+          const labels = text === '' ? {} : JSON.parse(text);
+
+          if (wanted.every(([key, value]) => labels[key] === value)) process.stdout.write(`${name}\n`);
+        }
       } else if (action === 'rm') {
         const [name] = more;
 

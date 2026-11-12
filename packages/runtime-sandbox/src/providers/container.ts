@@ -248,7 +248,7 @@ export function containerProvider({ engine, image, owner, host, warm, profile, s
    * Makes the internal network of `key` and the filter in front of it, which lets through what `rules` name (judge.ts),
    * and is labelled by the run only, so the attempt's labels find its sandbox alone; a sweep reads its attempt from
    * teamai.filter. What it made stays for `release` when a later step fails; a network it made itself, it removes when
-   * it fails, as no sweep finds a network.
+   * it fails, rather than leave it to a later open's sweep.
    */
   const filtered = async (key: PlaceKey, rules: string[], { isStep }: { isStep: boolean }): Promise<{ ok: true } | { ok: false; failure: RuntimeFailure }> => {
     // No address of the host on the bridge either, so the host's own services are out of reach too; and no IPv6, which
@@ -465,11 +465,19 @@ export function containerProvider({ engine, image, owner, host, warm, profile, s
 
       if (!(listed.kind === 'ran' && listed.code === 0)) return sandboxFailed(`${engine} could not list the containers this runtime's journal owns: ${why(listed)}`);
       const lines = listed.stdout.split('\n').map((line) => line.trim().split(' '));
+      const networks = await cli(['network', 'ls', '--filter', `label=teamai.owner=${owner}`, '--format', '{{.Name}}'], { timeoutMs: COMMAND_MS, isListing: true });
+
+      if (!(networks.kind === 'ran' && networks.code === 0)) return sandboxFailed(`${engine} could not list the networks this runtime's journal owns: ${why(networks)}`);
 
       return {
         ok: true,
         sandboxes: lines.flatMap(([id, run, attempt]) => (id && run && attempt ? [{ id, run, attempt }] : [])),
         leftWarm: lines.flatMap(([id, run, attempt, by]) => (id && !run && !attempt && by && isLeftBehind(by) ? [id] : [])),
+        released: networks.stdout.split('\n').flatMap((name) => {
+          const named = containerNamed(name.trim());
+
+          return named?.kind === 'network' ? [named.key] : [];
+        }),
       };
     },
 
