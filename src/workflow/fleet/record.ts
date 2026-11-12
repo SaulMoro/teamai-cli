@@ -682,7 +682,7 @@ function parseRecord(text: string, run: string, attempt: string): Written<FleetR
   }
 
   if (format.success && format.data.version < RECORD_VERSION) {
-    return { ok: false, error: { code: 'fleet_record_unreadable', message: `The record of attempt ${attempt} of run ${run} on teamai-reports was written by teamai ${format.data.teamai ?? 'older than this one'}, in an older format this teamai does not read. Upgrade teamai on the install that offered it.` } };
+    return { ok: false, error: { code: 'fleet_record_unreadable', message: `The record of attempt ${attempt} of run ${run} on teamai-reports was written by teamai ${format.data.teamai ?? 'older than this one'}, in an older format this teamai does not read. Upgrade the teamai ${format.data.teamai === undefined ? '' : `${format.data.teamai} `}that wrote it, on the owner's or a member's machine.` } };
   }
 
   const parsed = FleetRecordSchema.safeParse(raw);

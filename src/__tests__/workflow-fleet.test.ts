@@ -212,7 +212,7 @@ describe('fleet attempts on teamai-reports', () => {
     expect(await readAttemptRecord(bob.config, RUN, ATTEMPT)).toMatchObject({ ok: false, error: { code: 'fleet_record_unreadable' } });
   });
 
-  it('reads a record an older teamai wrote in the format before this one as one its writer upgrades for', async () => {
+  it('reads a record an older teamai wrote in the format before this one as one its writer, owner or member, upgrades for', async () => {
     const acme = team();
     const [alice, bob] = [await acme.member('alice'), await acme.member('bob')];
     const offered = await offer(alice);
@@ -227,7 +227,7 @@ describe('fleet attempts on teamai-reports', () => {
 
     expect(await readAttemptRecord(bob.config, RUN, ATTEMPT)).toEqual({ ok: false, error: {
       code: 'fleet_record_unreadable',
-      message: `The record of attempt ${ATTEMPT} of run ${RUN} on teamai-reports was written by teamai 0.21.0, in an older format this teamai does not read. Upgrade teamai on the install that offered it.`,
+      message: `The record of attempt ${ATTEMPT} of run ${RUN} on teamai-reports was written by teamai 0.21.0, in an older format this teamai does not read. Upgrade the teamai 0.21.0 that wrote it, on the owner's or a member's machine.`,
     } });
     expect(offersAmong(await listRecords(bob.config), { pool: 'default', repository: 'github.com/acme/business' })).toEqual([]);
   });
