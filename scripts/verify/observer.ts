@@ -270,7 +270,15 @@ export function startObserver(world: World, { pass, label, listed = listedHere }
       return;
     }
 
-    const parsed = SbxListedSchema.safeParse(JSON.parse(out.stdout));
+    let json: unknown;
+
+    try {
+      json = JSON.parse(out.stdout);
+    } catch {
+      json = undefined;
+    }
+
+    const parsed = SbxListedSchema.safeParse(json);
 
     if (!parsed.success) {
       unobserved.add('sbx sandboxes, `sbx ls --json` printed a list this harness cannot read');

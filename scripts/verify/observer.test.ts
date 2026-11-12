@@ -105,6 +105,10 @@ describe('the sandbox observer', () => {
     const noSbx = startObserver(world, { pass: new Map(), label: 'teamai workflow start', listed: () => Promise.resolve(missing) });
 
     expect(await sbxFails.stop()).toEqual(['[verify] NOT OBSERVED: sbx sandboxes, `sbx ls` failed (sbx: not signed in)']);
+
+    const sbxBanner = startObserver(world, { pass: new Map(), label: 'teamai workflow start', listed: ([command]) => Promise.resolve(command === 'sbx' ? printed('A new sbx is out: run sbx upgrade\n[]') : missing) });
+
+    expect(await sbxBanner.stop()).toEqual(['[verify] NOT OBSERVED: sbx sandboxes, `sbx ls --json` printed a list this harness cannot read']);
     expect(await noSbx.stop()).toEqual([]);
   });
 
