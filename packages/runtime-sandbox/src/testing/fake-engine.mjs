@@ -112,7 +112,6 @@ function writeContainer(container) {
   return true;
 }
 
-/** Stops every process group an exec of the container whose directory is `dir` started, as a container stop does. */
 /**
  * Sends `name` to process group `pgid`: never to one below 2, which kill reads as this program's own group (0), every
  * process it may signal (-1), or init (1). node runs this program as it is, so it cannot load
@@ -124,6 +123,7 @@ function signalGroup(pgid, name) {
   try { process.kill(-pgid, name); } catch { /* gone */ }
 }
 
+/** Stops every process group an exec of the container whose directory is `dir` started, as a container stop does. */
 function killProcesses(dir) {
   let pids;
 

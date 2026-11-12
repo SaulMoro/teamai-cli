@@ -36,6 +36,16 @@ export const read = Reflect.get(process, 'kill');`, (output) => {
   expect(reports(output)).toBe(8);
 });
 
+rule.invalid('rejects process.kill read through a computed global, a fallback, or a kill executable named by path or with a pid filled in', `import { execSync, spawn } from 'node:child_process';
+globalThis['process'].kill(2, 0);
+const maybe = globalThis.process ?? null;
+maybe?.kill(2, 0);
+const pid = 2;
+execSync(\`kill -9 \${pid}\`);
+spawn('/bin/kill', ['-KILL', String(pid)]);`, (output) => {
+  expect(reports(output)).toBe(4);
+});
+
 rule.invalid('rejects kill of the process module, imported or required', `import { kill as end } from 'node:process';
 import proc from 'process';
 import * as nodeProcess from 'node:process';
@@ -97,6 +107,13 @@ export { end, kill, timer };`, (output) => {
   expect(childReports(output)).toBe(5);
 }, { filename: 'src/utils/fetch.ts' });
 
+rule.invalid('rejects a child\'s kill with no pid check in the text of a program production code writes for another tool to run', `export const plugin = \`
+const timer = setTimeout(() => { try { child.kill(); } catch {} }, 1000);
+const other = setTimeout(() => { if (child.pid !== undefined) child.kill(); }, 1000);
+\`;`, (output) => {
+  expect(output.match(/This text kills a child with no check that it spawned/g)).toHaveLength(1);
+}, { filename: 'src/tool-hooks.ts' });
+
 rule.valid('allows signalChild in production source, and a kill of its own put on a child', `import { spawn } from 'node:child_process';
 import { signalChild } from '@teamai/shared/process-group';
 const child = spawn('git', ['fetch']);
@@ -122,12 +139,10 @@ it('is an error in this checkout, with no file let off', () => {
   expect(config.overrides.filter((override) => 'teamai/signal-owner' in override.rules)).toEqual([]);
 });
 
-it('names only files that exist and still need what the rule lets them do', () => {
+it('names only files that still need what the rule lets them do', () => {
   const read = (file: string): string => fs.readFileSync(path.join(REPO, file), 'utf8');
 
   expect(OWNER).toEqual(['packages/shared/src/process-group.ts']);
-
-  for (const file of [...OWNER, ...RUN_AS_IS, ...SCRIPT_TEXT, ...NOT_A_CHILD.keys()]) expect(fs.existsSync(path.join(REPO, file)), file).toBe(true);
 
   for (const file of [...OWNER, ...RUN_AS_IS, ...SCRIPT_TEXT]) expect(read(file), file).toMatch(/\bprocess\.kill\(/);
 

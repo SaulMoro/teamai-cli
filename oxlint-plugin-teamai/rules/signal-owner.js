@@ -4,7 +4,7 @@ import { defineRule } from '@oxlint/plugins';
 import { importedName } from '../imports.js';
 import { inProductionSource, isOneOf, scopedFiles, stringLiteralValue, variableOf } from '../utils.js';
 
-/** The one module that calls `process.kill`, behind `signalPid` and `signalGroup`. */
+/** The one module that calls `process.kill`, behind `signalPid` and `signalGroup`, and a child's own kill, behind `signalChild`. */
 export const OWNER = scopedFiles(['packages/shared/src/process-group.ts']);
 
 /**
@@ -37,9 +37,15 @@ export const NOT_A_CHILD = new Map([
 
 scopedFiles([...NOT_A_CHILD.keys()]);
 
-const MESSAGE = 'Send a signal through signalPid or signalGroup from @teamai/shared/process-group, not process.kill: they send nothing to a pid below 2, which kill reads as the caller\'s own process group (0), every process it may signal (-1) or init (1), and they tell what the signal came to instead of throwing. A test observes signals with vi.spyOn(process, \'kill\').';
+const MESSAGE = 'Send a signal through signalPid or signalGroup from @teamai/shared/process-group, not process.kill: they send nothing to a pid below 2, which kill reads as the caller\'s own process group (0), every process it may signal (-1) or init (1), and they tell what the signal came to rather than throw for a process that is gone or another user\'s. A test observes signals with vi.spyOn(process, \'kill\').';
 
 const CHILD_MESSAGE = 'Signal a child process through signalChild from @teamai/shared/process-group, not its own kill: until a failed spawn\'s error is delivered, Node 20 sends that kill to pid 0, the caller\'s whole process group, and signalChild sends nothing to a child with no pid. A remote sandbox\'s command is not a child: name its file in NOT_A_CHILD (oxlint-plugin-teamai/rules/signal-owner.js).';
+
+const CHILD_TEXT_MESSAGE = 'This text kills a child with no check that it spawned, in a program production code writes for another tool to run, which cannot load @teamai/shared/process-group. Write each kill as `if (child.pid !== undefined) child.kill(…)`: until a failed spawn\'s error is delivered, Node 20 sends that kill to pid 0, the whole process group of the tool it runs in.';
+
+/** A kill of a child in program text, and the same kill behind the pid check this rule asks for. */
+const TEXT_KILL = /([\w$]+)\s*\.\s*kill\s*\(/g;
+const GUARDED_TEXT_KILL = /if \(([\w$]+)\.pid !== undefined\) \1\.kill\(/g;
 
 const TEXT_MESSAGE = 'This text calls process.kill in a program a test runs, which lint does not read as code. Signal through @teamai/shared/process-group in code, or name the file in SCRIPT_TEXT (oxlint-plugin-teamai/rules/signal-owner.js) and keep the pid it signals above 1.';
 
@@ -60,6 +66,16 @@ function textOf(/** @type {ESTree.Node | null | undefined} */ node) {
   if (node?.type === 'TemplateLiteral' && node.expressions.length === 0) return node.quasis[0]?.value.cooked ?? undefined;
 
   return stringLiteralValue(node);
+}
+
+/** The text a command line starts with: a string, or a template up to its first placeholder. */
+function leadingTextOf(/** @type {ESTree.Node | undefined} */ node) {
+  return node?.type === 'TemplateLiteral' ? node.quasis[0]?.value.cooked ?? undefined : stringLiteralValue(node);
+}
+
+/** The executable a path names: `kill` of `/bin/kill`. */
+function executableOf(/** @type {string} */ command) {
+  return command.split(/[\\/]/).at(-1) ?? '';
 }
 
 /** The name a call is made by: `f` of `f(…)` and of `o.f(…)`. */
@@ -90,12 +106,17 @@ function isProcess(sourceCode, node) {
     }
 
     case 'MemberExpression': {
-      if (node.computed || node.property.type !== 'Identifier') return false;
+      const key = node.computed ? textOf(node.property) : node.property.type === 'Identifier' ? node.property.name : undefined;
 
-      if (node.property.name === 'process') return node.object.type === 'Identifier' && (node.object.name === 'globalThis' || node.object.name === 'global');
+      if (key === 'process') return node.object.type === 'Identifier' && (node.object.name === 'globalThis' || node.object.name === 'global');
 
-      return node.property.name === 'default' && isProcess(sourceCode, node.object);
+      return key === 'default' && isProcess(sourceCode, node.object);
     }
+
+    case 'LogicalExpression':
+      return isProcess(sourceCode, node.left) || isProcess(sourceCode, node.right);
+    case 'ConditionalExpression':
+      return isProcess(sourceCode, node.consequent) || isProcess(sourceCode, node.alternate);
 
     case 'CallExpression':
       return node.callee.type === 'Identifier' && node.callee.name === 'require' && PROCESS_MODULES.has(textOf(node.arguments[0]) ?? '');
@@ -148,7 +169,12 @@ export default defineRule({
     const checkText = (node) => {
       const text = node.type === 'TemplateLiteral' ? node.quasis.map((quasi) => quasi.value.cooked ?? '').join('') : stringLiteralValue(node);
 
-      if (!isScriptText && text !== undefined && /\bprocess\s*\.\s*kill\s*\(/.test(text)) context.report({ node, message: TEXT_MESSAGE });
+      if (text === undefined) return;
+
+      if (!isScriptText && /\bprocess\s*\.\s*kill\s*\(/.test(text)) context.report({ node, message: TEXT_MESSAGE });
+      const kills = [...text.matchAll(TEXT_KILL)].filter(([, name]) => name !== 'process').length;
+
+      if (checksChildren && kills > [...text.matchAll(GUARDED_TEXT_KILL)].length) context.report({ node, message: CHILD_TEXT_MESSAGE });
     };
 
     return {
@@ -187,13 +213,13 @@ export default defineRule({
         // Reflect.get(process, 'kill') reads it with no member expression.
         if (name === 'get' && callee.type === 'MemberExpression' && callee.object.type === 'Identifier' && callee.object.name === 'Reflect'
           && textOf(node.arguments[1]) === 'kill' && node.arguments[0] && isProcess(sourceCode, node.arguments[0])) report(node);
-        const first = textOf(node.arguments[0]);
+        const first = leadingTextOf(node.arguments[0]);
 
         if (first === undefined || name === undefined) return;
 
-        if (STARTERS.has(name) && KILL_EXECUTABLES.has(first)) report(node);
+        if (STARTERS.has(name) && KILL_EXECUTABLES.has(executableOf(first))) report(node);
 
-        if (SHELLS.has(name) && KILL_EXECUTABLES.has(first.trim().split(/\s+/)[0] ?? '')) report(node);
+        if (SHELLS.has(name) && KILL_EXECUTABLES.has(executableOf(first.trim().split(/\s+/)[0] ?? ''))) report(node);
       },
       Literal: checkText,
       TemplateLiteral: checkText,
