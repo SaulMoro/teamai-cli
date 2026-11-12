@@ -1732,7 +1732,7 @@ describe('uninstall', () => {
     ]).toEqual([true, '- name every endpoint\n', false]);
   });
 
-  it('keeps, in the data home it removes, the drivers, runtimes, sandbox profiles and tool instances the member wrote there', async () => {
+  it('keeps, in the data home it removes, the drivers, runtimes, sandbox profiles and tool instances the member wrote there, and its preview names them', async () => {
     const { homeDir, repoPath, teamaiHome } = await setupFixture(tmpDir);
     vi.stubEnv('HOME', homeDir);
     vi.stubEnv('SHELL', '/bin/zsh');
@@ -1740,6 +1740,13 @@ describe('uninstall', () => {
     for (const file of own) await fse.outputFile(path.join(teamaiHome, file), 'mine\n');
     await fse.outputFile(path.join(teamaiHome, 'rules', 'testing', 'RULE.md'), 'Test first.\n');
     mockAutoDetectInit.mockResolvedValue({ localConfig: makeLocalConfig(homeDir, repoPath), teamConfig: makeTeamConfig() });
+    const printed: string[] = [];
+    vi.spyOn(console, 'log').mockImplementation((line?: unknown) => { printed.push(String(line ?? '')); });
+
+    await uninstall({ dryRun: true, force: true });
+
+    expect(printed.join('\n')).toContain(`   TeamAI home directory:\n     ${teamaiHome}/\n   but your own drivers, runtimes, sandbox profiles and tool instances in it, which teamai never writes:\n`
+      + ['drivers', 'runtimes', 'sandboxes', 'tools'].map((dir) => `     ${path.join(teamaiHome, dir)}\n`).join(''));
 
     await uninstall({ force: true });
 

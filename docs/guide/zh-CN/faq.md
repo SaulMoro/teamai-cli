@@ -6,7 +6,7 @@
 
 ## 卸载
 
-`teamai uninstall` 删除 TeamAI 装上去的 Agent 资源。你自己建的文件会留下；只有把 TeamAI 写进去的部分去掉后整份文件空了，它才一起删掉。user scope 卸载会保留本机仍登记的项目的数据。请先逐个卸载项目，再在任何项目之外运行 `teamai uninstall`，移除剩余的共享数据。
+`teamai uninstall` 删除 TeamAI 装上去的 Agent 资源。你自己建的文件会留下；只有把 TeamAI 写进去的部分去掉后整份文件空了，它才一起删掉。user scope 卸载会删除 `~/.teamai`，但保留其中你自己的 `drivers/`、`runtimes/`、`sandboxes/` 和 `tools/`，预览和输出都会列出保留了什么。它还会保留本机仍登记的项目的数据。请先逐个卸载项目，再在任何项目之外运行 `teamai uninstall`，移除剩余的共享数据。
 
 卸载工作区时，TeamAI 可能会保留工具主目录中的内置 hooks，供其他安装使用。如果卸载预览将 hooks 列在 "Kept for other teamai installs" 下，并且你已确认没有其他工作区、checkout、用户级安装或 HTTP agent 使用它们，请在仍配置了 TeamAI 的工作区中先运行 `teamai hooks remove`，再卸载该工作区。之后在工作区之外卸载时，可能只会移除 `~/.teamai`。
 

@@ -211,6 +211,8 @@ interface RemovalPlan {
   teamaiHome: string;
   /** Whether teamaiHome exists on disk. */
   teamaiHomeExists: boolean;
+  /** The member's own drivers, runtimes, sandbox profiles and tool instances in teamaiHome, which teamai reads and never writes: removing teamaiHome keeps them. */
+  keptOwn: string[];
   /**
    * Queues of learnings not published yet that deleting teamaiHome takes with
    * it, each with how many it holds; empty when teamaiHome stays.
@@ -1557,6 +1559,12 @@ async function buildRemovalPlan(
 
   // Read before anything is deleted: what the projects still set up need stays.
   const projectsKept = includeShared && globalAdapters ? await keptForProjects() : { projects: [], paths: [] };
+  const { PERSONAL_DIRS } = await import('./workflow/runtimes/definitions.js');
+
+  const keptOwn = includeShared
+    ? (await Promise.all(Object.values(PERSONAL_DIRS).map((dir) => path.join(getTeamaiHomeDir(), dir))
+      .map(async (dir) => (dir.startsWith(teamaiHome + path.sep) && await pathExists(dir) ? [dir] : [])))).flat()
+    : [];
 
   // The worktree's .teamai/delivered/ (#1787): the rule, agent and MCP folders of a project scope, and a self-mode scope's hook folders.
   const worktreeDelivered = DeliveredFolders.worktreeRoot(localConfig);
@@ -1608,6 +1616,7 @@ async function buildRemovalPlan(
     worktreeSetups: [],
     teamaiHome,
     teamaiHomeExists: includeShared && await pathExists(teamaiHome),
+    keptOwn,
     unpublishedQueues: includeShared
       ? (await listQueuesIn(teamaiHome)).filter(({ dir }) => !projectsKept.paths.some((keptPath) => dir.startsWith(keptPath + path.sep)))
       : [],
@@ -2168,6 +2177,10 @@ function printSummary(plan: RemovalPlan, agentFilter?: string): void {
   if (plan.teamaiHomeExists) {
     console.log('   TeamAI home directory:');
     console.log(`     ${plan.teamaiHome}/`);
+
+    if (plan.keptOwn.length > 0) console.log('   but your own drivers, runtimes, sandbox profiles and tool instances in it, which teamai never writes:');
+
+    for (const dir of plan.keptOwn) console.log(`     ${dir}`);
     console.log('');
   }
 
@@ -3300,15 +3313,11 @@ async function executeRemoval(
       const sharedManifest = plan.preserveSharedManifest && await pathExists(plan.preserveSharedManifest)
         ? await readFileSafe(plan.preserveSharedManifest) : null;
 
-      // The member's own drivers, runtimes, sandbox profiles and tool instances, which teamai reads and never writes.
-      const { PERSONAL_DIRS } = await import('./workflow/runtimes/definitions.js');
-      const own = Object.values(PERSONAL_DIRS).map((dir) => path.join(getTeamaiHomeDir(), dir));
-
       const kept = [
         ...docsInside ? [plan.docsDir!] : [],
         ...plan.keptForProjects.paths,
         ...await keptFolders(plan.teamaiHome),
-        ...(await Promise.all(own.map(async (dir) => (dir.startsWith(plan.teamaiHome + path.sep) && await pathExists(dir) ? [dir] : [])))).flat(),
+        ...plan.keptOwn,
       ];
 
       await unregisterWorktreesIn(plan.teamaiHome, plan.checkouts, plan.unpushedSideBranches);
