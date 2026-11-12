@@ -59,7 +59,9 @@ A ledger section or an observer line that says NOT OBSERVED proves nothing for t
     docker, podman  a container per attempt, labelled teamai.owner; ends: an observer line env ok per container,
                     (f) no teamai container left
     sbx             a microVM per attempt named teamai-<journal>-...; needs sbx signed in and a policy that lets the
-                    step reach what it needs; ends: env ok, (f) no teamai sbx sandbox left
+                    step reach what it needs; ends: env ok, (f) no teamai sbx sandbox left. A world's HOME starts
+                    signed out: \`doctor <run> --drivers\` says so, and \`sh <run> sbx login\` signs in there. Until
+                    then a sbx claim is UNVERIFIABLE
     bwrap           Linux only; the observer reads the first process under bwrap; ends: env ok, no world process left
     seatbelt        macOS; no observer reads a seatbelt step's environment, so the env part proves nothing for it,
                     and (f) notes each attempt that ran on it

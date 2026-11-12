@@ -477,7 +477,8 @@ export function liveWorlds(): World[] {
 }
 
 /** Programs a member runs on their own: what one of them writes is theirs, such as a tool's sessions. A shell may run teamai. */
-const MEMBER_PROGRAMS = new Set([...TOOL_COMMANDS, 'cp', 'mkdir', 'touch', 'git']);
+// sbx keeps its sign-in and its list in HOME: a maintainer's `sh <run> sbx login` is theirs, not teamai's.
+const MEMBER_PROGRAMS = new Set([...TOOL_COMMANDS, 'cp', 'mkdir', 'touch', 'git', 'sbx']);
 
 /** git commands that run the hooks teamai installs in a project (post-checkout, post-merge, post-rewrite), which pull. */
 const HOOKED_GIT = new Set(['checkout', 'switch', 'clone', 'merge', 'pull', 'rebase', 'worktree', 'am']);

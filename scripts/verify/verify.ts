@@ -108,7 +108,8 @@ async function main(): Promise<number> {
 
       if (rest.includes('--drivers')) {
         const { doctorDrivers } = await import('./doctor.js');
-        await doctorDrivers((good, text) => console.log(`${good ? 'ok  ' : 'warn'} ${text}`));
+        const world = run === undefined ? undefined : loadWorld(parseTarget(run).runId);
+        await doctorDrivers((good, text) => console.log(`${good ? 'ok  ' : 'warn'} ${text}`), world !== undefined && world.cleanedAt === undefined ? { world } : {});
       }
 
       return 0;

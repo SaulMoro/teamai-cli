@@ -10,7 +10,8 @@ import { collectEnvSecrets } from '@teamai/shared/redact';
 import { PROVIDER_COMMANDS } from '../../packages/runtime-sandbox/src/provider-commands.js';
 import { VERCEL_AUTH } from '../../packages/runtime-sandbox/src/providers/vercel.js';
 import { priceTokens } from '../../src/token-usage/pricing.js';
-import { runtimeHostCommands, TOOL_COMMANDS } from './world.js';
+import { captureOn } from './target.js';
+import { recordWriters, runtimeHostCommands, TOOL_COMMANDS, worldFiles, worldWritersFile, type World } from './world.js';
 
 /** What `argv` printed, or why it could not say: run in the harness's own environment, never a world's. */
 function probe(argv: readonly string[]): { ok: true; first: string; stdout: string } | { ok: false; why: string } {
@@ -76,11 +77,38 @@ const CHEAPEST_MODEL = {
   opencode: () => undefined,
 } satisfies Record<(typeof TOOL_COMMANDS)[number], () => string | undefined>;
 
-/** Prints the drivers section of doctor. */
-export async function doctorDrivers(line: (good: boolean, text: string) => void): Promise<void> {
+/** The line `doctor <run> --drivers` gives sbx from what `sbx ls --no-input` answered in world `runId`. */
+export function sbxInWorld(runId: string, ran: { code: number | null; why: string }): { good: boolean; text: string } {
+  if (ran.code === 0) return { good: true, text: 'sandbox sbx: signed in in this world' };
+
+  // sbx ends its refusal with the command that signs in: `try: sbx login`.
+  if (/\bsbx login\b/.test(ran.why)) return { good: false, text: `sandbox sbx: installed, not signed in in this world; sign in with \`npm run -s verify -- sh ${runId} sbx login\`. Claims on it are UNVERIFIABLE until then` };
+
+  return { good: false, text: `sandbox sbx: \`sbx ls\` failed in this world (${ran.why}): claims on it are UNVERIFIABLE here` };
+}
+
+/**
+ * Asks sbx in `world`, from its own HOME, whether it is signed in there. What sbx writes there is its own, as when a
+ * maintainer runs it with `sh`, so it is recorded as sbx's.
+ */
+function askSbxIn(world: World): { good: boolean; text: string } {
+  const argv = [PROVIDER_COMMANDS.sbx, 'ls', '--json', '--no-input'];
+  const before = worldFiles(world);
+  const ran = captureOn(world, { kind: 'world' }, argv);
+  recordWriters(worldWritersFile(world), argv, before, worldFiles(world));
+
+  return sbxInWorld(world.runId, ran);
+}
+
+/** Prints the drivers section of doctor; with `world`, what sbx answers in it. */
+export async function doctorDrivers(line: (good: boolean, text: string) => void, { world }: { world?: World } = {}): Promise<void> {
   for (const [provider, ready] of Object.entries(PROVIDER_READINESS)) {
     const answer = ready();
     line(answer.ok, answer.ok ? `sandbox ${provider}: ${answer.first}` : `sandbox ${provider}: ${answer.why}: claims on it are UNVERIFIABLE here`);
+
+    if (provider !== 'sbx' || !answer.ok) continue;
+    const signIn = world === undefined ? { good: false, text: 'sandbox sbx: signed in or not is per world; `doctor <run> --drivers` asks in that world' } : askSbxIn(world);
+    line(signIn.good, signIn.text);
   }
 
   for (const { runtime, commands } of await runtimeHostCommands()) {
