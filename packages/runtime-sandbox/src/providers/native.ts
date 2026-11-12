@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { z } from 'zod';
-import { PlaceViewSchema, type Can, type PlaceView, type RuntimeFailure } from '@teamai/runtime-protocol';
+import { PlaceViewSchema, type Can, type RuntimeFailure } from '@teamai/runtime-protocol';
 import { signalGroup } from '@teamai/shared/process-group';
 import { readRegularFileSync } from '@teamai/shared/regular-file';
 import { COMMAND_MS, handleOf, type ExecEnd, type ExecSpec, type Provider } from '../provider.js';

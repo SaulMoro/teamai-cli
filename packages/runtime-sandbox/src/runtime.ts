@@ -254,6 +254,7 @@ export function serve({ input, write: send, journal, warn, provider: providerFor
       const found = await provider.find(key);
 
       if (!found.ok) return found;
+
       const created = found.id === undefined
         ? await provider.create(key, { view, tool: launched, ...(deadline !== undefined && { deadline }), ...(warmed.warmed && { warmed: warmed.warmed }), hostPorts: [...new Set(onThisMachine(credentials).map(({ port }) => port))] })
         : { ok: true as const, id: found.id };

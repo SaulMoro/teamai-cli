@@ -71,6 +71,12 @@ function thisMachineAddresses(): string[] {
   return Object.values(os.networkInterfaces()).flatMap((found) => (found ?? []).flatMap((one) => (one.internal || one.address.startsWith('fe80') ? [] : [one.address])));
 }
 
+/** Whether a step's container runs behind the network filter, and the name the engine gives this machine there. */
+interface StepNetwork {
+  isFiltered: boolean;
+  alias: string | undefined;
+}
+
 /**
  * Whether a docker of `version` keeps DNS inside an internal network: before 26.0.0, 25.0.5 and 23.0.11 it forwarded a
  * container's lookups out of it (CVE-2024-29018), which a judge could use to send what it read.
@@ -144,7 +150,7 @@ export function containerProvider({ engine, image, owner, host, warm, profile }:
    * What `offer` found, which each step's container is created on: whether steps run behind the network filter, and the
    * name the engine gives this machine, at which a credential on this machine is let through.
    */
-  let steps: { isFiltered: boolean; alias: string | undefined } = { isFiltered: false, alias: undefined };
+  let steps: StepNetwork = { isFiltered: false, alias: undefined };
 
   /**
    * Makes the internal network of `key` and the filter in front of it, which lets through what `rules` name (judge.ts),
