@@ -365,7 +365,13 @@ async function finishLeftClaims(config: LocalConfig, records: FleetRecord[], { r
       // Its place there is closed: a run of the attempt starts again with a place and an exec of its own.
       await fs.rm(attemptRuntimePath(config, record.run, record.attempt), { force: true });
 
-      if (!isHeld(record) && record.state !== 'cancelling') return undefined;
+      // An attempt whose record ended needs nothing more here: what the member kept of it goes, its claim marker with it.
+      if (!isHeld(record) && record.state !== 'cancelling') {
+        await removeEndedAttempt(config, record.run, record.attempt);
+
+        return undefined;
+      }
+
       const ref = attemptRef(record.run, record.attempt);
       // Only this member pushes to the attempt's ref, so its tip is the last work it saved. Another member process in this
       // checkout may fetch meanwhile, so the tip comes from origin's listing, never from FETCH_HEAD.
@@ -395,6 +401,24 @@ async function finishLeftClaims(config: LocalConfig, records: FleetRecord[], { r
   }
 
   return undefined;
+}
+
+/**
+ * Removes the directory a member kept attempt `attempt` of run `run` in, with the run's own folders once they hold
+ * nothing else: a member holds no record of the run, so nothing else ends them.
+ */
+async function removeEndedAttempt(config: LocalConfig, run: RunId, attempt: AttemptId): Promise<void> {
+  const dir = attemptDir(config, run, attempt);
+  await fs.rm(dir, { recursive: true, force: true });
+
+  for (const parent of [path.dirname(dir), path.dirname(path.dirname(dir))]) {
+    try {
+      await fs.rmdir(parent);
+    } catch {
+      // Not empty, or already gone: another attempt of the run, or the run's own record, is still there.
+      return;
+    }
+  }
 }
 
 /** Answers the cancel of claim `cancelling` with the work up to `pushed`: the step stopped. */

@@ -1172,6 +1172,19 @@ describe('a restarted member', () => {
     }
   }, 60_000);
 
+  it('removes what it kept of an attempt once its record ended, at its next take', async () => {
+    const { alice, bob, run, offered } = await offerSlow(60_000, { definition: AGAIN.replace('test -f left.txt && echo again > again.txt', 'echo again > again.txt'), command: 'echo again > again.txt' });
+    await readableReportsWorktree(bob.config);
+    const take = async () => takeFleetAttempt(bob.config, { pool: 'default', repository: 'github.com/acme/business', root: bob.checkout, member: await installOwner(bob.config), secrets: {}, place: HERE });
+
+    expect(await take()).toMatchObject({ data: { ran: { run, attempt: offered.attempt } } });
+    expect(await recordOf(alice, run)).toMatchObject({ state: 'finished' });
+    expect(fs.existsSync(attemptDir(bob.config, run, offered.attempt))).toBe(true);
+
+    expect(await take()).toEqual({ data: { idle: { offered: 0 } } });
+    expect(fs.existsSync(attemptDir(bob.config, run, offered.attempt))).toBe(false);
+  }, 60_000);
+
   it('keeps the claim and runs nothing of the step again when it cannot confirm the command its killed run left ended', async () => {
     const { alice, bob, run, offered } = await offerSlow(60_000, { definition: AGAIN.replace('test -f left.txt && echo again > again.txt', 'echo again > again.txt'), command: 'echo again > again.txt' });
     const claimed = await claimAttempt(bob.config, offered, await installOwner(bob.config));

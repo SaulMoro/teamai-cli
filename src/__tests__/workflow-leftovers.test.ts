@@ -404,6 +404,10 @@ describe('doctor --fix past workflows.retention', () => {
     const attempt = run.steps.flatMap((step) => ('attempt' in step && step.attempt ? [step.attempt] : []))[0] ?? '';
     git(cwd, ['update-ref', `refs/teamai/kept/${attempt}`, 'HEAD']);
     git(cwd, ['push', '-q', 'origin', `HEAD:refs/heads/teamai/${runId}/base`]);
+    // The branch a fleet attempt of the run pushed its work to.
+    const fleetBranch = `teamai/attempts/${runId}/${attempt}`;
+    git(cwd, ['push', '-q', 'origin', `HEAD:refs/heads/${fleetBranch}`]);
+    const onOrigin = () => git(origin, ['for-each-ref', '--format=%(refname)', `refs/heads/${fleetBranch}`]);
     const worktrees = () => git(cwd, ['worktree', 'list', '--porcelain']).split('\n').filter((line) => line.startsWith('worktree ')).length;
     expect(branches(origin, runId)).toEqual(['base', 'broken/p1', 'change/p1', 'docs/p1']);
     expect(worktrees()).toBe(2);
@@ -411,12 +415,14 @@ describe('doctor --fix past workflows.retention', () => {
 
     expect(await sweepLeftovers(config, null, { now: settled + 13 * DAY, checkout: cwd })).toMatchObject({ swept: [] });
     expect(branches(origin, runId)).toEqual(['base', 'broken/p1', 'change/p1', 'docs/p1']);
+    expect(onOrigin()).toBe(`refs/heads/${fleetBranch}`);
 
     const swept = await sweepLeftovers(config, null, { now: settled + 14 * DAY, checkout: cwd });
 
     expect(swept.swept).toEqual([expect.objectContaining({
-      run: runId, branches: [`teamai/${runId}/base`, `teamai/${runId}/broken/p1`, `teamai/${runId}/docs/p1`], refs: [`refs/teamai/kept/${attempt}`], failed: [],
+      run: runId, branches: [fleetBranch, `teamai/${runId}/base`, `teamai/${runId}/broken/p1`, `teamai/${runId}/docs/p1`], refs: [`refs/teamai/kept/${attempt}`], failed: [],
     })]);
+    expect(onOrigin()).toBe('');
     expect(branches(origin, runId)).toEqual(['change/p1']);
     expect(branches(cwd, runId)).toEqual(['change/p1']);
     expect(worktrees()).toBe(1);
