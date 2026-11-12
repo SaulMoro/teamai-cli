@@ -8,7 +8,7 @@ import { existingCheckout } from '../run-location.js';
 import { errnoCode } from '../../utils/fs.js';
 import { attemptDir, AttemptIdSchema, attemptsDir, attemptsDirIn, readRun, RunIdSchema, type AttemptId, type RunId, type RunLock } from '../store.js';
 import { knownSecrets } from '../../env-resolution.js';
-import { attemptRun, attemptRuntimeFile, attemptRuntimePath, attemptToolHome, isPlaceLeftOpen, maskAttemptResults, readAttemptPlacement, readAttemptPlacementAt, releaseAttemptRuntime, type AttemptRuntimeRecord } from './attempt.js';
+import { attemptRun, attemptRuntimeFile, attemptRuntimePath, attemptToolHome, isPlaceLeftOpen, maskAttemptResults, readAttemptPlacement, readAttemptPlacementAt, releaseAttemptRuntime, type AttemptPlacement, type AttemptRuntimeRecord } from './attempt.js';
 import { endLogin, LOGIN_TOOLS, loginHolder, type LoginTool } from './login.js';
 import { disposeDriver, openDriver } from './sources.js';
 import { retryCommand } from './retry-command.js';
@@ -132,8 +132,22 @@ type AttemptStop = 'closed' | 'released' | 'none' | 'running';
 /** How `stopAttempt` ended: still `running`, with why, or done; `masked` holds the values its runtime's messages are masked with. */
 type Stopped = ({ ended: Exclude<AttemptStop, 'running'> } | { ended: 'running'; why: string }) & { masked?: Record<string, string> };
 
+/** Why a step runtime may still hold an attempt's place: its record says it is open, or cannot be read. */
+export type HeldPlace = { held: 'open'; record: AttemptRuntimeRecord } | { held: 'unreadable'; why: string };
+
 /** An attempt whose place a step runtime may still hold: its record says `open`, or cannot be read. */
-export type PlaceMaybeHeld = { run: RunId; attempt: AttemptId } & ({ held: 'open' } | { held: 'unreadable'; why: string });
+export type PlaceMaybeHeld = { run: RunId; attempt: AttemptId } & HeldPlace;
+
+/**
+ * Whether a step runtime may still hold the place of the attempt whose record reads `placement`, and why; undefined when
+ * none does. The one test of "a place still open" that `teamai uninstall` refuses with: fails closed on a record it
+ * cannot read, which may be one that is open.
+ */
+export function heldPlaceOf(placement: AttemptPlacement): HeldPlace | undefined {
+  if (isPlaceLeftOpen(placement)) return { held: 'open', record: placement.record };
+
+  return placement.kind === 'unreadable' ? { held: 'unreadable', why: placement.why } : undefined;
+}
 
 /**
  * Each attempt of the runs directory `runs` (`runsDir`, or `runsDirIn` of a data home) whose place a step runtime may
@@ -153,10 +167,9 @@ export async function placesMaybeHeld(runs: string): Promise<PlaceMaybeHeld[]> {
       const attempt = AttemptIdSchema.safeParse(entry);
 
       if (!attempt.success) continue;
-      const placement = await readAttemptPlacementAt(attemptRuntimeFile(path.join(attempts, attempt.data)));
+      const place = heldPlaceOf(await readAttemptPlacementAt(attemptRuntimeFile(path.join(attempts, attempt.data))));
 
-      if (isPlaceLeftOpen(placement)) held.push({ run: run.data, attempt: attempt.data, held: 'open' });
-      else if (placement.kind === 'unreadable') held.push({ run: run.data, attempt: attempt.data, held: 'unreadable', why: placement.why });
+      if (place !== undefined) held.push({ run: run.data, attempt: attempt.data, ...place });
     }
   }
 

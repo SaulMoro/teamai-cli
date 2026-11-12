@@ -1,12 +1,13 @@
 /**
  * The attempt places teamai's own records say an external step runtime still keeps open, under every HOME of the world,
  * and each sandboxed attempt whose environment no observer line read (observer.ts `attemptsObserved`). The record is
- * the product's (`readAttemptPlacementAt`), read the way a cancel reads it, and judged open by the predicate `teamai
- * uninstall` refuses with (`isPlaceLeftOpen`): cleanup refuses while one is open or unreadable, since the record it
- * would remove is what closes the place.
+ * the product's (`readAttemptPlacementAt`), read the way a cancel reads it, and judged by the predicate `teamai
+ * uninstall` refuses with (`heldPlaceOf`): cleanup refuses while one is open or unreadable, since the record it would
+ * remove is what closes the place.
  */
 import path from 'node:path';
-import { isPlaceLeftOpen, readAttemptPlacementAt, type AttemptPlacement } from '../../../src/workflow/runtimes/attempt.js';
+import { readAttemptPlacementAt, type AttemptPlacement } from '../../../src/workflow/runtimes/attempt.js';
+import { heldPlaceOf } from '../../../src/workflow/runtimes/cancelled.js';
 import type { LeftoverKind } from '../leftovers.js';
 import type { World } from '../world.js';
 
@@ -46,15 +47,13 @@ export const places: LeftoverKind = {
     const placements = await readPlacements(records.files);
 
     const findings = records.files.flatMap((file, index) => {
-      const placement = placements[index];
+      const place = placements[index] === undefined ? undefined : heldPlaceOf(placements[index]);
 
-      if (placement === undefined) return [];
+      if (place === undefined) return [];
       const own = { kind: 'own' as const, why: `teamai's record ${file}` };
 
-      if (placement.kind === 'unreadable') return [{ what: `the runtime record of run ${attemptOf(file)}, which cannot be read (${placement.why}), so whether its place is open is unknown`, attribution: own, next: `close what it can with ${cancelOf(world, file)}, or fix that record` }];
-
-      if (!isPlaceLeftOpen(placement)) return [];
-      const { record } = placement;
+      if (place.held === 'unreadable') return [{ what: `the runtime record of run ${attemptOf(file)}, which cannot be read (${place.why}), so whether its place is open is unknown`, attribution: own, next: `close what it can with ${cancelOf(world, file)}, or fix that record` }];
+      const { record } = place;
       const held = record.heldFor === undefined ? '' : `, held for a ${record.heldFor.conversation.tool} conversation`;
 
       return [{ what: `run ${attemptOf(file)}'s place on ${record.driver}/${record.runtime}${record.open.handle === undefined ? '' : ` (${record.open.handle})`}, ${record.phase}${held}`, attribution: own, next: `close it with ${cancelOf(world, file)}` }];
