@@ -164,7 +164,7 @@ async function planSelfBootstrap(
   }
 
   const { loadTeamConfig } = await import('./config.js');
-  const teamConfig = await loadTeamConfig(localPath);
+  const teamConfig = await loadTeamConfig(localPath, null);
 
   if (!teamConfig) {
     log.debug('[bootstrap] teamai.yaml not loadable; skipping');

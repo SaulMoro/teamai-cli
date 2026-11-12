@@ -290,8 +290,8 @@ function withAssignedRoles(config: LocalConfig, roles: string[], source: 'assign
  * The namespaces `member` receives tool instances from in the team repo at `repoPath` (`workflowNamespacesOf`). With no
  * member, only a repo with no manifest to filter by reads its namespaces.
  */
-async function memberNamespaces(repoPath: string, member: LocalConfig | undefined): Promise<readonly string[] | 'legacy'> {
-  if (member === undefined) {
+async function memberNamespaces(repoPath: string, member: LocalConfig | null): Promise<readonly string[] | 'legacy'> {
+  if (member === null) {
     const manifests = await Promise.all(['roles.yaml', 'projects.yaml'].map((file) => pathExists(path.join(repoPath, 'manifest', file))));
 
     return manifests.some(Boolean) ? [] : 'legacy';
@@ -302,9 +302,10 @@ async function memberNamespaces(repoPath: string, member: LocalConfig | undefine
 
 /**
  * Load the team config (teamai.yaml) from the team repo, with the tool instances of `member`: the namespaces their roles
- * and projects select, and their scope over another's instance of one name.
+ * and projects select, and their scope over another's instance of one name. `null` reads it for no member, as for a
+ * team repo teamai only inspects: the team root's instances, or every namespace's in a repo with no manifest.
  */
-export async function loadTeamConfig(repoPath: string, member?: LocalConfig): Promise<TeamaiConfig | null> {
+export async function loadTeamConfig(repoPath: string, member: LocalConfig | null): Promise<TeamaiConfig | null> {
   const content = await readFileSafe(path.join(repoPath, 'teamai.yaml'));
 
   if (!content) {
@@ -316,7 +317,7 @@ export async function loadTeamConfig(repoPath: string, member?: LocalConfig): Pr
   try {
     const raw = parseYaml(content);
 
-    return await withToolInstances({ root: repoPath, scope: member?.scope, isForMember: member !== undefined, namespaces: () => memberNamespaces(repoPath, member) }, TeamaiConfigSchema.parse(raw));
+    return await withToolInstances({ root: repoPath, scope: member?.scope, isForMember: member !== null, namespaces: () => memberNamespaces(repoPath, member) }, TeamaiConfigSchema.parse(raw));
   } catch (e) {
     log.error(`Invalid teamai.yaml: ${describeConfigError(e)}`);
 
@@ -334,7 +335,7 @@ export async function loadTeamAgentLanguage(
 ): Promise<'en' | 'zh' | undefined> {
   if (!config) return undefined;
 
-  return (await loadTeamConfig(config.repo.localPath))?.language;
+  return (await loadTeamConfig(config.repo.localPath, null))?.language;
 }
 
 /** A YAML mapping read from a machine file, its values not validated yet. */
@@ -907,9 +908,12 @@ async function throwTeamConfigMissingOrInvalid(repoPath: string): Promise<never>
   throw new Error(`The team config at ${teamConfigPath} could not be read: ${why}. Fix it in the team repo, or ask a team admin to.`);
 }
 
-/** The team config (teamai.yaml) in `repoPath`, or null when the team has none; one that cannot be used throws, naming it. */
-export async function loadTeamConfigIfPresent(repoPath: string): Promise<TeamaiConfig | null> {
-  const teamConfig = await loadTeamConfig(repoPath);
+/**
+ * The team config (teamai.yaml) in `repoPath`, with `member`'s tool instances as `loadTeamConfig` reads them, or null
+ * when the team has none; one that cannot be used throws, naming it.
+ */
+export async function loadTeamConfigIfPresent(repoPath: string, member: LocalConfig | null): Promise<TeamaiConfig | null> {
+  const teamConfig = await loadTeamConfig(repoPath, member);
 
   if (teamConfig || !(await pathExists(path.join(repoPath, 'teamai.yaml')))) return teamConfig;
 

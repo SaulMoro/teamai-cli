@@ -77,7 +77,7 @@ describe('source physical destination ownership', () => {
   }
 
   async function removeSource(alias = 'current', local = config): Promise<void> {
-    const currentTeam = await loadTeamConfig(local.repo.localPath);
+    const currentTeam = await loadTeamConfig(local.repo.localPath, null);
     expect(currentTeam).not.toBeNull();
     vi.mocked(autoDetectInit).mockResolvedValue({ localConfig: local, teamConfig: currentTeam! });
     await sourceRemove(alias, {});
@@ -195,7 +195,7 @@ describe('source physical destination ownership', () => {
     await removeSource();
 
     expect(await fse.pathExists(getSourceManifestPath('current', config))).toBe(false);
-    expect((await loadTeamConfig(config.repo.localPath))?.sources).toEqual([]);
+    expect((await loadTeamConfig(config.repo.localPath, null))?.sources).toEqual([]);
     expect(await fse.pathExists(config.projectRoot!)).toBe(true);
   });
 

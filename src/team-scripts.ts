@@ -210,7 +210,7 @@ async function resolveScript(
   repoPath: string,
   event: TeamScriptEvent,
 ): Promise<string | 'absent' | 'unsafe'> {
-  const teamConfig = await loadTeamConfig(repoPath);
+  const teamConfig = await loadTeamConfig(repoPath, null);
   const declared = teamConfig ? scriptPathOf(teamConfig, event) : undefined;
 
   if (!declared) return 'absent';

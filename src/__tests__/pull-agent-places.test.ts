@@ -85,7 +85,7 @@ describe('a pull and the agents of a moved home', () => {
 
     for (const file of recallAgents) expect(await fse.pathExists(file), file).toBe(true);
 
-    vi.mocked(autoDetectInit).mockResolvedValue({ localConfig: config, teamConfig: await loadTeamConfig(repo) } as never);
+    vi.mocked(autoDetectInit).mockResolvedValue({ localConfig: config, teamConfig: await loadTeamConfig(repo, null) } as never);
     await recallDisable({});
 
     for (const file of recallAgents) expect(await fse.pathExists(file), file).toBe(false);

@@ -986,7 +986,7 @@ export async function initHttp(
     await writeFile(stubPath, YAML.stringify({ team: 'http-reporting', repo: url, sharing: {} }));
   }
 
-  const teamConfig = await loadTeamConfig(localPath);
+  const teamConfig = await loadTeamConfig(localPath, null);
 
   if (!teamConfig) {
     log.error('Failed to write a valid teamai.yaml stub. Check filesystem permissions.');
@@ -1700,7 +1700,7 @@ export async function initSelfMode(options: GlobalOptions & {
     log.success('Created .teamai/teamai.yaml (mode: self)');
   }
 
-  const teamConfig = await loadTeamConfig(localPath);
+  const teamConfig = await loadTeamConfig(localPath, null);
 
   if (!teamConfig) {
     log.error('Failed to write a valid .teamai/teamai.yaml. Check filesystem permissions.');
@@ -2530,7 +2530,7 @@ export async function init(options: GlobalOptions & {
   // Step 4: Load team config
   // Remote teamai.yaml.scope (if present) is ignored — local install location
   // is decided only by --scope / default (issue #250).
-  const teamConfig = await loadTeamConfig(localPath);
+  const teamConfig = await loadTeamConfig(localPath, null);
 
   if (!validateGitInitAgentIds(requestedAgents, teamConfig)) {
     process.exit(1);
@@ -2724,7 +2724,7 @@ export async function init(options: GlobalOptions & {
 
   // Step 5.5: Configure default MR reviewers (only for fresh setup with no reviewers yet).
   // --force implies non-interactive: skip reviewer prompts entirely (can be configured later).
-  const currentConfig = await loadTeamConfig(localPath);
+  const currentConfig = await loadTeamConfig(localPath, null);
   const hasReviewers = currentConfig?.reviewers && currentConfig.reviewers.length > 0;
 
   if (isNewMember && !hasReviewers && !options.force) {
@@ -2758,7 +2758,7 @@ export async function init(options: GlobalOptions & {
               // createGitWithBlockTimeout (spawn-level timeout); the provider's
               // pr-create spawnSync also carries the init-push timeout so a
               // stalled gh/gf process cannot block the event loop past it.
-              const mrTeamConfig = await loadTeamConfig(localPath);
+              const mrTeamConfig = await loadTeamConfig(localPath, null);
 
               const mrLocalConfig: Pick<LocalConfig, 'repo' | 'username' | 'provider'> = {
                 repo: { remote: repoInfo.httpsUrl, localPath },

@@ -66,7 +66,7 @@ async function load(repo: string, member?: LocalConfig) {
   const registry = await import('../tool-registry.js');
   const { log } = await import('@teamai/shared/log');
   const errors = vi.spyOn(log, 'error').mockImplementation(() => undefined);
-  const config = await loadTeamConfig(repo, member);
+  const config = await loadTeamConfig(repo, member ?? null);
 
   return { config, registry, errors: errors.mock.calls.map(([message]) => String(message)) };
 }
@@ -142,11 +142,11 @@ describe('team tool instances', () => {
     const shown = () => errors.mock.calls.map(([message]) => String(message));
     const refusal = expect.stringContaining('command: command is the name of one executable on PATH');
 
-    for (let pass = 0; pass < 3; pass++) await loadTeamConfig(repo);
+    for (let pass = 0; pass < 3; pass++) await loadTeamConfig(repo, null);
     expect(shown()).toEqual([refusal]);
 
     resetWarnOnce();
-    await loadTeamConfig(repo);
+    await loadTeamConfig(repo, null);
     expect(shown()).toEqual([refusal, refusal]);
   });
 
