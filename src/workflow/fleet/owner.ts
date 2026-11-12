@@ -589,12 +589,16 @@ async function waitOnOffer(input: WaitInput, { cancel, leave }: { cancel: AbortS
   // Staleness counts on this machine's clock, from when it last saw the record change: a member's clock may be off. A
   // cancel goes through the record, and waits for the member's answer as long as for its progress.
   let lastSeen: { write: string; at: number } | undefined;
-  // The cancel this wait wrote over a member's claim, once it landed: the member answers it.
-  let cancelling: Extract<FleetRecord, { state: 'cancelling' }> | undefined;
-  // When this wait first saw the cancel, on this machine's clock.
-  let cancelledAt: number | undefined;
-  // When the first cancel write began: until CANCEL_WRITE_MS after it, a cancel that did not land is written again.
-  let cancelTriedAt: number | undefined;
+
+  // The cancel `cancel` asks for, once this wait saw it: when it saw it, on this machine's clock; then when the first
+  // cancel write began, a write that did not land being tried again until CANCEL_WRITE_MS after it; then the cancel that
+  // landed over a member's claim, which the member answers. A withdraw that landed ends the wait.
+  let cancelling:
+    | { readonly kind: 'seen'; readonly at: number }
+    | { readonly kind: 'trying'; readonly since: number }
+    | { readonly kind: 'landed'; readonly record: Extract<FleetRecord, { state: 'cancelling' }> }
+    | undefined;
+
   // The gate the member asks, put to this driver's person once: `answer` once the person answered.
   let asked: Asked | undefined;
   // Each reason a member gave on the offer for leaving it, shown once, by member and reason.
@@ -707,8 +711,8 @@ async function waitOnOffer(input: WaitInput, { cancel, leave }: { cancel: AbortS
 
     // A cancel that landed waits for its member's answer as long as for its progress: past stale_after with no read of
     // the record, whether the member stopped is not known, so the wait ends and keeps the place for `workflow cancel`.
-    if (cancelling !== undefined && record === undefined && lastSeen !== undefined && Date.now() - lastSeen.at > staleAfterMs) {
-      const stopAsked = `Step "${step}" was cancelled: its member ${safeText(cancelling.member.user)} was asked to stop it, and the record of attempt ${attempt}`;
+    if (cancelling?.kind === 'landed' && record === undefined && lastSeen !== undefined && Date.now() - lastSeen.at > staleAfterMs) {
+      const stopAsked = `Step "${step}" was cancelled: its member ${safeText(cancelling.record.member.user)} was asked to stop it, and the record of attempt ${attempt}`;
 
       return failed({
         code: CANCEL_FAILED,
@@ -718,8 +722,9 @@ async function waitOnOffer(input: WaitInput, { cancel, leave }: { cancel: AbortS
       });
     }
 
-    if (cancel.aborted && cancelling === undefined) {
-      cancelledAt ??= Date.now();
+    if (cancel.aborted && cancelling?.kind !== 'landed') {
+      const pending = cancelling ?? { kind: 'seen', at: Date.now() };
+      cancelling = pending;
 
       // A read that failed shows nothing: the cancel is written once a read shows the record again, for as long as a
       // member's answer is waited on, so the offer does not stay out for a member to take.
@@ -727,22 +732,23 @@ async function waitOnOffer(input: WaitInput, { cancel, leave }: { cancel: AbortS
         if (read.ok) return failed({ code: 'runtime_interrupted', message: `Step "${step}" was cancelled, and its attempt has no record on fleet pool ${pool}, so no member was asked to stop it.` });
 
         // A cancel write already tried keeps its deadline, and only it, while origin cannot be read: the place stays kept.
-        if (cancelTriedAt !== undefined) {
-          if (Date.now() >= cancelTriedAt + CANCEL_WRITE_MS) return failed(cancelNotWritten({ step, run, attempt, pool }, read.error));
-        } else if (Date.now() - cancelledAt > staleAfterMs) {
+        if (pending.kind === 'trying') {
+          if (Date.now() >= pending.since + CANCEL_WRITE_MS) return failed(cancelNotWritten({ step, run, attempt, pool }, read.error));
+        } else if (Date.now() - pending.at > staleAfterMs) {
           // A member may still take the offer, so the place stays kept for the next `workflow cancel`, as at the deadline.
           return failed({ code: CANCEL_FAILED, message: `Step "${step}" was cancelled, and the record of its attempt on fleet pool ${pool} could not be read for ${staleAfterMs / 1_000} s, so no member was asked to stop it, and a member may still take its offer. ${cancelWriteCause(read.error)} The attempt's place and records are kept. Run teamai workflow cancel ${run} again.` });
         }
       } else if (record.state === 'offered' || isHeld(record)) {
-        cancelTriedAt ??= Date.now();
-        const until = cancelTriedAt + CANCEL_WRITE_MS;
+        const since = pending.kind === 'trying' ? pending.since : Date.now();
+        cancelling = { kind: 'trying', since };
+        const until = since + CANCEL_WRITE_MS;
         // A publish of this install holding teamai-reports, as `workflow cancel` does, is waited for.
         const written = await cancelAttempt(config, record, { until, signal: leave });
 
         if (written.ok) {
           // A withdraw is final: no member takes an offer once it landed, so the cancel ends at the write.
           if (written.value.state === 'withdrawn') return withdrawn;
-          cancelling = written.value;
+          cancelling = { kind: 'landed', record: written.value };
           lastSeen = { write: written.value.write, at: Date.now() };
           continue;
         }
@@ -776,7 +782,7 @@ async function waitOnOffer(input: WaitInput, { cancel, leave }: { cancel: AbortS
     const woken = AbortSignal.any([cancel, leave, ...(asked !== undefined && asked.answer === undefined ? [asked.answered.signal] : [])]);
 
     // A cancel write that is due is tried again at the shortest poll, so its deadline is kept.
-    if (cancel.aborted && cancelling === undefined && cancelTriedAt !== undefined && record?.state !== 'cancelling') pollMs = RECORD_POLL_MS;
+    if (cancelling?.kind === 'trying' && record?.state !== 'cancelling') pollMs = RECORD_POLL_MS;
     await sleep(pollMs, undefined, cancel.aborted ? { signal: leave } : { signal: woken }).catch(() => undefined);
     pollMs = Math.min(pollMs * 2, slowestPollMs);
   }
