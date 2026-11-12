@@ -11,7 +11,21 @@ const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '.
 
 const rule = ruleHarness('teamai/step-path-writes', { filename: 'src/workflow/steps/outcome.ts' });
 
-const MESSAGE = 'Write a file in src/workflow with writeRegularFile, appendRegularFile or openRegularFileForWrite';
+const MESSAGE = 'Write a file with writeRegularFile, appendRegularFile or openRegularFileForWrite';
+
+/** A file the rule lets off plain writes in, and how many. */
+const [LEFT_FILE, LEFT_COUNT]: [string, number] = Object.entries(z.record(z.string(), z.number()).parse(JSON.parse(fs.readFileSync(path.join(REPO, 'oxlint-plugin-teamai/rules/step-path-writes.left.json'), 'utf8'))))[0] ?? ['', 0];
+const writes = (count: number): string => `import fs from 'node:fs/promises';\nexport const all = (file: string) => [${Array.from({ length: count }, () => "fs.appendFile(file, 'x')").join(', ')}];`;
+
+rule.valid('lets off as many plain writes as a file had when the rule came to check it', writes(LEFT_COUNT), { filename: LEFT_FILE });
+
+rule.invalid('rejects every plain write of a let-off file once it has more than it had', writes(LEFT_COUNT + 1), (output) => {
+  expect(output.match(/Write a file with writeRegularFile/g)).toHaveLength(LEFT_COUNT + 1);
+}, { filename: LEFT_FILE });
+
+rule.invalid('asks for a let-off file\'s count to come down once it has fewer, so the list only shrinks', writes(LEFT_COUNT - 1), (output) => {
+  expect(output).toContain(`${LEFT_FILE} has ${LEFT_COUNT - 1} plain writes where step-path-writes.left.json lets off ${LEFT_COUNT}`);
+}, { filename: LEFT_FILE });
 
 rule.invalid('rejects an open of fs.promises with a write flag', `import fs from 'node:fs';
 export const open = (file: string) => fs.promises.open(file, 'a');`, (output) => {
@@ -37,7 +51,7 @@ rule.invalid('rejects a write stream and an append, from node:fs and fs-extra', 
 import fse from 'fs-extra';
 import { appendFile } from 'node:fs/promises';
 export const all = async (file: string) => [fs.createWriteStream(file), fs.appendFileSync(file, 'x'), await fse.appendFile(file, 'x'), await appendFile(file, 'x')];`, (output) => {
-  expect(output.match(/Write a file in src\/workflow/g)).toHaveLength(4);
+  expect(output.match(/Write a file with writeRegularFile/g)).toHaveLength(4);
 });
 
 rule.invalid('rejects a write in a folder no rule names, so new code is in scope', `import fs from 'node:fs/promises';
@@ -48,18 +62,18 @@ export const add = (file: string) => fs.appendFile(file, 'x');`, (output) => {
 rule.invalid('rejects a whole-file write, which waits on a FIFO as an open for writing does', `import fs from 'node:fs';
 import { writeFile } from 'node:fs/promises';
 export const all = async (file: string) => [await fs.promises.writeFile(file, 'x', 'utf-8'), fs.writeFileSync(file, 'x'), await writeFile(file, 'x', { mode: 0o600 })];`, (output) => {
-  expect(output.match(/Write a file in src\/workflow/g)).toHaveLength(3);
+  expect(output.match(/Write a file with writeRegularFile/g)).toHaveLength(3);
 });
 
 rule.invalid('rejects a copy, which opens its destination for writing', `import fs from 'node:fs/promises';
 import fse from 'fs-extra';
 export const all = async (from: string, to: string) => [await fs.copyFile(from, to), fse.copyFileSync(from, to)];`, (output) => {
-  expect(output.match(/Write a file in src\/workflow/g)).toHaveLength(2);
+  expect(output.match(/Write a file with writeRegularFile/g)).toHaveLength(2);
 });
 
 rule.invalid('rejects fs-extra\'s writers of a whole file', `import fse from 'fs-extra';
 export const all = async (file: string) => [await fse.outputFile(file, 'x'), await fse.writeJson(file, {}), fse.outputJsonSync(file, {}), fse.writeJSONSync(file, {})];`, (output) => {
-  expect(output.match(/Write a file in src\/workflow/g)).toHaveLength(4);
+  expect(output.match(/Write a file with writeRegularFile/g)).toHaveLength(4);
 });
 
 rule.valid('allows the helper and an atomic JSON write', `import { appendRegularFile, openRegularFileForWrite, writeRegularFile } from '@teamai/shared/regular-file';
@@ -79,21 +93,35 @@ export const open = (file: string) => [fs.promises.open(file), fs.openSync(file,
 
 rule.valid('allows an open method that is no file module\'s', `export const open = (runtime: { open: (view: string, flags: string) => void }, flags: string) => runtime.open('view', flags);`);
 
-rule.valid('allows writes outside src/workflow', `import fs from 'node:fs/promises';
-export const add = (file: string) => fs.appendFile(file, 'x');`, { filename: 'src/commands/status.ts' });
+rule.invalid('rejects a write anywhere in production source, a new package\'s too, as the read rule checks reads', `import fs from 'node:fs/promises';
+export const add = (file: string) => fs.appendFile(file, 'x');`, (output) => {
+  expect(output).toContain(MESSAGE);
+}, { filename: 'packages/zzz-new/src/x.ts' });
+
+rule.valid('allows writes outside production source', `import fs from 'node:fs/promises';
+export const add = (file: string) => fs.appendFile(file, 'x');`, { filename: 'scripts/verify/world.ts' });
 
 rule.valid('allows writes in tests', `import fs from 'node:fs/promises';
 export const add = (file: string) => fs.appendFile(file, 'x');`, { filename: 'src/workflow/steps/outcome.test.ts' });
 
-it('matches the production source of src/workflow in this checkout, and nothing outside it', () => {
-  const files = fs.readdirSync(path.join(REPO, 'src'), { recursive: true, encoding: 'utf8' }).map((file) => `src/${file.split(path.sep).join('/')}`);
+it('matches the production source of src/ and of every package in this checkout, and no test', () => {
+  const sources = ['src', ...fs.readdirSync(path.join(REPO, 'packages')).map((name) => `packages/${name}/src`)].filter((dir) => fs.existsSync(path.join(REPO, dir)));
+  const files = sources.flatMap((dir) => fs.readdirSync(path.join(REPO, dir), { recursive: true, encoding: 'utf8' }).map((file) => `${dir}/${file.split(path.sep).join('/')}`));
   const matched = files.filter(isWriteChecked);
 
-  expect(matched.length).toBeGreaterThan(100);
-  expect(matched.filter((file) => !file.startsWith('src/workflow/') || /\.test\.|\/__tests__\/|\/testing\//.test(file))).toEqual([]);
+  expect(matched.filter((file) => file.startsWith('src/workflow/')).length).toBeGreaterThan(100);
+  expect(matched.filter((file) => file.startsWith('packages/')).length).toBeGreaterThan(100);
+  expect(matched.filter((file) => /\.test\.|\/__tests__\/|\/testing\//.test(file))).toEqual([]);
 });
 
-it('is an error in this checkout, with no file let off', () => {
+it('lets off only files of this checkout it checks, each with writes left', () => {
+  const left = z.record(z.string(), z.number().int().positive()).parse(JSON.parse(fs.readFileSync(path.join(REPO, 'oxlint-plugin-teamai/rules/step-path-writes.left.json'), 'utf8')));
+
+  expect(Object.keys(left).filter((file) => !fs.existsSync(path.join(REPO, file)) || !isWriteChecked(file))).toEqual([]);
+  expect(Object.keys(left).filter((file) => file.startsWith('src/workflow/'))).toEqual([]);
+});
+
+it('is an error in this checkout', () => {
   const config = fs.readFileSync(path.join(REPO, '.oxlintrc.json'), 'utf8').replace(/^\s*\/\/.*$/gm, '');
   const rules = z.object({ rules: z.record(z.string(), z.unknown()) }).parse(JSON.parse(config)).rules;
 

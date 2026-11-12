@@ -3,6 +3,8 @@ import { defineRule } from '@oxlint/plugins';
 
 import { fsFunctionOf, isCalled, openKindOf, passesOnFsModule, PASSED_ON_MESSAGE, refersToValue, reExportsFsModule } from '../fs-calls.js';
 import { repositoryPath, stringLiteralValue } from '../utils.js';
+import { isReadChecked } from './regular-file-reads.js';
+import LEFT from './step-path-writes.left.json' with { type: 'json' };
 
 /**
  * The calls that open a path for writing whatever it holds: a FIFO there waits for a reader. A copy opens its
@@ -19,17 +21,20 @@ const WHOLE_WRITES = new Set(['writeFile', 'writeFileSync']);
 /** The calls that open a path, writing when their flags say so. */
 const OPENS = new Set(['open', 'openSync']);
 
-const MESSAGE = 'Write a file in src/workflow with writeRegularFile, appendRegularFile or openRegularFileForWrite from @teamai/shared/regular-file, or with writeJsonAtomic: a step writes the paths the engine writes to, and a FIFO it leaves there blocks a plain open for writing until a reader comes, past every deadline and past process.exit. The helper opens without blocking and refuses anything but a regular file. A create that fails on anything already there (flag wx) is allowed.';
+const MESSAGE = 'Write a file with writeRegularFile, appendRegularFile or openRegularFileForWrite from @teamai/shared/regular-file, or with writeJsonAtomic: a step writes the paths teamai writes to, and a FIFO it leaves there blocks a plain open for writing until a reader comes, past every deadline and past process.exit. The helper opens without blocking and refuses anything but a regular file, or a link. A create that fails on anything already there (flag wx) is allowed.';
 
 /**
- * Whether the rule checks `file`, given from the repository root: production source under `src/workflow/`, so a new
- * folder there is in scope with no rule edit. Tests, `__tests__/` and `testing/` support are not.
- * @param {string} file
- * @returns {boolean}
+ * The plain writes each file held when the rule came to check all production source, not only `src/workflow/`, by
+ * file from the repository root. A file's count only goes down: more fail as any file's do, fewer until it is lowered.
+ * @type {Readonly<Record<string, number>>}
  */
-export function isWriteChecked(file) {
-  return /^src\/workflow\/.+\.[cm]?[jt]sx?$/.test(file) && !/\.test\.[cm]?[jt]sx?$|\/(?:__tests__|testing)\//.test(file);
-}
+const LEFT_WRITES = LEFT;
+
+/**
+ * Whether the rule checks `file`, given from the repository root: the production source the read rule checks, so a
+ * new folder or package is in scope with no rule edit.
+ */
+export const isWriteChecked = isReadChecked;
 
 /**
  * Whether `options`, a whole-file write's third argument, may replace what is there: anything but an object literal whose
@@ -48,8 +53,8 @@ function replacesWith(options) {
 export default defineRule({
   meta: {
     type: 'problem',
-    docs: { description: 'Write files in src/workflow only through the helpers that refuse a FIFO or a device.' },
-    // No option: every file in scope writes through the helpers, with no list of files let off.
+    docs: { description: 'Write files in production source only through the helpers that refuse a FIFO, a device or a link.' },
+    // No option: the writes let off are LEFT_WRITES, which only shrinks.
     schema: [],
   },
   create(context) {
@@ -57,6 +62,9 @@ export default defineRule({
 
     if (!isWriteChecked(relative)) return {};
     const { sourceCode } = context;
+    const left = Object.hasOwn(LEFT_WRITES, relative) ? LEFT_WRITES[relative] ?? 0 : 0;
+    /** @type {{ node: ESTree.Node; message: string }[]} */
+    const found = [];
 
     return {
       CallExpression(node) {
@@ -65,18 +73,25 @@ export default defineRule({
         const [, flags, options] = node.arguments;
 
         if (called === undefined || !(WRITES.has(called) || (WHOLE_WRITES.has(called) && replacesWith(options)) || (OPENS.has(called) && openKindOf(flags) !== 'read'))) return;
-        context.report({ node, message: MESSAGE });
+        found.push({ node, message: MESSAGE });
       },
       // A write passed on as a value, such as `.then(writeFile)`, is made by a later call whose flags the rule cannot read.
       'Identifier, MemberExpression'(/** @type {ESTree.Node} */ node) {
         if (isCalled(node) || !refersToValue(node)) return;
         const used = fsFunctionOf(sourceCode, node);
 
-        if (used !== undefined && (WRITES.has(used) || WHOLE_WRITES.has(used) || OPENS.has(used))) context.report({ node, message: MESSAGE });
-        else if (passesOnFsModule(sourceCode, node)) context.report({ node, message: PASSED_ON_MESSAGE });
+        if (used !== undefined && (WRITES.has(used) || WHOLE_WRITES.has(used) || OPENS.has(used))) found.push({ node, message: MESSAGE });
+        else if (passesOnFsModule(sourceCode, node)) found.push({ node, message: PASSED_ON_MESSAGE });
       },
       'ExportNamedDeclaration, ExportAllDeclaration'(/** @type {ESTree.ExportNamedDeclaration | ESTree.ExportAllDeclaration} */ node) {
-        if (reExportsFsModule(node)) context.report({ node, message: PASSED_ON_MESSAGE });
+        if (reExportsFsModule(node)) found.push({ node, message: PASSED_ON_MESSAGE });
+      },
+      'Program:exit'(/** @type {ESTree.Program} */ node) {
+        if (found.length > left) {
+          for (const each of found) context.report(each);
+        } else if (found.length < left) {
+          context.report({ node, message: `${relative} has ${found.length} plain writes where step-path-writes.left.json lets off ${left}: lower its count there to ${found.length}, or remove it at 0.` });
+        }
       },
     };
   },

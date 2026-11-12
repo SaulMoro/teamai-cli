@@ -54,7 +54,7 @@ export async function openRegularFile(file: string): Promise<FileHandle> {
 }
 
 async function openRegularFileWith(file: string, flags: number): Promise<FileHandle> {
-  // oxlint-disable-next-line teamai/regular-file-reads -- the helper's own open: nonblocking, and its handle is checked before a byte is read
+  // oxlint-disable-next-line teamai/regular-file-reads, teamai/step-path-writes -- the helper's own open: nonblocking, and its handle is checked before a byte is read
   const handle = await fs.promises.open(file, flags);
 
   try {
@@ -114,7 +114,7 @@ export async function readRegularFileNoLink(file: string, encoding?: BufferEncod
  * `openRegularFile`. Reading a regular file ends at its end, so only the open could block, and it does not here.
  */
 export function openRegularFileSync(file: string): number {
-  // oxlint-disable-next-line teamai/regular-file-reads -- the helper's own open: nonblocking, and its descriptor is checked before a byte is read
+  // oxlint-disable-next-line teamai/regular-file-reads, teamai/step-path-writes -- the helper's own open: nonblocking, and its descriptor is checked before a byte is read
   const fd = fs.openSync(file, NONBLOCKING_READ);
 
   try {
@@ -162,7 +162,7 @@ export async function openRegularFileForWrite(file: string, { append, mode, read
   let handle: FileHandle;
 
   try {
-    // oxlint-disable-next-line teamai/regular-file-reads -- the helper's own open: nonblocking, and its handle is checked before a byte is read or written
+    // oxlint-disable-next-line teamai/regular-file-reads, teamai/step-path-writes -- the helper's own open: nonblocking, and its handle is checked before a byte is read or written
     handle = await fs.promises.open(file, NONBLOCKING_CREATE | (read ? fs.constants.O_RDWR : fs.constants.O_WRONLY) | (append ? fs.constants.O_APPEND : fs.constants.O_TRUNC), mode);
   } catch (error) {
     // A FIFO no process reads, or a device with nothing behind it.
