@@ -945,14 +945,24 @@ function runtimeCommand(config: LocalConfig, { run, attempt, place, work, runDir
       return { exitCode: STOPPED_EXIT_CODE, stdout: '', stderr, output };
     }
 
-    // A command runs no tool, so it gets none of the runtime's credentials.
-    const end = await running.exec({ argv: shellArgv(command), env, unset: [...unset], credentials: {}, cwd: work }, {
-      onOutput: (stream, data) => {
-        output += data;
+    let end: Awaited<ReturnType<typeof running.exec>>;
 
-        if (stream === 'stderr') stderr = `${stderr}${data}`.slice(-STDERR_KEPT);
-      },
-    }, 'command');
+    // A command runs no tool, so it gets none of the runtime's credentials.
+    try {
+      end = await running.exec({ argv: shellArgv(command), env, unset: [...unset], credentials: {}, cwd: work }, {
+        onOutput: (stream, data) => {
+          output += data;
+
+          if (stream === 'stderr') stderr = `${stderr}${data}`.slice(-STDERR_KEPT);
+        },
+      }, 'command');
+    } catch (error) {
+      // An exec that fails instead of ending still closes its place, so a retry is the only one open.
+      const unclosed = await running.close();
+
+      if (unclosed) log.warn(unclosed.message);
+      throw error;
+    }
 
     const uncollected = await running.collect();
     const unclosed = await running.close();

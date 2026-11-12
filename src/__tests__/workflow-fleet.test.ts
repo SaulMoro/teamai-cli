@@ -745,7 +745,8 @@ steps:
     const local = hostStepRuntime();
     const runtime: StepRuntime<DriverCan> = { ...local, exec: () => Promise.reject(new Error('the box went away')) };
 
-    const { taken, record } = await takeForged(() => undefined, undefined, MARK, { command: { kind: 'runtime', driver: 'bobs', use: 'box', runtime } });
+    let forgedRun: RunId | undefined;
+    const { taken, record, bob } = await takeForged((_forged, run) => { forgedRun = run; }, undefined, MARK, { command: { kind: 'runtime', driver: 'bobs', use: 'box', runtime } });
 
     expect(taken).toMatchObject({ data: { ran: { step: 'write', exit_code: 1 } } });
     expect(record).toMatchObject({ state: 'finished', result: { exitCode: 1 } });
@@ -753,6 +754,9 @@ steps:
     expect(stderr).toContain('step "write"');
     expect(stderr).toContain('the box went away');
     expect(stderr).toMatch(/teamai workflow retry r[0-9a-f]+ write/);
+    // The place the command opened closes too, so the retry is the only one open.
+    expect(forgedRun).toBeDefined();
+    expect(JSON.parse(fs.readFileSync(attemptRuntimePath(bob.config, forgedRun ?? RunIdSchema.parse('r0'), ATTEMPT), 'utf8'))).toMatchObject({ phase: 'closed' });
   });
 
   it('refuses an offer whose command is not the one the team\'s workflow defines for the step, and runs nothing', async () => {
