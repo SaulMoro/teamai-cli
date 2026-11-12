@@ -1194,6 +1194,26 @@ describe('a prompt attempt in a container', () => {
     expect(await connection.next((message) => message.event === 'closed' || message.event === 'close_failed', 30_000)).toEqual({ event: 'closed', handle: HANDLE });
   });
 
+  it("keeps the addresses of this machine its step's filter reads current, as when a VPN comes up during a step, and removes them with the place", async () => {
+    engine.image(IMAGE, { claude: CLAUDE, node: '' });
+    const connection = start();
+    await init(connection, { provider: 'docker', image: IMAGE });
+    await openPlace(connection, place());
+    const file = path.join(dir, 'home', '.teamai', 'runtime-state', 'sandbox', 'docker', 'filters', HANDLE, 'this-machine');
+    const lan = Object.values(os.networkInterfaces()).flatMap((found) => found ?? []).filter((one) => !one.internal && one.family === 'IPv4').map((one) => one.address);
+    const listed = (): string[] => (fs.existsSync(file) ? fs.readFileSync(file, 'utf8').split('\n') : []);
+
+    expect(listed()).toEqual(expect.arrayContaining(lan));
+    // What the file held when the addresses it lists were not this machine's yet.
+    fs.writeFileSync(file, '');
+    await expect.poll(listed, { timeout: 10_000 }).toEqual(expect.arrayContaining(lan));
+    expect(lan.length).toBeGreaterThan(0);
+    connection.send({ type: 'close', handle: HANDLE });
+    await connection.next((message) => message.handle === HANDLE && (message.event === 'closed' || message.event === 'close_failed'));
+
+    expect(fs.existsSync(path.dirname(file))).toBe(false);
+  });
+
   it('leaves no network of a first open whose network filter could not start, which no sweep would find', async () => {
     engine.image(IMAGE, { claude: CLAUDE, node: '' });
     engine.failFilter(true);

@@ -343,6 +343,7 @@ function docker() {
       const name = one(found, '--name');
 
       if (name?.endsWith('-proxy') && fs.existsSync(path.join(state, 'filter-fails'))) fail(`docker: Error response from daemon: failed to create task for container: failed to create shim task: OCI runtime create failed: ${name}.`, 125);
+
       if (name && readContainer(name)) fail(`Conflict. The container name "/${name}" is already in use.`, 125);
       const network = one(found, '--network');
 

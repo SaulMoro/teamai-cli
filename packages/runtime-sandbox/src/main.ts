@@ -93,6 +93,7 @@ function providerOf(options: ParsedOptions): Provider {
         warm: options.warm,
         ...(options.profile && { profile: options.profile }),
         owner: sandboxJournal.owner,
+        state: path.join(journalRoot, options.provider),
         host: { user: uid !== undefined && gid !== undefined ? { uid, gid } : undefined, selinux: fs.existsSync('/sys/fs/selinux/enforce'), env: process.env },
       });
     case 'seatbelt':

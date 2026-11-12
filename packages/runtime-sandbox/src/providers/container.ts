@@ -1,10 +1,13 @@
 import crypto from 'node:crypto';
+import fs from 'node:fs';
 import os from 'node:os';
+import path from 'node:path';
+import { readRegularFileSync } from '@teamai/shared/regular-file';
 import type { ContainerEngine, ProfileOption, WarmOptions } from '../options.js';
 import { PROVIDER_COMMANDS } from '../provider-commands.js';
 import type { JournalId } from '../journal.js';
 import type { Can, ConfinedOffer, RuntimeFailure } from '@teamai/runtime-protocol';
-import { ANY_HOST, EVIDENCE_DIR, FILTER_PORT, FILTER_SCRIPT, judgeTool, thisMachineRule } from '../judge.js';
+import { ANY_HOST, EVIDENCE_DIR, FILTER_PORT, FILTER_SCRIPT, judgeTool, thisMachineFileRule, thisMachineRule } from '../judge.js';
 import { COMMAND_MS, handleOf, type ExecEnd, type ExecSpec, type HostRoute, type PlaceKey, type Provider, type WarmedImage } from '../provider.js';
 import { offerSignedIn } from '../sign-in.js';
 import { isLeftBehind, oneBuildPerKey, planWarm, scratchOf, WARM_BY, warmFailed, type WarmPlan } from '../warm.js';
@@ -74,6 +77,40 @@ function thisMachineAddresses(): string[] {
   return Object.values(os.networkInterfaces()).flatMap((found) => (found ?? []).flatMap((one) => (one.internal || one.address.startsWith('fe80') ? [] : [one.address])));
 }
 
+/** Where a step's filter reads the addresses of this machine, which the runtime keeps current, in a folder of its own. */
+const THIS_MACHINE_DIR = '/teamai-this-machine';
+const THIS_MACHINE_FILE = 'this-machine';
+
+/**
+ * Writes the addresses of this machine as they are now into each step filter's file under `filters` that lists others.
+ * A rename, so a filter never reads half a list.
+ */
+function keepThisMachine(filters: string): void {
+  const now = `${thisMachineAddresses().join('\n')}\n`;
+
+  for (const name of fs.existsSync(filters) ? fs.readdirSync(filters) : []) {
+    const file = path.join(filters, name, THIS_MACHINE_FILE);
+
+    try {
+      if (readRegularFileSync(file, 'utf8') === now) continue;
+      fs.writeFileSync(`${file}.${process.pid}`, now);
+      fs.renameSync(`${file}.${process.pid}`, file);
+    } catch {
+      // A place closed meanwhile has no file left to keep.
+    }
+  }
+}
+
+const watched = new Set<string>();
+
+/** Keeps the files under `filters` current while this runtime runs: an address this machine gains is refused within 2 s. */
+function watchThisMachine(filters: string): void {
+  if (watched.has(filters)) return;
+  watched.add(filters);
+  keepThisMachine(filters);
+  setInterval(() => keepThisMachine(filters), 2000).unref();
+}
+
 /** Whether a step's container runs behind the network filter, and the name the engine gives this machine there. */
 interface StepNetwork {
   isFiltered: boolean;
@@ -109,7 +146,7 @@ export interface Host {
  * `owner`: the id of the journal whose attempts the containers are, which labels each one. `warm`: the recipe of the
  * warm image each attempt's container starts from, made on `image`; unset, it starts from `image`.
  */
-export function containerProvider({ engine, image, owner, host, warm, profile }: { engine: ContainerEngine; image: string; owner: JournalId; host: Host; warm?: WarmOptions; profile?: ProfileOption }): Provider {
+export function containerProvider({ engine, image, owner, host, warm, profile, state }: { engine: ContainerEngine; image: string; owner: JournalId; host: Host; warm?: WarmOptions; profile?: ProfileOption; state: string }): Provider {
   const notInstalled = engine === 'docker'
     ? 'docker is not installed here, or not on PATH. Install Docker Desktop (https://docs.docker.com/get-docker/) or Docker Engine, start it, and start again.'
     : 'podman is not installed here, or not on PATH. Install Podman (https://podman.io/docs/installation), run `podman machine init && podman machine start` on macOS or Windows, and start again.';
@@ -155,6 +192,10 @@ export function containerProvider({ engine, image, owner, host, warm, profile }:
    */
   let steps: StepNetwork = { isFiltered: false, alias: undefined };
 
+  const filters = path.join(state, 'filters');
+  /** The folder a step filter of `key` reads the addresses of this machine from. */
+  const thisMachineOf = (key: PlaceKey): string => path.join(filters, handleOf(key));
+
   /** Removes the filter of `key` and its network, ok when it has none. */
   const release = async (key: PlaceKey): Promise<{ ok: true } | { ok: false; failure: RuntimeFailure }> => {
     const filter = await cli(['rm', '--force', filterOf(key)], { timeoutMs: COMMAND_MS });
@@ -169,6 +210,8 @@ export function containerProvider({ engine, image, owner, host, warm, profile }:
       return { ok: false, failure: { code: 'sandbox_failed', message: `${engine} could not remove the network ${networkOf(key)}: ${why(network)}. Remove it with \`${engine} network rm ${networkOf(key)}\`.` } };
     }
 
+    fs.rmSync(thisMachineOf(key), { recursive: true, force: true });
+
     return { ok: true };
   };
 
@@ -178,21 +221,33 @@ export function containerProvider({ engine, image, owner, host, warm, profile }:
    * teamai.filter. What it made stays for `release` when a later step fails; a network it made itself, it removes when
    * it fails, as no sweep finds a network.
    */
-  const filtered = async (key: PlaceKey, rules: string[]): Promise<{ ok: true } | { ok: false; failure: RuntimeFailure }> => {
+  const filtered = async (key: PlaceKey, rules: string[], { isStep }: { isStep: boolean }): Promise<{ ok: true } | { ok: false; failure: RuntimeFailure }> => {
     // No address of the host on the bridge either, so the host's own services are out of reach too.
     const network = await cli(['network', 'create', '--internal', '-o', 'com.docker.network.bridge.inhibit_ipv4=true', '--label', `teamai.run=${key.run}`, '--label', `teamai.attempt=${key.attempt}`, '--label', `teamai.owner=${owner}`, networkOf(key)]);
 
     if (!(network.kind === 'ran' && (network.code === 0 || said(network, /already exists/i)))) return sandboxFailed(`${engine} could not create the network ${networkOf(key)} of attempt ${key.attempt}: ${why(network)}`);
-    const filter = await cli(['run', '-d', '--name', filterOf(key), '--label', `teamai.run=${key.run}`, '--label', `teamai.filter=${key.attempt}`, '--label', `teamai.owner=${owner}`, ...user(), ...LOCKED, '--entrypoint', 'node', image, '-e', FILTER_SCRIPT, String(FILTER_PORT), ...rules]);
+    const own = isStep ? ['-v', `${thisMachineOf(key)}:${THIS_MACHINE_DIR}:ro${host.selinux ? ',z' : ''}`] : [];
+
+    if (isStep) {
+      fs.mkdirSync(thisMachineOf(key), { recursive: true });
+      fs.writeFileSync(path.join(thisMachineOf(key), THIS_MACHINE_FILE), '');
+      keepThisMachine(filters);
+      watchThisMachine(filters);
+    }
+
+    const filter = await cli(['run', '-d', '--name', filterOf(key), '--label', `teamai.run=${key.run}`, '--label', `teamai.filter=${key.attempt}`, '--label', `teamai.owner=${owner}`, ...user(), ...LOCKED, ...own, '--entrypoint', 'node', image, '-e', FILTER_SCRIPT, String(FILTER_PORT), ...rules, ...(isStep ? [thisMachineFileRule(`${THIS_MACHINE_DIR}/${THIS_MACHINE_FILE}`)] : [])]);
 
     const joined = filter.kind === 'ran' && (filter.code === 0 || said(filter, /already in use/i)) ? await cli(['network', 'connect', networkOf(key), filterOf(key)]) : undefined;
 
     if (joined?.kind === 'ran' && (joined.code === 0 || said(joined, /already exists|already attached/i))) return { ok: true };
+
     const failed = joined === undefined
       ? sandboxFailed(`${engine} could not start the network filter ${filterOf(key)}: ${why(filter)}`)
       : sandboxFailed(`${engine} could not connect the network filter to ${networkOf(key)}: ${why(joined)}`);
+
     // A network an earlier open made is that open's place's, which a failed open again keeps.
     if (network.code !== 0) return failed;
+
     const released = await release(key);
 
     return released.ok ? failed : { ok: false, failure: { ...failed.failure, message: `${failed.failure.message} ${released.failure.message}` } };
@@ -352,6 +407,9 @@ export function containerProvider({ engine, image, owner, host, warm, profile }:
       // it, the step reaches every port here. A judge's lets through only its model provider, so it needs no such knowledge.
       const knowsThisMachine = system === 'Docker Desktop' || (process.platform === 'linux' && daemonHost === os.hostname());
       steps = { isFiltered: canFilter && knowsThisMachine, alias: route.ok ? route.alias : undefined };
+
+      // A resumed attempt's filter keeps reading this machine's addresses as they are now.
+      if (steps.isFiltered) watchThisMachine(filters);
       const judges = canFilter ? shipped : [];
 
       for (const tool of judges) {
@@ -407,7 +465,7 @@ export function containerProvider({ engine, image, owner, host, warm, profile }:
 
       if (steps.isFiltered) {
         const { alias } = steps;
-        const made = await filtered(key, [ANY_HOST, ...(alias === undefined ? [] : hostPorts.map((port) => `${alias}:${port}`)), ...thisMachineAddresses().map(thisMachineRule)]);
+        const made = await filtered(key, [ANY_HOST, ...(alias === undefined ? [] : hostPorts.map((port) => `${alias}:${port}`)), ...thisMachineAddresses().map(thisMachineRule)], { isStep: true });
 
         if (!made.ok) return made;
         const proxy = proxyOf(key);
@@ -441,7 +499,7 @@ export function containerProvider({ engine, image, owner, host, warm, profile }:
       if (refused) return { ok: false, failure: refused };
 
       const labels = ['--label', `teamai.run=${key.run}`, '--label', `teamai.attempt=${key.attempt}`, '--label', `teamai.owner=${owner}`];
-      const made = await filtered(key, hosts);
+      const made = await filtered(key, hosts, { isStep: false });
 
       if (!made.ok) return made;
       const proxy = proxyOf(key);
