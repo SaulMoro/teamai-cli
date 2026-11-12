@@ -1,5 +1,5 @@
 /** sbx sandboxes teamai named (`teamai-<journal>-…`), tied to a world by the owner journal of one of its HOMEs. */
-import { PROVIDER_COMMANDS } from '../../../packages/runtime-sandbox/src/options.js';
+import { PROVIDER_COMMANDS } from '../../../packages/runtime-sandbox/src/provider-commands.js';
 import { sbxNamesListed } from '../../../packages/runtime-sandbox/src/providers/sbx.js';
 import { attributeLeftover, probeHere, type LeftoverKind } from '../leftovers.js';
 

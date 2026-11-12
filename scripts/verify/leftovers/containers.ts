@@ -2,7 +2,8 @@
  * Containers, networks and images teamai labelled (`teamai.owner`) on each container engine that is up, tied to a world by
  * the owner journal of one of its HOMEs or by a mount of one of its paths. An engine is asked, never started.
  */
-import { CONTAINER_ENGINES, PROVIDER_COMMANDS } from '../../../packages/runtime-sandbox/src/options.js';
+import { CONTAINER_ENGINES } from '../../../packages/runtime-sandbox/src/options.js';
+import { PROVIDER_COMMANDS } from '../../../packages/runtime-sandbox/src/provider-commands.js';
 import { attributeLeftover, probeHere, type Finding, type LeftoverKind, type Observed, type WorldTies } from '../leftovers.js';
 
 const OWNER = 'teamai.owner';

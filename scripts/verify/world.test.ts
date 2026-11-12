@@ -1,7 +1,8 @@
+import { spawnSync } from 'node:child_process';
 import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { socketPathOf } from '../../packages/runtime-sandbox/src/attempt-socket.js';
-import { worldCommandNames, worldTmpDir } from './world.js';
+import { REPO_ROOT, worldCommandNames, worldTmpDir } from './world.js';
 
 afterEach(() => {
   vi.unstubAllEnvs();
@@ -9,8 +10,24 @@ afterEach(() => {
 
 describe('the commands a world puts on PATH', () => {
   it('are git, every tool, every sandbox provider teamai runs on this machine, and the T3 and Paseo commands', () => {
-    // docs/glossary.md, Sandbox provider: docker, podman, sbx, seatbelt (macOS's /usr/bin/sandbox-exec), bwrap; vercel runs elsewhere.
+    // docs/dev/glossary.md, Sandbox provider: docker, podman, sbx, seatbelt (macOS's /usr/bin/sandbox-exec), bwrap; vercel runs elsewhere.
     expect(worldCommandNames()).toEqual(expect.arrayContaining(['git', 'claude', 'codex', 'codebuddy', 'opencode', 'docker', 'podman', 'sbx', '/usr/bin/sandbox-exec', 'bwrap', 't3', 'paseo']));
+  });
+});
+
+describe('the basic world', () => {
+  // Every module of a step runtime's package the harness loads for its basic verbs, each a name and nothing else.
+  const COMMAND_NAMES = new Set(['runtime-sandbox/src/provider-commands.ts', 'runtime-sandbox/src/this-machine.ts', 'runtime-paseo/src/daemon/command.ts', 'runtime-t3/src/t3-command.ts']);
+
+  it("loads no step runtime's modules beyond the command names it puts on PATH", () => {
+    const hook = `import { registerHooks } from 'node:module'; import fs from 'node:fs';
+      registerHooks({ resolve(specifier, context, next) { const resolved = next(specifier, context); fs.writeSync(2, 'LOADED ' + resolved.url + '\\n'); return resolved; } });`;
+    const ran = spawnSync(process.execPath, ['--import', `data:text/javascript,${encodeURIComponent(hook)}`, 'scripts/verify.mjs', 'help'], { cwd: REPO_ROOT, encoding: 'utf8' });
+    const runtimes = [...new Set(ran.stderr.split('\n').flatMap((line) => /^LOADED file:\/\/.*\/packages\/(runtime-(?!protocol\/)[^/]+\/src\/.+)$/.exec(line)?.[1] ?? []))];
+
+    expect(ran.status).toBe(0);
+    expect(runtimes.filter((module) => !COMMAND_NAMES.has(module))).toEqual([]);
+    expect(runtimes.length).toBeGreaterThan(0);
   });
 });
 

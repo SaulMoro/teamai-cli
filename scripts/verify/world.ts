@@ -10,9 +10,9 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { z } from 'zod';
-import { PROVIDER_COMMANDS } from '../../packages/runtime-sandbox/src/options.js';
+import { PROVIDER_COMMANDS } from '../../packages/runtime-sandbox/src/provider-commands.js';
 import { T3_COMMAND } from '../../packages/runtime-t3/src/t3-command.js';
-import { PASEO_COMMAND } from '../../packages/runtime-paseo/src/daemon/client.js';
+import { PASEO_COMMAND } from '../../packages/runtime-paseo/src/daemon/command.js';
 
 export const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 export const WORLDS_ROOT = path.join(os.tmpdir(), 'teamai-verify');

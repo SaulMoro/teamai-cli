@@ -2,7 +2,7 @@ import { execFile } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { readRegularFileSync } from '@teamai/shared/regular-file';
-import { PROVIDER_COMMANDS } from '../options.js';
+import { PROVIDER_COMMANDS } from '../provider-commands.js';
 import { OS_RELEASE } from '../this-machine.js';
 import { isWithin, onPath, type NativeSandbox, type Sandboxed } from './native.js';
 

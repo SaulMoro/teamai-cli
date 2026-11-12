@@ -1,5 +1,6 @@
 import crypto from 'node:crypto';
-import { PROVIDER_COMMANDS, type ContainerEngine, type ProfileOption, type WarmOptions } from '../options.js';
+import type { ContainerEngine, ProfileOption, WarmOptions } from '../options.js';
+import { PROVIDER_COMMANDS } from '../provider-commands.js';
 import type { JournalId } from '../journal.js';
 import type { Can, ConfinedOffer, RuntimeFailure } from '@teamai/runtime-protocol';
 import { EVIDENCE_DIR, FILTER_PORT, FILTER_SCRIPT, judgeTool } from '../judge.js';

@@ -1,7 +1,5 @@
-import path from 'node:path';
 import { z } from 'zod';
 import type { RuntimeFailure, RuntimeOptions } from '@teamai/runtime-protocol';
-import { SYSTEM_BIN } from './this-machine.js';
 
 // ─── Options, as a driver definition passes them at `init` ───
 //
@@ -46,18 +44,7 @@ export type NativeProvider = (typeof NATIVE_SANDBOXES)[number];
 /** The providers this version runs. */
 const PROVIDERS = ['sbx', ...CONTAINER_ENGINES, ...NATIVE_SANDBOXES, 'vercel'] as const;
 
-/**
- * The executable each provider runs on this machine: a name looked up on PATH, or the path the OS ships it at; none for
- * one that runs elsewhere. Every provider names one here, so whatever puts them on a PATH misses none.
- */
-export const PROVIDER_COMMANDS = {
-  sbx: 'sbx',
-  docker: 'docker',
-  podman: 'podman',
-  seatbelt: path.join(SYSTEM_BIN, 'sandbox-exec'),
-  bwrap: 'bwrap',
-  vercel: undefined,
-} as const satisfies Record<(typeof PROVIDERS)[number], string | undefined>;
+export type SandboxProviderName = (typeof PROVIDERS)[number];
 
 const CACHE = 'List the manifests and lockfiles that key the warm image, relative to the checkout, for example cache: [package.json, package-lock.json]';
 

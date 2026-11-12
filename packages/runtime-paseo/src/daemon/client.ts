@@ -11,6 +11,7 @@ import type { RuntimeFailure } from '@teamai/runtime-protocol';
 import type WebSocket from 'ws';
 import { z } from 'zod';
 import { clientInApp } from './app-client.js';
+import { PASEO_COMMAND } from './command.js';
 import { readRegularFileSync } from '@teamai/shared/regular-file';
 
 // ─── The Paseo client ────────────────────────────────────
@@ -27,9 +28,6 @@ import { readRegularFileSync } from '@teamai/shared/regular-file';
 //
 //  The client's own dependencies, @getpaseo/protocol and ws, resolve from the client's directory, as its code does.
 //
-
-/** The name of the Paseo CLI, on PATH or in ~/.local/bin, where the Paseo app links it. */
-export const PASEO_COMMAND = 'paseo';
 
 /** The oldest Paseo this runtime runs against, its client and its daemon alike: the version it is tested against. */
 export const OLDEST_PASEO = '0.14.0';
