@@ -150,7 +150,9 @@ steps:
     prompt: Review the change.
 `;
 
-describe('a prompt step that runs with a role in a worktree copy', () => {
+// Each case pulls, starts a run and prepares a worktree copy, close to two hundred git processes, which take 3 s on an
+// idle machine and up to 30 s on a loaded one.
+describe('a prompt step that runs with a role in a worktree copy', { timeout: 60_000 }, () => {
   it('is held from the skill driver, which cannot give a step a role, and from a driver that makes its own copy, which teamai delivers no role into', async () => {
     const { config, runId } = await roleWorkspace(REVIEW_IN_COPY, { tools: ['claude'] });
     const client = inProcessClient({ config, env: await resolveWorkflowEnv(config) });
