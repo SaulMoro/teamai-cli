@@ -2,7 +2,8 @@
  * Watches the sandboxes a world's command makes while it runs, and judges each one's environment with
  * `judgeSandboxEnv`: containers and sbx sandboxes tied to the world, and on Linux each bwrap whose arguments name a world
  * path. Values are read and compared in memory only; what is written (observed.jsonl, the `[verify] observed` lines)
- * holds names. Loaded only once a HOME of the world holds the sandbox runtime's journal.
+ * holds names. Loaded only once a sandbox place opens or closes in a HOME of the world during the command (target.ts).
+ * A sandbox of the world it lists but cannot read is NOT OBSERVED, never left out.
  */
 import { execFile } from 'node:child_process';
 import fs from 'node:fs';
@@ -13,7 +14,8 @@ import type { JsonValue } from '@teamai/shared/json';
 import { parseYaml } from '@teamai/shared/yaml';
 import { SIGN_INS } from '@teamai/tool-definitions';
 import { z } from 'zod';
-import { journal, sandboxJournalRoot } from '../../packages/runtime-sandbox/src/journal.js';
+import { journal } from '../../packages/runtime-sandbox/src/journal.js';
+import { sandboxJournalRoot } from '../../packages/runtime-sandbox/src/journal-root.js';
 import { CONTAINER_ENGINES } from '../../packages/runtime-sandbox/src/options.js';
 import { PROVIDER_COMMANDS } from '../../packages/runtime-sandbox/src/provider-commands.js';
 import { journalOfSbxName } from './leftovers/sbx.js';
@@ -72,7 +74,8 @@ function environsOf(stdout: string): Array<Map<string, string>> {
   return stdout.split('\0\0').flatMap((block) => (block === '' ? [] : [parseEnviron(block)]));
 }
 
-async function listed(argv: readonly string[]): Promise<string | undefined> {
+/** What `argv` printed on this machine, or undefined when it could not run or failed: the observer's one effect on a sandbox. */
+async function listedHere(argv: readonly string[]): Promise<string | undefined> {
   const [command = 'true', ...args] = argv;
 
   try {
@@ -85,7 +88,7 @@ async function listed(argv: readonly string[]): Promise<string | undefined> {
 const SbxListedSchema = z.array(z.looseObject({ name: z.string(), status: z.string().optional() }));
 
 /** Starts watching; `stop` takes a last look and answers the lines to show, and has written them to observed.jsonl. */
-export function startObserver(world: World, { pass, label }: { pass: ReadonlyMap<string, string>; label: string }) {
+export function startObserver(world: World, { pass, label, listed = listedHere }: { pass: ReadonlyMap<string, string>; label: string; listed?: (argv: readonly string[]) => Promise<string | undefined> }) {
   const canary = world.env?.[CANARY_NAME] ?? '';
   const secrets = new Map([...Object.entries(collectEnvSecrets(process.env)), ...pass]);
   const { declared, unreadable } = declaredCredentials(world);
@@ -126,7 +129,7 @@ export function startObserver(world: World, { pass, label }: { pass: ReadonlyMap
         if (id === '' || !owners.has(owner)) continue;
         const environs = await listed([command, 'exec', id, 'sh', '-c', ENVIRONS]);
 
-        if (environs !== undefined) judge(`${engine}:${name}`, `${engine}:${name}`, environsOf(environs));
+        judge(`${engine}:${name}`, `${engine}:${name}`, environs === undefined ? [] : environsOf(environs));
       }
     }
   };
@@ -148,13 +151,17 @@ export function startObserver(world: World, { pass, label }: { pass: ReadonlyMap
 
       const environs = await listed([PROVIDER_COMMANDS.sbx, 'exec', sandbox.name, 'sh', '-c', ENVIRONS]);
 
-      if (environs !== undefined) judge(`sbx:${sandbox.name}`, `sbx:${sandbox.name}`, environsOf(environs));
+      judge(`sbx:${sandbox.name}`, `sbx:${sandbox.name}`, environs === undefined ? [] : environsOf(environs));
     }
   };
 
   /** On Linux, each bwrap whose arguments name a world path: the environment of its first descendant that is not bwrap. */
   const bwraps = (): void => {
-    if (process.platform !== 'linux') return;
+    if (process.platform !== 'linux') {
+      for (const member of world.members ?? []) if (member.machine === 'container') unobserved.add(`bwrap steps in @${member.name}'s container, the observer reads their environment from /proc on Linux only`);
+
+      return;
+    }
 
     const procs = fs.readdirSync('/proc').filter((name) => /^\d+$/.test(name)).flatMap((pid) => {
       try {

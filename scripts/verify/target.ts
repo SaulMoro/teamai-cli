@@ -8,7 +8,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { lineRedactor, worldRedactor } from './secrets.js';
 import { MEMBER_NAME } from './members.js';
-import { markDriverSeen, recordWriters, runtimeStateDirs, worldFiles, worldWritersFile, writeCommandLog, type Member, type World } from './world.js';
+import { sandboxJournalRoot } from '../../packages/runtime-sandbox/src/journal-root.js';
+import { markDriverSeen, recordWriters, runtimeStateDirs, worldFiles, worldHomes, worldWritersFile, writeCommandLog, type Member, type World } from './world.js';
 
 export type Target = { kind: 'world' } | { kind: 'member'; name: string };
 
@@ -117,7 +118,8 @@ export async function runOn(world: World, target: Target, argv: readonly string[
   const before = worldFiles(place);
   const { command, args, env, cwd } = commandOf(world, place, argv, { pass });
   const child = spawn(command, args, { cwd, env, stdio: ['inherit', 'pipe', 'pipe'] });
-  const watching = watchSandboxes(world, { pass, label: argv.slice(0, 3).map(mask).join(' ') });
+  const label = argv.slice(0, 3).map(mask).join(' ');
+  const watching = watchSandboxes(world, { start: () => startWatching(world, { pass, label }) });
   let output = '';
 
   const closed = [child.stdout, child.stderr].map((stream, i) => {
@@ -163,33 +165,46 @@ export async function runOn(world: World, target: Target, argv: readonly string[
   return { exit: status ?? 1, log };
 }
 
-/**
- * Watches for the state a runtime outside teamai's process keeps under a HOME of the world, one stat a second, and
- * starts the observer (observer.ts) once it is there: a command that runs no such runtime loads none of it.
- */
+/** Whether a HOME of the world holds the state of a runtime outside teamai's process. */
 function hasRuntimeState(world: World): boolean {
   return runtimeStateDirs(world).some((dir) => fs.existsSync(dir));
 }
 
-function watchSandboxes(world: World, { pass, label }: { pass: ReadonlyMap<string, string>; label: string }) {
+/** Starts the observer (observer.ts); a failure of its own is a line of the command's output, never the end of the harness's process. */
+async function startWatching(world: World, { pass, label }: { pass: ReadonlyMap<string, string>; label: string }): Promise<{ stop(): Promise<string[]> }> {
+  try {
+    const { startObserver } = await import('./observer.js');
+
+    return startObserver(world, { pass, label });
+  } catch (error) {
+    const why = error instanceof Error ? error.message : String(error);
+
+    return { stop: () => Promise.resolve([`[verify] NOT OBSERVED: the sandbox observer stopped, ${why}`]) };
+  }
+}
+
+/** The places and ops each HOME's sandbox journal lists: a sandbox opening, running or closing changes it. */
+function sandboxJournalStamp(world: Pick<World, 'home' | 'members'>): string {
+  return worldHomes(world).flatMap((home) => ['places', 'ops'].map((kind) => {
+    try {
+      return fs.readdirSync(path.join(sandboxJournalRoot(home), kind)).toSorted().join('/');
+    } catch {
+      return '';
+    }
+  })).join('\n');
+}
+
+/**
+ * Watches the sandbox journal of every HOME of the world, one listing a second, and calls `start` once it changes during
+ * the command: a command that makes no sandbox loads none of the observer, whatever earlier ones left there.
+ */
+export function watchSandboxes(world: Pick<World, 'home' | 'members'>, { start }: { start: () => Promise<{ stop(): Promise<string[]> }> }) {
+  const before = sandboxJournalStamp(world);
   let observer: Promise<{ stop(): Promise<string[]> }> | undefined;
 
-  // A failure of the observer's own is a line of the command's output, never the end of the harness's process.
-  const startWatching = async (): Promise<{ stop(): Promise<string[]> }> => {
-    try {
-      const { startObserver } = await import('./observer.js');
-
-      return startObserver(world, { pass, label });
-    } catch (error) {
-      const why = error instanceof Error ? error.message : String(error);
-
-      return { stop: () => Promise.resolve([`[verify] NOT OBSERVED: the sandbox observer stopped, ${why}`]) };
-    }
-  };
-
   const look = (): void => {
-    if (observer !== undefined || !hasRuntimeState(world)) return;
-    observer = startWatching();
+    if (observer !== undefined || sandboxJournalStamp(world) === before) return;
+    observer = start();
   };
 
   const timer = setInterval(look, 1_000);

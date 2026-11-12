@@ -67,9 +67,10 @@ A ledger section or an observer line that says NOT OBSERVED proves nothing for t
                     each sandbox teamai made there and whose it is, deletes the world's own or a named one on --delete,
                     exits 0 once none is alive, and says UNVERIFIABLE without a key
 
-The observer: once a HOME of the world holds a runtime's state, each teamai or sh command ends with one line per sandbox
-it saw, \`[verify] observed <sandbox>: env ok\` or \`ENV LEAK <names>\`, kept in observed.jsonl. A leak is the world's
-canary (${CANARY_NAME}, which no step may receive) or a host secret no driver definition declares. Names only, ever.
+The observer: a teamai or sh command during which a sandbox opens or closes ends with one line per sandbox of the world
+it saw, \`[verify] observed <sandbox>: env ok\`, \`ENV LEAK <names>\` or NOT OBSERVED when it could not read one, kept in
+observed.jsonl. A leak is the world's canary (${CANARY_NAME}, which no step may receive) or a host secret no driver
+definition declares. Names only, ever.
 
 A claim teamai decides by hostname or pid (a driver's identity, the owner of a staging folder, the import lock, a warm
 image's maker, the fleet's stop of a step whose starter is gone) needs \`member <run> <name> --machine container\`: two

@@ -85,11 +85,6 @@ function write(file: string, value: PlaceRecord | ExecRecord | KnownInstances): 
   fs.renameSync(temporary, file);
 }
 
-/** Where the sandbox runtime keeps its journal for the member whose home is `home`: its id labels what the runtime makes. */
-export function sandboxJournalRoot(home: string): string {
-  return path.join(home, '.teamai', 'runtime-state', 'sandbox');
-}
-
 export function journal(root: string) {
   const placeFile = (handle: string): string => path.join(root, 'places', `${encodeURIComponent(handle)}.json`);
   const indexDir = (handle: string): string => path.join(root, 'places', encodeURIComponent(handle));

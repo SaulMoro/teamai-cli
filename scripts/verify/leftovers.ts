@@ -205,7 +205,7 @@ function tiesOf(world: z.infer<typeof SpanSchema>, runs: readonly string[], jour
  * only for a world whose runs used a runtime outside teamai's process, since only what such a runtime makes carries it.
  */
 async function sandboxJournalIds(): Promise<(home: string) => string> {
-  const { journal, sandboxJournalRoot } = await import('../../packages/runtime-sandbox/src/journal.js');
+  const [{ journal }, { sandboxJournalRoot }] = await Promise.all([import('../../packages/runtime-sandbox/src/journal.js'), import('../../packages/runtime-sandbox/src/journal-root.js')]);
 
   return (home) => journal(sandboxJournalRoot(home)).owner;
 }

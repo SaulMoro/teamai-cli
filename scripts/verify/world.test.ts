@@ -16,8 +16,8 @@ describe('the commands a world puts on PATH', () => {
 });
 
 describe('the basic world', () => {
-  // Every module of a step runtime's package the harness loads for its basic verbs, each a name and nothing else.
-  const COMMAND_NAMES = new Set(['runtime-sandbox/src/provider-commands.ts', 'runtime-sandbox/src/this-machine.ts', 'runtime-paseo/src/daemon/command.ts', 'runtime-t3/src/t3-command.ts']);
+  // Every module of a step runtime's package the harness loads for its basic verbs, each a name or a path and nothing else.
+  const COMMAND_NAMES = new Set(['runtime-sandbox/src/provider-commands.ts', 'runtime-sandbox/src/this-machine.ts', 'runtime-sandbox/src/journal-root.ts', 'runtime-paseo/src/daemon/command.ts', 'runtime-t3/src/t3-command.ts']);
 
   it("loads no step runtime's modules beyond the command names it puts on PATH", () => {
     const hook = `import { registerHooks } from 'node:module'; import fs from 'node:fs';
