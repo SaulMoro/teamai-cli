@@ -77,7 +77,7 @@ const TEMPLATE_SIGN_IN = { claude: '.claude/.credentials.json' } satisfies Parti
 const STARTED = /^[ \t]*✓ sandbox \S+ — started\r?\n/;
 
 /** The sandbox names `sbx ls --json` printed, or undefined when it printed something else. */
-function namesListed(stdout: string): string[] | undefined {
+export function sbxNamesListed(stdout: string): string[] | undefined {
   try {
     const listed = ListedSchema.safeParse(JSON.parse(stdout));
 
@@ -120,7 +120,7 @@ export function sbxProvider({ agent, owner, env, warm, profile }: { agent: strin
   /** Every sandbox name `sbx ls --json` lists, within COMMAND_MS, or what sbx said instead. */
   const list = async (): Promise<{ ok: true; names: string[] } | { ok: false; message: string }> => {
     const ran = await cli(['ls', '--json'], { timeoutMs: COMMAND_MS, isListing: true });
-    const names = ran.kind === 'ran' && ran.code === 0 ? namesListed(ran.stdout) : undefined;
+    const names = ran.kind === 'ran' && ran.code === 0 ? sbxNamesListed(ran.stdout) : undefined;
 
     return names !== undefined ? { ok: true, names } : { ok: false, message: messageOf(ran) || 'it printed no list' };
   };

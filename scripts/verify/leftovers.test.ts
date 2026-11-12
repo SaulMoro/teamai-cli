@@ -1,0 +1,62 @@
+import { describe, expect, it } from 'vitest';
+import { attributeLeftover, worldTier, type WorldTies } from './leftovers.js';
+
+const SELF: WorldTies = { runId: '20261112T120000-aaaaaa', paths: ['/w/20261112T120000-aaaaaa', '/private/tmp/teamai-verify-20261112T120000-aaaaaa'], journals: ['0123456789abcdef'], runs: ['r00000000000000aa'] };
+const OTHER: WorldTies = { runId: '20261112T110000-bbbbbb', paths: ['/w/20261112T110000-bbbbbb'], journals: ['fedcba9876543210'], runs: ['r00000000000000bb'] };
+
+describe('whose leftover it is', () => {
+  it("is this world's when it names a path inside it, its TMPDIR included, or a journal or run of its own", () => {
+    expect(attributeLeftover({ paths: ['/w/20261112T120000-aaaaaa/home/x'], journals: [], runs: [], marked: false }, SELF, [OTHER]).kind).toBe('own');
+    expect(attributeLeftover({ paths: ['/private/tmp/teamai-verify-20261112T120000-aaaaaa'], journals: [], runs: [], marked: false }, SELF, [OTHER]).kind).toBe('own');
+    expect(attributeLeftover({ paths: [], journals: ['0123456789abcdef'], runs: [], marked: true }, SELF, [OTHER]).kind).toBe('own');
+    expect(attributeLeftover({ paths: [], journals: [], runs: ['r00000000000000aa'], marked: true }, SELF, [OTHER]).kind).toBe('own');
+  });
+
+  it("is another world's when it is tied to that one only, and never this world's leak", () => {
+    expect(attributeLeftover({ paths: ['/w/20261112T110000-bbbbbb/project'], journals: [], runs: [], marked: false }, SELF, [OTHER])).toEqual({ kind: 'other_world', runId: OTHER.runId });
+    expect(attributeLeftover({ paths: [], journals: ['fedcba9876543210'], runs: [], marked: true }, SELF, [OTHER])).toEqual({ kind: 'other_world', runId: OTHER.runId });
+  });
+
+  it('does not take a path that only starts like a world path for one inside it', () => {
+    expect(attributeLeftover({ paths: ['/w/20261112T120000-aaaaaa-copy/x'], journals: [], runs: [], marked: false }, SELF, []).kind).toBe('unrelated');
+  });
+
+  it("is ambiguous when it carries teamai's mark but no world's tie, and unrelated when it carries neither", () => {
+    expect(attributeLeftover({ paths: ['/Users/me/repo'], journals: ['1111111111111111'], runs: [], marked: true }, SELF, [OTHER]).kind).toBe('ambiguous');
+    expect(attributeLeftover({ paths: ['/Users/me/repo'], journals: [], runs: [], marked: false }, SELF, [OTHER])).toEqual({ kind: 'unrelated' });
+  });
+});
+
+describe("a world's tier", () => {
+  it('is basic when no step runtime left a record, middle when only teamai\'s own process ran steps, and driver once a runtime outside it, a sandbox journal or a container member exists', () => {
+    expect(worldTier({ inProcessRecords: 0, externalRecords: 0, runtimeJournals: 0, containerMembers: 0 })).toBe('basic');
+    expect(worldTier({ inProcessRecords: 2, externalRecords: 0, runtimeJournals: 0, containerMembers: 0 })).toBe('middle');
+    expect(worldTier({ inProcessRecords: 2, externalRecords: 1, runtimeJournals: 0, containerMembers: 0 })).toBe('driver');
+    expect(worldTier({ inProcessRecords: 0, externalRecords: 0, runtimeJournals: 1, containerMembers: 0 })).toBe('driver');
+    expect(worldTier({ inProcessRecords: 0, externalRecords: 0, runtimeJournals: 0, containerMembers: 1 })).toBe('driver');
+  });
+});
+
+describe('what each row reads from what an engine or the process table printed', () => {
+  it("takes a process's working directory and the absolute paths its arguments name, and skips the harness's own chain", async () => {
+    const { lineageOf, parseLsofCwd, parseProcLines, parsePs, pathsNamed } = await import('./leftovers/processes.js');
+    const procs = parsePs('    1     0 /sbin/launchd\n  500     1 node /w/x/bin/teamai workflow serve\n  600   500 /bin/sh -c sleep 1000 --dir=/w/20261112T120000-aaaaaa/home\n');
+
+    expect(procs.map((proc) => proc.pid)).toEqual([1, 500, 600]);
+    expect(pathsNamed(procs[2]?.command ?? '')).toEqual(['/bin/sh', '/w/20261112T120000-aaaaaa/home']);
+    expect(parseLsofCwd('p500\nfcwd\nn/w/20261112T120000-aaaaaa/project\np600\nfcwd\nn/\n')).toEqual(new Map([[500, '/w/20261112T120000-aaaaaa/project'], [600, '/']]));
+    expect([...lineageOf(600, procs)]).toEqual([600, 500]);
+    expect(parseProcLines('42\t1\t/w/20261112T120000-aaaaaa/project\tnode /x a b\nnot a line\n')).toEqual([{ pid: 42, ppid: 1, cwd: '/w/20261112T120000-aaaaaa/project', command: 'node /x a b' }]);
+  });
+
+  it('reads containers with their owner, run and mounts, and sbx names with the journal teamai gave them', async () => {
+    const { parseContainers, parseMounts } = await import('./leftovers/containers.js');
+    const { journalOfSbxName } = await import('./leftovers/sbx.js');
+
+    expect(parseContainers('abc123\tteamai-r1-a1\t0123456789abcdef\tr1\trunning\n')).toEqual([{ id: 'abc123', name: 'teamai-r1-a1', owner: '0123456789abcdef', run: 'r1', state: 'running' }]);
+    expect(parseMounts('abc123abc123ffff\t/w/20261112T120000-aaaaaa/project\t/tmp/x\n')).toEqual(new Map([['abc123abc123', ['/w/20261112T120000-aaaaaa/project', '/tmp/x']]]));
+    expect(journalOfSbxName('teamai-0123456789abcdef-r1-a1')).toBe('0123456789abcdef');
+    expect(journalOfSbxName('teamai-0123456789abcdef-warm-42-x')).toBe('0123456789abcdef');
+    expect(journalOfSbxName('my-sandbox')).toBeUndefined();
+  });
+});

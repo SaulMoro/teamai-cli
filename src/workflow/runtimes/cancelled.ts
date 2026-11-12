@@ -6,7 +6,7 @@ import type { RunStatus, WorkflowFailure } from '../types.js';
 import { existingCheckout } from '../run-location.js';
 import { attemptDir, AttemptIdSchema, attemptsDir, readRun, type AttemptId, type RunId, type RunLock } from '../store.js';
 import { knownSecrets } from '../../env-resolution.js';
-import { attemptRun, attemptRuntimePath, attemptToolHome, maskAttemptResults, readAttemptPlacement, releaseAttemptRuntime, type AttemptRuntimeRecord } from './attempt.js';
+import { attemptRun, attemptRuntimePath, attemptToolHome, isPlaceLeftOpen, maskAttemptResults, readAttemptPlacement, releaseAttemptRuntime, type AttemptRuntimeRecord } from './attempt.js';
 import { endLogin, LOGIN_TOOLS, loginHolder, type LoginTool } from './login.js';
 import { disposeDriver, openDriver } from './sources.js';
 import { retryCommand } from './retry-command.js';
@@ -143,7 +143,7 @@ async function placesLeftOpen(config: LocalConfig, run: RunId, leased: ReadonlyS
     // no place to stop.
     const placement = await readAttemptPlacement(config, run, attempt.data);
 
-    if (placement.kind === 'external' && placement.record.phase !== 'closed') open.push(attempt.data);
+    if (isPlaceLeftOpen(placement)) open.push(attempt.data);
   }
 
   return open;

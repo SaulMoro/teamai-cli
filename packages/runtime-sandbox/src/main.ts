@@ -4,7 +4,7 @@ import { WRAPPER_PREFIX } from '@teamai/runtime-kit/outer';
 import { isStartedByTeamai } from '@teamai/runtime-kit/serve';
 import { getUserHome } from '@teamai/shared/home';
 import { signalPid } from '@teamai/shared/process-group';
-import { journal } from './journal.js';
+import { journal, sandboxJournalRoot } from './journal.js';
 import type { RuntimeMessage } from '@teamai/runtime-protocol';
 import type { ParsedOptions } from './options.js';
 import { unreachable, type Provider } from './provider.js';
@@ -32,7 +32,7 @@ process.stderr.on('error', () => { stderrOpen = false; });
 
 const uid = process.getuid?.();
 const gid = process.getgid?.();
-const journalRoot = path.join(getUserHome(), '.teamai', 'runtime-state', 'sandbox');
+const journalRoot = sandboxJournalRoot(getUserHome());
 const sandboxJournal = journal(journalRoot);
 
 /**

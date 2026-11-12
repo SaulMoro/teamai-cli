@@ -180,12 +180,17 @@ export async function recordInProcessSessionHome(config: LocalConfig, run: RunId
   }
 }
 
-/** The record of attempt `attempt` of run `run`: the one reader of `runtime.json`. */
-async function readAttemptRecord(config: LocalConfig, run: RunId, attempt: AttemptId): Promise<{ kind: 'recorded'; record: z.infer<typeof AttemptRecordSchema> } | { kind: 'unrecorded' } | { kind: 'unreadable'; why: string }> {
+/** The record of attempt `attempt` of run `run`. */
+function readAttemptRecord(config: LocalConfig, run: RunId, attempt: AttemptId) {
+  return readAttemptRecordAt(attemptRuntimePath(config, run, attempt));
+}
+
+/** The attempt record in `file`, an attempt's `runtime.json`: the one reader of that file. */
+async function readAttemptRecordAt(file: string): Promise<{ kind: 'recorded'; record: z.infer<typeof AttemptRecordSchema> } | { kind: 'unrecorded' } | { kind: 'unreadable'; why: string }> {
   let parsed: unknown;
 
   try {
-    parsed = JSON.parse(await readRegularFile(attemptRuntimePath(config, run, attempt), 'utf8'));
+    parsed = JSON.parse(await readRegularFile(file, 'utf8'));
   } catch (error) {
     return errnoCode(error) === 'ENOENT' ? { kind: 'unrecorded' } : { kind: 'unreadable', why: error instanceof Error ? error.message : String(error) };
   }
@@ -196,8 +201,13 @@ async function readAttemptRecord(config: LocalConfig, run: RunId, attempt: Attem
 }
 
 /** Where attempt `attempt` of run `run` ran, by its record. */
-export async function readAttemptPlacement(config: LocalConfig, run: RunId, attempt: AttemptId): Promise<AttemptPlacement> {
-  const read = await readAttemptRecord(config, run, attempt);
+export function readAttemptPlacement(config: LocalConfig, run: RunId, attempt: AttemptId): Promise<AttemptPlacement> {
+  return readAttemptPlacementAt(attemptRuntimePath(config, run, attempt));
+}
+
+/** Where the attempt whose record is `file`, an attempt's `runtime.json`, ran. */
+export async function readAttemptPlacementAt(file: string): Promise<AttemptPlacement> {
+  const read = await readAttemptRecordAt(file);
 
   if (read.kind !== 'recorded') return read;
 
@@ -208,6 +218,11 @@ export async function readAttemptPlacement(config: LocalConfig, run: RunId, atte
   }
 
   return { kind: 'external', record: read.record };
+}
+
+/** Whether `placement` is a place an external step runtime still keeps open: one a cancel closes, and one nothing should leave. */
+export function isPlaceLeftOpen(placement: AttemptPlacement): placement is Extract<AttemptPlacement, { kind: 'external' }> {
+  return placement.kind === 'external' && placement.record.phase !== 'closed';
 }
 
 /** The record of attempt `attempt` of run `run` when it holds a place on an external step runtime; undefined for any other placement. */

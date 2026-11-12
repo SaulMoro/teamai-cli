@@ -3,7 +3,7 @@
  * the ledger's uninstall) runs it through `runOn`, which builds its environment, shows and logs its output, and records
  * what a member's own program wrote.
  */
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import path from 'node:path';
 import { lineRedactor, worldRedactor } from './secrets.js';
 import { MEMBER_NAME } from './members.js';
@@ -112,4 +112,21 @@ export async function runOn(world: World, target: Target, argv: readonly string[
   recordWriters(place.writers, argv, before, worldFiles(place));
 
   return { exit: status ?? 1, log };
+}
+
+/** Runs a probe `argv` on `target` and answers what it printed, unlogged: how the ledger reads a machine. */
+export function captureOn(world: World, target: Target, argv: readonly string[], { timeoutMs = 30_000 }: { timeoutMs?: number } = {}) {
+  const place = placeOf(world, target);
+  const [command = 'true', ...args] = argv;
+  const ran = spawnSync(command, args, { cwd: place.project, env: place.env ?? process.env, encoding: 'utf8', timeout: timeoutMs, maxBuffer: 256 * 1024 ** 2 });
+
+  return { code: ran.error === undefined ? ran.status : null, stdout: ran.stdout ?? '', why: ran.error?.message ?? ran.stderr?.trim().split('\n').at(-1) ?? '' };
+}
+
+/** Each machine a world's commands run on: this one, whose process table every member on it shares, and each member's container. */
+export function machinesOf(world: World): Array<{ label: string; target: Target; platform: NodeJS.Platform }> {
+  return [
+    { label: 'this machine', target: { kind: 'world' }, platform: process.platform },
+    ...(world.members ?? []).flatMap((member) => (member.machine === 'container' ? [{ label: `@${member.name}'s container`, target: { kind: 'member' as const, name: member.name }, platform: 'linux' as const }] : [])),
+  ];
 }

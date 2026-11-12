@@ -13,6 +13,7 @@ import { z } from 'zod';
 import { defaultToolHome, envToolHome, toolHome } from '../../src/tool-home.js';
 import { detectToolRoot, RELOCATABLE_TOOLS, TeamaiConfigBaseSchema } from '../../src/types.js';
 import { PERSONAL_DIRS } from '../../src/workflow/runtimes/layers.js';
+import { leftoversSection } from './leftovers.js';
 import { runOn, type Target } from './target.js';
 import { checkoutStatus, git, loadWriters, REPO_ROOT, teamRefs, worldFiles, worldWritersFile, type World } from './world.js';
 
@@ -437,8 +438,10 @@ async function reverseOf(world: World, place: LedgerPlace): Promise<{ leaks: str
 
 /** Uninstalls teamai in the world, writes the next LEDGER-<n>.md and returns whether it is clean. */
 export async function runLedger(world: World): Promise<boolean> {
+  // Before uninstall, which removes the records that say which runtimes the world's runs used.
+  const left = { title: '(f) What a driver left running', ...await leftoversSection(world) };
   const reverse = await reverseState(world);
-  const sections = [teamRepo(world), worktrees(world), hostFiles(world), environment(world), reverse];
+  const sections = [teamRepo(world), worktrees(world), hostFiles(world), environment(world), reverse, left];
   const leaks = sections.reduce((sum, section) => sum + section.leaks.length, 0);
   const verdict = leaks === 0 ? 'CLEAN' : `${leaks} LEAK${leaks === 1 ? '' : 'S'}`;
 
