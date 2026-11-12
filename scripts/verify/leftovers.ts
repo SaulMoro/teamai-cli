@@ -214,10 +214,10 @@ async function sandboxJournalIds(): Promise<(home: string) => string> {
 }
 
 /** Every other world on this machine, by what ties it; a world.json that cannot be read ties nothing. */
-function otherWorlds(self: World, journalOf: ((home: string) => string) | undefined): WorldTies[] {
+function otherWorlds(self: World | undefined, journalOf: ((home: string) => string) | undefined): WorldTies[] {
   if (!fs.existsSync(WORLDS_ROOT)) return [];
 
-  return fs.readdirSync(WORLDS_ROOT).filter((name) => name !== self.runId).flatMap((name) => {
+  return fs.readdirSync(WORLDS_ROOT).filter((name) => name !== self?.runId).flatMap((name) => {
     try {
       return [tiesOf(SpanSchema.parse(JSON.parse(fs.readFileSync(path.join(WORLDS_ROOT, name, 'world.json'), 'utf8'))), [], journalOf)];
     } catch {
@@ -295,6 +295,16 @@ async function contextOf(world: World): Promise<{ context: LeftoverContext; tier
   const journalOf = tier === 'driver' ? await sandboxJournalIds() : undefined;
 
   return { context: { world, self: tiesOf(world, records.runs, journalOf), others: otherWorlds(world, journalOf), records }, tier };
+}
+
+/** What ties `world`, its runs included, and every other world on this machine, journals included: how reap judges. */
+export async function tiesOnThisMachine(world: World | undefined): Promise<{ self: WorldTies | undefined; others: WorldTies[] }> {
+  const journalOf = await sandboxJournalIds();
+
+  return {
+    self: world === undefined ? undefined : tiesOf(world, scanRecords(world).runs, journalOf),
+    others: otherWorlds(world, journalOf),
+  };
 }
 
 /** Ledger section (f): each row the world's tier asks, its LEAK lines and notes. A world that ran no step runtime gets one line. */

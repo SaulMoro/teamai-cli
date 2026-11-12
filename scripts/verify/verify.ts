@@ -177,6 +177,12 @@ async function main(): Promise<number> {
       return isClean ? 0 : 1;
     }
 
+    case 'reap': {
+      const { reap } = await import('./reap.js');
+
+      return reap(rest, loadWorld);
+    }
+
     case 'dir': {
       if (rest[0] === '--all') {
         for (const world of liveWorlds()) console.log(`${world.runId} ${world.dir}`);
