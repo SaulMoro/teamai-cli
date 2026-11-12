@@ -937,16 +937,16 @@ await check('every driver definition and sandbox profile a guide page shows pass
  * git short sha of 7 is left out. Not one elided with `…`, an op id's tail (`op-…`), a UUID's first part, or the tail of
  * a hyphenated name other than a sandbox's `teamai-[<owner>-]<run>-<attempt>`, such as a worktree's hash.
  */
-const ID_SHAPED = /(?<![\w-])(?:(?<handle>teamai-(?:[0-9a-f]{16}-)?)(?<handleRun>r[0-9a-f]+)-(?<handleAttempt>a[0-9a-f]+)|(?<id>[ra](?=[0-9a-f]*\d)[0-9a-f]{7,}))(?![\w…-])/g;
+const SHOWN_RUN_OR_ATTEMPT_ID = /(?<![\w-])(?:(?<handle>teamai-(?:[0-9a-f]{16}-)?)(?<handleRun>r[0-9a-f]+)-(?<handleAttempt>a[0-9a-f]+)|(?<id>[ra](?=[0-9a-f]*\d)[0-9a-f]{7,}))(?![\w…-])/g;
 
 /** Each id a guide page shows that the CLI would refuse, with its page and line, and how many it checked. */
-function invalidIds(pages: readonly string[]): { checked: number; invalid: string[] } {
+function invalidIds(pages: readonly string[]) {
   let checked = 0;
   const invalid: string[] = [];
 
   for (const page of pages) {
     fs.readFileSync(path.join(ROOT, page), 'utf8').split('\n').forEach((text, index) => {
-      for (const match of text.matchAll(ID_SHAPED)) {
+      for (const match of text.matchAll(SHOWN_RUN_OR_ATTEMPT_ID)) {
         const { handleRun, handleAttempt, id } = match.groups ?? {};
 
         for (const shown of [handleRun, handleAttempt, id]) {
