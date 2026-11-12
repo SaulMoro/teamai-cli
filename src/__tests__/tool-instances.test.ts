@@ -210,6 +210,20 @@ describe('team tool instances', () => {
   });
 });
 
+describe('a linked tools folder', () => {
+  it('reads no instance through a team repo\'s tools folder that is a link, and says why', async () => {
+    const outside = path.join(root, 'outside');
+    fs.mkdirSync(outside);
+    fs.writeFileSync(path.join(outside, 'acme-claude.yaml'), ACME_CLAUDE);
+    const repo = teamRepo({});
+    fs.symlinkSync(outside, path.join(repo, 'tools'));
+    const { registry, errors } = await load(repo);
+
+    expect(registry.toolOf('acme-claude')).toBeUndefined();
+    expect(errors).toEqual(['tools in the team repo is a link, and teamai reads the team\'s tool instances only from a folder the team repo holds, so it uses none of them. Replace the link with the folder, push it, and run teamai pull.']);
+  });
+});
+
 describe('team instances of two scopes', () => {
   it('takes the workspace\'s team instance over the user scope\'s of the same name, as a driver definition is', async () => {
     const userRepo = teamRepo({ 'tools/acme-claude.yaml': ACME_CLAUDE });

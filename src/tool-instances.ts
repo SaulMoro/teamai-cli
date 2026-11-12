@@ -4,7 +4,7 @@ import path from 'node:path';
 import { z } from 'zod';
 import { isBareCommandName } from '@teamai/shared/cli-path';
 import { INSTANCE_KEYS, type ToolInstance, type ToolInstanceHome } from '@teamai/tool-core/instance';
-import { RESOURCE_LAYOUTS, Resources, type TeamTree } from './resources/resolver.js';
+import { isSymlink, RESOURCE_LAYOUTS, Resources, type TeamTree } from './resources/resolver.js';
 import { isSessionPlatform } from './session-flow/adapters/platform-facts.js';
 import { homeEnvOf } from './tool-home.js';
 import { homeVariables, isToolId, TOOL_ORDER, useToolInstances } from './tool-registry.js';
@@ -162,9 +162,16 @@ export interface TeamToolTree extends TeamTree {
 /**
  * The instances of the team tree `team`: `tools/<name>.yaml`, and `tools/<namespace>/<name>.yaml` for each namespace
  * active for the member, which replaces the root one. Two of one name in two active namespaces are a conflict, and
- * neither is used; an instance an active namespace replaces is not used even when the namespace's does not parse.
+ * neither is used; an instance an active namespace replaces is not used even when the namespace's does not parse. A
+ * `tools` folder that is a link gives none: what it names is not the team repo's.
  */
 export async function teamToolInstances(team: TeamTree): Promise<ResolvedToolInstance[]> {
+  if (await isSymlink(path.join(team.root, RESOURCE_LAYOUTS.tools.dir))) {
+    errorOnce('tools in the team repo is a link, and teamai reads the team\'s tool instances only from a folder the team repo holds, so it uses none of them. Replace the link with the folder, push it, and run teamai pull.');
+
+    return [];
+  }
+
   const { resolutions, diagnostics } = await Resources.survey(RESOURCE_LAYOUTS.tools, { team });
 
   for (const diagnostic of diagnostics) if (diagnostic.kind === 'invalid') errorOnce(diagnostic.message);

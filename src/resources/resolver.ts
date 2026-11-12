@@ -458,7 +458,7 @@ async function layer<TEntry>(layout: ResourceLayout<TEntry>, at: { readonly root
 }
 
 /** Whether `file` is a symbolic link itself; false when it is missing. */
-async function isSymlink(file: string): Promise<boolean> {
+export async function isSymlink(file: string): Promise<boolean> {
   try {
     return (await fs.lstat(file)).isSymbolicLink();
   } catch {
