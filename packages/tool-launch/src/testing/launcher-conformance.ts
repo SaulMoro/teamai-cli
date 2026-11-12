@@ -7,6 +7,8 @@ interface Watched {
   started: boolean;
   events: string[];
   chunks: string[];
+  /** Stops the process again, once it closed. */
+  stop: () => Promise<void>;
 }
 
 /** Starts `script` under node through `start`, as a launch does, and watches every call the adapter makes back. */
@@ -31,14 +33,15 @@ async function watch(start: ToolLauncher, { executable = process.execPath, scrip
   returned = true;
   stopNow = () => launched.stop();
 
-  return { closed: await launched.closed, started: launched.started(), events, chunks };
+  return { closed: await launched.closed, started: launched.started(), events, chunks, stop: () => launched.stop() };
 }
 
 /**
  * The contract every `ToolLauncher` adapter keeps, which `runStepLaunch` relies on: it calls `onStart` once, when the
  * process started and before any of its output; it never calls `onStdout` before `start` returns, so the launch holds
  * the process before a limit stops it; `closed` carries the exit status and the stdout `onStdout` got, in order; `stop`
- * ends a process that runs until stopped; and a process that cannot start still closes, with no success.
+ * ends a process that runs until stopped; every `stop` settles and never rejects, whenever it is called; and a process
+ * that cannot start still closes, with no success.
  * `adapter` builds the launcher under test in `cwd`, a directory of its own for each case.
  */
 export function toolLauncherConformance(name: string, adapter: () => Promise<{ start: ToolLauncher; cwd: string }>): void {
@@ -63,11 +66,29 @@ export function toolLauncherConformance(name: string, adapter: () => Promise<{ s
       expect('failure' in watched.closed || watched.closed.exitCode !== 0, `closed as ${JSON.stringify(watched.closed)}`).toBe(true);
     }, 30_000);
 
-    it('closes a process that cannot start, with no success', async () => {
+    it('closes a process that cannot start, with no success, and stops it after without rejecting', async () => {
       const { start, cwd } = await adapter();
       const watched = await watch(start, { cwd, executable: '/nonexistent/teamai-no-such-tool', script: '' });
 
       expect('failure' in watched.closed || watched.closed.exitCode !== 0 || watched.closed.error !== undefined, `closed as ${JSON.stringify(watched.closed)}`).toBe(true);
+      await expect(watched.stop()).resolves.toBeUndefined();
+    }, 30_000);
+
+    it('settles every stop without rejecting: before its process started, while it runs, twice at once, and once it ended', async () => {
+      const { start, cwd } = await adapter();
+      const stops: Array<Promise<void>> = [];
+
+      const launched = start({
+        executable: process.execPath, args: ['-e', 'process.stdout.write("ready\\n"); setInterval(() => {}, 1000);'], cwd, env: { ...process.env }, interactive: false,
+        onStart: () => {},
+        onStdout: () => { stops.push(launched.stop(), launched.stop()); },
+      });
+
+      stops.push(launched.stop());
+      await launched.closed;
+      stops.push(launched.stop());
+
+      expect((await Promise.allSettled(stops)).map((stop) => stop.status)).toEqual(stops.map(() => 'fulfilled'));
     }, 30_000);
   });
 }

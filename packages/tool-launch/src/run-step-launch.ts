@@ -96,7 +96,11 @@ export interface ToolProcess {
   closed: Promise<ToolClosed>;
   /** Whether the process started: it spawned, or its runtime accepted it. */
   started(): boolean;
-  /** Stops the process and everything it started; a signal from the person is forwarded to an interactive one. */
+  /**
+   * Stops the process and everything it started; a signal from the person is forwarded to an interactive one. It may be
+   * called at any time, before the process started, again, or after it ended, and it settles and never rejects: a stop
+   * that failed is the adapter's to report. `toolLauncherConformance` checks it.
+   */
   stop(signal?: NodeJS.Signals): Promise<void>;
 }
 
