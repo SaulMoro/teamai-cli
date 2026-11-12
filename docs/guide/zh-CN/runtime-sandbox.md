@@ -214,8 +214,8 @@ docker exec -w /home/me/acme/app/.teamai/workflow-worktrees/… -e NPM_TOKEN -e 
 
 | 提供方 | 步骤能连到这台机器的什么 | 隔离 |
 | --- | --- | --- |
-| `docker`，镜像里有 `node`，Docker 26.0.0 或更高（25.0.5、23.0.11） | 只有它的凭据写到的这台机器的端口，比如网关的端口。容器在自己的网络上，唯一的出口是一个过滤器，设为它的 `HTTPS_PROXY` 和 `HTTP_PROXY`：过滤器放行这台机器之外的任何主机和这些端口，拒绝这台机器和 Docker 主机的其他所有地址。 | `sandbox`，包括 unattended |
-| 其他情况下的 `docker`，`podman` | 这台机器的每个端口，经由它在容器里的名字 | `worktree` |
+| Docker Desktop 上的 `docker`，或这台 Linux 机器上 Docker Engine 的 `docker`，镜像里有 `node`，26.0.0 或更高（25.0.5、23.0.11） | 只有它的凭据写到的这台机器的端口，比如网关的端口。容器在自己的网络上，唯一的出口是一个过滤器，设为它的 `HTTPS_PROXY` 和 `HTTP_PROXY`：过滤器放行这台机器之外的任何主机和这些端口，拒绝这台机器和 Docker 主机的其他所有地址。 | `sandbox`，包括 unattended |
+| 其他情况下的 `docker`（比如跑在自己的虚拟机里：Colima、Rancher Desktop、Lima），以及 `podman` | 这台机器的每个端口，经由它在容器里的地址 | `worktree` |
 | `sbx` | 你的 sbx 网络策略允许的：这台机器的某个端口要等 `sbx policy allow network localhost:<port>` 放行之后 | `sandbox`，包括 unattended |
 | `seatbelt` | 只有它的凭据写到的端口，在这台 Mac 的任何地址上，所以连步骤自己启动的服务器也连不到；Unix 套接字只能是它的位置里的，以及 DNS 解析器的 | `worktree` |
 | `bwrap` | 这台机器的每个端口，以及它的抽象 Unix 套接字：步骤和这台机器共用网络 | `worktree` |
@@ -664,7 +664,7 @@ sbx ls -q
 | `cancel_failed` | 取消或达到限制时，无法确认步骤已经停止：引擎拒绝了停止，或者停止（包括删除评判的容器）加上步骤进程的结束超过了 10 秒。那里运行的内容可能仍在运行，所以 teamai 保留容器、工作和登录。例如：`docker could not stop the processes in container teamai-r0123abcd-a0123abcd: Cannot connect to the Docker daemon. They may still run; remove the container with docker rm --force teamai-r0123abcd-a0123abcd.` | 先重新启动引擎，再运行一次 `teamai workflow cancel <run>`：运行时会停止步骤并关闭它的位置。也可以用信息里给出的 `docker rm --force` 或 `sbx rm --force` 命令删除它 |
 | 运行详情里的 **未关闭**（Not closed） | 无法删除这次尝试的容器或沙箱，或者删除和其中运行内容的结束超过了 10 秒，里面运行的东西可能还在运行。运行本身照常结束。 | 按信息里给出的命令执行 `docker rm --force <container>` 或 `sbx rm --force <sandbox>`。确认其中已没有任何东西在运行后，`teamai workflow cancel <run> --release <attempt>` 会放开这次尝试：即使运行时无法删除这个位置，也会忘掉它，信息里仍会给出 `rm --force` 命令 |
 | `runtime_interrupted` | 步骤运行时 teamai 重启了 | `teamai workflow retry <run> <step>` |
-| `isolation_unproven`（来自 `teamai-sandbox-<tool>`） | 包装器是为这次尝试没有登记的 agent 启动的，或者在步骤登记之前、在尝试的 worktree 之外启动的，所以什么都没有运行。或者容器不在过滤器后面（Podman，或者镜像里没有 `node`、版本太旧的 Docker），所以它能连到这台机器的每个端口 | 从 teamai 启动步骤，而不是应用自己的 agent；应用的辅助 agent 按设计会被拒绝。容器的话，用镜像里有 `node` 的 Docker（[步骤能连到什么](#步骤能连到这台机器的什么)），或者 `sbx` |
+| `isolation_unproven`（来自 `teamai-sandbox-<tool>`） | 包装器是为这次尝试没有登记的 agent 启动的，或者在步骤登记之前、在尝试的 worktree 之外启动的，所以什么都没有运行。或者容器不在过滤器后面（Podman、跑在自己虚拟机里的 docker，或者镜像里没有 `node`、版本太旧的 Docker），所以它能连到这台机器的每个端口 | 从 teamai 启动步骤，而不是应用自己的 agent；应用的辅助 agent 按设计会被拒绝。容器的话，用镜像里有 `node` 的 Docker（[步骤能连到什么](#步骤能连到这台机器的什么)），或者 `sbx` |
 | `credentials_pending`（来自 `teamai-sandbox-<tool>`） | 沙箱运行时重启了，teamai 还没有重新连接这次尝试，所以它没有工具的凭据 | `teamai workflow resume <run>`：teamai 带着凭据重新连接这次尝试，应用下一次启动工具时就会得到授权 |
 | `tool_unsupported`（来自 `teamai-sandbox-<tool>`） | 沙箱不提供这个工具，或者实例的 `command` 没有安装在里面 | 把这个命令加到信息里给出的镜像或模板中，或者用 `--driver local` 运行这个步骤 |
 

@@ -151,13 +151,26 @@ describe('init', () => {
     expect(reply.can).not.toHaveProperty('hitl');
   });
 
+  it.runIf(process.platform === 'linux')('offers a sandbox on Docker Engine on this Linux machine, whose addresses the filter refuses', async () => {
+    engine.image(IMAGE, { claude: CLAUDE, node: '' });
+    const reply = await init(start({ FAKE_ENGINE_OS: 'Ubuntu 24.04.1 LTS', FAKE_ENGINE_HOST: os.hostname() }), { provider: 'docker', image: IMAGE });
+
+    expect(reply).toMatchObject({ ok: true, can: { isolation: 'sandbox', unattended: true } });
+  });
+
   // Without the filter, a step's container reaches every port of this machine (host.docker.internal), so it is no sandbox.
-  it.each<{ label: string; options: Message; tools: Record<string, string> }>([
+  it.each<{ label: string; options: Message; tools: Record<string, string>; env?: NodeJS.ProcessEnv }>([
     { label: 'docker with no node in the image', options: { provider: 'docker', image: IMAGE }, tools: { claude: CLAUDE } },
     { label: 'podman, whose rootless network cannot connect the filter', options: { provider: 'podman', image: IMAGE }, tools: { claude: CLAUDE, node: '' } },
-  ])('offers isolation worktree, no unattended step and no attempt socket on $label', async ({ options, tools }) => {
+    {
+      label: 'docker in a VM of its own, as Colima or Rancher Desktop runs it, whose address for this machine the filter does not know',
+      options: { provider: 'docker', image: IMAGE },
+      tools: { claude: CLAUDE, node: '' },
+      env: { FAKE_ENGINE_OS: 'Ubuntu 24.04.1 LTS', FAKE_ENGINE_HOST: 'colima' },
+    },
+  ])('offers isolation worktree, no unattended step and no attempt socket on $label', async ({ options, tools, env }) => {
     engine.image(IMAGE, tools);
-    const connection = start();
+    const connection = start(env);
     const reply = await init(connection, options);
     const at = place();
     const op = newOp();

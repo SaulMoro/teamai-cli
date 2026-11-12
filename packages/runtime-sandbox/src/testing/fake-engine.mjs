@@ -33,6 +33,7 @@
 //   FAKE_ENGINE_LOG     optional: where argv lines go
 //   FAKE_ENGINE_VERSION optional: the server version `info` reports, 27.3.1 when unset
 //   FAKE_ENGINE_OS      optional: the OperatingSystem docker's `info` reports, "Docker Desktop" when unset
+//   FAKE_ENGINE_HOST    optional: the host name docker's `info` reports for its daemon (`Name`), this machine's when unset
 //
 //  A saved image (docker `commit` or `build`, sbx `template save`) keeps the home of the container it was saved from,
 //  under `saved/<tag>/home`, and the base whose tools it holds; a container created from it starts with a copy of that
@@ -47,6 +48,7 @@
 import { spawn } from 'node:child_process';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 
 const state = process.env.FAKE_ENGINE_STATE;
@@ -303,7 +305,7 @@ function docker() {
 
       if (format.includes(engine === 'podman' ? 'ServerVersion' : 'Version.Version')) fail(`Error: template: info:1:2: executing "info" at <${format}>: can't evaluate field`, 125);
       const version = process.env.FAKE_ENGINE_VERSION ?? (engine === 'podman' ? '5.2.3' : '27.3.1');
-      process.stdout.write(`${format.replace('{{.ServerVersion}}', version).replace('{{.Version.Version}}', version).replace('{{.OperatingSystem}}', process.env.FAKE_ENGINE_OS ?? 'Docker Desktop')}\n`);
+      process.stdout.write(`${format.replace('{{.ServerVersion}}', version).replace('{{.Version.Version}}', version).replace('{{.OperatingSystem}}', process.env.FAKE_ENGINE_OS ?? 'Docker Desktop').replace('{{.Name}}', process.env.FAKE_ENGINE_HOST ?? os.hostname())}\n`);
       break;
     }
 

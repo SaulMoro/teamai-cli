@@ -29,7 +29,10 @@ import { cliOf, commandsOf, definedOnly, heldProbe, signalled, LAUNCHABLE, mount
 //      or: docker build -t teamai-warm:<key> -f <checkout>/<containerfile> <scratch>
 //
 //  On docker, with node in the image, a step's container has no route out but a network filter (judge.ts), so it
-//  reaches no port of this machine but the ones its credentials name, whatever it runs, as Paseo's daemon on loopback:
+//  reaches no port of this machine but the ones its credentials name, whatever it runs, as Paseo's daemon on loopback.
+//  The filter knows this machine only on Docker Desktop (by the names it gives) and on Docker Engine on this Linux
+//  machine (by its own addresses); a docker in a VM of its own (Colima, Rancher Desktop, Lima) reaches this machine at
+//  an address of that VM's, so a step there is at `isolation: worktree`, as on podman:
 //
 //    docker network create --internal -o com.docker.network.bridge.inhibit_ipv4=true <name>-net
 //    docker run -d --name <name>-proxy … --entrypoint node <image> -e <filter> 3128 '*' host.docker.internal:8317 '!<address>' …
@@ -266,7 +269,7 @@ export function containerProvider({ engine, image, owner, host, warm, profile }:
 
   /** What the engine says of itself, its version and system, or why it does not answer. */
   const engineInfo = async () => {
-    const info = await cli(['info', '--format', engine === 'podman' ? '{{.Version.Version}}' : '{{.ServerVersion}}|{{.OperatingSystem}}']);
+    const info = await cli(['info', '--format', engine === 'podman' ? '{{.Version.Version}}' : '{{.ServerVersion}}|{{.OperatingSystem}}|{{.Name}}']);
 
     if (info.kind !== 'ran') return unavailable(info.message);
 
@@ -284,7 +287,7 @@ export function containerProvider({ engine, image, owner, host, warm, profile }:
       const reached = await engineInfo();
 
       if (!reached.ok) return reached;
-      const [version = '', system = ''] = reached.info.trim().split('|');
+      const [version = '', system = '', daemonHost = ''] = reached.info.trim().split('|');
 
       // Docker Desktop names this machine host.docker.internal in every container, and Podman host.containers.internal;
       // Docker Engine on Linux names it nothing.
@@ -319,10 +322,12 @@ export function containerProvider({ engine, image, owner, host, warm, profile }:
       // DNS out of the judge's network. Podman judges nothing: its rootless network cannot connect the filter to it.
       const confined: ConfinedOffer[] = [];
 
-      // A step's network filter, the same, keeps it from this machine: without it, the step reaches every port here.
-      const isFiltered = found.has('node') && engine === 'docker' && dnsStaysInside(version);
-      steps = { isFiltered, alias: route.ok ? route.alias : undefined };
-      const judges = isFiltered ? shipped : [];
+      const canFilter = found.has('node') && engine === 'docker' && dnsStaysInside(version);
+      // A step's network filter, the same, keeps it from this machine where it knows how the engine reaches it: without
+      // it, the step reaches every port here. A judge's lets through only its model provider, so it needs no such knowledge.
+      const knowsThisMachine = system === 'Docker Desktop' || (process.platform === 'linux' && daemonHost === os.hostname());
+      steps = { isFiltered: canFilter && knowsThisMachine, alias: route.ok ? route.alias : undefined };
+      const judges = canFilter ? shipped : [];
 
       for (const tool of judges) {
         const access = judgeTool(tool)?.access;
@@ -335,7 +340,7 @@ export function containerProvider({ engine, image, owner, host, warm, profile }:
       }
 
       const can: Can = {
-        workspace: WORKSPACES, isolation: isFiltered ? 'sandbox' : 'worktree', env: true, tokens: true, max_turns: true, setup: true, tools: offered, end_turn: true, ...(isFiltered && { unattended: true }), role: true,
+        workspace: WORKSPACES, isolation: steps.isFiltered ? 'sandbox' : 'worktree', env: true, tokens: true, max_turns: true, setup: true, tools: offered, end_turn: true, ...(steps.isFiltered && { unattended: true }), role: true,
         ...(confined.length > 0 && { confined }),
       };
 
@@ -448,7 +453,7 @@ export function containerProvider({ engine, image, owner, host, warm, profile }:
     client(id, spec) {
       // A sandbox an app's tool runs in reaches nothing of this machine: one not behind the filter runs none.
       if (!steps.isFiltered) {
-        return { ok: false, failure: { code: 'isolation_unproven', message: `teamai keeps a container from this machine only behind its network filter, which runs on docker 26.0.0 or later (25.0.5, 23.0.11), not podman, with node in the image, so it runs no app's tool in this one (${engine}, image ${image}). Use such a docker with node in the image, or provider: sbx.` } };
+        return { ok: false, failure: { code: 'isolation_unproven', message: `teamai keeps a container from this machine only behind its network filter, which runs on Docker Desktop or on Docker Engine on this Linux machine, 26.0.0 or later (25.0.5, 23.0.11), not podman or a docker in a VM of its own, with node in the image, so it runs no app's tool in this one (${engine}, image ${image}). Use such a docker with node in the image, or provider: sbx.` } };
       }
 
       return { ok: true, ...signalled({ exec: [executable, ...execArgs(id, { ...spec, argv: [] }, { isInteractive: true })], argv: spec.argv }), env: definedOnly(execEnv(spec)) };
