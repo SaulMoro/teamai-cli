@@ -22,7 +22,13 @@ docker build -t ghcr.io/acme/agent:1 -f Containerfile .
 docker push ghcr.io/acme/agent:1
 ```
 
-**2. 在团队仓库里添加驱动定义**，然后推送。
+**2. 在团队仓库里添加 sandbox 档案和驱动定义**，然后推送。档案写明沙箱从什么构建；驱动定义运行它，并写明 credentials。
+
+```yaml
+# sandboxes/containers.yaml
+provider: docker                  # 或 podman
+image: ghcr.io/acme/agent:1
+```
 
 ```yaml
 # drivers/containers.yaml
@@ -32,9 +38,8 @@ description: Run each step in a container from the team image, on the member's C
 tool: claude
 runtimes:
   - use: sandbox
+    sandbox: containers
     options:
-      provider: docker                  # 或 podman
-      image: ghcr.io/acme/agent:1
       credentials:
         CLAUDE_CODE_OAUTH_TOKEN: env:CLAUDE_CODE_OAUTH_TOKEN
 ```
@@ -76,25 +81,38 @@ teamai-r7c41d09e2b6a5f13-a3e9b0c51  ghcr.io/acme/agent:1  Up 41 seconds
 
 尝试结束后，teamai 会删除它的容器。`teamai workflow cancel` 会停止步骤，并同样删除容器。
 
-## 选项
+## Sandbox 档案
+
+sandbox 档案写明沙箱从什么构建：它的 provider 和该 provider 的选项。团队把它放成 `sandboxes/<name>.yaml`，或者放成文件夹 `sandboxes/<name>/`，里面有 `SANDBOX.yaml` 和它构建时用的文件，比如 `Containerfile`。`use: sandbox`（或 `through: sandbox`）的条目用 `sandbox: <name>` 指定它，不写时运行档案 `default`。teamai 先在你的 `~/.teamai/sandboxes/` 里找这个名字，再到团队仓库里找，最后在它自带的档案里找，那里 `<name>` 也会按 `teamai-<name>` 找到：`default` 是 teamai 的 `teamai-default`，一个 sbx microVM；`sbx`、`docker`、`podman`、`seatbelt`、`bwrap` 和 `vercel` 各有一个，可以直接指定或复制（`teamai-docker` 和 `teamai-podman` 没写镜像，复制后要设上）。你或团队的档案和 teamai 的某个档案同名时，运行开始时会提示一次。每次尝试的记录都写明它运行的档案、来自哪里、它的修订、它的 provider，以及沙箱是否隔离了步骤。
+
+条目的 `options` 只保留 teamai 自己读取的 `credentials` 和 `max_parallel`；写在那里的其他键会在任何步骤运行之前失败，并说明要把它移到哪个档案文件。读不了的档案、写了未知 provider 的档案，或者含有链接的档案文件夹，同样会失败并指出它的文件。
 
 | 键 | 示例 | 含义 |
 | --- | --- | --- |
 | `provider` | `docker` | `sbx`、`docker`、`podman`、`seatbelt`、`bwrap` 或 `vercel` |
 | `agent` | `claude` | 仅 `sbx`：每个沙箱从哪个 agent 模板启动，`claude` 或 `codex`，或者一个自带工具的 kit 引用。不写时，每次尝试从它自己工具的模板启动：Claude 步骤用 `claude`，Codex 步骤用 `codex`，命令步骤用裸的 `shell`。`agent: shell` 会被拒绝，因为那个模板里没有 agent。 |
 | `image` | `ghcr.io/acme/agent:1` | 仅 `docker` 和 `podman`：预先构建的镜像。它需要 `/bin/sh` 以及步骤要运行的工具：`claude`、`codex` 或 `codebuddy`。需要读取历史的步骤还要装 `git`。 |
-| `credentials` | `CLAUDE_CODE_OAUTH_TOKEN: env:CLAUDE_CODE_OAUTH_TOKEN` | 由 teamai 在运行开始时从你的环境里读取，只交给步骤的工具，从不交给命令步骤。见[来自你环境的凭据](workflow-advanced.md#来自你环境的凭据)。 |
 | `warm` | `prepare: npm ci --ignore-scripts` | 包管理器缓存已填好的镜像，只做一次，每次尝试都用它。见[预热镜像](#预热镜像)。 |
+| `credentials`（写在条目上） | `CLAUDE_CODE_OAUTH_TOKEN: env:CLAUDE_CODE_OAUTH_TOKEN` | 由 teamai 在运行开始时从你的环境里读取，只交给步骤的工具，从不交给命令步骤。见[来自你环境的凭据](workflow-advanced.md#来自你环境的凭据)。 |
 
-不支持的键会在任何步骤运行之前失败：
+provider 不支持的键会在任何步骤运行之前失败：
 
 ```text
-{"error":{"code":"bad_option","message":"Runtime \"sandbox\" of driver definition /home/me/acme/app/.teamai/drivers/containers.yaml refused option \"imgae\": Provider docker takes no option \"imgae\". It takes: provider, image, warm. Fix the option and start again."}}
+{"error":{"code":"bad_option","message":"Sandbox profile sandboxes/containers.yaml refused option \"imgae\": Provider docker takes no option \"imgae\". It takes: provider, image, warm. Fix it, push it, run teamai pull, and start again."}}
 ```
 
 ## 预热镜像
 
 写了 `warm` 后，每次尝试都从包管理器缓存已经填好的镜像启动，工作流的 setup 从缓存安装，不必在每个步骤里重新下载所有包：
+
+```yaml
+# sandboxes/containers.yaml
+provider: docker
+image: ghcr.io/acme/agent:1
+warm:
+  prepare: npm ci --ignore-scripts
+  cache: [package.json, package-lock.json]
+```
 
 ```yaml
 # drivers/containers.yaml
@@ -104,19 +122,21 @@ description: Run each step in a container from the team image, with the package 
 tool: claude
 runtimes:
   - use: sandbox
+    sandbox: containers
     options:
-      provider: docker
-      image: ghcr.io/acme/agent:1
       credentials:
         CLAUDE_CODE_OAUTH_TOKEN: env:CLAUDE_CODE_OAUTH_TOKEN
-      warm:
-        prepare: npm ci --ignore-scripts
-        cache: [package.json, package-lock.json]
 ```
 
 第一个打开的步骤会制作它：teamai 把 `cache` 里的文件复制到检出目录之外的临时目录，在一个不带任何凭据的 `image` 容器里于该目录运行 `prepare`，再把结果保存为 `teamai-warm:<key>`。key 由镜像在本机的状态（它的 id，所以拉取了同一标签的新推送也算变化）、配方和 `cache` 文件的内容算出，所以 lockfile 一变就会做新镜像，不变就复用，本次运行和以后的运行都是如此。指向检出目录之外文件的 `cache` 链接会被拒绝。同时打开的步骤只等一次构建。镜像只保留 `prepare` 在该目录之外留下的东西，比如主目录里的缓存（`~/.npm`）或它安装的工具：该目录本身，连同在其中生成的 `node_modules`，都不在镜像里，检出目录的任何文件也不在。setup 照常安装（`npm ci --prefer-offline`），会从缓存取包。用 `docker image ls teamai-warm` 列出，用 `docker image rm` 删除。
 
-在 `docker` 和 `podman` 上，`containerfile: ci/deps.Containerfile` 会构建这个文件而不是运行 `prepare`，构建上下文里只有 `cache` 文件；镜像里会有该文件复制进去的内容。在 `sbx` 上，`warm` 只接受 `prepare`，并保存为模板（`sbx template ls`），key 由模板和 sbx 的版本算出。在 `vercel` 上，`warm` 接受 `prepare` 和可选的 `expiration`（`30d`、`12h`；至少 `1h`，不写则为 30 天）：`prepare` 在一个 `runtime` 的临时沙箱里运行，结果保存为 Vercel 快照，每次尝试的沙箱都从它启动。Vercel 在最后一次使用后保留它 `expiration` 这么久，快照没了之后，下一次打开会重新制作。`prepare` 失败时，步骤以 `sandbox_failed` 失败并给出最后几行输出；修好之前不会运行任何步骤。
+在 `docker` 和 `podman` 上，`containerfile: ci/deps.Containerfile` 会构建这个文件而不是运行 `prepare`，构建上下文里只有 `cache` 文件；镜像里会有该文件复制进去的内容。档案放成文件夹时，`containerfile: ./Containerfile` 指的是文件夹自己里面的文件，不能是链接，也不能指到文件夹外面；key 还包含文件夹的修订，所以推送到文件夹的任何改动都会做出新镜像：
+
+```text
+sandboxes/node-deps/
+  SANDBOX.yaml       provider: docker, image: ghcr.io/acme/agent:1, warm: { containerfile: ./Containerfile, cache: [package-lock.json] }
+  Containerfile      FROM ghcr.io/acme/agent:1，然后 COPY package-lock.json 并 RUN npm ci
+```在 `sbx` 上，`warm` 只接受 `prepare`，并保存为模板（`sbx template ls`），key 由模板和 sbx 的版本算出。在 `vercel` 上，`warm` 接受 `prepare` 和可选的 `expiration`（`30d`、`12h`；至少 `1h`，不写则为 30 天）：`prepare` 在一个 `runtime` 的临时沙箱里运行，结果保存为 Vercel 快照，每次尝试的沙箱都从它启动。Vercel 在最后一次使用后保留它 `expiration` 这么久，快照没了之后，下一次打开会重新制作。`prepare` 失败时，步骤以 `sandbox_failed` 失败并给出最后几行输出；修好之前不会运行任何步骤。
 
 ## 步骤能看到什么
 
@@ -238,15 +258,20 @@ teamai-rabebd844f8554e81-a6ee9e5b2-proxy   bridge,teamai-rabebd844f8554e81-a6ee9
 **评判用 API 密钥登录。** 评判容器没有工具主目录，所以 `codex: login` 永远到不了它那里。给 sandbox 一个评判工具会读取的环境变量凭据：Claude 用 `CLAUDE_CODE_OAUTH_TOKEN`、`ANTHROPIC_API_KEY` 或 `ANTHROPIC_AUTH_TOKEN`，Codex 用 `OPENAI_API_KEY` 或 `CODEX_API_KEY`。快速开始里步骤用的令牌也能用来评判。条目里写了的话，评判也会拿到它的工具读取的模型变量，例如 `ANTHROPIC_MODEL`，但永远拿不到你的代理或 CA 文件：它唯一的出口是过滤器。通过网关时，过滤器放行它的 base URL 而不是公共 API，`https` 和普通 `http` 都可以：
 
 ```yaml
+# sandboxes/gateway.yaml
+provider: docker
+image: ghcr.io/acme/agent:1
+```
+
+```yaml
 # drivers/gateway.yaml：步骤用 Claude，评判用经过你的网关的 Codex
 schemaVersion: v1alpha1
 name: gateway
 tool: claude
 runtimes:
   - use: sandbox
+    sandbox: gateway
     options:
-      provider: docker
-      image: ghcr.io/acme/agent:1
       credentials:
         CLAUDE_CODE_OAUTH_TOKEN: env:CLAUDE_CODE_OAUTH_TOKEN   # 步骤用
         OPENAI_API_KEY: env:OPENAI_API_KEY                     # Codex 评判用
@@ -256,15 +281,20 @@ runtimes:
 **sandbox 只为驱动定义里给了密钥的工具提供评判。** 只有登录时，由驱动定义里后面的运行时来评判。这个驱动定义用 `teamai-share-session` 给会话打分，不在 sandbox 里运行步骤：评判经由 `tools` 在你机器上的 Claude 上运行：
 
 ```yaml
+# sandboxes/containers.yaml
+provider: docker
+image: ghcr.io/acme/agent:1
+```
+
+```yaml
 # drivers/containers.yaml
 schemaVersion: v1alpha1
 name: containers
 tool: claude
 runtimes:
   - use: sandbox
+    sandbox: containers
     options:
-      provider: docker
-      image: ghcr.io/acme/agent:1
       credentials:
         codex: login                                          # 只是登录：容器里不评判
   - use: tools                                                # 接手评判
@@ -311,16 +341,16 @@ SCOPE      TYPE      NAME        SECRET
 
 登录留在你机器上 sbx 的代理里，由代理加到工具的请求上，每个新沙箱都会复用它：你的环境里不需要令牌，这次尝试的工具主目录里也没有 `auth.json`。API key 也一样：`sbx secret set anthropic`。
 
-**2. 用 `--driver sandbox` 运行工作流。** teamai 自带这个驱动定义，你不需要自己写：
+**2. 用 `--driver sandbox` 运行工作流。** teamai 自带这个驱动定义，它运行档案 `default`：除非你或团队有自己的，否则就是 teamai 的 `teamai-default`（`provider: sbx`），你不需要自己写：
 
 ```yaml
 # drivers/teamai-sandbox.yaml，随 teamai 提供
 schemaVersion: v1alpha1
 name: teamai-sandbox
-description: Run each step in a Docker Sandboxes (sbx) microVM of its own, from the template of the step's tool, signed in on the login sbx keeps; this machine takes the judge and interactive steps.
+description: Run each step in a sandbox of its own, as the sandbox profile default sets it (teamai's is a Docker Sandboxes microVM per attempt, from the template of the step's tool); this machine takes the judge and interactive steps.
 runtimes:
-  - use: sandbox
-    options: { provider: sbx, max_parallel: 4 }   # 不写 agent：每次尝试从它自己工具的模板启动
+  - use: sandbox                                   # 档案 default：你的、团队的，否则用 teamai 的 teamai-default
+    options: { max_parallel: 4 }
   - use: tools                                     # 负责评判：sbx 不提供评判
 ```
 
@@ -340,7 +370,13 @@ teamai-5f0c2a9e1d7b4c38-r1742da096cbb2f40-a9953a8d7   claude   ● running      
 {"data":{"done":{"run":"r1742da096cbb2f40","outcome":"succeeded","record":"published"},"cancelled":[]}}
 ```
 
-想固定模板、让每个步骤都留在 sandbox 里，或者写明 credentials 时，再写你自己的驱动定义：
+想固定模板、让每个步骤都留在 sandbox 里，或者写明 credentials 时，再写你自己的档案和驱动定义：
+
+```yaml
+# sandboxes/sbx-codex.yaml
+provider: sbx
+agent: codex                       # 不需要 credentials：sbx 的代理替 Codex 登录
+```
 
 ```yaml
 # drivers/sbx-codex.yaml：用 sbx 替你保存的登录运行 Codex 步骤，这台机器上什么都不运行
@@ -349,9 +385,7 @@ name: sbx-codex
 tool: codex
 runtimes:
   - use: sandbox
-    options:
-      provider: sbx
-      agent: codex                       # 不需要 credentials：sbx 的代理替 Codex 登录
+    sandbox: sbx-codex
 ```
 
 两种方式都没给工具登录时，用这个工具的步骤会拿到 sbx 命令，运行里的命令步骤照样运行：
@@ -393,14 +427,21 @@ name: sbx-judged
 tool: claude
 runtimes:
   - use: sandbox
-    options: { provider: sbx }
+    sandbox: sbx                     # teamai 的 teamai-sbx
   - use: sandbox
-    options: { provider: docker, image: ghcr.io/acme/agent:1, credentials: { ANTHROPIC_API_KEY: env:ANTHROPIC_API_KEY } }
+    sandbox: containers              # 团队的 sandboxes/containers.yaml，见快速开始
+    options: { credentials: { ANTHROPIC_API_KEY: env:ANTHROPIC_API_KEY } }
 ```
 
 sbx 本身不会对步骤隐藏的东西：除非你在 sbx 里关掉，sbx 会转发你的 SSH agent；它的代理会把保存的全局代码托管密钥（`sbx secret set github`）加到每个沙箱发往该站点的请求上。要让步骤拿不到它们，就关掉转发，并限定或删除那个密钥。
 
 ## Podman
+
+```yaml
+# sandboxes/containers-podman.yaml
+provider: podman
+image: ghcr.io/acme/agent:1
+```
 
 ```yaml
 # drivers/containers-podman.yaml
@@ -409,9 +450,8 @@ name: containers-podman
 tool: claude
 runtimes:
   - use: sandbox
+    sandbox: containers-podman
     options:
-      provider: podman
-      image: ghcr.io/acme/agent:1
       credentials:
         CLAUDE_CODE_OAUTH_TOKEN: env:CLAUDE_CODE_OAUTH_TOKEN
 ```
@@ -426,14 +466,19 @@ teamai workflow start review --driver containers-podman
 `seatbelt`（macOS 14 或更高版本）和 `bwrap`（Linux，[bubblewrap](https://github.com/containers/bubblewrap)）把每个步骤作为这台机器上的一个沙箱进程运行，用的是这台机器自己的工具：不需要镜像，也不需要守护进程。它们只接受 `provider` 和 `credentials`。
 
 ```yaml
+# sandboxes/native.yaml
+provider: seatbelt                 # Linux 上用 bwrap
+```
+
+```yaml
 # drivers/native.yaml
 schemaVersion: v1alpha1
 name: native
 tool: claude
 runtimes:
   - use: sandbox
+    sandbox: native
     options:
-      provider: seatbelt                 # Linux 上用 bwrap
       credentials:
         CLAUDE_CODE_OAUTH_TOKEN: env:CLAUDE_CODE_OAUTH_TOKEN
 ```
@@ -455,18 +500,23 @@ sudo apt install bubblewrap
 `vercel` 把每次尝试放进它自己的 [Vercel Sandbox](https://vercel.com/docs/vercel-sandbox)，也就是 Vercel 上的一个微型虚拟机。它的镜像自带 Claude，所以它提供 Claude 步骤。
 
 ```yaml
+# sandboxes/hosted.yaml
+provider: vercel
+timeout: 2h                        # 可选：沙箱的存活时间，1m 到 5h
+runtime: node24                    # 可选：Vercel 的镜像
+provider_auth:                     # 可选：teamai 从哪里读取 Vercel 登录信息
+  VERCEL_TOKEN: file:~/.config/vercel-token
+```
+
+```yaml
 # drivers/hosted.yaml
 schemaVersion: v1alpha1
 name: hosted
 tool: claude
 runtimes:
   - use: sandbox
+    sandbox: hosted
     options:
-      provider: vercel
-      timeout: 2h                        # 可选：沙箱的存活时间，1m 到 5h
-      runtime: node24                    # 可选：Vercel 的镜像
-      provider_auth:                     # 可选：teamai 从哪里读取 Vercel 登录信息
-        VERCEL_TOKEN: file:~/.config/vercel-token
       credentials:
         ANTHROPIC_API_KEY: env:ANTHROPIC_API_KEY
 ```
@@ -508,9 +558,9 @@ name: t3-sandboxed
 runtimes:
   - use: t3
     through: sandbox
+    sandbox: containers
     options:
       t3: { environment: local, runtime_mode: full-access }
-      sandbox: { provider: docker, image: ghcr.io/acme/agent:1 }
   - use: tools
 ```
 
@@ -588,7 +638,9 @@ sbx ls -q
 | `tool_unavailable` | 步骤的工具在 sandbox 里登录不了 | 执行信息里点名的命令：sbx 上执行 `sbx run claude <任意目录>` 再 `/login`，或 `sbx secret set openai --oauth`；容器里执行 `claude setup-token`，再导出 `CLAUDE_CODE_OAUTH_TOKEN` 并写进 `credentials` |
 | `credential_missing` | 凭据对应的变量在 teamai 运行的地方没有设置，或者评判没有拿到它的工具会读取的环境变量凭据 | 设置信息里点名的变量，或者把它点名的密钥加到 `credentials` |
 | `confined_pending` | 驱动定义里没有运行时提供评判用的工具：镜像缺少 `node` 或那个工具，驱动定义没给它密钥，Docker 早于 26.0.0，或者 provider 是 `podman` 或 `sbx` | 把 `node` 和工具装进镜像、在 `credentials` 里加上工具的密钥、升级 Docker，或者在驱动定义里列上 `tools` |
-| `bad_option` | `options` 里有键或值写错了（`sbx` 写了 `agent: shell`），或者在 Linux 上的 Docker Engine 里，`ANTHROPIC_BASE_URL` 这类凭据指向那里的容器到不了的 `localhost` 或 `127.0.0.1` | 修正驱动定义并推送；Linux 上的 base URL 改用容器能到达的你的机器的地址 |
+| `bad_option` | sandbox 档案里有键或值写错了（`sbx` 写了 `agent: shell`），条目的 `options` 里写了档案的键，或者在 Linux 上的 Docker Engine 里，`ANTHROPIC_BASE_URL` 这类凭据指向那里的容器到不了的 `localhost` 或 `127.0.0.1` | 修正消息指出的文件并推送；Linux 上的 base URL 改用容器能到达的你的机器的地址 |
+| `sandbox_profile_not_found` | 没有任何一层有条目指定的档案 | 在团队仓库里添加 `sandboxes/<name>.yaml` 并运行 `teamai pull`，或者为自己添加 `~/.teamai/sandboxes/<name>.yaml` |
+| `sandbox_profile_invalid` | 档案不是 YAML 映射、写了 `credentials` 或 `max_parallel`，或者作为文件夹含有链接 | 修正消息指出的文件；`credentials` 和 `max_parallel` 留在条目上 |
 | `sandbox_failed` | 无法创建或查找这次尝试的容器或沙箱，例如运行中途退出了 Docker Desktop。查找失败的容器仍算作这次尝试的，不会当作已经不存在。 | 查看步骤失败里给出的信息。先重新启动引擎，再删除剩下的：`docker ps -a --filter label=teamai.run=<run>` 或 `sbx ls` 会列出它，信息里给出了要执行的 `docker rm --force` 或 `sbx rm --force` 命令 |
 | `cancel_failed` | 取消或达到限制时，无法确认步骤已经停止：引擎拒绝了停止，或者停止（包括删除评判的容器）加上步骤进程的结束超过了 10 秒。那里运行的内容可能仍在运行，所以 teamai 保留容器、工作和登录。例如：`docker could not stop the processes in container teamai-r0123abcd-a0123abcd: Cannot connect to the Docker daemon. They may still run; remove the container with docker rm --force teamai-r0123abcd-a0123abcd.` | 先重新启动引擎，再运行一次 `teamai workflow cancel <run>`：运行时会停止步骤并关闭它的位置。也可以用信息里给出的 `docker rm --force` 或 `sbx rm --force` 命令删除它 |
 | 运行详情里的 **未关闭**（Not closed） | 无法删除这次尝试的容器或沙箱，或者删除和其中运行内容的结束超过了 10 秒，里面运行的东西可能还在运行。运行本身照常结束。 | 按信息里给出的命令执行 `docker rm --force <container>` 或 `sbx rm --force <sandbox>`。确认其中已没有任何东西在运行后，`teamai workflow cancel <run> --release <attempt>` 会放开这次尝试：即使运行时无法删除这个位置，也会忘掉它，信息里仍会给出 `rm --force` 命令 |

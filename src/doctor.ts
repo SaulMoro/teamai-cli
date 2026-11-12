@@ -975,6 +975,7 @@ export async function buildChecks(ctx: DoctorContext, stage: CheckStage = 'docto
     ...(stage === 'doctor' ? await buildRulesDeliveryChecks(ctx) : []),
     ...(stage === 'doctor' ? await buildAgentsDeliveryChecks(ctx) : []),
     ...(stage === 'doctor' ? await buildInstructionDeliveryChecks(ctx) : []),
+    ...(stage === 'doctor' ? await (await import('./doctor-sandboxes.js')).buildSandboxProfileChecks(ctx, process.cwd()) : []),
     ...await buildAgentModelChecks(ctx, stage),
     ...await buildMcpDeliveryChecks(ctx),
     ...await buildMcpReadFileChecks(ctx),

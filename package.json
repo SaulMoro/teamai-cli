@@ -25,6 +25,7 @@
     "scorers",
     "drivers",
     "runtimes",
+    "sandboxes",
     "hooks",
     "README.md",
     "CHANGELOG.md",

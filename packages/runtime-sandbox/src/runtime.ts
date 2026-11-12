@@ -10,7 +10,7 @@ import { execOperations } from './exec.js';
 import type { Journal, PlaceRecord } from './journal.js';
 import { noJudgeCredential, offersSignedIn } from './judge.js';
 import { onThisMachine } from './loopback.js';
-import { parseOptions, type SandboxOptions } from './options.js';
+import { parseOptions, type ParsedOptions } from './options.js';
 import { attemptSockets } from './outer.js';
 import { prompts } from './prompt.js';
 import { ATTEMPT_ID, handleOf, RUN_ID, sandboxOf, unreachable, type HostRoute, type Provider } from './provider.js';
@@ -65,7 +65,7 @@ export interface RuntimeDeps {
   /** Writes one line for a person, never a protocol line: a warning on stderr. */
   warn: (line: string) => void;
   /** The provider the options choose. */
-  provider: (options: SandboxOptions) => Provider;
+  provider: (options: ParsedOptions) => Provider;
   /**
    * The environment teamai started this runtime with, the member's: a hint names the sign-in it sets. It serves only
    * when teamai started it (`RUNTIME_PROTOCOL_ENV`), and removes that variable, so nothing it starts serves.
@@ -407,8 +407,9 @@ export function serve({ input, write: send, journal, warn, provider: providerFor
   /**
    * `credentials`: the names the definition gives this runtime; an older teamai sends none, and every judge is offered.
    * In `recover` mode teamai only stops and closes what the journal holds: nothing is checked or offered, and the
-   * provider is reached only when a cancel or a close needs it. `check` mode is refused: what a provider offers is
-   * known only once its image is pulled and a sandbox started, which a check may not do.
+   * provider is reached only when a cancel or a close needs it. `check` mode asks the provider only whether it answers,
+   * and fails with its fix when it does not; otherwise it is refused: what a provider offers is known only once its image
+   * is pulled and a sandbox started, which a check may not do.
    */
   const init = async ({ options, credentials, mode, instances = [] }: Extract<RuntimeRequest, { type: 'init' }>): Promise<void> => {
     const parsed = parseOptions(options);
@@ -420,14 +421,16 @@ export function serve({ input, write: send, journal, warn, provider: providerFor
       return;
     }
 
+    const provider = providerFor(parsed.options);
+
     if (mode === 'check') {
-      ready = { provider: unreachable(CHECK_UNSUPPORTED), can: {}, host: NOT_OFFERED, unusedGateways: {}, instances: new Map() };
-      write({ type: 'init', ok: false, error: CHECK_UNSUPPORTED });
+      const reached = await provider.reachable();
+      const answer = reached.ok ? CHECK_UNSUPPORTED : reached.failure;
+      ready = { provider: unreachable(answer), can: {}, host: NOT_OFFERED, unusedGateways: {}, instances: new Map() };
+      write({ type: 'init', ok: false, error: answer });
 
       return;
     }
-
-    const provider = providerFor(parsed.options);
 
     if (mode === 'recover') {
       ready = { provider, can: {}, host: NOT_OFFERED, unusedGateways: {}, instances: new Map() };

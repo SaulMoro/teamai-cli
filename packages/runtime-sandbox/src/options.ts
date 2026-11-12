@@ -25,8 +25,10 @@ import type { RuntimeFailure, RuntimeOptions } from '@teamai/runtime-protocol';
 //          provider_auth: { VERCEL_TOKEN: file:~/.config/vercel-token }   # optional: where the Vercel sign-in is read
 //          warm: { prepare: npm ci --ignore-scripts, cache: [package-lock.json], expiration: 30d }   # optional
 //
-//  teamai reads `credentials` and `max_parallel` itself and never passes them here; it gives the credentials on `open`.
-//  Each provider has its own schema, and a key it does not take fails with `bad_option` naming it.
+//  These options come from a sandbox profile, `sandboxes/<name>.yaml` or `sandboxes/<name>/SANDBOX.yaml`, which teamai
+//  passes with `profile`: its name, its revision, and its folder when it is one, which `warm.containerfile` is then
+//  inside. teamai reads `credentials` and `max_parallel` itself and never passes them here; it gives the credentials on
+//  `open`. Each provider has its own schema, and a key it does not take fails with `bad_option` naming it.
 //
 
 /** The container engines this version runs. */
@@ -136,6 +138,14 @@ const SCHEMAS = { sbx: SbxOptionsSchema, docker: ContainerOptionsSchema, podman:
 
 export type SandboxOptions = z.infer<typeof ContainerOptionsSchema> | z.infer<typeof SbxOptionsSchema> | z.infer<typeof NativeOptionsSchema> | VercelOptions;
 
+/** The sandbox profile the options come from, as teamai gives it: its name, its revision, and its folder when it is one. */
+const ProfileSchema = z.strictObject({ name: z.string().min(1), revision: z.string().min(1), folder: z.string().min(1).optional() });
+
+export type ProfileOption = z.infer<typeof ProfileSchema>;
+
+/** The provider's options, with the profile they come from when teamai named one. */
+export type ParsedOptions = SandboxOptions & { readonly profile?: ProfileOption };
+
 /** `schema` without what wraps an object: optional, and a transform's input. */
 function bare(schema: z.core.$ZodType): z.core.$ZodType {
   if (schema instanceof z.ZodOptional) return bare(schema.unwrap());
@@ -166,7 +176,11 @@ function unknownKeyMessage(issue: z.core.$ZodIssue | undefined, provider: (typeo
 }
 
 /** Parses a definition's options, or says which key is wrong and why. */
-export function parseOptions(raw: RuntimeOptions): { ok: true; options: SandboxOptions } | { ok: false; failure: RuntimeFailure } {
+export function parseOptions(given: RuntimeOptions): { ok: true; options: ParsedOptions } | { ok: false; failure: RuntimeFailure } {
+  const { profile: named, ...raw } = given;
+  const profile = named === undefined ? undefined : ProfileSchema.safeParse(named);
+
+  if (profile?.success === false) return { ok: false, failure: { code: 'bad_option', key: 'profile', message: 'teamai names the sandbox profile as { name, revision, folder }; update teamai and its runtime together' } };
   const provider = z.enum(PROVIDERS).safeParse(raw.provider);
 
   if (!provider.success) {
@@ -186,5 +200,5 @@ export function parseOptions(raw: RuntimeOptions): { ok: true; options: SandboxO
     return { ok: false, failure: { code: 'bad_option', key: key || 'options', message } };
   }
 
-  return { ok: true, options: parsed.data };
+  return { ok: true, options: { ...parsed.data, ...(profile?.data && { profile: profile.data }) } };
 }

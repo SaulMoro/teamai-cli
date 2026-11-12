@@ -46,6 +46,7 @@ export function unreachable(failure: RuntimeFailure, family: Provider['family'] 
   const kept = (sandbox: string) => ({ ok: false as const, failure: { ...failure, message: `${failure.message} Sandbox ${sandbox}, if it exists, stays this attempt's until the sandbox runtime can reach it.` } });
 
   const sandboxing = {
+    reachable: async () => ({ ok: false, failure }),
     offer: async () => ({ ok: false, failure }),
     find: async (key) => kept(handleOf(key)),
     create: async (key) => kept(handleOf(key)),
@@ -93,6 +94,11 @@ export type HostRoute = { ok: true; alias: string } | { ok: false; refusal: stri
 export interface WarmedImage { image: string }
 
 interface Sandboxing {
+  /**
+   * Whether the technology answers on this machine, asking it only what reads its state, or `sandbox_unavailable` with
+   * the fix: what a `check` init can tell without pulling an image or starting a sandbox.
+   */
+  reachable(): Promise<{ ok: true } | { ok: false; failure: RuntimeFailure }>;
   /**
    * Checks the technology is usable on this machine and says what it offers, or fails `sandbox_unavailable` with the
    * fix. It offers a tool only when it can sign in there with `credentials`, the names teamai gives, and lists each

@@ -4,8 +4,9 @@ import type { RunMode } from '../../launch-context.js';
 import { type LocalConfig } from '../../types.js';
 import type { DriverCan } from '../requirements.js';
 import type { WorkflowFailure } from '../types.js';
-import { resolveDriver, type DriverDefinition, type ResolvedDriver } from './definitions.js';
-import { acceptRuntime, isRuntimeAccepted, locateRuntime } from './locate.js';
+import { resolveDriver, SANDBOX_RUNTIME, type DriverDefinition, type ResolvedDriver } from './definitions.js';
+import { acceptRuntime, fixOf, isRuntimeAccepted, locateRuntime } from './locate.js';
+import { DEFAULT_PROFILE, locateSandboxProfile, sandboxOptions, type SandboxProfile } from './sandbox-profiles.js';
 import { LOCAL_DRIVER } from '../driver-name.js';
 import { fleetStepRuntime, shadowedFleetEntries, type OpenWake } from '../fleet/owner.js';
 import { log } from '@teamai/shared/log';
@@ -220,6 +221,16 @@ function optionsSource(driver: ResolvedDriver, use: string): string {
   return driver.config.workflows?.drivers?.[driver.name]?.runtimes?.[use] === undefined ? driver.file : `${driver.file} or your workflows.drivers.${driver.name}.runtimes.${use}`;
 }
 
+/** What the sandbox runtime refused of the profile its options came from, naming the profile's file. */
+function profileRefused(profile: SandboxProfile, key: string, message: string): WorkflowFailure {
+  return { code: 'bad_option', message: `Sandbox profile ${profile.location} refused option "${key}": ${message}. ${fixOf(profile.layer)}` };
+}
+
+/** What an attempt's record says of the sandbox profile its sandbox runtime ran, and whether its init offered isolation. */
+function sandboxRecord(profile: SandboxProfile, can: DriverCan): NonNullable<RuntimeOrigin['sandbox']> {
+  return { profile: profile.resource, layer: profile.layer, location: profile.location, revision: profile.revision, provider: String(profile.options['provider']), enforced: can.isolation === 'sandbox' };
+}
+
 function badOption(driver: ResolvedDriver, use: string, key: string, message: string): WorkflowFailure {
   return { code: 'bad_option', message: `Runtime "${use}" of driver definition ${driver.file} refused option "${key}": ${message}. Fix the option and start again.` };
 }
@@ -264,7 +275,7 @@ async function fleetRuntime(driver: ResolvedDriver, split: Extract<ReturnType<ty
   const masks: Record<string, string> = {};
 
   const openWake: OpenWake = async ({ use, options }) => {
-    const opened = await openRuntime(driver, use, entryOptions(driver, use, options), how);
+    const opened = await openRuntime(driver, { use, options: entryOptions(driver, use, options) }, how);
 
     if (!opened.ok) return opened;
 
@@ -283,7 +294,7 @@ async function fleetRuntime(driver: ResolvedDriver, split: Extract<ReturnType<ty
 }
 
 /** Opens one runtime of `driver`: finds it, refuses a team runtime no one accepted here, starts it and passes its options. */
-async function openRuntime(driver: ResolvedDriver, use: string, options: RuntimeOptions, { mode, canAsk, purpose, checkout }: { mode: RunMode; canAsk: boolean; purpose: DriverPurpose; checkout: string }): Promise<{ ok: true; opened: OpenedRuntime } | { ok: false; failure: WorkflowFailure }> {
+async function openRuntime(driver: ResolvedDriver, { use, options, sandbox }: { use: string; options: RuntimeOptions; sandbox?: string }, { mode, canAsk, purpose, checkout }: { mode: RunMode; canAsk: boolean; purpose: DriverPurpose; checkout: string }): Promise<{ ok: true; opened: OpenedRuntime } | { ok: false; failure: WorkflowFailure }> {
   const split = engineOptions(options);
 
   if (!split.ok) return { ok: false, failure: badOption(driver, use, split.key, split.message) };
@@ -313,12 +324,23 @@ async function openRuntime(driver: ResolvedDriver, use: string, options: Runtime
   const accepted = await acceptRuntime(source, purpose === 'check' ? { mode: 'unattended', canAsk: false } : { mode, canAsk });
 
   if (!accepted.ok) return accepted;
-  const sources: RuntimeOrigin[] = [{ runtime: source.resource, layer: source.layer, location: source.location, revision: source.revision }];
+  // The sandbox runtime takes its provider's options from the sandbox profile the entry names.
+  const profiled = use === SANDBOX_RUNTIME ? await sandboxOptions({ driver, named: sandbox, given: split.runtime, from: optionsSource(driver, use) }) : undefined;
+
+  if (profiled?.ok === false) return profiled;
+  const initOptions = profiled?.options ?? split.runtime;
+  const profile = profiled?.profile;
+  const origin: RuntimeOrigin = { runtime: source.resource, layer: source.layer, location: source.location, revision: source.revision };
 
   // A runtime of the member or the team in place of teamai's own is never taken silently.
   if (purpose === 'run' && source.replaces !== undefined) {
     const whose = source.layer === 'team' ? `Runtime "${use}" of the team` : `Your runtime "${use}"`;
     warnOnce(`${whose} (${source.location}, revision ${source.revision.slice(0, 12)}) replaces teamai's.`);
+  }
+
+  if (purpose === 'run' && profile?.replaces !== undefined) {
+    const whose = profile.layer === 'team' ? `Sandbox profile "${profile.asked}" of the team` : `Your sandbox profile "${profile.asked}"`;
+    warnOnce(`${whose} (${profile.location}, revision ${profile.revision.slice(0, 12)}) replaces teamai's.`);
   }
 
   const isDeclaring = split.credentials.length > 0 || split.engine.logins.length > 0;
@@ -337,10 +359,10 @@ async function openRuntime(driver: ResolvedDriver, use: string, options: Runtime
 
   if (purpose === 'stop') {
     const recovering = spawned();
-    const recovered = await recovering.init({ options: split.runtime, mode: 'recover', checkout });
+    const recovered = await recovering.init({ options: initOptions, mode: 'recover', checkout });
 
     // It offers nothing in this mode: it is asked only to stop, collect and close what it ran.
-    if (recovered.ok) return { ok: true, opened: { kind: 'external', use, runtime: recovering, can: recovered.can, launchesAgents: recovered.launchesAgents, ...(recovered.keepsConversations && { keepsConversations: true }), ...(recovered.runsOnToolHome && { runsOnToolHome: true }), engine: split.engine, credentials: {}, found: [], masks, optionsFrom: optionsSource(driver, use), sources } };
+    if (recovered.ok) return { ok: true, opened: { kind: 'external', use, runtime: recovering, can: recovered.can, launchesAgents: recovered.launchesAgents, ...(recovered.keepsConversations && { keepsConversations: true }), ...(recovered.runsOnToolHome && { runsOnToolHome: true }), engine: split.engine, credentials: {}, found: [], masks, optionsFrom: optionsSource(driver, use), sources: [origin] } };
     await recovering.dispose();
     notRecovered = recovered.failure;
   }
@@ -349,7 +371,7 @@ async function openRuntime(driver: ResolvedDriver, use: string, options: Runtime
   const credentials = { env: [...split.credentials.map((credential) => credential.name), ...Object.keys(found)], logins: split.engine.logins };
 
   const ready = await runtime.init({
-    options: split.runtime, mode: purpose === 'check' ? 'check' : mode, credentials, instances: await runnableInstances(), checkout,
+    options: initOptions, mode: purpose === 'check' ? 'check' : mode, credentials, instances: await runnableInstances(), checkout,
   });
 
   // A runtime that runs each tool on the attempt's tool home gets the login there, as an exec runtime does.
@@ -404,15 +426,16 @@ async function openRuntime(driver: ResolvedDriver, use: string, options: Runtime
     const declared = isMemberRoute ? notOwnLogin(values.values) : values.values;
     const given = isKeepingFound ? { ...declared, ...foundHere } : declared;
 
-    return { ok: true, opened: { kind: 'external', use, runtime, can: ready.can, launchesAgents: ready.launchesAgents, engine, credentials: given, found: isKeepingFound ? Object.keys(foundHere) : [], masks, optionsFrom: optionsSource(driver, use), sources, ...(ready.unavailable && { unavailable: ready.unavailable }), ...(ready.wakes && { wakes: true }), ...(ready.keepsConversations && { keepsConversations: true }), ...(ready.runsOnToolHome && { runsOnToolHome: true }) } };
+    return { ok: true, opened: { kind: 'external', use, runtime, can: ready.can, launchesAgents: ready.launchesAgents, engine, credentials: given, found: isKeepingFound ? Object.keys(foundHere) : [], masks, optionsFrom: optionsSource(driver, use), sources: [profile ? { ...origin, sandbox: sandboxRecord(profile, ready.can) } : origin], ...(ready.unavailable && { unavailable: ready.unavailable }), ...(ready.wakes && { wakes: true }), ...(ready.keepsConversations && { keepsConversations: true }), ...(ready.runsOnToolHome && { runsOnToolHome: true }) } };
   }
 
   await runtime.dispose();
   const { failure } = ready;
 
   const notStarted = failure.code === 'bad_option'
-    ? badOption(driver, use, failure.key ?? '?', failure.message)
-    : { code: 'runtime_failed', message: `Runtime "${source.name}" of driver "${driver.name}" did not start (${failure.code}): ${failure.message}` };
+    ? (profile ? profileRefused(profile, failure.key ?? '?', failure.message) : badOption(driver, use, failure.key ?? '?', failure.message))
+    // A check keeps the runtime's own code, which says whether it could tell at all.
+    : { code: purpose === 'check' ? failure.code : 'runtime_failed', message: `Runtime "${source.name}" of driver "${driver.name}" did not start (${failure.code}): ${failure.message}` };
 
   if (notRecovered === undefined) return { ok: false, failure: notStarted };
 
@@ -425,15 +448,15 @@ async function openRuntime(driver: ResolvedDriver, use: string, options: Runtime
  * `composedStepRuntime` with the offer `composedOffer` merges. The prompt's credentials are the outer's, which runs the
  * tool; the inner keeps its own.
  */
-async function openComposed(driver: ResolvedDriver, names: { inner: string; outer: string }, options: RuntimeOptions, how: Parameters<typeof openRuntime>[3]): Promise<{ ok: true; opened: OpenedRuntime } | { ok: false; failure: WorkflowFailure }> {
+async function openComposed(driver: ResolvedDriver, { names, options, sandbox }: { names: { inner: string; outer: string }; options: RuntimeOptions; sandbox?: string }, how: Parameters<typeof openRuntime>[2]): Promise<{ ok: true; opened: OpenedRuntime } | { ok: false; failure: WorkflowFailure }> {
   const name = composedName(names.inner, names.outer);
   const nested = nestedOptions(options, names);
 
   if (!nested.ok) return { ok: false, failure: badOption(driver, name, nested.key, nested.message) };
-  const outer = await openRuntime(driver, names.outer, entryOptions(driver, names.outer, nested.outer), how);
+  const outer = await openRuntime(driver, { use: names.outer, options: entryOptions(driver, names.outer, nested.outer), ...(names.outer === SANDBOX_RUNTIME && sandbox !== undefined && { sandbox }) }, how);
 
   if (!outer.ok) return outer;
-  const inner = await openRuntime(driver, names.inner, entryOptions(driver, names.inner, nested.inner), how);
+  const inner = await openRuntime(driver, { use: names.inner, options: entryOptions(driver, names.inner, nested.inner), ...(names.inner === SANDBOX_RUNTIME && sandbox !== undefined && { sandbox }) }, how);
 
   if (!inner.ok) {
     if (outer.opened.kind === 'external') await outer.opened.runtime.dispose();
@@ -531,8 +554,8 @@ export async function openDriver(
     if (purpose === 'run' && !needsAiTool && await isSkippedWithoutAi(driver, entry)) continue;
 
     const one = entry.through === undefined
-      ? await openRuntime(driver, entry.use, entryOptions(driver, entry.use, entry.options), how)
-      : await openComposed(driver, { inner: entry.use, outer: entry.through }, entry.options ?? {}, how);
+      ? await openRuntime(driver, { use: entry.use, options: entryOptions(driver, entry.use, entry.options), ...(entry.sandbox !== undefined && { sandbox: entry.sandbox }) }, how)
+      : await openComposed(driver, { names: { inner: entry.use, outer: entry.through }, options: entry.options ?? {}, ...(entry.sandbox !== undefined && { sandbox: entry.sandbox }) }, how);
 
     if (!one.ok) {
       await Promise.all(opened.map((done) => (done.kind === 'external' ? done.runtime.dispose() : undefined)));
@@ -544,6 +567,51 @@ export async function openDriver(
   }
 
   return { ok: true, opened: { driver, asked: name, runtimes: opened } };
+}
+
+/** What the sandbox runtime answers a check once its provider answers: it cannot tell more without starting a sandbox. */
+const SANDBOX_CANNOT_TELL = 'check_unsupported';
+
+/** One sandbox entry of a driver: the profile it names, found or why not, and whether this machine can start it. */
+export interface SandboxEntryCheck {
+  driver: string;
+  /** The profile the entry names, `default` when it names none. */
+  asked: string;
+  located: Awaited<ReturnType<typeof locateSandboxProfile>>;
+  canStart: () => Promise<{ ok: true } | { ok: false; failure: WorkflowFailure }>;
+}
+
+/**
+ * Each entry of driver `name` in `config` that runs the sandbox runtime, the member's own definition first. Whether one
+ * can start opens only its sandbox runtime in `check` mode, which asks its provider whether it answers and starts nothing.
+ */
+export async function sandboxEntryChecks(config: LocalConfig, name: string, checkout: string): Promise<SandboxEntryCheck[]> {
+  const resolved = await resolveDriver(config, name, { personal: true });
+
+  if (!resolved.ok) return [];
+  const { driver } = resolved;
+  const entries = driver.definition.runtimes.filter((entry) => entry.use === SANDBOX_RUNTIME || entry.through === SANDBOX_RUNTIME);
+
+  return Promise.all(entries.map(async (entry) => ({
+    driver: driver.name,
+    asked: entry.sandbox ?? DEFAULT_PROFILE,
+    located: await locateSandboxProfile(driver, entry.sandbox),
+    canStart: async () => {
+      const nested = entry.through === undefined ? { ok: true as const, outer: entry.options ?? {} } : nestedOptions(entry.options ?? {}, { inner: entry.use, outer: entry.through });
+
+      if (!nested.ok) return { ok: false, failure: badOption(driver, composedName(entry.use, SANDBOX_RUNTIME), nested.key, nested.message) };
+      const sandbox = { use: SANDBOX_RUNTIME, options: entryOptions(driver, SANDBOX_RUNTIME, nested.outer), ...(entry.sandbox !== undefined && { sandbox: entry.sandbox }) };
+      const opened = await openRuntime(driver, sandbox, { mode: 'attended', canAsk: false, purpose: 'check', checkout });
+
+      if (opened.ok) {
+        if (opened.opened.kind === 'external') await opened.opened.runtime.dispose();
+
+        return { ok: true };
+      }
+
+      return opened.failure.code === SANDBOX_CANNOT_TELL ? { ok: true } : opened;
+    },
+  })));
 }
 
 /**

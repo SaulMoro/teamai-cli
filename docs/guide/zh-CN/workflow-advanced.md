@@ -1554,15 +1554,20 @@ teamai 按下面的顺序查找 `<name>.yaml`，或存放 `DRIVER.yaml`（内容
 一个定义列出一个或多个运行时。teamai 按列出的顺序把每个步骤交给它们，第一个能接下的运行时运行它：
 
 ```yaml
+# sandboxes/containers.yaml
+provider: docker
+image: ghcr.io/acme/agent:1
+```
+
+```yaml
 # drivers/sandboxed.yaml
 schemaVersion: v1alpha1
 name: sandboxed
 tool: claude
 runtimes:
   - use: sandbox          # 接下它能接的每个步骤
+    sandbox: containers     # 见 [sandbox 档案](runtime-sandbox.md#sandbox-档案)
     options:
-      provider: docker
-      image: ghcr.io/acme/agent:1
       max_parallel: 2
   - use: tools            # 接下其余的，例如交互步骤或必须回答的审批
 ```
@@ -1590,8 +1595,7 @@ schemaVersion: v1alpha1
 name: sandbox-only
 tool: claude
 runtimes:
-  - use: sandbox          # 提示步骤和你的命令步骤；teamai 自己的步骤在 host 条目上运行
-    options: { provider: sbx }
+  - use: sandbox          # 提示步骤和你的命令步骤；teamai 自己的步骤在 host 条目上运行；档案 default：teamai 的 sbx microVM
 ```
 
 打分 pass 的评判在[回答限定提示的运行时](runtime-protocol.md#回答限定提示的运行时)上运行；没有这种运行时而定义列出了 `tools` 时，用本机的工具；两者都没有时，运行以 `confined_pending` 停下。teamai 自己的工作流换个名字复制后，不会留在本机。运行状态中每个步骤都以 `runtime` 记录它运行在哪个运行时上：其条目的 `use`；在 teamai 进程中运行的步骤，命令和回答记为 `host`，提示记为 `tools`。
@@ -1629,11 +1633,11 @@ teamai 自带这些定义：
 | `teamai-claude`、`teamai-codex`、`teamai-opencode` | `tools`，提示步骤用对应的工具 |
 | `teamai-t3` | `t3`（`environment: local`、`max_parallel: 4`） |
 | `teamai-paseo` | `paseo`（`max_parallel: 4`，连接你的 Paseo 配置指定的地址） |
-| `teamai-sandbox` | `sandbox`（`provider: sbx`、`max_parallel: 4`），然后 `tools` |
+| `teamai-sandbox` | `sandbox`（sandbox 档案 `default`，teamai 的是 sbx microVM；`max_parallel: 4`），然后 `tools` |
 
 ### 各部分放在哪里
 
-运行用到的驱动、运行时和工具都是团队仓库中的文件，每个可以是一个文件，也可以是一个文件夹，存放它的标记文件和所需的内容：
+运行用到的驱动、运行时、sandbox 档案和工具都是团队仓库中的文件，每个可以是一个文件，也可以是一个文件夹，存放它的标记文件和所需的内容：
 
 ```text
 drivers/
@@ -1645,6 +1649,11 @@ runtimes/
 └── t3/
     ├── RUNTIME.yaml            步骤运行时 "t3"，替换 teamai 自带的
     └── runtime                 它的代码，随文件夹的修订一起接受
+sandboxes/
+├── default.yaml                sandbox 档案 "default"，替换 teamai 自带的
+└── node-deps/
+    ├── SANDBOX.yaml            sandbox 档案 "node-deps"
+    └── Containerfile           它的预热镜像从这里构建
 tools/
 ├── acme-claude.yaml            工具实例 "acme-claude"
 └── web-claude/
@@ -1655,9 +1664,10 @@ tools/
 | --- | --- | --- |
 | 在其他运行时上运行步骤，或在另一个工具上运行提示步骤 | 驱动定义 | [上面的查找顺序](#驱动定义和步骤运行时) |
 | 在你自己的程序里运行步骤，比如某个应用或远程机器 | 步骤运行时 | [编写步骤运行时](runtime-protocol.md) |
+| 让 `sandbox` 运行时的步骤换一个 provider 或镜像运行 | sandbox 档案 | [sandbox 档案](runtime-sandbox.md#sandbox-档案) |
 | 用另一个命令或主目录运行某个工具 | 工具实例 | [团队工具](reference.md#团队工具tools) |
 
-每一种也可以放在你的角色或项目为 workflows 激活的命名空间下的 `<folder>/<namespace>/`，以及只给你自己用的 `~/.teamai/<folder>/`。驱动和运行时的名字先在每个位置按完全相同的名字查找，再查找 `teamai-<name>`，所以团队的 `runtimes/t3/` 会替换 teamai 自带的 `teamai-t3` 运行。
+每一种也可以放在你的角色或项目为 workflows 激活的命名空间下的 `<folder>/<namespace>/`，以及只给你自己用的 `~/.teamai/<folder>/`。驱动、运行时和 sandbox 档案的名字先在每个位置按完全相同的名字查找，再查找 `teamai-<name>`，所以团队的 `runtimes/t3/` 会替换 teamai 自带的 `teamai-t3` 运行。
 
 ### 运行时选项
 
@@ -1889,15 +1899,20 @@ Codex 运行期间运行时自己停止，或之后无法关闭位置时，登�
 容器里的工具读不到保存在钥匙串里的登录。改为从你的环境给它一个令牌：`NAME: env:VARIABLE` 为步骤的工具设置 `NAME`，值取自你的 `VARIABLE`。
 
 ```yaml
+# sandboxes/containers.yaml
+provider: docker
+image: ghcr.io/acme/agent:1
+```
+
+```yaml
 # drivers/containers.yaml
 schemaVersion: v1alpha1
 name: containers
 tool: claude
 runtimes:
   - use: sandbox
+    sandbox: containers
     options:
-      provider: docker
-      image: ghcr.io/acme/agent:1
       credentials:
         CLAUDE_CODE_OAUTH_TOKEN: env:CLAUDE_CODE_OAUTH_TOKEN   # 来自 `claude setup-token`
         NPM_TOKEN: env:ACME_NPM_TOKEN                          # 私有仓库，在你 shell 里用另一个名字

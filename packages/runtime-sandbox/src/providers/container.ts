@@ -1,5 +1,5 @@
 import crypto from 'node:crypto';
-import type { ContainerEngine, WarmOptions } from '../options.js';
+import type { ContainerEngine, ProfileOption, WarmOptions } from '../options.js';
 import type { JournalId } from '../journal.js';
 import type { Can, ConfinedOffer, RuntimeFailure } from '@teamai/runtime-protocol';
 import { EVIDENCE_DIR, FILTER_PORT, FILTER_SCRIPT, judgeTool } from '../judge.js';
@@ -85,7 +85,7 @@ export interface Host {
  * `owner`: the id of the journal whose attempts the containers are, which labels each one. `warm`: the recipe of the
  * warm image each attempt's container starts from, made on `image`; unset, it starts from `image`.
  */
-export function containerProvider({ engine, image, owner, host, warm }: { engine: ContainerEngine; image: string; owner: JournalId; host: Host; warm?: WarmOptions }): Provider {
+export function containerProvider({ engine, image, owner, host, warm, profile }: { engine: ContainerEngine; image: string; owner: JournalId; host: Host; warm?: WarmOptions; profile?: ProfileOption }): Provider {
   const notInstalled = engine === 'docker'
     ? 'docker is not installed here, or not on PATH. Install Docker Desktop (https://docs.docker.com/get-docker/) or Docker Engine, start it, and start again.'
     : 'podman is not installed here, or not on PATH. Install Podman (https://podman.io/docs/installation), run `podman machine init && podman machine start` on macOS or Windows, and start again.';
@@ -188,7 +188,7 @@ export function containerProvider({ engine, image, owner, host, warm }: { engine
   /** The image an attempt in `checkout` starts from: the warm image, made first when it is not there yet, else `image`. */
   const warmImageFor = async (checkout: string): Promise<{ ok: true; image: string } | { ok: false; failure: RuntimeFailure }> => {
     if (warm === undefined) return { ok: true, image };
-    const planned = planWarm({ base: await baseOf(), recipe: warm, checkout });
+    const planned = planWarm({ base: await baseOf(), recipe: warm, checkout, ...(profile && { profile }) });
 
     if (!planned.ok) return planned;
     const { plan } = planned;
@@ -219,15 +219,27 @@ export function containerProvider({ engine, image, owner, host, warm }: { engine
     return sandboxFailed(`${engine} could not look for the container of attempt ${key.attempt}: ${why(listed)}. Its container, if it has one, stays this attempt's until ${engine} answers again; to remove it now, run \`${engine} rm --force ${handleOf(key)}\`.`);
   };
 
+  /** What the engine says of itself, its version and system, or why it does not answer. */
+  const engineInfo = async () => {
+    const info = await cli(['info', '--format', engine === 'podman' ? '{{.Version.Version}}' : '{{.ServerVersion}}|{{.OperatingSystem}}']);
+
+    if (info.kind !== 'ran') return unavailable(info.message);
+
+    return info.code === 0 ? { ok: true as const, info: info.stdout } : unavailable(notRunning(info));
+  };
+
   return {
     family: 'bind',
+    async reachable() {
+      const reached = await engineInfo();
+
+      return reached.ok ? { ok: true } : reached;
+    },
     async offer(credentials, instances) {
-      const info = await cli(['info', '--format', engine === 'podman' ? '{{.Version.Version}}' : '{{.ServerVersion}}|{{.OperatingSystem}}']);
+      const reached = await engineInfo();
 
-      if (info.kind !== 'ran') return unavailable(info.message);
-
-      if (info.code !== 0) return unavailable(notRunning(info));
-      const [version = '', system = ''] = info.stdout.trim().split('|');
+      if (!reached.ok) return reached;
+      const [version = '', system = ''] = reached.info.trim().split('|');
 
       // Docker Desktop names this machine host.docker.internal in every container, and Podman host.containers.internal;
       // Docker Engine on Linux names it nothing.

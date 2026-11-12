@@ -149,25 +149,26 @@ it('check reads a driver definition on any guide page, and rejects a key a defin
   expect(checked.output).toContain(`docs/guide/dashboard.md:${before.split('\n').length + 2}`);
   expect(checked.output).toContain('runtime');
 });
-it('check rejects a driver definition example whose options the runtime itself refuses', () => {
+it('check rejects a driver definition example that gives the sandbox runtime its provider inline, not in a sandbox profile', () => {
   const root = checkout();
   const page = path.join(root, 'docs/guide/dashboard.md');
   const before = fs.readFileSync(page, 'utf8');
-  fs.writeFileSync(page, `${before}\n\`\`\`yaml\n# drivers/boxed.yaml\nschemaVersion: v1alpha1\nname: boxed\nruntimes:\n  - use: sandbox\n    options:\n      provider: sbx\n      image: ghcr.io/acme/agent:1\n\`\`\`\n`);
+  fs.writeFileSync(page, `${before}\n\`\`\`yaml\n# drivers/boxed.yaml\nschemaVersion: v1alpha1\nname: boxed\nruntimes:\n  - use: sandbox\n    options:\n      provider: sbx\n\`\`\`\n`);
   const checked = run(root);
   expect(checked.status).toBe(1);
   expect(checked.output).toContain(`docs/guide/dashboard.md:${before.split('\n').length + 2}`);
-  expect(checked.output).toContain('Provider sbx takes no option "image"');
+  expect(checked.output).toContain('runtimes.0 (sandbox) option provider: a sandbox\'s options live in a sandbox profile');
 });
-it('check reads each runtime of an entry through another with that runtime\'s own options', () => {
+it('check reads each runtime of an entry through another with that runtime\'s own options, the sandbox\'s from the profile the page shows', () => {
   const root = checkout();
   const page = path.join(root, 'docs/guide/dashboard.md');
   const before = fs.readFileSync(page, 'utf8');
-  fs.writeFileSync(page, `${before}\n\`\`\`yaml\n# drivers/boxed.yaml\nschemaVersion: v1alpha1\nname: boxed\nruntimes:\n  - use: t3\n    through: sandbox\n    options:\n      t3: { environment: local }\n      sandbox: { provider: sbx, image: ghcr.io/acme/agent:1 }\n\`\`\`\n`);
+  fs.writeFileSync(page, `${before}\n\`\`\`yaml\n# sandboxes/boxed.yaml\nprovider: sbx\nimage: ghcr.io/acme/agent:1\n\`\`\`\n\n\`\`\`yaml\n# drivers/boxed.yaml\nschemaVersion: v1alpha1\nname: boxed\nruntimes:\n  - use: t3\n    through: sandbox\n    sandbox: boxed\n    options:\n      t3: { environment: local }\n\`\`\`\n`);
   const checked = run(root);
   expect(checked.status).toBe(1);
   expect(checked.output).toContain(`docs/guide/dashboard.md:${before.split('\n').length + 2}`);
-  expect(checked.output).toContain('runtimes.0 (sandbox) option image: Provider sbx takes no option "image"');
+  expect(checked.output).toContain('option image: Provider sbx takes no option "image"');
+  expect(checked.output).toContain('runtimes.0 (sandbox) profile boxed option image: Provider sbx takes no option "image"');
 });
 it('check rejects a driver definition example naming a runtime teamai does not ship and the guide does not define', () => {
   const root = checkout();

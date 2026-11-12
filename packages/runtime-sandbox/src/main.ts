@@ -5,7 +5,7 @@ import { isStartedByTeamai } from '@teamai/runtime-kit/serve';
 import { getUserHome } from '@teamai/shared/home';
 import { journal } from './journal.js';
 import type { RuntimeMessage } from '@teamai/runtime-protocol';
-import type { SandboxOptions } from './options.js';
+import type { ParsedOptions } from './options.js';
 import { unreachable, type Provider } from './provider.js';
 import { bwrap } from './providers/bwrap.js';
 import { containerProvider } from './providers/container.js';
@@ -75,20 +75,21 @@ if (PLATFORM === 'win32' && (wrapper !== undefined || !isStartedByTeamai(process
   else process.exit(end.code);
 }
 
-function providerOf(options: SandboxOptions): Provider {
+function providerOf(options: ParsedOptions): Provider {
   if (PLATFORM === 'win32') {
     return unreachable({ code: 'sandbox_unavailable', message: `The sandbox runtime does not run on Windows. ${NOT_ON_WINDOWS} Run teamai inside WSL2 (\`wsl --install\`, then install teamai there), or run the steps with --driver local` }, options.provider === 'vercel' ? 'copy' : 'bind');
   }
 
   switch (options.provider) {
     case 'sbx':
-      return sbxProvider({ agent: options.agent, owner: sandboxJournal.owner, env: process.env, warm: options.warm });
+      return sbxProvider({ agent: options.agent, owner: sandboxJournal.owner, env: process.env, warm: options.warm, ...(options.profile && { profile: options.profile }) });
     case 'docker':
     case 'podman':
       return containerProvider({
         engine: options.provider,
         image: options.image,
         warm: options.warm,
+        ...(options.profile && { profile: options.profile }),
         owner: sandboxJournal.owner,
         host: { user: uid !== undefined && gid !== undefined ? { uid, gid } : undefined, selinux: fs.existsSync('/sys/fs/selinux/enforce'), env: process.env },
       });

@@ -21,7 +21,8 @@ import { WORKSPACE_MODES } from '@teamai/runtime-protocol';
 import type { DriverIdentity, WorkflowEnvelope } from '../../src/workflow/types.js';
 import { knownSecrets } from '../../src/env-resolution.js';
 import { parseSuite, type SourceFile } from '../../src/benchmark/suite.js';
-import { parseDriverDefinition } from '../../src/workflow/runtimes/definitions.js';
+import { parseDriverDefinition, SANDBOX_RUNTIME, SHIPPED_PREFIX } from '../../src/workflow/runtimes/definitions.js';
+import { DEFAULT_PROFILE } from '../../src/workflow/runtimes/sandbox-profiles.js';
 import { engineOptions } from '../../src/workflow/runtimes/sources.js';
 import { parseFleetOptions, shadowedFleetEntries } from '../../src/workflow/fleet/owner.js';
 import { nestedOptions } from '../../src/workflow/runtimes/composed.js';
@@ -781,7 +782,7 @@ await check('every runtime teamai ships has its options checked in the guide exa
  * options pass what teamai reads of them (`max_parallel`, `credentials`), and the rest passes that runtime's own check
  * when teamai ships it; a team's own runtime reads its options itself.
  */
-async function definitionProblem(example: Example): Promise<string | undefined> {
+async function definitionProblem(example: Example, profiles: ReadonlyMap<string, string>): Promise<string | undefined> {
   const named = DEFINITION_FILE.exec(example.source.split('\n')[0] ?? '')?.[1];
   const document = parseDocument(example.source);
   const shown: JsonValue = document.errors.length > 0 ? null : document.toJS();
@@ -797,7 +798,7 @@ async function definitionProblem(example: Example): Promise<string | undefined> 
 
   if (shadowed !== undefined) return shadowed;
 
-  for (const [index, { use, through, options }] of parsed.definition.runtimes.entries()) {
+  for (const [index, { use, through, options, sandbox }] of parsed.definition.runtimes.entries()) {
     // An entry through another nests each runtime's options under its name, as the engine splits them at the start.
     const nested = through === undefined ? undefined : nestedOptions(options ?? {}, { inner: use, outer: through });
 
@@ -805,7 +806,7 @@ async function definitionProblem(example: Example): Promise<string | undefined> 
     const parts: Array<[string, RuntimeOptions]> = nested === undefined || through === undefined ? [[use, options ?? {}]] : [[use, nested.inner], [through, nested.outer]];
 
     for (const [name, given] of parts) {
-      const problem = await runtimeOptionsProblem(name, given);
+      const problem = name === SANDBOX_RUNTIME ? await sandboxEntryProblem(given, sandbox ?? DEFAULT_PROFILE, profiles) : await runtimeOptionsProblem(name, given);
 
       if (problem !== undefined) return `runtimes.${index} ${problem}`;
     }
@@ -825,6 +826,48 @@ async function runtimeOptionsProblem(name: string, options: RuntimeOptions): Pro
   const own = await ownCheck?.(read.runtime);
 
   return own?.ok === false ? `(${name}) option ${own.failure.key ?? '?'}: ${own.failure.message}` : undefined;
+}
+
+/** A block's first line, `# sandboxes/<name>.yaml` (in any language), names the sandbox profile it shows. */
+const PROFILE_FILE = /^#.*\bsandboxes\/([A-Za-z0-9._-]+)\.yaml\b/;
+
+/** The sandbox profile `name` resolves to where the guide has shown none: teamai's own, by its name or as `teamai-<name>`. */
+function shippedProfile(name: string): string | undefined {
+  const file = [name, `${SHIPPED_PREFIX}${name}`].map((stem) => path.join(ROOT, 'sandboxes', `${stem}.yaml`)).find((candidate) => fs.existsSync(candidate));
+
+  return file === undefined ? undefined : fs.readFileSync(file, 'utf8');
+}
+
+/** Why a sandbox profile's text would not start the sandbox runtime, or undefined. */
+async function profileProblem(source: string): Promise<string | undefined> {
+  const document = parseDocument(source);
+
+  if (document.errors.length > 0) return document.errors[0]?.message;
+  const shown: JsonValue = document.toJS();
+
+  if (!isJsonObject(shown)) return 'a profile is a mapping such as provider: docker';
+  const parsed = parseSandboxOptions(shown);
+
+  return parsed.ok ? undefined : `option ${parsed.failure.key ?? '?'}: ${parsed.failure.message}`;
+}
+
+/**
+ * Why a sandbox entry would not start, as teamai reads it: its options keep only what teamai reads of them, and the
+ * profile it names (`default` when it names none) is the last one the page showed before it, or one teamai ships.
+ */
+async function sandboxEntryProblem(given: RuntimeOptions, name: string, profiles: ReadonlyMap<string, string>): Promise<string | undefined> {
+  const read = engineOptions(given);
+
+  if (!read.ok) return `(sandbox) option ${read.key}: ${read.message}`;
+  const [inline] = Object.keys(read.runtime);
+
+  if (inline !== undefined) return `(sandbox) option ${inline}: a sandbox's options live in a sandbox profile, which the entry names with sandbox: <name>`;
+  const source = profiles.get(name) ?? shippedProfile(name);
+
+  if (source === undefined) return `(sandbox) names sandbox profile ${name}, which no block before it on the page shows and teamai does not ship`;
+  const problem = await profileProblem(source);
+
+  return problem === undefined ? undefined : `(sandbox) profile ${name} ${problem}`;
 }
 
 /** A block's first line saying it shows a definition teamai ships, in English or Chinese: `# drivers/<name>.yaml, shipped with teamai`. */
@@ -859,14 +902,30 @@ await check('every shipped driver definition parses, and a guide block naming it
 });
 
 // Guide pages only: a design note may show a definition with fields it proposes.
-await check('every driver definition a guide page shows passes the definition schema and its runtimes\' options', async () => {
-  const examples = guidePages(/\.md$/).flatMap((page) => examplesOf(page));
+await check('every driver definition and sandbox profile a guide page shows passes the definition schema and its runtimes\' options', async () => {
+  const failures: string[] = [];
 
-  const failures = (await Promise.all(examples.map(async (example) => {
-    const problem = await definitionProblem(example);
+  for (const page of guidePages(/\.md$/)) {
+    // A page shows a profile before the definitions that name it, and a later block of the same name replaces it.
+    const profiles = new Map<string, string>();
 
-    return problem === undefined ? [] : [`${example.label}: ${problem}`];
-  }))).flat();
+    for (const example of examplesOf(page)) {
+      const [heading = '', ...body] = example.source.split('\n');
+      const profile = PROFILE_FILE.exec(heading)?.[1];
+
+      if (profile !== undefined) {
+        profiles.set(profile, body.join('\n'));
+        const problem = await profileProblem(body.join('\n'));
+
+        if (problem !== undefined) failures.push(`${example.label}: ${problem}`);
+        continue;
+      }
+
+      const problem = await definitionProblem(example, profiles);
+
+      if (problem !== undefined) failures.push(`${example.label}: ${problem}`);
+    }
+  }
 
   assert.deepEqual(failures, []);
 });

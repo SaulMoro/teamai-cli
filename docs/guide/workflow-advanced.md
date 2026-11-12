@@ -1560,15 +1560,20 @@ teamai looks for `<name>.yaml`, or a folder `<name>/` holding `DRIVER.yaml` with
 A definition lists one runtime or more. teamai offers each step to them in the order listed, and the first that can take it runs it:
 
 ```yaml
+# sandboxes/containers.yaml
+provider: docker
+image: ghcr.io/acme/agent:1
+```
+
+```yaml
 # drivers/sandboxed.yaml
 schemaVersion: v1alpha1
 name: sandboxed
 tool: claude
 runtimes:
   - use: sandbox          # takes every step it can
+    sandbox: containers     # see [sandbox profiles](runtime-sandbox.md#sandbox-profiles)
     options:
-      provider: docker
-      image: ghcr.io/acme/agent:1
       max_parallel: 2
   - use: tools            # takes the rest, such as an interactive step or a required approval
 ```
@@ -1596,8 +1601,7 @@ schemaVersion: v1alpha1
 name: sandbox-only
 tool: claude
 runtimes:
-  - use: sandbox          # prompts and your command steps; teamai's own steps run on the host entry
-    options: { provider: sbx }
+  - use: sandbox          # prompts and your command steps; teamai's own steps run on the host entry; profile default: teamai's sbx microVM
 ```
 
 A scored pass's judge runs on a runtime that [answers confined prompts](runtime-protocol.md#a-runtime-that-answers-confined-prompts), else, when the definition lists `tools`, on this machine's tools; with neither, the run stops `confined_pending`. A copy of teamai's own workflows under another name is not kept on this machine. Each step's state in the run records the runtime it ran on as `runtime`: the `use` of its entry, or, for a step in teamai's process, `host` for a command or an answer and `tools` for a prompt.
@@ -1635,11 +1639,11 @@ teamai ships these definitions:
 | `teamai-claude`, `teamai-codex`, `teamai-opencode` | `tools`, with prompt steps on that tool |
 | `teamai-t3` | `t3` (`environment: local`, `max_parallel: 4`) |
 | `teamai-paseo` | `paseo` (`max_parallel: 4`, at the address your Paseo config names) |
-| `teamai-sandbox` | `sandbox` (`provider: sbx`, `max_parallel: 4`), then `tools` |
+| `teamai-sandbox` | `sandbox` (sandbox profile `default`, teamai's an sbx microVM; `max_parallel: 4`), then `tools` |
 
 ### Where each part lives
 
-A run's drivers, runtimes and tools are files in the team repo, each kept as a file or as a folder with its marker and what it needs:
+A run's drivers, runtimes, sandbox profiles and tools are files in the team repo, each kept as a file or as a folder with its marker and what it needs:
 
 ```text
 drivers/
@@ -1651,6 +1655,11 @@ runtimes/
 └── t3/
     ├── RUNTIME.yaml            step runtime "t3", in place of teamai's
     └── runtime                 its code, accepted with the folder's revision
+sandboxes/
+├── default.yaml                sandbox profile "default", in place of teamai's
+└── node-deps/
+    ├── SANDBOX.yaml            sandbox profile "node-deps"
+    └── Containerfile           what its warm image builds from
 tools/
 ├── acme-claude.yaml            tool instance "acme-claude"
 └── web-claude/
@@ -1661,9 +1670,10 @@ tools/
 | --- | --- | --- |
 | Run steps on other runtimes, or prompt steps on another tool | a driver definition | [the lookup above](#driver-definitions-and-step-runtimes) |
 | Run steps in a program of your own, such as an app or a remote machine | a step runtime | [write a step runtime](runtime-protocol.md) |
+| Run the `sandbox` runtime's steps on another provider or image | a sandbox profile | [sandbox profiles](runtime-sandbox.md#sandbox-profiles) |
 | Run a tool under another command or home | a tool instance | [team tools](reference.md#team-tools-tools) |
 
-Each may also sit in `<folder>/<namespace>/` for a namespace your roles or projects activate for workflows, and in `~/.teamai/<folder>/` for yourself. A driver or runtime name is looked up exactly in every place first, then as `teamai-<name>`, so a team's `runtimes/t3/` runs in place of teamai's `teamai-t3`.
+Each may also sit in `<folder>/<namespace>/` for a namespace your roles or projects activate for workflows, and in `~/.teamai/<folder>/` for yourself. A driver, runtime or sandbox profile name is looked up exactly in every place first, then as `teamai-<name>`, so a team's `runtimes/t3/` runs in place of teamai's `teamai-t3`.
 
 ### Runtime options
 
@@ -1895,15 +1905,20 @@ The login is also kept when the runtime itself stops while Codex runs, or cannot
 A tool in a container cannot read a login kept in your keychain. Give it a token from your environment instead: `NAME: env:VARIABLE` sets `NAME` for the step's tool, with the value of your `VARIABLE`.
 
 ```yaml
+# sandboxes/containers.yaml
+provider: docker
+image: ghcr.io/acme/agent:1
+```
+
+```yaml
 # drivers/containers.yaml
 schemaVersion: v1alpha1
 name: containers
 tool: claude
 runtimes:
   - use: sandbox
+    sandbox: containers
     options:
-      provider: docker
-      image: ghcr.io/acme/agent:1
       credentials:
         CLAUDE_CODE_OAUTH_TOKEN: env:CLAUDE_CODE_OAUTH_TOKEN   # from `claude setup-token`
         NPM_TOKEN: env:ACME_NPM_TOKEN                          # the private registry, under another name in your shell

@@ -9,6 +9,7 @@ import { stringify } from 'yaml';
 import { z } from 'zod';
 import { resolveProjectDataHome } from '../../config.js';
 import type { RunState } from '../../workflow/types.js';
+import { folderRevision } from '../../workflow/runtimes/resource-folder.js';
 import { CLAUDE_SESSIONS, envelope, ROOT, runCLI, type Ran } from '../helpers/step-runtime-e2e.js';
 
 // The sandbox runtime teamai ships, on a fake docker whose containers run on the host
@@ -122,20 +123,22 @@ beforeAll(async () => {
   execFileSync('git', ['push', '-q', '-u', 'origin', 'main'], { cwd: repo });
 
   fs.mkdirSync(path.join(repo, '.teamai', 'drivers'), { recursive: true });
+  fs.mkdirSync(path.join(repo, '.teamai', 'sandboxes'), { recursive: true });
+  fs.writeFileSync(path.join(repo, '.teamai', 'sandboxes', 'e2e.yaml'), stringify({ provider: 'docker', image: IMAGE }));
   fs.writeFileSync(path.join(repo, '.teamai', 'drivers', 'containers.yaml'), stringify({
     schemaVersion: 'v1alpha1', name: 'containers', tool: 'claude',
-    runtimes: [{ use: 'sandbox', options: { provider: 'docker', image: IMAGE, credentials: { CLAUDE_CODE_OAUTH_TOKEN: 'env:CLAUDE_CODE_OAUTH_TOKEN' } } }],
+    runtimes: [{ use: 'sandbox', sandbox: 'e2e', options: { credentials: { CLAUDE_CODE_OAUTH_TOKEN: 'env:CLAUDE_CODE_OAUTH_TOKEN' } } }],
   }));
   fs.writeFileSync(path.join(repo, '.teamai', 'drivers', 'keychain.yaml'), stringify({
-    schemaVersion: 'v1alpha1', name: 'keychain', tool: 'claude', runtimes: [{ use: 'sandbox', options: { provider: 'docker', image: IMAGE } }],
+    schemaVersion: 'v1alpha1', name: 'keychain', tool: 'claude', runtimes: [{ use: 'sandbox', sandbox: 'e2e' }],
   }));
   fs.writeFileSync(path.join(repo, '.teamai', 'drivers', 'gateway.yaml'), stringify({
-    schemaVersion: 'v1alpha1', name: 'gateway', tool: 'claude', runtimes: [{ use: 'sandbox', options: { provider: 'docker', image: IMAGE } }, { use: 'tools' }],
+    schemaVersion: 'v1alpha1', name: 'gateway', tool: 'claude', runtimes: [{ use: 'sandbox', sandbox: 'e2e' }, { use: 'tools' }],
   }));
   // The sandbox runs its prompt steps itself, and the tools runtime beside it takes what it does not.
   fs.writeFileSync(path.join(repo, '.teamai', 'drivers', 'boxed.yaml'), stringify({
     schemaVersion: 'v1alpha1', name: 'boxed', tool: 'claude',
-    runtimes: [{ use: 'sandbox', options: { provider: 'docker', image: IMAGE, credentials: { CLAUDE_CODE_OAUTH_TOKEN: 'env:CLAUDE_CODE_OAUTH_TOKEN' } } }, { use: 'tools' }],
+    runtimes: [{ use: 'sandbox', sandbox: 'e2e', options: { credentials: { CLAUDE_CODE_OAUTH_TOKEN: 'env:CLAUDE_CODE_OAUTH_TOKEN' } } }, { use: 'tools' }],
   }));
   fs.mkdirSync(path.join(repo, '.teamai', 'workflows'), { recursive: true });
   fs.writeFileSync(path.join(repo, '.teamai', 'workflows', 'spend.yaml'), 'schemaVersion: v1alpha1\nname: spend\ndescription: spend\nsteps:\n  - id: spend\n    tool: claude\n    prompt: Spend tokens.\n    budget: { tokens: 300 }\n    on_limit: end_turn\n');
@@ -260,7 +263,7 @@ console.log(JSON.stringify({ type: 'turn.completed', usage: { input_tokens: 4, o
 `, { mode: 0o755 });
   fs.writeFileSync(path.join(repo, '.teamai', 'drivers', 'codexlogin.yaml'), stringify({
     schemaVersion: 'v1alpha1', name: 'codexlogin', tool: 'codex',
-    runtimes: [{ use: 'sandbox', options: { provider: 'docker', image: IMAGE, credentials: { codex: 'login' } } }, { use: 'tools' }],
+    runtimes: [{ use: 'sandbox', sandbox: 'e2e', options: { credentials: { codex: 'login' } } }, { use: 'tools' }],
   }));
   const before = engineCalls().length;
 
@@ -288,4 +291,50 @@ it("signs a Claude prompt step in on the gateway the member's environment names,
   const noted = fs.readdirSync(dataHome, { recursive: true }).map(String).filter((file) => file.includes(attempt) && file.endsWith('base-url.txt'));
   expect(noted.map((file) => fs.readFileSync(path.join(dataHome, file), 'utf8'))).toEqual(['http://host.docker.internal:8317']);
   expect(JSON.stringify(engineCalls())).not.toContain('gateway-token-5b1c');
+});
+
+describe('sandbox profiles', () => {
+  const writeDriver = (name: string, entry: Record<string, unknown>): void => {
+    fs.writeFileSync(path.join(repo, '.teamai', 'drivers', `${name}.yaml`), stringify({ schemaVersion: 'v1alpha1', name, tool: 'claude', runtimes: [entry] }));
+  };
+
+  it('refuses a driver that still sets the sandbox provider inline, naming the profile to move it to', async () => {
+    writeDriver('inline', { use: 'sandbox', options: { provider: 'docker', image: IMAGE } });
+    const before = engineCalls().length;
+
+    const ran = await runCLI(['workflow', 'start', 'review', '--driver', 'inline'], repo, { ...engineEnv, CLAUDE_CODE_OAUTH_TOKEN: 'oauth-value-4d8e' });
+
+    expect(envelope(ran)).toMatchObject({ error: { code: 'bad_option', message: expect.stringMatching(/drivers\/inline\.yaml gives runtime "sandbox" the option "provider", and a sandbox's options live in a sandbox profile: move them to sandboxes\/inline\.yaml in the team repo \(or ~\/\.teamai\/sandboxes\/inline\.yaml for yourself\), name it on the entry with sandbox: inline, and start again\.$/) } });
+    expect(engineCalls().slice(before)).toEqual([]);
+  });
+
+  it('builds a profile folder\'s Containerfile once, reuses it, builds again once the folder changes, and records the profile each attempt ran', async () => {
+    const folder = path.join(repo, '.teamai', 'sandboxes', 'warmed');
+    fs.mkdirSync(folder, { recursive: true });
+    fs.writeFileSync(path.join(folder, 'SANDBOX.yaml'), stringify({ provider: 'docker', image: IMAGE, warm: { containerfile: './Containerfile', cache: ['package.json'] } }));
+    fs.writeFileSync(path.join(folder, 'Containerfile'), `FROM ${IMAGE}\nRUN true\n`);
+    fs.writeFileSync(path.join(repo, 'package.json'), '{"name":"app"}\n');
+    execFileSync('git', ['add', 'package.json'], { cwd: repo });
+    execFileSync('git', ['commit', '-qm', 'package.json'], { cwd: repo });
+    writeDriver('warmed', { use: 'sandbox', sandbox: 'warmed', options: { credentials: { CLAUDE_CODE_OAUTH_TOKEN: 'env:CLAUDE_CODE_OAUTH_TOKEN' } } });
+    const run = async (): Promise<{ ran: Ran; builds: string[][] }> => {
+      const before = engineCalls().length;
+      const ran = await runCLI(['workflow', 'start', 'review', '--driver', 'warmed'], repo, { ...engineEnv, CLAUDE_CODE_OAUTH_TOKEN: 'oauth-value-4d8e' });
+      expect(envelope(ran), ran.stderr).toMatchObject({ data: { done: { outcome: 'succeeded' } } });
+      return { ran, builds: engineCalls().slice(before).filter(([command]) => command === 'build') };
+    };
+
+    const first = await run();
+    const second = await run();
+    fs.writeFileSync(path.join(folder, 'Containerfile'), `FROM ${IMAGE}\nRUN echo changed\n`);
+    const third = await run();
+
+    expect([first.builds.length, second.builds.length, third.builds.length]).toEqual([1, 0, 1]);
+    expect(third.builds[0]?.[third.builds[0].indexOf('-t') + 1]).not.toBe(first.builds[0]?.[first.builds[0].indexOf('-t') + 1]);
+    const state = readRunState(third.ran);
+    const [review] = state.steps;
+    const attempt = review !== undefined && 'attempt' in review ? String(review.attempt) : '';
+    const record = JSON.parse(fs.readFileSync(path.join(dataHome, 'workflows', 'runs', state.id, 'attempts', attempt, 'runtime.json'), 'utf8')) as unknown;
+    expect(record).toMatchObject({ sources: [{ runtime: 'teamai-sandbox', layer: 'teamai', sandbox: { profile: 'warmed', layer: 'team', location: 'sandboxes/warmed/', revision: await folderRevision(folder), provider: 'docker', enforced: true } }] });
+  });
 });

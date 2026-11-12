@@ -14,7 +14,7 @@ import { acceptTeamCommand } from '../../tool-instances.js';
 import { getKnowledgeDir, getTeamaiHomeDir } from '../../types.js';
 import { writeJsonAtomic } from '../../utils/fs.js';
 import type { WorkflowFailure } from '../types.js';
-import { personalItem, teamTreeOf, type ResolvedDriver } from './definitions.js';
+import { personalItem, SHIPPED_PREFIX, teamTreeOf, type ResolvedDriver } from './definitions.js';
 import { firstLink, folderEntries, folderRevision } from './resource-folder.js';
 
 // ─── Where a step runtime comes from ─────────────────────
@@ -106,7 +106,7 @@ function sha256(text: string): string {
 }
 
 /** What a member does to fix a definition in `layer`. */
-function fixOf(layer: RuntimeLayer): string {
+export function fixOf(layer: RuntimeLayer): string {
   switch (layer) {
     case 'personal':
       return 'Fix the file and start again.';
@@ -366,8 +366,6 @@ async function shippedRuntime(names: readonly string[]): Promise<string | undefi
   return undefined;
 }
 
-/** The prefix of every runtime teamai ships, as of every default. */
-const SHIPPED_PREFIX = 'teamai-';
 
 const TrustFileSchema = z.object({ accepted: z.array(z.object({ dir: z.string(), revision: z.string(), acceptedAt: z.string() })) });
 

@@ -1,7 +1,7 @@
 schemaVersion: v1alpha1
 name: teamai-sandbox
-description: Run each step in a Docker Sandboxes (sbx) microVM of its own, from the template of the step's tool, signed in on the login sbx keeps; this machine takes the judge and interactive steps.
+description: Run each step in a sandbox of its own, as the sandbox profile default sets it (teamai's is a Docker Sandboxes microVM per attempt, from the template of the step's tool); this machine takes the judge and interactive steps.
 runtimes:
-  - use: sandbox
-    options: { provider: sbx, max_parallel: 4 }   # no agent: each attempt starts from its own tool's template
+  - use: sandbox                                   # profile default: yours, the team's, else teamai's teamai-default
+    options: { max_parallel: 4 }
   - use: tools                                     # takes the judge, which sbx does not offer

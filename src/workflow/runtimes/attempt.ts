@@ -67,7 +67,11 @@ const ToolHomeSchema = z.object({ tool: z.string(), dir: z.string() });
  * Where one runtime an attempt runs on came from: the resource found for it (`t3`, or teamai's `teamai-t3`), its layer,
  * where a person finds it, and its revision, a folder's (`folderRevision`) or the sha256 of a file's content.
  */
-const RuntimeOriginSchema = z.object({ runtime: z.string(), layer: z.enum(['personal', 'team', 'teamai']), location: z.string(), revision: z.string() });
+const RuntimeOriginSchema = z.object({
+  runtime: z.string(), layer: z.enum(['personal', 'team', 'teamai']), location: z.string(), revision: z.string(),
+  /** For the sandbox runtime: the sandbox profile it ran, as the runtime is named, its provider, and whether its init offered isolation. */
+  sandbox: z.object({ profile: z.string(), layer: z.enum(['personal', 'team', 'teamai']), location: z.string(), revision: z.string(), provider: z.string(), enforced: z.boolean() }).optional(),
+});
 
 export type RuntimeOrigin = z.infer<typeof RuntimeOriginSchema>;
 

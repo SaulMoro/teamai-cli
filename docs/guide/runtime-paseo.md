@@ -409,14 +409,19 @@ runtimes:
 A runtime entry `use: paseo` with `through: sandbox` runs each prompt step's tool in the attempt's sandbox, while its agent stays in the Paseo app. Only a sandbox provider that serves the attempt socket works: `docker`, `podman`, `sbx` or `bwrap`. With `seatbelt` or `vercel`, the open fails before any agent starts. Paseo runs the tool as teamai's wrapper, [`teamai-sandbox-<tool>`](runtime-sandbox.md#through-an-app-teamai-sandbox-tool), on a Paseo custom provider. When the daemon runs on this machine and holds no provider that runs the wrapper, teamai adds one at the first open, named after the wrapper, and the run says so once, as for a team instance:
 
 ```yaml
+# sandboxes/containers.yaml
+provider: docker
+image: ghcr.io/acme/agent:1
+```
+
+```yaml
 # drivers/paseo-sandboxed.yaml
 schemaVersion: v1alpha1
 name: paseo-sandboxed
 runtimes:
   - use: paseo
     through: sandbox
-    options:
-      sandbox: { provider: docker, image: ghcr.io/acme/agent:1 }
+    sandbox: containers
   - use: tools
 ```
 

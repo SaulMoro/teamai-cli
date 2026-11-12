@@ -256,12 +256,19 @@ export function nativeProvider({ sandbox, state, env, home }: { sandbox: NativeS
     return { ok: true, command: onPath(command, env.PATH) ?? command, args, env: childEnv };
   };
 
+  const reachable = async (): Promise<{ ok: true } | { ok: false; failure: RuntimeFailure }> => {
+    const ready = await sandbox.preflight(env);
+
+    return ready.ok ? { ok: true } : { ok: false, failure: { code: 'sandbox_unavailable', message: ready.message } };
+  };
+
   return {
     family: 'bind',
+    reachable,
     async offer(credentials, instances) {
-      const ready = await sandbox.preflight(env);
+      const ready = await reachable();
 
-      if (!ready.ok) return { ok: false, failure: { code: 'sandbox_unavailable', message: ready.message } };
+      if (!ready.ok) return ready;
       const held = new Set([...LAUNCHABLE, ...commandsOf(instances)].filter((command) => onPath(command, env.PATH) !== undefined));
 
       const { tools, unavailable } = offerSignedIn({

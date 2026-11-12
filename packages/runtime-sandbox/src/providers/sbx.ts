@@ -3,7 +3,7 @@ import path from 'node:path';
 import { z } from 'zod';
 import type { Can, RuntimeFailure } from '@teamai/runtime-protocol';
 import type { JournalId } from '../journal.js';
-import type { WarmOptions } from '../options.js';
+import type { ProfileOption, WarmOptions } from '../options.js';
 import { isRunning, oneBuildPerKey, planWarm, scratchOf, WARM_REPOSITORY, warmFailed, type WarmPlan } from '../warm.js';
 import { COMMAND_MS, type ExecEnd, type ExecSpec, type PlaceKey, type Provider } from '../provider.js';
 import { offerSignedIn, type MissingCommand } from '../sign-in.js';
@@ -91,7 +91,7 @@ function namesListed(stdout: string): string[] | undefined {
  * or kit every sandbox starts from; unset, each attempt's tool picks its template. `warm`: the recipe of the warm
  * template each attempt starts from, saved from that template.
  */
-export function sbxProvider({ agent, owner, env, warm }: { agent: string | undefined; owner: JournalId; env: NodeJS.ProcessEnv; warm?: Extract<WarmOptions, { prepare: string }> }): Provider {
+export function sbxProvider({ agent, owner, env, warm, profile }: { agent: string | undefined; owner: JournalId; env: NodeJS.ProcessEnv; warm?: Extract<WarmOptions, { prepare: string }>; profile?: ProfileOption }): Provider {
   const { run: cli, executable } = cliOf({ name: 'sbx', env, notInstalled: NOT_INSTALLED });
 
   /** `sbx exec`'s arguments and environment: the spec's names by name only, never sbx's own settings, which stay. */
@@ -242,7 +242,7 @@ export function sbxProvider({ agent, owner, env, warm }: { agent: string | undef
    */
   const warmFrom = async (template: string, checkout: string, { creating = false }: { creating?: boolean } = {}): Promise<{ ok: true; args: string[] } | { ok: false; failure: RuntimeFailure }> => {
     if (warm === undefined) return { ok: true, args: [] };
-    const planned = planWarm({ base: `${template}@${await sbxVersion()}`, recipe: warm, checkout });
+    const planned = planWarm({ base: `${template}@${await sbxVersion()}`, recipe: warm, checkout, ...(profile && { profile }) });
 
     if (!planned.ok) return planned;
     const { plan } = planned;
@@ -271,19 +271,29 @@ export function sbxProvider({ agent, owner, env, warm }: { agent: string | undef
     return { ok: true, services: new Set(parsed.secrets.map(({ name }) => name)) };
   };
 
+  /** Whether sbx's daemon answers and its network policy is set, without which it creates no sandbox. */
+  const reachable = async (): Promise<{ ok: true } | { ok: false; failure: RuntimeFailure }> => {
+    const ls = await cli(['ls', '--json']);
+
+    if (ls.kind !== 'ran') return unavailable(ls.message);
+
+    if (ls.code !== 0) return unavailable(`sbx cannot reach its daemon (${messageOf(ls)}). Run \`sbx daemon start\`, or \`sbx login\` if you are signed out, and start again.`);
+    const policy = await cli(['policy', 'ls']);
+
+    if (policy.kind === 'ran' && /not been initialized/i.test(policy.stderr)) {
+      return unavailable('sbx creates no sandbox until its network policy is set. Run `sbx policy init balanced` once (or `sbx policy init deny-all` and allow your model provider with `sbx policy allow network <host>`), and start again.');
+    }
+
+    return { ok: true };
+  };
+
   return {
     family: 'bind',
+    reachable,
     async offer(credentials, instances) {
-      const ls = await cli(['ls', '--json']);
+      const reached = await reachable();
 
-      if (ls.kind !== 'ran') return unavailable(ls.message);
-
-      if (ls.code !== 0) return unavailable(`sbx cannot reach its daemon (${messageOf(ls)}). Run \`sbx daemon start\`, or \`sbx login\` if you are signed out, and start again.`);
-      const policy = await cli(['policy', 'ls']);
-
-      if (policy.kind === 'ran' && /not been initialized/i.test(policy.stderr)) {
-        return unavailable('sbx creates no sandbox until its network policy is set. Run `sbx policy init balanced` once (or `sbx policy init deny-all` and allow your model provider with `sbx policy allow network <host>`), and start again.');
-      }
+      if (!reached.ok) return reached;
 
       const template = LAUNCHABLE.find((tool) => tool === agent);
       const found = agent === undefined ? { ok: true as const, tools: [...TEMPLATED], held: undefined } : template !== undefined ? { ok: true as const, tools: [template], held: undefined } : await probeTools(agent, commandsOf(instances));

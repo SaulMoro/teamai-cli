@@ -61,7 +61,7 @@ Loading a **resource** in stages. Its **context pointer** is always in context; 
 _Avoid_: lazy loading, on-demand context
 
 **Marker file**:
-The file whose presence makes a directory a **resource folder**: `SKILL.md`, `WORKFLOW.yaml`, `HOOK.yaml`, `RULE.md`, `MCP.yaml`, `SUITE.yaml`, `DRIVER.yaml`, `RUNTIME.yaml`, `TOOL.yaml`.
+The file whose presence makes a directory a **resource folder**: `SKILL.md`, `WORKFLOW.yaml`, `HOOK.yaml`, `RULE.md`, `MCP.yaml`, `SUITE.yaml`, `DRIVER.yaml`, `RUNTIME.yaml`, `SANDBOX.yaml`, `TOOL.yaml`.
 _Avoid_: manifest, index file
 
 **Resource folder**:
@@ -208,8 +208,12 @@ One runtime entry that runs a **step runtime** through another, such as `use: t3
 _Avoid_: "nested runtime", "wrapper runtime"
 
 **Sandbox provider**:
-What runs the `sandbox` runtime's places, as its `provider` option names it: `docker`, `podman`, `sbx`, `seatbelt`, `bwrap` or `vercel`.
+What runs the `sandbox` runtime's places, as a **sandbox profile**'s `provider` names it: `docker`, `podman`, `sbx`, `seatbelt`, `bwrap` or `vercel`.
 _Avoid_: bare provider where a **model provider** or a **repo provider** could be meant
+
+**Sandbox profile**:
+What a `sandbox` runtime entry builds its sandbox from: a **sandbox provider** and its options, kept as `sandboxes/<name>.yaml` or a **resource folder** with its `SANDBOX.yaml` and the files it builds from. The entry names it with `sandbox: <name>`, `default` when it names none.
+_Avoid_: sandbox config, sandbox options
 
 **Provider instance**:
 A tool as T3 Code or Paseo configures it, with its own command and home. A team's **tool instance** runs on one, which teamai adds when the app has none.

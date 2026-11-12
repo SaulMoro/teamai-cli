@@ -409,14 +409,19 @@ runtimes:
 `use: paseo` 的 runtime 条目加上 `through: sandbox` 后，每个 prompt step 的工具在 attempt 的沙箱里运行，agent 仍留在 Paseo 应用中。只有提供 attempt socket 的沙箱 provider 可用：`docker`、`podman`、`sbx` 或 `bwrap`。使用 `seatbelt` 或 `vercel` 时，open 会在任何 agent 启动前失败。Paseo 通过一个 Paseo 自定义 provider，把工具作为 teamai 的包装器 [`teamai-sandbox-<tool>`](runtime-sandbox.md#通过应用运行teamai-sandbox-tool) 来运行。当 daemon 运行在本机、且没有任何 provider 运行该包装器时，teamai 在第一次 open 时添加一个以包装器命名的 provider，并像团队实例那样在运行中提示一次：
 
 ```yaml
+# sandboxes/containers.yaml
+provider: docker
+image: ghcr.io/acme/agent:1
+```
+
+```yaml
 # drivers/paseo-sandboxed.yaml
 schemaVersion: v1alpha1
 name: paseo-sandboxed
 runtimes:
   - use: paseo
     through: sandbox
-    options:
-      sandbox: { provider: docker, image: ghcr.io/acme/agent:1 }
+    sandbox: containers
   - use: tools
 ```
 

@@ -8,7 +8,7 @@ import { PlaceViewSchema, type Can, type PlaceView, type RuntimeFailure } from '
 import { readRegularFileSync } from '@teamai/shared/regular-file';
 import { boundedTail, STDERR_CHARS } from '../bounded-tail.js';
 import type { JournalId } from '../journal.js';
-import type { VercelOptions } from '../options.js';
+import type { ProfileOption, VercelOptions } from '../options.js';
 import { COMMAND_MS, type ExecEnd, type PlaceKey, type Provider } from '../provider.js';
 import { offerSignedIn } from '../sign-in.js';
 import { isRunning, oneBuildPerKey, planWarm, warmFailed, type WarmPlan } from '../warm.js';
@@ -149,7 +149,7 @@ export function lifetimeOf(timeoutMs: number | undefined, deadline: string | und
   };
 }
 
-export function vercelProvider({ options, owner, state, env, home }: { options: VercelOptions; owner: JournalId; state: string; env: NodeJS.ProcessEnv; home: string }): Provider {
+export function vercelProvider({ options, owner, state, env, home }: { options: VercelOptions & { readonly profile?: ProfileOption }; owner: JournalId; state: string; env: NodeJS.ProcessEnv; home: string }): Provider {
   const nameOf = ({ run, attempt }: PlaceKey): string => `teamai-${owner}-${run}-${attempt}`;
   const dirOf = (id: string): string => path.join(state, id);
   const commandsOf = (id: string): string => path.join(dirOf(id), 'commands');
@@ -316,7 +316,7 @@ export function vercelProvider({ options, owner, state, env, home }: { options: 
 
     if (warm === undefined) return { ok: true, snapshotId: undefined };
     // The default image is keyed by its name only: teamai cannot tell when Vercel changes it.
-    const planned = planWarm({ base: `vercel:${options.runtime ?? 'default'}`, recipe: { prepare: warm.prepare, cache: warm.cache }, checkout });
+    const planned = planWarm({ base: `vercel:${options.runtime ?? 'default'}`, recipe: { prepare: warm.prepare, cache: warm.cache }, checkout, ...(options.profile && { profile: options.profile }) });
 
     if (!planned.ok) return planned;
     const { plan } = planned;
@@ -349,6 +349,11 @@ export function vercelProvider({ options, owner, state, env, home }: { options: 
 
   return {
     family: 'copy',
+    async reachable() {
+      const auth = signedIn();
+
+      return auth.ok ? { ok: true } : { ok: false, failure: { code: 'sandbox_unavailable', message: auth.message } };
+    },
     async offer(credentials, instances) {
       const auth = signedIn();
 

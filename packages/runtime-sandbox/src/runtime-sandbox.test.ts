@@ -1073,14 +1073,19 @@ describe('a prompt attempt in a container', () => {
     expect(engine.calls()).toEqual([]);
   });
 
-  // Whether a run could start here is known only once the image is pulled and a container started, which a check may not do.
-  it('refuses check mode, running the engine never and keeping nothing of the instances it names', async () => {
-    const connection = start();
+  // Whether a run could start here is known only once the image is pulled and a container started, which a check may not
+  // do; whether the engine runs at all is known by asking it.
+  it('in check mode asks the engine only whether it runs, says why not when it does not, and keeps nothing of the instances it names', async () => {
+    const instances = [{ name: 'acme-claude', tool: 'claude', command: 'acme-claude' }];
 
-    expect(await init(connection, { provider: 'docker', image: IMAGE }, 'check', undefined, [{ name: 'acme-claude', tool: 'claude', command: 'acme-claude' }])).toEqual({
+    expect(await init(start(), { provider: 'docker', image: IMAGE }, 'check', undefined, instances)).toEqual({
       type: 'init', ok: false, error: { code: 'check_unsupported', message: expect.stringContaining('cannot tell whether a run could start without starting a sandbox') },
     });
-    expect(engine.calls()).toEqual([]);
+    engine.daemon(false);
+    expect(await init(start(), { provider: 'docker', image: IMAGE }, 'check', undefined, instances)).toEqual({
+      type: 'init', ok: false, error: { code: 'sandbox_unavailable', message: expect.stringContaining('its daemon is not running') },
+    });
+    expect(engine.calls().map(([, command]) => command)).toEqual(['info', 'info']);
     expect(fs.readdirSync(path.join(dir, 'home'), { recursive: true }).filter((entry) => String(entry).endsWith('instances.json'))).toEqual([]);
   });
 
@@ -2251,15 +2256,16 @@ describe('an attempt in an sbx sandbox', () => {
     expect(templates).toEqual(['claude', 'codex', 'shell']);
   });
 
-  it('starts on the options of the teamai-sandbox definition teamai ships, on sbx, with each tool sbx keeps a login for', async () => {
-    const shipped = z.object({ name: z.string(), runtimes: z.array(z.object({ use: z.string(), options: z.record(z.string(), z.json()).default({}) })) })
+  it('starts on the sandbox profile the teamai-sandbox definition teamai ships runs, teamai-default, on sbx, with each tool sbx keeps a login for', async () => {
+    const shipped = z.object({ name: z.string(), runtimes: z.array(z.object({ use: z.string(), sandbox: z.string().optional(), options: z.record(z.string(), z.json()).default({}) })) })
       .parse(parse(fs.readFileSync(path.join(REPO, 'drivers', 'teamai-sandbox.yaml'), 'utf8')));
-    // teamai reads max_parallel and credentials itself, and strips them before init.
-    const { max_parallel: _maxParallel, credentials: _credentials, ...options } = shipped.runtimes[0]?.options ?? {};
+    // An entry that names no profile runs profile default, which is teamai's teamai-default until a team or member replaces it.
+    const options = z.record(z.string(), z.json()).parse(parse(fs.readFileSync(path.join(REPO, 'sandboxes', 'teamai-default.yaml'), 'utf8')));
     engine.secret('anthropic', true);
 
-    expect(shipped).toMatchObject({ name: 'teamai-sandbox', runtimes: [{ use: 'sandbox' }, { use: 'tools' }] });
-    expect(await init(start(), options, 'unattended', { env: [], logins: [] })).toMatchObject({ ok: true, can: { tools: ['claude', 'opencode'] }, unavailable: { codex: expect.stringContaining('sbx secret set openai') } });
+    expect(shipped).toMatchObject({ name: 'teamai-sandbox', runtimes: [{ use: 'sandbox', options: { max_parallel: 4 } }, { use: 'tools' }] });
+    expect(shipped.runtimes[0]?.sandbox).toBeUndefined();
+    expect(await init(start(), { ...options, profile: { name: 'teamai-default', revision: 'r' } }, 'unattended', { env: [], logins: [] })).toMatchObject({ ok: true, can: { tools: ['claude', 'opencode'] }, unavailable: { codex: expect.stringContaining('sbx secret set openai') } });
   });
 
   it.each([
@@ -3005,6 +3011,27 @@ describe('a warm image', () => {
     const [tag] = engine.savedImages();
     expect(Object.keys(engine.savedFiles(String(tag)).context).sort()).toEqual(['package-lock.json', 'package.json']);
     expect(engine.calls().find(([, command, ...rest]) => command === 'run' && rest.includes(HANDLE))).toContain(tag);
+  });
+
+  it('builds the Containerfile of a sandbox profile folder, keyed by the folder\'s revision, and refuses one that leaves the folder or is a link', async () => {
+    const folder = path.join(dir, 'profile-gpu');
+    fs.mkdirSync(folder);
+    fs.writeFileSync(path.join(folder, 'Containerfile'), `FROM ${IMAGE}\nRUN npm ci\n`);
+    fs.writeFileSync(path.join(dir, 'Containerfile.outside'), `FROM ${IMAGE}\n`);
+    fs.symlinkSync(path.join(dir, 'Containerfile.outside'), path.join(folder, 'Linked'));
+    const opened = async (containerfile: string, revision: string, attempt: string): Promise<Message> => {
+      const connection = start();
+      await init(connection, { provider: 'docker', image: IMAGE, warm: { containerfile, cache: ['package.json'] }, profile: { name: 'gpu', revision, folder } });
+      return openAttempt(connection, checkout(), attempt);
+    };
+
+    expect(await opened('./Containerfile', 'rev-1', 'a0123abc1')).toMatchObject({ event: 'ready' });
+    expect(await opened('./Containerfile', 'rev-1', 'a0123abc2')).toMatchObject({ event: 'ready' });
+    expect(await opened('./Containerfile', 'rev-2', 'a0123abc3')).toMatchObject({ event: 'ready' });
+    expect(builds().saves).toHaveLength(2);
+    expect(await opened('../Containerfile.outside', 'rev-2', 'a0123abc4')).toMatchObject({ event: 'failed', failure: { code: 'bad_option', key: 'warm.containerfile', message: '../Containerfile.outside is not a path inside the folder of sandbox profile "gpu". Give it relative to the folder, for example ./Containerfile' } });
+    expect(await opened('./Linked', 'rev-2', 'a0123abc5')).toMatchObject({ event: 'failed', failure: { code: 'bad_option', key: 'warm.containerfile', message: './Linked is a link, and a sandbox profile builds only from the files its folder holds. Replace it with the file itself' } });
+    expect(builds().saves).toHaveLength(2);
   });
 
   it('fails the open with bad_option on warm.cache naming a cache file that links out of the checkout, and copies nothing of where it points', async () => {

@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import type { RuntimeFailure } from '@teamai/runtime-protocol';
 import { readRegularFileSync } from '@teamai/shared/regular-file';
-import type { WarmOptions } from './options.js';
+import type { ProfileOption, WarmOptions } from './options.js';
 import type { Ran } from './providers/cli.js';
 
 // ─── The warm image ──────────────────────────────────────
@@ -14,7 +14,7 @@ import type { Ran } from './providers/cli.js';
 //  sandbox with the network and no credential, where only copies of the `cache` files are, in a scratch directory
 //  outside the checkout:
 //
-//    key        sha256(base, recipe, each cache file's path and bytes), its first 16 hex digits
+//    key        sha256(base, recipe, a profile folder's revision, each cache file's path and bytes), its first 16 hex digits
 //    tag        teamai-warm:<key>
 //    prepare    the provider runs `prepare` in /bin/sh, in that directory, then saves the sandbox as the tag
 //    containerfile   docker and podman build it with that directory as the whole context
@@ -95,12 +95,34 @@ export function warmFailed(what: string, ran: Ran) {
 }
 
 /**
- * The warm image for `base` and `recipe` with the `cache` files of `checkout`, or `bad_option` on `warm.<key>` naming a
- * file that is not in the checkout.
+ * The Containerfile `file` of the folder of sandbox profile `profile`: a file the folder itself holds, never a link or a
+ * path out of it, since the folder's revision is all a person reviewed of it.
  */
-export function planWarm({ base, recipe, checkout }: { base: string; recipe: WarmOptions; checkout: string }): { ok: true; plan: WarmPlan } | { ok: false; failure: RuntimeFailure } {
-  const hash = crypto.createHash('sha256').update(JSON.stringify({ base, recipe }));
-  const files = [...recipe.cache.map((file) => ({ file, key: 'warm.cache' })), ...(recipe.containerfile === undefined ? [] : [{ file: recipe.containerfile, key: 'warm.containerfile' }])];
+function inFolder(file: string, profile: ProfileOption & { folder: string }): { ok: true; from: string } | { ok: false; failure: RuntimeFailure } {
+  const refuse = (message: string) => ({ ok: false as const, failure: { code: 'bad_option', key: 'warm.containerfile', message } satisfies RuntimeFailure });
+  const inside = path.relative(profile.folder, path.resolve(profile.folder, file));
+
+  if (path.isAbsolute(file) || inside === '' || inside === '..' || inside.startsWith(`..${path.sep}`)) return refuse(`${file} is not a path inside the folder of sandbox profile "${profile.name}". Give it relative to the folder, for example ./Containerfile`);
+  const from = path.join(profile.folder, inside);
+  const stat = fs.lstatSync(from, { throwIfNoEntry: false });
+
+  if (stat?.isSymbolicLink() === true) return refuse(`${file} is a link, and a sandbox profile builds only from the files its folder holds. Replace it with the file itself`);
+
+  return stat?.isFile() === true ? { ok: true, from } : refuse(`${file} is not a file in the folder of sandbox profile "${profile.name}"`);
+}
+
+/**
+ * The warm image for `base` and `recipe` with the `cache` files of `checkout`, or `bad_option` on `warm.<key>` naming a
+ * file that is not in the checkout. A recipe of a profile folder takes its Containerfile from the folder, and its key
+ * holds the folder's revision, so any change pushed to the folder makes a new image.
+ */
+export function planWarm({ base, recipe, checkout, profile }: { base: string; recipe: WarmOptions; checkout: string; profile?: ProfileOption }): { ok: true; plan: WarmPlan } | { ok: false; failure: RuntimeFailure } {
+  const folder = profile?.folder === undefined ? undefined : { ...profile, folder: profile.folder };
+  const hash = crypto.createHash('sha256').update(JSON.stringify({ base, recipe, ...(folder && { revision: folder.revision }) }));
+  const ownFile = recipe.containerfile !== undefined && folder !== undefined ? inFolder(recipe.containerfile, folder) : undefined;
+
+  if (ownFile?.ok === false) return ownFile;
+  const files = [...recipe.cache.map((file) => ({ file, key: 'warm.cache' })), ...(recipe.containerfile === undefined || ownFile !== undefined ? [] : [{ file: recipe.containerfile, key: 'warm.containerfile' }])];
   const real = fs.realpathSync(checkout);
   const read: Array<{ file: string; from: string }> = [];
 
@@ -132,7 +154,7 @@ export function planWarm({ base, recipe, checkout }: { base: string; recipe: War
 
   const key = hash.digest('hex').slice(0, 16);
   const cache = read.slice(0, recipe.cache.length);
-  const make = recipe.containerfile === undefined ? { prepare: recipe.prepare } : { containerfile: read[recipe.cache.length]?.from ?? path.resolve(checkout, recipe.containerfile) };
+  const make = recipe.containerfile === undefined ? { prepare: recipe.prepare } : { containerfile: ownFile?.from ?? read[recipe.cache.length]?.from ?? path.resolve(checkout, recipe.containerfile) };
 
   return { ok: true, plan: { tag: `${WARM_REPOSITORY}:${key}`, key, cache, make } };
 }

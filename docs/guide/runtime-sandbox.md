@@ -22,7 +22,13 @@ docker build -t ghcr.io/acme/agent:1 -f Containerfile .
 docker push ghcr.io/acme/agent:1
 ```
 
-**2. Add a driver definition** to the team repo, then push it.
+**2. Add a sandbox profile and a driver definition** to the team repo, then push them. The profile says what the sandbox is built from; the definition runs it and names the credentials.
+
+```yaml
+# sandboxes/containers.yaml
+provider: docker                  # or podman
+image: ghcr.io/acme/agent:1
+```
 
 ```yaml
 # drivers/containers.yaml
@@ -32,9 +38,8 @@ description: Run each step in a container from the team image, on the member's C
 tool: claude
 runtimes:
   - use: sandbox
+    sandbox: containers
     options:
-      provider: docker                  # or podman
-      image: ghcr.io/acme/agent:1
       credentials:
         CLAUDE_CODE_OAUTH_TOKEN: env:CLAUDE_CODE_OAUTH_TOKEN
 ```
@@ -76,25 +81,38 @@ teamai-r7c41d09e2b6a5f13-a3e9b0c51  ghcr.io/acme/agent:1  Up 41 seconds
 
 When the attempt ends, teamai removes its container. A `teamai workflow cancel` stops the step and removes it too.
 
-## Options
+## Sandbox profiles
+
+A sandbox profile says what a sandbox is built from: its provider and that provider's options. The team keeps one as `sandboxes/<name>.yaml`, or as a folder `sandboxes/<name>/` holding a `SANDBOX.yaml` and the files it builds from, such as a `Containerfile`. An entry with `use: sandbox` (or `through: sandbox`) names it with `sandbox: <name>`, and with none it runs the profile `default`. teamai looks for the name in your `~/.teamai/sandboxes/`, then in the team repo, then among its own, where `<name>` is also found as `teamai-<name>`: `default` is teamai's `teamai-default`, an sbx microVM, and `sbx`, `docker`, `podman`, `seatbelt`, `bwrap` and `vercel` are one each to name or copy (`teamai-docker` and `teamai-podman` name no image, so copy them and set one). A profile of yours or the team's that takes the name of one of teamai's is said once when a run starts. Each attempt's record names the profile it ran, where it came from, its revision, its provider, and whether the sandbox isolated the step.
+
+The entry keeps what teamai reads itself, `credentials` and `max_parallel`, in its `options`; any other key there fails before any step runs and names the profile file to move it to. A profile that cannot be read, names an unknown provider, or, as a folder, holds a link, fails the same way and names its file.
 
 | Key | Example | Meaning |
 | --- | --- | --- |
 | `provider` | `docker` | `sbx`, `docker`, `podman`, `seatbelt`, `bwrap` or `vercel` |
 | `agent` | `claude` | `sbx` only: the agent template each sandbox starts from, `claude` or `codex`, or a kit reference that brings the tools. Leave it out to start each attempt from its own tool's template: a Claude step from `claude`, a Codex step from `codex`, a command step from the bare `shell`. `agent: shell` is refused, since that template holds no agent. |
 | `image` | `ghcr.io/acme/agent:1` | `docker` and `podman` only: the prebuilt image. It needs `/bin/sh` and the tools your steps run: `claude`, `codex` or `codebuddy`. Add `git` for steps that read history. |
-| `credentials` | `CLAUDE_CODE_OAUTH_TOKEN: env:CLAUDE_CODE_OAUTH_TOKEN` | Read by teamai from your environment when the run starts, and given only to the step's tool, never to a command step. See [Credentials from your environment](workflow-advanced.md#credentials-from-your-environment). |
 | `warm` | `prepare: npm ci --ignore-scripts` | An image with your package manager's store filled, made once and used by every attempt. See [A warm image](#a-warm-image). |
+| `credentials` (on the entry) | `CLAUDE_CODE_OAUTH_TOKEN: env:CLAUDE_CODE_OAUTH_TOKEN` | Read by teamai from your environment when the run starts, and given only to the step's tool, never to a command step. See [Credentials from your environment](workflow-advanced.md#credentials-from-your-environment). |
 
-A key it does not take fails before any step runs:
+A key the provider does not take fails before any step runs:
 
 ```text
-{"error":{"code":"bad_option","message":"Runtime \"sandbox\" of driver definition /home/me/acme/app/.teamai/drivers/containers.yaml refused option \"imgae\": Provider docker takes no option \"imgae\". It takes: provider, image, warm. Fix the option and start again."}}
+{"error":{"code":"bad_option","message":"Sandbox profile sandboxes/containers.yaml refused option \"imgae\": Provider docker takes no option \"imgae\". It takes: provider, image, warm. Fix it, push it, run teamai pull, and start again."}}
 ```
 
 ## A warm image
 
 With `warm`, each attempt starts from an image whose package manager's store is already filled, so the workflow's setup installs from it instead of downloading every package in every step:
+
+```yaml
+# sandboxes/containers.yaml
+provider: docker
+image: ghcr.io/acme/agent:1
+warm:
+  prepare: npm ci --ignore-scripts
+  cache: [package.json, package-lock.json]
+```
 
 ```yaml
 # drivers/containers.yaml
@@ -104,19 +122,21 @@ description: Run each step in a container from the team image, with the package 
 tool: claude
 runtimes:
   - use: sandbox
+    sandbox: containers
     options:
-      provider: docker
-      image: ghcr.io/acme/agent:1
       credentials:
         CLAUDE_CODE_OAUTH_TOKEN: env:CLAUDE_CODE_OAUTH_TOKEN
-      warm:
-        prepare: npm ci --ignore-scripts
-        cache: [package.json, package-lock.json]
 ```
 
 The first step that opens makes it: teamai copies the `cache` files to a scratch directory outside the checkout, runs `prepare` there in a container of `image` with no credential, and saves the result as `teamai-warm:<key>`. The key comes from the image as it is on this machine (its id, so pulling a new push of its tag counts), the recipe and the bytes of the `cache` files, so a change to the lockfile makes a new image and an unchanged one reuses it, in this run and later runs. A `cache` file that is a link to a file outside the checkout is refused. Steps that open at the same time wait for one build. The image keeps only what `prepare` leaves outside that directory, such as the store in its home (`~/.npm`) or tools it installs: the directory, with any `node_modules` made there, is not in it, and neither is any file of the checkout. Install in the workflow's setup as usual (`npm ci --prefer-offline`), which takes the packages from the store. List and remove the images with `docker image ls teamai-warm` and `docker image rm`.
 
-On `docker` and `podman`, `containerfile: ci/deps.Containerfile` builds that file instead of running `prepare`, with only the `cache` files in its context; the image holds what the file copies of them. On `sbx`, `warm` takes `prepare` only and saves a template (`sbx template ls`), keyed by the template and sbx's version. On `vercel`, `warm` takes `prepare` and an optional `expiration` (`30d`, `12h`; at least `1h`, 30 days when unset): `prepare` runs in a scratch sandbox of `runtime`, and the result is saved as a Vercel snapshot that each attempt's sandbox starts from. Vercel keeps it for `expiration` after its last use, and the next open makes it again once it is gone. A `prepare` that fails stops the step with `sandbox_failed` and its last lines; no step runs until you fix it.
+On `docker` and `podman`, `containerfile: ci/deps.Containerfile` builds that file instead of running `prepare`, with only the `cache` files in its context; the image holds what the file copies of them. In a profile kept as a folder, `containerfile: ./Containerfile` names a file of the folder itself, never a link or a path out of it, and the key also holds the folder's revision, so a change pushed to the folder makes a new image:
+
+```text
+sandboxes/node-deps/
+  SANDBOX.yaml       provider: docker, image: ghcr.io/acme/agent:1, warm: { containerfile: ./Containerfile, cache: [package-lock.json] }
+  Containerfile      FROM ghcr.io/acme/agent:1, then COPY package-lock.json and RUN npm ci
+``` On `sbx`, `warm` takes `prepare` only and saves a template (`sbx template ls`), keyed by the template and sbx's version. On `vercel`, `warm` takes `prepare` and an optional `expiration` (`30d`, `12h`; at least `1h`, 30 days when unset): `prepare` runs in a scratch sandbox of `runtime`, and the result is saved as a Vercel snapshot that each attempt's sandbox starts from. Vercel keeps it for `expiration` after its last use, and the next open makes it again once it is gone. A `prepare` that fails stops the step with `sandbox_failed` and its last lines; no step runs until you fix it.
 
 ## What the step sees
 
@@ -238,15 +258,20 @@ teamai-rabebd844f8554e81-a6ee9e5b2-proxy   bridge,teamai-rabebd844f8554e81-a6ee9
 **A judge signs in with an API key.** A judge container has no tool home, so a `codex: login` never reaches it. Give the sandbox an env credential its judge tool reads: `CLAUDE_CODE_OAUTH_TOKEN`, `ANTHROPIC_API_KEY` or `ANTHROPIC_AUTH_TOKEN` for Claude, `OPENAI_API_KEY` or `CODEX_API_KEY` for Codex. The steps' token from the quick start judges too. A judge also gets the model variables its tool reads, such as `ANTHROPIC_MODEL`, when the entry names them, but never your proxy or CA file: its one way out is the filter. Through a gateway, the filter lets through its base URL in place of the public API, over `https` or plain `http`:
 
 ```yaml
+# sandboxes/gateway.yaml
+provider: docker
+image: ghcr.io/acme/agent:1
+```
+
+```yaml
 # drivers/gateway.yaml: Claude steps, a Codex judge through your gateway
 schemaVersion: v1alpha1
 name: gateway
 tool: claude
 runtimes:
   - use: sandbox
+    sandbox: gateway
     options:
-      provider: docker
-      image: ghcr.io/acme/agent:1
       credentials:
         CLAUDE_CODE_OAUTH_TOKEN: env:CLAUDE_CODE_OAUTH_TOKEN   # the steps
         OPENAI_API_KEY: env:OPENAI_API_KEY                     # a Codex judge
@@ -256,15 +281,20 @@ runtimes:
 **The sandbox offers a judge only on the tools whose key the definition names.** With only a login, a later runtime of the definition judges instead. This definition scores sessions with `teamai-share-session`, which runs no step in the sandbox: its judge runs on your machine's Claude, through `tools`:
 
 ```yaml
+# sandboxes/containers.yaml
+provider: docker
+image: ghcr.io/acme/agent:1
+```
+
+```yaml
 # drivers/containers.yaml
 schemaVersion: v1alpha1
 name: containers
 tool: claude
 runtimes:
   - use: sandbox
+    sandbox: containers
     options:
-      provider: docker
-      image: ghcr.io/acme/agent:1
       credentials:
         codex: login                                          # a login: no judge in a container
   - use: tools                                                # takes the judge
@@ -311,16 +341,16 @@ SCOPE      TYPE      NAME        SECRET
 
 The login stays in sbx's proxy on your machine, which adds it to the tool's requests, and every new sandbox reuses it: no token in your environment, and no `auth.json` in the attempt's tool home. An API key works the same way: `sbx secret set anthropic`.
 
-**2. Run a workflow with `--driver sandbox`.** teamai ships this definition, so you need none:
+**2. Run a workflow with `--driver sandbox`.** teamai ships this definition, which runs the profile `default`, teamai's `teamai-default` (`provider: sbx`) unless you or the team keep one, so you need none:
 
 ```yaml
 # drivers/teamai-sandbox.yaml, shipped with teamai
 schemaVersion: v1alpha1
 name: teamai-sandbox
-description: Run each step in a Docker Sandboxes (sbx) microVM of its own, from the template of the step's tool, signed in on the login sbx keeps; this machine takes the judge and interactive steps.
+description: Run each step in a sandbox of its own, as the sandbox profile default sets it (teamai's is a Docker Sandboxes microVM per attempt, from the template of the step's tool); this machine takes the judge and interactive steps.
 runtimes:
-  - use: sandbox
-    options: { provider: sbx, max_parallel: 4 }   # no agent: each attempt starts from its own tool's template
+  - use: sandbox                                   # profile default: yours, the team's, else teamai's teamai-default
+    options: { max_parallel: 4 }
   - use: tools                                     # takes the judge, which sbx does not offer
 ```
 
@@ -340,7 +370,13 @@ teamai-5f0c2a9e1d7b4c38-r1742da096cbb2f40-a9953a8d7   claude   ● running      
 {"data":{"done":{"run":"r1742da096cbb2f40","outcome":"succeeded","record":"published"},"cancelled":[]}}
 ```
 
-Write your own definition to pin the template, keep every step in the sandbox, or name credentials:
+Write your own profile and definition to pin the template, keep every step in the sandbox, or name credentials:
+
+```yaml
+# sandboxes/sbx-codex.yaml
+provider: sbx
+agent: codex                       # no credentials: sbx's proxy signs Codex in
+```
 
 ```yaml
 # drivers/sbx-codex.yaml: Codex steps on the login sbx keeps for you, nothing on this machine
@@ -349,9 +385,7 @@ name: sbx-codex
 tool: codex
 runtimes:
   - use: sandbox
-    options:
-      provider: sbx
-      agent: codex                       # no credentials: sbx's proxy signs Codex in
+    sandbox: sbx-codex
 ```
 
 A step on a tool you signed in neither way gets the sbx command, and the run's command steps still run:
@@ -393,14 +427,21 @@ name: sbx-judged
 tool: claude
 runtimes:
   - use: sandbox
-    options: { provider: sbx }
+    sandbox: sbx                     # teamai's teamai-sbx
   - use: sandbox
-    options: { provider: docker, image: ghcr.io/acme/agent:1, credentials: { ANTHROPIC_API_KEY: env:ANTHROPIC_API_KEY } }
+    sandbox: containers              # the team's sandboxes/containers.yaml, from the quick start
+    options: { credentials: { ANTHROPIC_API_KEY: env:ANTHROPIC_API_KEY } }
 ```
 
 What sbx itself does not hide from a step: sbx forwards your SSH agent unless you turn it off in sbx, and its proxy adds a stored global forge secret (`sbx secret set github`) to every sandbox's requests to that forge. To keep them from steps, turn forwarding off and scope or remove that secret.
 
 ## Podman
+
+```yaml
+# sandboxes/containers-podman.yaml
+provider: podman
+image: ghcr.io/acme/agent:1
+```
 
 ```yaml
 # drivers/containers-podman.yaml
@@ -409,9 +450,8 @@ name: containers-podman
 tool: claude
 runtimes:
   - use: sandbox
+    sandbox: containers-podman
     options:
-      provider: podman
-      image: ghcr.io/acme/agent:1
       credentials:
         CLAUDE_CODE_OAUTH_TOKEN: env:CLAUDE_CODE_OAUTH_TOKEN
 ```
@@ -426,14 +466,19 @@ teamai workflow start review --driver containers-podman
 `seatbelt` (macOS 14 or later) and `bwrap` (Linux, [bubblewrap](https://github.com/containers/bubblewrap)) run each step as a sandboxed process on this machine, with this machine's own tools: no image and no daemon. They take only `provider` and `credentials`.
 
 ```yaml
+# sandboxes/native.yaml
+provider: seatbelt                 # bwrap on Linux
+```
+
+```yaml
 # drivers/native.yaml
 schemaVersion: v1alpha1
 name: native
 tool: claude
 runtimes:
   - use: sandbox
+    sandbox: native
     options:
-      provider: seatbelt                 # bwrap on Linux
       credentials:
         CLAUDE_CODE_OAUTH_TOKEN: env:CLAUDE_CODE_OAUTH_TOKEN
 ```
@@ -455,18 +500,23 @@ sudo apt install bubblewrap
 `vercel` runs each attempt in its own [Vercel Sandbox](https://vercel.com/docs/vercel-sandbox), a microVM on Vercel. Its image ships Claude, so it offers Claude steps.
 
 ```yaml
+# sandboxes/hosted.yaml
+provider: vercel
+timeout: 2h                        # optional: the sandbox's lifetime, 1m to 5h
+runtime: node24                    # optional: Vercel's image
+provider_auth:                     # optional: where teamai reads the Vercel sign-in
+  VERCEL_TOKEN: file:~/.config/vercel-token
+```
+
+```yaml
 # drivers/hosted.yaml
 schemaVersion: v1alpha1
 name: hosted
 tool: claude
 runtimes:
   - use: sandbox
+    sandbox: hosted
     options:
-      provider: vercel
-      timeout: 2h                        # optional: the sandbox's lifetime, 1m to 5h
-      runtime: node24                    # optional: Vercel's image
-      provider_auth:                     # optional: where teamai reads the Vercel sign-in
-        VERCEL_TOKEN: file:~/.config/vercel-token
       credentials:
         ANTHROPIC_API_KEY: env:ANTHROPIC_API_KEY
 ```
@@ -508,9 +558,9 @@ name: t3-sandboxed
 runtimes:
   - use: t3
     through: sandbox
+    sandbox: containers
     options:
       t3: { environment: local, runtime_mode: full-access }
-      sandbox: { provider: docker, image: ghcr.io/acme/agent:1 }
   - use: tools
 ```
 
@@ -588,7 +638,9 @@ sbx ls -q
 | `tool_unavailable` | The step's tool cannot sign in inside the sandbox | The command the message names: on sbx, `sbx run claude <any dir>` then `/login`, or `sbx secret set openai --oauth`; in a container, `claude setup-token`, then export `CLAUDE_CODE_OAUTH_TOKEN` and name it in `credentials` |
 | `credential_missing` | A credential's variable is not set where teamai runs, or a judge got no env credential its tool reads | Set the variable the message names, or add the key it names to `credentials` |
 | `confined_pending` | No runtime of the definition offers the judge's tool: the image lacks `node` or that tool, the definition names no key for it, Docker is older than 26.0.0, or the provider is `podman` or `sbx` | Add `node` and the tool to the image, add the tool's key to `credentials`, update Docker, or list `tools` in the definition |
-| `bad_option` | A key or value in `options` is wrong (for `sbx`, `agent: shell`), or, on Docker Engine on Linux, a credential such as `ANTHROPIC_BASE_URL` points at `localhost` or `127.0.0.1`, which a container there cannot reach | Fix the definition and push it; for a base URL on Linux, use an address of your machine the container reaches |
+| `bad_option` | A key or value of the sandbox profile is wrong (for `sbx`, `agent: shell`), the entry's `options` hold a key of the profile, or, on Docker Engine on Linux, a credential such as `ANTHROPIC_BASE_URL` points at `localhost` or `127.0.0.1`, which a container there cannot reach | Fix the file the message names and push it; for a base URL on Linux, use an address of your machine the container reaches |
+| `sandbox_profile_not_found` | No layer holds the profile the entry names | Add `sandboxes/<name>.yaml` to the team repo and run `teamai pull`, or add `~/.teamai/sandboxes/<name>.yaml` for yourself |
+| `sandbox_profile_invalid` | The profile is not a YAML mapping, sets `credentials` or `max_parallel`, or, as a folder, holds a link | Fix the file the message names; keep `credentials` and `max_parallel` on the entry |
 | `sandbox_failed` | The engine could not create or find the attempt's container or sandbox, for example because Docker Desktop quit mid-run. A container it could not find is kept as the attempt's, never taken as gone. | Read the message in the step failure. Start the engine again, then remove what is left: `docker ps -a --filter label=teamai.run=<run>` or `sbx ls` lists it, and the message names the `docker rm --force` or `sbx rm --force` command |
 | `cancel_failed` | A cancel or a limit could not confirm the step stopped: the engine refused the stop, or the stop (a judge's removal included) and the end of the step's process took over 10 s. What ran there may still run, so teamai keeps the container, the work and the login. Example: `docker could not stop the processes in container teamai-r0123abcd-a0123abcd: Cannot connect to the Docker daemon. They may still run; remove the container with docker rm --force teamai-r0123abcd-a0123abcd.` | Start the engine again, then run `teamai workflow cancel <run>` again: the runtime stops the step and closes its place. Or remove it with the `docker rm --force` or `sbx rm --force` command the message names |
 | **Not closed** in run details | The engine could not remove the attempt's container or sandbox, or the removal and the end of what ran there took over 10 s, so what ran there may still run. The run ends as it would. | `docker rm --force <container>` or `sbx rm --force <sandbox>`, as the message says. Once nothing of it runs, `teamai workflow cancel <run> --release <attempt>` lets the attempt go: the runtime forgets the place even when it cannot remove it, and its message still names the `rm --force` command |

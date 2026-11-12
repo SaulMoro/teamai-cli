@@ -24,8 +24,8 @@ import { readRegularFileNoLink } from '@teamai/shared/regular-file';
 //  the definition teamai builds in, with no runtime, and reads no file.
 //
 
-/** The prefix of every definition teamai ships, as of every default workflow. */
-const SHIPPED_PREFIX = 'teamai-';
+/** The prefix of every definition, runtime and sandbox profile teamai ships, as of every default workflow. */
+export const SHIPPED_PREFIX = 'teamai-';
 
 const RUNTIME_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 
@@ -54,16 +54,22 @@ function definitionName(name: string): { ok: true; name: DriverName } | { ok: fa
 
 const RuntimeNameSchema = z.string().regex(RUNTIME_NAME, 'A runtime name starts with a letter or digit and holds only letters, digits, dots, dashes and underscores');
 
+/** The runtime whose place a sandbox profile sets up. */
+export const SANDBOX_RUNTIME = 'sandbox';
+
 /**
  * One runtime of a definition: the runtime it uses and the options it passes at `init`. With `through`, the runtime it
  * uses runs its tools inside the place that other runtime makes (`use: t3, through: sandbox`), and `options` holds
- * each one's options under its name.
+ * each one's options under its name. `sandbox` names the sandbox profile the sandbox runtime of the entry runs.
  */
 const RuntimeEntrySchema = z.object({
   use: RuntimeNameSchema,
   through: RuntimeNameSchema.optional(),
+  sandbox: RuntimeNameSchema.optional(),
   options: z.record(z.string(), JsonValueSchema).optional(),
-}).strict().refine((entry) => entry.through !== entry.use, { path: ['through'], message: 'A runtime runs through another runtime, not through itself' });
+}).strict()
+  .refine((entry) => entry.through !== entry.use, { path: ['through'], message: 'A runtime runs through another runtime, not through itself' })
+  .refine((entry) => entry.sandbox === undefined || entry.use === SANDBOX_RUNTIME || entry.through === SANDBOX_RUNTIME, { path: ['sandbox'], message: 'sandbox names a sandbox profile, which only an entry with use: sandbox or through: sandbox runs' });
 
 export const DriverDefinitionSchema = z.object({
   schemaVersion: z.literal('v1alpha1'),
@@ -94,7 +100,7 @@ export interface ResolvedDriver {
 }
 
 /** The member's own directories, which teamai reads and never writes, so team code it caches never reads as the member's. */
-export const PERSONAL_DIRS = { drivers: 'drivers', runtimes: 'runtimes', tools: 'tools' } as const;
+export const PERSONAL_DIRS = { drivers: 'drivers', runtimes: 'runtimes', sandboxes: 'sandboxes', tools: 'tools' } as const;
 
 /** The marker of a driver definition kept as a folder, `drivers/<name>/DRIVER.yaml`, which takes the folder's name. */
 const DRIVER_MARKER = FOLDER_MARKERS.drivers.marker;
