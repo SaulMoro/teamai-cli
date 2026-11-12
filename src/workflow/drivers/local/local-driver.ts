@@ -27,7 +27,7 @@ import { attemptRun, credentialSecrets, HeldPlace, isExecRuntimeTool, readAttemp
 import { answerCallTool, hostStepRuntime } from '../../runtimes/host.js';
 import { writeHeldSteps, type HeldSteps } from '../../runtimes/held.js';
 import { closeAfterSweep, endLeftLogins, stopLeftInProcess, stopOnRecordedDriver } from '../../runtimes/cancelled.js';
-import { LOGIN_TOOLS, loginHolder } from '../../runtimes/login.js';
+import { loginHolder } from '../../runtimes/login.js';
 import { toolsLaunchDeps, type EngineOptions, type OpenedDriver } from '../../runtimes/sources.js';
 import { newOpId, type ExecAnswer, type ExecQuestion, type StepRuntime } from '@teamai/runtime-protocol/step-runtime';
 import { resumeOrPublish, retryCommand } from '../../runtimes/retry-command.js';
@@ -333,7 +333,7 @@ async function stageLease(lease: StagedLease, { config, lock, root, env, mode, s
 /**
  * Stops what a killed teamai left running in attempt `attempt`'s place here before the attempt runs again. A process
  * no stop confirms ended may still run, its tool on the login the attempt holds: the attempt does not run beside it, and
- * is added to `leftRunning`, whose login its close keeps.
+ * is added to `leftRunning`, whose close stops that process again and keeps the login while it may still run.
  */
 async function stopLeftHere({ config, run, attempt, step, leftRunning }: { config: LocalConfig; run: RunId; attempt: StagedLease['attempt']; step: string; leftRunning: Set<string> }): Promise<WorkflowFailure | undefined> {
   const left = await stopRecordedGroup(attemptDir(config, run, attempt));
@@ -836,7 +836,11 @@ async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, given: 
 
     // One in teamai's process left its tool home under the attempt, which a killed judge refreshed its login in. One
     // that did not run again beside what its earlier run left keeps its login while that may still use it.
-    if (slot?.kind !== 'external' && leftRunning.has(attempt)) return keepLeftLogins(attempt);
+    if (slot?.kind !== 'external' && leftRunning.has(attempt)) {
+      await stopLeftInProcess(config, runId, attempt);
+
+      return;
+    }
 
     if (slot?.kind !== 'external') return endLeftLogins(config, runId, attempt);
 
@@ -851,16 +855,6 @@ async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, given: 
 
       if (holder?.run === runId && holder.attempt === attempt) {
         log.warn(`The ${tool} login teamai keeps stays held by attempt ${attempt} of run ${runId}, whose tool may still run. Stop that tool on its step runtime; once run ${runId} has ended, run teamai workflow cancel ${runId} --release ${attempt}, which lets the attempt go and ends its login.`);
-      }
-    }
-  };
-
-  const keepLeftLogins = async (attempt: AttemptId): Promise<void> => {
-    for (const tool of LOGIN_TOOLS) {
-      const holder = await loginHolder(tool);
-
-      if (holder?.run === runId && holder.attempt === attempt) {
-        log.warn(`The ${tool} login teamai keeps stays held by attempt ${attempt} of run ${runId}, whose tool an earlier run left and may still run. Once that process has ended and run ${runId} has ended, run teamai workflow cancel ${runId} --release ${attempt}, which lets the attempt go and ends its login.`);
       }
     }
   };

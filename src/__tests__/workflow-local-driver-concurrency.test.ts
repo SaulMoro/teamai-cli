@@ -644,7 +644,7 @@ steps:
 
     await runLocalDriver(config, runId, workspace);
 
-    expect(warn).toHaveBeenCalledWith(expect.stringContaining(`The codex login teamai keeps stays held by attempt ${attempt} of run ${run}, whose tool an earlier run left and may still run.`));
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining(`Kept the codex login attempt ${attempt} of run ${run} holds: teamai could not confirm that process 424242, which that attempt left, ended`));
     expect({
       ran: fs.existsSync(path.join(workspace, 'ran')),
       daily: JSON.parse(fs.readFileSync(path.join(daily, 'auth.json'), 'utf8')).tokens.refresh_token,
@@ -653,6 +653,14 @@ steps:
     expect(await readRun(config, runId)).toMatchObject({
       steps: [{ id: 'check', status: 'failed', failure: { code: 'runtime_lost', message: expect.stringContaining('teamai could not confirm that process 424242') } }],
     });
+
+    // A cancel of the run keeps the login while that process may still run, and ends it once it has.
+    const cancelHere = (): ReturnType<typeof takeRunLock> => takeRunLock(config, run, (lock) => stopCancelledAttempts(config, lock, { isRunnerHolding: isSkillRunnerHolding }), { waitMs: 0 });
+    expect(await cancelHere()).toMatchObject({ kind: 'held' });
+    expect(await loginHolder('codex')).toEqual(expect.objectContaining({ run, attempt }));
+    fs.rmSync(path.join(attemptDir(config, run, attempt), 'group-424242.json'));
+    expect(await cancelHere()).toMatchObject({ kind: 'held' });
+    expect({ daily: JSON.parse(fs.readFileSync(path.join(daily, 'auth.json'), 'utf8')).tokens.refresh_token, holder: await loginHolder('codex') }).toEqual({ daily: 'refresh-2', holder: undefined });
   });
 
   // Codex rotates its refresh token on a refresh and refuses the old one after (refresh_token_reused).
