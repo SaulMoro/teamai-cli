@@ -69,17 +69,6 @@ export const NOT_YET_MOVED = new Map(Object.entries({
   'src/__tests__/workflow-worktree-role.test.ts': 3,
   'src/recall.ts': 1,
   'src/session-flow/sync.ts': 1,
-  // Listings of the sandbox, Paseo and Codex packages' tests and test support, to move to entriesUnder.
-  'packages/runtime-paseo/src/daemon/client.test.ts': 1,
-  'packages/runtime-paseo/src/testing/asar.ts': 1,
-  'packages/runtime-paseo/src/testing/suite.ts': 1,
-  'packages/runtime-sandbox/src/prompt.test.ts': 1,
-  'packages/runtime-sandbox/src/providers/vercel.test.ts': 1,
-  'packages/runtime-sandbox/src/runtime-sandbox.test.ts': 2,
-  'packages/runtime-sandbox/src/testing/harness.ts': 1,
-  'packages/runtime-sandbox/src/testing/leaks.ts': 1,
-  'packages/runtime-sandbox/src/wrapper.test.ts': 1,
-  'packages/tool-codex/src/testing/fake-agent.test.ts': 1,
 }));
 
 scopedFiles([...NOT_YET_MOVED.keys()]);

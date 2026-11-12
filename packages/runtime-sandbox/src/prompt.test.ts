@@ -3,6 +3,7 @@ import path from 'node:path';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { bundleRuntime, connect, fakeEngine, tempDir, type Connection, type FakeEngine, type Message } from './testing/harness.js';
 import { closeLeftovers, expectNothingLeft } from './testing/leaks.js';
+import { entriesUnder } from '@teamai/shared/entries-under';
 
 // A prompt step's tool run by the sandbox runtime itself, through its stdio entry point, on a fake docker
 // (testing/fake-engine.mjs): teamai sends the lease as a `prompt`, and the runtime launches the tool in the attempt's
@@ -288,7 +289,7 @@ describe('how a prompt step\'s tool fails', () => {
     expect(end).toMatchObject({ event: 'finished', result: { output: { ok: true } } });
     expect(JSON.stringify(end)).not.toContain('sk-ant-secret-1');
     const journal = path.join(dir, 'home', '.teamai', 'runtime-state', 'sandbox');
-    const kept = fs.readdirSync(journal, { recursive: true }).map(String).filter((file) => file.endsWith('.json')).map((file) => fs.readFileSync(path.join(journal, file), 'utf8'));
+    const kept = entriesUnder(journal).map(({ relative }) => relative).filter((file) => file.endsWith('.json')).map((file) => fs.readFileSync(path.join(journal, file), 'utf8'));
     expect(kept.join('\n')).not.toContain('sk-ant-secret-1');
   });
 

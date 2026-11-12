@@ -7,6 +7,7 @@ import { bundleRuntime as bundleRuntimeAt } from '@teamai/runtime-testing/bundle
 import { connectRuntime, type Connection as RuntimeConnection, type Line } from '@teamai/runtime-testing/connect';
 import type { BuildOptions, Plugin } from 'esbuild';
 import { z } from 'zod';
+import { entriesUnder } from '@teamai/shared/entries-under';
 
 // ─── Test support: the runtime over its stdio, on a fake container engine ───
 //
@@ -103,7 +104,7 @@ export interface FakeEngine {
 function filesUnder(root: string): Record<string, string> {
   if (!fs.existsSync(root)) return {};
 
-  return Object.fromEntries(fs.readdirSync(root, { recursive: true }).map(String).filter((file) => fs.lstatSync(path.join(root, file)).isFile()).map((file) => [file, fs.readFileSync(path.join(root, file), 'utf8')]));
+  return Object.fromEntries(entriesUnder(root).map(({ relative }) => relative).filter((file) => fs.lstatSync(path.join(root, file)).isFile()).map((file) => [file, fs.readFileSync(path.join(root, file), 'utf8')]));
 }
 
 const StoredSchema = z.object({ name: z.string(), labels: z.record(z.string(), z.string()) });

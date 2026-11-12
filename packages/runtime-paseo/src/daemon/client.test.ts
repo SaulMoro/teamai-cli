@@ -4,6 +4,7 @@ import { describe, expect, it } from 'vitest';
 import { paseoApp } from '../testing/asar.js';
 import { TEST_CLIENT } from '../testing/harness.js';
 import { dir, start, ready, useRuntimeSuite } from '../testing/suite.js';
+import { entriesUnder } from '@teamai/shared/entries-under';
 
 describe('teamai-runtime-paseo', () => {
   useRuntimeSuite();
@@ -75,8 +76,8 @@ describe('teamai-runtime-paseo', () => {
     fs.writeFileSync(path.join(state, 'config.json'), '{}');
 
     /** Every file and directory under `root`, with each file's bytes. */
-    const tree = (root: string): Record<string, string> => Object.fromEntries(fs.readdirSync(root, { recursive: true, withFileTypes: true })
-      .map((entry) => {
+    const tree = (root: string): Record<string, string> => Object.fromEntries(entriesUnder(root)
+      .map(({ entry }) => {
         const at = path.join(entry.parentPath, entry.name);
 
         return [path.relative(root, at), entry.isFile() ? fs.readFileSync(at, 'base64') : 'directory'];

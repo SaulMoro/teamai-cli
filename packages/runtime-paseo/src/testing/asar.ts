@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { z } from 'zod';
+import { entriesUnder } from '@teamai/shared/entries-under';
 
 // ─── A Paseo desktop app, for tests ──────────────────────
 //
@@ -60,7 +61,7 @@ const ManifestSchema = z.object({ name: z.string(), dependencies: z.record(z.str
 
 /** Every file under `dir` but its own node_modules, by its path relative to `dir`. */
 function filesOf(dir: string): string[] {
-  return fs.readdirSync(dir, { recursive: true, withFileTypes: true })
+  return entriesUnder(dir).map(({ entry }) => entry)
     .filter((entry) => entry.isFile())
     .map((entry) => path.relative(dir, path.join(entry.parentPath, entry.name)))
     .filter((name) => !name.split(path.sep).includes('node_modules'));

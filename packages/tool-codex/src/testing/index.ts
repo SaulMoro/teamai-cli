@@ -36,7 +36,9 @@ export const codexFake = {
   const at = args.indexOf('resume');
   const resumed = at !== -1 && args[at + 1] !== undefined && !args[at + 1].startsWith('-') ? args[at + 1] : undefined;
   const sessions = path.join(process.env.CODEX_HOME || path.join(process.env.HOME || '', '.codex'), 'sessions');
-  const own = resumed === undefined || !fs.existsSync(sessions) ? undefined : fs.readdirSync(sessions, { recursive: true, encoding: 'utf8' }).find((name) => name.endsWith('-' + resumed + '.jsonl'));
+  // Every file under a folder, without following links: a link to a folder is not entered.
+  const under = (dir, at = '') => fs.readdirSync(path.join(dir, at), { withFileTypes: true }).flatMap((entry) => entry.isDirectory() ? under(dir, path.join(at, entry.name)) : [path.join(at, entry.name)]);
+  const own = resumed === undefined || !fs.existsSync(sessions) ? undefined : under(sessions).find((name) => name.endsWith('-' + resumed + '.jsonl'));
   if (resumed !== undefined && own === undefined) refuse('Error: thread/resume: thread/resume failed: no rollout found for thread id ' + resumed + ' (code -32600)');
   const threadId = resumed ?? randomUUID();
   const failed = does('fail');

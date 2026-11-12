@@ -7,6 +7,7 @@ import { afterAll, afterEach, beforeAll, beforeEach } from 'vitest';
 import { expectNothingLeft } from '@teamai/runtime-testing/leaks';
 import { startFakeDaemon, type Behaviour } from './fake-daemon.js';
 import { bundleRuntime, startRuntime, type Runtime } from './harness.js';
+import { entriesUnder } from '@teamai/shared/entries-under';
 
 // ─── Test support: one test file's runtimes on a fake Paseo daemon ───
 //
@@ -100,7 +101,7 @@ export async function opened(runtime: Runtime, { attempt = ATTEMPT, op = 'op-000
 export const journalFiles = (): string[] => {
   const root = path.join(dir, 'home', '.teamai', 'runtime-state', 'paseo');
 
-  return fs.existsSync(root) ? fs.readdirSync(root, { recursive: true, withFileTypes: true }).filter((entry) => entry.isFile()).map((entry) => path.relative(root, path.join(entry.parentPath, entry.name))) : [];
+  return fs.existsSync(root) ? entriesUnder(root).map(({ entry }) => entry).filter((entry) => entry.isFile()).map((entry) => path.relative(root, path.join(entry.parentPath, entry.name))) : [];
 };
 
 /** The agents the fake daemon holds, by id. */

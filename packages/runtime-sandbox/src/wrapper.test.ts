@@ -9,6 +9,7 @@ import { OuterHandleSchema, registerLine, registerThrough, WRAPPER_PREFIX } from
 import type { InitInstance } from '@teamai/runtime-protocol';
 import { bundleRuntime, connect, fakeEngine, tempDir, type Connection, type FakeEngine, type Message } from './testing/harness.js';
 import { closeLeftovers, expectNothingLeft } from './testing/leaks.js';
+import { entriesUnder } from '@teamai/shared/entries-under';
 
 // The sandbox wrapper through its `tool-exec` entry point (`teamai-sandbox-<tool>`, the runtime's executable under
 // another name), against the runtime over its stdio on a fake docker, with this test as the inner runtime that
@@ -365,7 +366,7 @@ describe('teamai-sandbox-<tool> inside an attempt', () => {
     expect(reportOf(ran)).toMatchObject({ set: ['CLAUDE_CODE_OAUTH_TOKEN', 'CLAUDE_CONFIG_DIR'], home: at.toolHome });
     expect(execsIn()[0]).toEqual(expect.arrayContaining(['-e', 'CLAUDE_CODE_OAUTH_TOKEN', '-e', 'CLAUDE_CONFIG_DIR']));
     expect(engine.calls().flat().join('\n')).not.toContain(SECRET);
-    const kept = fs.readdirSync(path.join(dir, 'home'), { recursive: true }).map((file) => path.join(dir, 'home', String(file))).filter((file) => fs.statSync(file).isFile());
+    const kept = entriesUnder(path.join(dir, 'home')).map(({ relative }) => path.join(dir, 'home', relative)).filter((file) => fs.statSync(file).isFile());
     expect(kept.filter((file) => fs.readFileSync(file, 'utf8').includes(SECRET))).toEqual([]);
   });
 

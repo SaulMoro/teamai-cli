@@ -11,6 +11,7 @@ import { BUILT_IN_TOOLS } from '@teamai/tool-definitions';
 import { bundleRuntime, connect, fakeEngine, tempDir, type Connection, type FakeEngine, type Message } from './testing/harness.js';
 import { closeLeftovers, expectNothingLeft } from './testing/leaks.js';
 import { signalPid } from '@teamai/shared/process-group';
+import { entriesUnder } from '@teamai/shared/entries-under';
 
 // The runtime through its stdio entry point, as teamai spawns it, on a fake docker / podman (testing/fake-engine.mjs).
 
@@ -308,7 +309,7 @@ async function openPlace(connection: Connection, at: Place, op = newOp(), { cred
 function journalFiles(): string[] {
   const journal = path.join(dir, 'home', '.teamai', 'runtime-state', 'sandbox');
 
-  return fs.readdirSync(journal, { recursive: true }).map((file) => path.join(journal, String(file))).filter((file) => fs.statSync(file).isFile());
+  return entriesUnder(journal).map(({ relative }) => path.join(journal, relative)).filter((file) => fs.statSync(file).isFile());
 }
 
 async function exec(connection: Connection, request: { argv: string[]; env?: Record<string, string>; unset?: string[]; credentials?: Record<string, string>; cwd: string }, op = newOp()): Promise<{ end: Message; output: string }> {
@@ -1113,7 +1114,7 @@ describe('a prompt attempt in a container', () => {
       type: 'init', ok: false, error: { code: 'sandbox_unavailable', message: expect.stringContaining('its daemon is not running') },
     });
     expect(engine.calls().map(([, command]) => command)).toEqual(['info', 'info']);
-    expect(fs.readdirSync(path.join(dir, 'home'), { recursive: true }).filter((entry) => String(entry).endsWith('instances.json'))).toEqual([]);
+    expect(entriesUnder(path.join(dir, 'home')).map(({ relative }) => relative).filter((entry) => entry.endsWith('instances.json'))).toEqual([]);
   });
 
   it("stops and removes a dead runtime's exec in recover mode, running the engine only for the stop and the removal", async () => {
@@ -1762,7 +1763,8 @@ describe("the containers of one runtime's journal", () => {
 
 // A judge's tools: each lists the files it can see from its working directory, says which credential names it got
 // (names only), and replies as the real tool does on stdout.
-const SEES = "const fs = require('node:fs'); const sees = fs.readdirSync('.', { recursive: true }).map(String).filter((file) => fs.statSync(file).isFile()).sort();";
+// Lists without following links, as entriesUnder does: a link to a folder is not entered.
+const SEES = "const fs = require('node:fs'); const under = (at) => fs.readdirSync(at || '.', { withFileTypes: true }).flatMap((entry) => { const file = at ? at + '/' + entry.name : entry.name; return entry.isDirectory() ? under(file) : [file]; }); const sees = under('').filter((file) => fs.statSync(file).isFile()).sort();";
 const NAMES = "const names = ['ANTHROPIC_API_KEY', 'CODEX_API_KEY', 'OPENAI_API_KEY', 'GITHUB_TOKEN', 'HTTPS_PROXY'].filter((name) => process.env[name] !== undefined); const given = Object.keys(process.env).filter((name) => process.env[name].includes('given')).sort();";
 const JUDGE_CLAUDE = `if (process.argv.includes('--version')) { console.log('2.1.0 (Claude Code)'); process.exit(0); }
 ${SEES} ${NAMES}

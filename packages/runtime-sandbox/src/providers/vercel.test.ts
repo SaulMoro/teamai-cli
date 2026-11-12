@@ -7,6 +7,7 @@ import { z } from 'zod';
 import { bundleRuntimeWith, connect, tempDir, type Connection, type Message } from '../testing/harness.js';
 import { closeLeftovers, expectNothingLeft } from '../testing/leaks.js';
 import { ATTEMPT, exec, HANDLE, newOp, openPlace, placeIn, RUN, type Place } from '../testing/native-harness.js';
+import { entriesUnder } from '@teamai/shared/entries-under';
 
 // The vercel provider through the runtime's stdio entry point, bundled as it ships but with `@vercel/sandbox` replaced
 // by a stand-in (testing/vercel-fake-sdk.ts) whose hosted sandboxes are directories on this machine. Only a Vercel
@@ -473,7 +474,7 @@ function snapshotIds(): string[] {
 function filesOf(id: string): string[] {
   const root = path.join(snapshotsDir(), id, 'root');
 
-  return fs.readdirSync(root, { recursive: true, encoding: 'utf8' }).filter((file) => fs.lstatSync(path.join(root, file)).isFile()).map((file) => `/${file}`);
+  return entriesUnder(root).map(({ relative }) => relative).filter((file) => fs.lstatSync(path.join(root, file)).isFile()).map((file) => `/${file}`);
 }
 
 const CreateSchema = z.looseObject({ call: z.literal('create'), name: z.string(), source: z.object({ type: z.literal('snapshot'), snapshotId: z.string() }).optional() });

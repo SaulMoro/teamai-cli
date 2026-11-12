@@ -4,6 +4,7 @@ import { OuterHandleSchema } from '@teamai/runtime-kit/outer';
 import { expectNothingLeft as expectNothingLeftBy } from '@teamai/runtime-testing/leaks';
 import { z } from 'zod';
 import { connect, type Connection } from './harness.js';
+import { entriesUnder } from '@teamai/shared/entries-under';
 
 // ─── What a test left behind ───
 //
@@ -32,7 +33,7 @@ const ATTEMPT_DIR = /^teamai-(?:[0-9a-f]{16}-)?r[0-9a-f]+-a[0-9a-f]+$/;
 
 /** Every directory under the runtime state of a home under `dir` that is an attempt's. */
 function attemptDirsUnder(dir: string): string[] {
-  return fs.readdirSync(dir, { recursive: true, withFileTypes: true }).filter((entry) => entry.isDirectory() && ATTEMPT_DIR.test(entry.name) && entry.parentPath.includes(`${path.sep}runtime-state${path.sep}`)).map((entry) => path.join(entry.parentPath, entry.name));
+  return entriesUnder(dir).map(({ entry }) => entry).filter((entry) => entry.isDirectory() && ATTEMPT_DIR.test(entry.name) && entry.parentPath.includes(`${path.sep}runtime-state${path.sep}`)).map((entry) => path.join(entry.parentPath, entry.name));
 }
 
 /** When this module loaded: a file a fake sandbox wrote on the host since then is the suite's. */

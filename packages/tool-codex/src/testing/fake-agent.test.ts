@@ -8,6 +8,7 @@ import { CodexAdapter } from '@teamai/tool-core/formats/codex';
 import { FAKE_AGENT_MARKERS, fakeAgent, leftFakeAgents, runFakeAgent } from '@teamai/tool-testing/fake-agent';
 import { family } from '../index.js';
 import { codexFake } from './index.js';
+import { entriesUnder } from '@teamai/shared/entries-under';
 
 const { call, step } = family.launch.codex;
 const made: string[] = [];
@@ -43,7 +44,7 @@ const threadOf = (stdout: string): string => {
 const rollouts = (codexHome: string): string[] => {
   const sessions = path.join(codexHome, 'sessions');
 
-  return fs.existsSync(sessions) ? fs.readdirSync(sessions, { recursive: true, encoding: 'utf8' }).filter((name) => name.endsWith('.jsonl')) : [];
+  return fs.existsSync(sessions) ? entriesUnder(sessions).map(({ relative }) => relative).filter((name) => name.endsWith('.jsonl')) : [];
 };
 
 const readSession = (codexHome: string, sessionId: string, projectPath: string) =>
