@@ -31,6 +31,7 @@ import unspawnedChild from './rules/unspawned-child.js';
 import signalOwner from './rules/signal-owner.js';
 import readlineError from './rules/readline-error.js';
 import spawnCommand from './rules/spawn-command.js';
+import recursiveReaddir from './rules/recursive-readdir.js';
 import regularFileReads from './rules/regular-file-reads.js';
 import stepPathWrites from './rules/step-path-writes.js';
 import toolFamily from './rules/tool-family-shape.js';
@@ -77,6 +78,7 @@ export default definePlugin({
     'unspawned-child': unspawnedChild,
     'signal-owner': signalOwner,
     'spawn-command': spawnCommand,
+    'recursive-readdir': recursiveReaddir,
     'regular-file-reads': regularFileReads,
     'step-path-writes': stepPathWrites,
     'tool-family-shape': toolFamily,
