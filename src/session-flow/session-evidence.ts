@@ -8,6 +8,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { z } from 'zod';
 import { errnoCode } from '../utils/fs.js';
+import { log } from '@teamai/shared/log';
 import { openRegularFile, readRegularFile } from '@teamai/shared/regular-file';
 
 /** Text kinds whose content is archived, masked, by extension, with the media type the judge is told. */
@@ -112,8 +113,8 @@ async function sha256Of(file: string): Promise<string> {
 
 /**
  * The evidence in `dir`, each text file and each path passed through `mask`, or undefined when `dir` holds no file but
- * those of `leaveOut` (paths relative to `dir`). A `mask` that throws fails the whole collection, so no text leaves
- * unmasked.
+ * those of `leaveOut` (paths relative to `dir`). A file whose masked path the archive cannot read back is left out, and
+ * named in a warning. A `mask` that throws fails the whole collection, so no text leaves unmasked.
  */
 async function collect(dir: string, mask: (text: string) => string, { leaveOut = [] }: { leaveOut?: readonly string[] } = {}): Promise<ArchivedEvidence | undefined> {
   let found: string[];
@@ -125,13 +126,21 @@ async function collect(dir: string, mask: (text: string) => string, { leaveOut =
     found = [];
   }
 
-  const names = found.filter((name) => !leaveOut.includes(name));
+  // A name the archive cannot read back, such as one with a `\\`, which POSIX allows, leaves out that file alone.
+  const names = found.filter((name) => !leaveOut.includes(name)).flatMap((name) => {
+    const archivedPath = mask(name);
+
+    if (EvidencePathSchema.safeParse(archivedPath).success) return [{ name, archivedPath }];
+    log.warn(`The file ${archivedPath} in ${dir} was left out of the step's evidence: the session archive keeps a path only as names joined by "/", none empty, "." or "..", and none holding "\\".`);
+
+    return [];
+  });
 
   if (names.length === 0) return undefined;
   const files: EvidenceFile[] = [];
   let left = STEP_MAX_BYTES;
 
-  for (const name of names.slice(0, FILES_MAX)) {
+  for (const { name, archivedPath } of names.slice(0, FILES_MAX)) {
     const file = path.join(dir, ...name.split('/'));
     const extension = path.extname(name).toLowerCase();
     const textType = TEXT_TYPES.get(extension);
@@ -142,11 +151,11 @@ async function collect(dir: string, mask: (text: string) => string, { leaveOut =
     if (textType !== undefined && text !== undefined) {
       const kept = cutAt(mask(text), Math.min(FILE_MAX_BYTES, left));
       left -= Math.min(Buffer.byteLength(kept.text, 'utf-8'), left);
-      files.push({ kind: 'text', path: mask(name), type: textType, size, ...kept });
+      files.push({ kind: 'text', path: archivedPath, type: textType, size, ...kept });
       continue;
     }
 
-    files.push({ kind: 'listed', path: mask(name), type: textType ?? LISTED_TYPES.get(extension) ?? 'application/octet-stream', size, sha256: await sha256Of(file) });
+    files.push({ kind: 'listed', path: archivedPath, type: textType ?? LISTED_TYPES.get(extension) ?? 'application/octet-stream', size, sha256: await sha256Of(file) });
   }
 
   // What leaves for the archive parses as what the archive reads back, or nothing leaves.
