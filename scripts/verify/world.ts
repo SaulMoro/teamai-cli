@@ -36,6 +36,8 @@ const WorldSchema = z.object({
   }),
   createdAt: z.string(),
   baseline: z.object({ teamRefs: z.record(z.string(), z.string()), checkoutStatus: z.array(z.string()), files: z.record(z.string(), z.string()).optional() }),
+  /** The only variables a command gets, frozen at creation; absent in a world made before it, whose commands run through bin/run. */
+  env: z.record(z.string(), z.string()).optional(),
   cleanedAt: z.string().optional(),
 });
 
@@ -239,6 +241,7 @@ function buildWorld(runId: string, dir: string): World {
 
   const world: World = {
     runId,
+    env,
     dir,
     project: at('project'),
     team,
@@ -336,7 +339,8 @@ export function loadWriters(world: World): Writers {
   return fs.existsSync(file) ? z.record(z.string(), Writer).parse(JSON.parse(fs.readFileSync(file, 'utf8'))) : {};
 }
 
-function recordWriters(world: World, args: readonly string[], before: Record<string, string>, after: Record<string, string>): void {
+/** Records, for each entry a member's program run as `args` changed, that program and what it left there. */
+export function recordWriters(world: World, args: readonly string[], before: Record<string, string>, after: Record<string, string>): void {
   const program = memberProgramOf(args);
 
   if (program === undefined) return;
@@ -349,19 +353,27 @@ function recordWriters(world: World, args: readonly string[], before: Record<str
   fs.writeFileSync(writersFile(world), `${JSON.stringify(writers, null, 2)}\n`);
 }
 
-/** Runs a command in the world, its output shown and kept in logs/<n>-<name>.log. */
+/** Writes the next logs/<n>-<name>.log of a command and returns its path. */
+export function writeCommandLog(world: World, args: readonly string[], output: string, status: number | null): string {
+  const n = fs.readdirSync(world.logs).length + 1;
+  const name = path.basename(args[0] ?? 'command').replace(/[^\w.-]/g, '_');
+  const file = path.join(world.logs, `${n}-${name}.log`);
+  fs.writeFileSync(file, `$ ${args.join(' ')}\n${output}exit ${status ?? 'signal'}\n`);
+
+  return file;
+}
+
+/**
+ * Runs a command in the world through bin/run and waits for it, its output shown and kept in logs/<n>-<name>.log. The
+ * agent wait budget measures through it: nothing else runs beside the command. The verbs run through target.ts.
+ */
 export function runInWorld(world: World, args: readonly string[]): number {
   if (world.cleanedAt !== undefined) throw new Error(`World ${world.runId} was cleaned up at ${world.cleanedAt}. Make a new one.`);
   const before = worldFiles(world);
   const result = spawnSync(path.join(world.bin, 'run'), args, { encoding: 'utf8', stdio: ['inherit', 'pipe', 'pipe'], maxBuffer: 1024 ** 3 });
   process.stdout.write(result.stdout ?? '');
   process.stderr.write(result.stderr ?? '');
-  const n = fs.readdirSync(world.logs).length + 1;
-  const name = path.basename(args[0] ?? 'command').replace(/[^\w.-]/g, '_');
-  fs.writeFileSync(
-    path.join(world.logs, `${n}-${name}.log`),
-    `$ ${args.join(' ')}\n${result.stdout ?? ''}${result.stderr ?? ''}exit ${result.status ?? 'signal'}\n`,
-  );
+  writeCommandLog(world, args, `${result.stdout ?? ''}${result.stderr ?? ''}`, result.status);
   recordWriters(world, args, before, worldFiles(world));
 
   return result.status ?? 1;

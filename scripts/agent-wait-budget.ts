@@ -505,7 +505,7 @@ const EXPECTED_REMOTE = new Map([
 ]);
 
 /** Measures one Claude Code session, workspace scope, team repo mode git, from the main checkout and linked worktrees. */
-export function measureAgentWait(options: { keep: boolean }) {
+export async function measureAgentWait(options: { keep: boolean }) {
   const world = createWorld();
   const failures: string[] = [];
   const scratch = path.join(world.dir, 'scratch');
@@ -682,7 +682,7 @@ export function measureAgentWait(options: { keep: boolean }) {
 
     if (options.keep) console.error(`Kept world ${world.runId}: npm run -s verify -- ledger ${world.runId}, then cleanup.`);
     else {
-      const clean = runLedger(world);
+      const clean = await runLedger(world);
       console.error(clean ? 'Ledger: CLEAN' : `Ledger found leaks: see ${world.dir}`);
 
       // The caller reads this list after the return above: a leak fails the measure as a broken invariant does.
@@ -850,13 +850,13 @@ export function compareAgentWait(head: AgentWaitBudget, base: AgentWaitBudget) {
 
 const readBudget = (file: string): AgentWaitBudget => AgentWaitBudgetSchema.parse(JSON.parse(fs.readFileSync(file, 'utf8')));
 
-export function main(args: readonly string[]): number {
+export async function main(args: readonly string[]): Promise<number> {
   const [flag, baseFile, headFile] = args;
 
   if (flag === '--compare') {
     if (!baseFile) throw new Error('--compare needs the JSON file a run on main wrote.');
     // A head measured here answers for its own invariants; one read from a file answered when it was measured.
-    const head = headFile ? { budget: readBudget(headFile), failures: [] } : measureOrFail(false);
+    const head = headFile ? { budget: readBudget(headFile), failures: [] } : await measureOrFail(false);
     const { markdown, grew } = compareAgentWait(head.budget, readBudget(baseFile));
     process.stdout.write(`${markdown}\n`);
 
@@ -865,7 +865,7 @@ export function main(args: readonly string[]): number {
     return reportFailures(head.failures);
   }
 
-  const { budget, failures } = measureOrFail(args.includes('--keep'));
+  const { budget, failures } = await measureOrFail(args.includes('--keep'));
   process.stdout.write(`${JSON.stringify(budget, null, 2)}\n`);
 
   return reportFailures(failures);
@@ -878,12 +878,12 @@ function reportFailures(failures: readonly string[]): number {
 }
 
 /** Measures with stdout kept for the result: the world's commands and the ledger print to stderr. */
-function measureOrFail(keep: boolean): ReturnType<typeof measureAgentWait> {
+async function measureOrFail(keep: boolean): ReturnType<typeof measureAgentWait> {
   const write = process.stdout.write.bind(process.stdout);
   process.stdout.write = process.stderr.write.bind(process.stderr);
 
   try {
-    return measureAgentWait({ keep });
+    return await measureAgentWait({ keep });
   } finally {
     process.stdout.write = write;
   }

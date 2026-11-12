@@ -2,7 +2,8 @@ import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { runLedger } from './ledger.js';
-import { checkoutStatus, createWorld, git, liveWorlds, loadWorld, REPO_ROOT, runInWorld, saveWorld, TEAM_URL, TOOL_COMMANDS, type World } from './world.js';
+import { parseTarget, runOn } from './target.js';
+import { checkoutStatus, createWorld, git, liveWorlds, loadWorld, REPO_ROOT, saveWorld, TEAM_URL, TOOL_COMMANDS, type World } from './world.js';
 
 const HELP = `Verify a teamai change end to end: the real CLI, packed and installed, in an isolated world.
 
@@ -71,7 +72,7 @@ function cleanup(world: World): void {
   console.log(`Cleaned ${world.runId}. Evidence kept in ${world.dir}`);
 }
 
-function main(): number {
+async function main(): Promise<number> {
   switch (verb) {
     case 'world': {
       const world = createWorld();
@@ -86,13 +87,16 @@ function main(): number {
 
       return 0;
     case 'teamai':
-      return runInWorld(loadWorld(rest[0]), ['teamai', ...rest.slice(1)]);
-    case 'sh':
-      if (rest.length < 2) throw new Error('sh needs a run id and a command.');
+    case 'sh': {
+      if (verb === 'sh' && rest.length < 2) throw new Error('sh needs a run id and a command.');
+      const { runId, target } = parseTarget(rest[0]);
+      const argv = verb === 'teamai' ? ['teamai', ...rest.slice(1)] : rest.slice(1);
 
-      return runInWorld(loadWorld(rest[0]), rest.slice(1));
+      return (await runOn(loadWorld(runId), target, argv)).exit;
+    }
+
     case 'ledger':
-      return runLedger(loadWorld(rest[0])) ? 0 : 1;
+      return await runLedger(loadWorld(rest[0])) ? 0 : 1;
     case 'cleanup':
       for (const world of rest[0] === '--all' ? liveWorlds() : [loadWorld(rest[0])]) cleanup(world);
 
@@ -116,7 +120,7 @@ function main(): number {
 }
 
 try {
-  process.exitCode = main();
+  process.exitCode = await main();
 } catch (error) {
   console.error(error instanceof Error ? error.message : String(error));
   process.exitCode = 1;

@@ -13,7 +13,8 @@ import { z } from 'zod';
 import { defaultToolHome, envToolHome, toolHome } from '../../src/tool-home.js';
 import { detectToolRoot, RELOCATABLE_TOOLS, TeamaiConfigBaseSchema } from '../../src/types.js';
 import { PERSONAL_DIRS } from '../../src/workflow/runtimes/layers.js';
-import { checkoutStatus, git, loadWriters, REPO_ROOT, runInWorld, teamRefs, worldFiles, type World } from './world.js';
+import { runOn } from './target.js';
+import { checkoutStatus, git, loadWriters, REPO_ROOT, teamRefs, worldFiles, type World } from './world.js';
 
 interface Section {
   readonly title: string;
@@ -273,7 +274,7 @@ function teamaiPlace(entry: string, value: string | undefined): boolean {
 }
 
 /** A way in has a way out: after `teamai uninstall` the world's HOME and project match the snapshot taken at creation. */
-function reverseState(world: World): Section {
+async function reverseState(world: World): Promise<Section> {
   const title = '(e) After teamai uninstall';
 
   if (world.baseline.files === undefined) return { title, leaks: ['this world has no snapshot to compare: make a new world'], notes: [] };
@@ -290,7 +291,7 @@ function reverseState(world: World): Section {
     ),
   );
 
-  const status = runInWorld(world, ['teamai', 'uninstall', '--force']);
+  const { exit: status } = await runOn(world, { kind: 'world' }, ['teamai', 'uninstall', '--force']);
   const after = worldFiles(world);
   const leaks = status === 0 ? [] : [`teamai uninstall exited ${status}`];
 
@@ -385,8 +386,8 @@ function reverseState(world: World): Section {
 }
 
 /** Uninstalls teamai in the world, writes the next LEDGER-<n>.md and returns whether it is clean. */
-export function runLedger(world: World): boolean {
-  const reverse = reverseState(world);
+export async function runLedger(world: World): Promise<boolean> {
+  const reverse = await reverseState(world);
   const sections = [teamRepo(world), worktrees(world), hostFiles(world), environment(world), reverse];
   const leaks = sections.reduce((sum, section) => sum + section.leaks.length, 0);
   const verdict = leaks === 0 ? 'CLEAN' : `${leaks} LEAK${leaks === 1 ? '' : 'S'}`;
