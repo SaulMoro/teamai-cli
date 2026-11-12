@@ -608,7 +608,18 @@ async function runClaim(config: LocalConfig, { lock, claim, root, secrets, membe
       });
     }, tickMs);
 
-    const ran = await command.exit.finally(() => clearInterval(beat));
+    let ran: FleetResult;
+
+    // A step that fails instead of ending still ends its claim, so its owner need not wait out stale_after to retry it.
+    try {
+      ran = await command.exit;
+    } catch (error) {
+      const cause = (error instanceof Error ? error.message : String(error)).slice(0, 300).replace(/[.\s]*$/, '.');
+      ran = { exitCode: 1, stderr: `The member's run of step "${lease.step}" failed before the step ended: ${cause} ${retryCommand({ run, step: lease.step })} offers it again.` };
+    } finally {
+      clearInterval(beat);
+    }
+
     await beating;
 
     if (gone !== undefined) return { error: { code: 'state_moved', message: `The owner of run ${run} gave up attempt ${attempt} of step "${lease.step}" while this member ran it, so its result was not written. ${gone}` } };

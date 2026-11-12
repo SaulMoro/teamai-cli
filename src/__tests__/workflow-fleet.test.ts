@@ -741,6 +741,20 @@ steps:
     expect(git(alice.checkout, 'show', `${to}:made.txt`)).toBe('written');
   });
 
+  it('ends the claim with the step, the cause and the retry command when the step runtime fails the command instead of answering', async () => {
+    const local = hostStepRuntime();
+    const runtime: StepRuntime<DriverCan> = { ...local, exec: () => Promise.reject(new Error('the box went away')) };
+
+    const { taken, record } = await takeForged(() => undefined, undefined, MARK, { command: { kind: 'runtime', driver: 'bobs', use: 'box', runtime } });
+
+    expect(taken).toMatchObject({ data: { ran: { step: 'write', exit_code: 1 } } });
+    expect(record).toMatchObject({ state: 'finished', result: { exitCode: 1 } });
+    const stderr = record?.state === 'finished' ? record.result.stderr : '';
+    expect(stderr).toContain('step "write"');
+    expect(stderr).toContain('the box went away');
+    expect(stderr).toMatch(/teamai workflow retry r[0-9a-f]+ write/);
+  });
+
   it('refuses an offer whose command is not the one the team\'s workflow defines for the step, and runs nothing', async () => {
     const { taken, record } = await takeForged((forged) => { forged.lease = { ...forged.lease, kind: 'command', command: 'echo forged > forged.txt' }; });
 
