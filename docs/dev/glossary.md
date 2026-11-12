@@ -26,6 +26,10 @@ _Avoid_: bare provider where a **repo provider** could be meant
 An AI coding tool teamai delivers to, such as Claude Code or Codex. [Tool support](../guide/tool-support.md) lists them.
 _Avoid_: agent, "agent CLI", client, IDE
 
+**Tool instance**:
+A **tool** a team or member adds as another command or home of a shipped one, in `tools/<name>.yaml` or a **resource folder** with `TOOL.yaml`. It keeps the formats of the tool it extends. A team's runs once a member accepts its file's content.
+_Avoid_: custom tool, tool variant, bare instance
+
 **Capability**:
 What an **agent** can do thanks to one or more **resources** on a topic. An effect, not a file.
 _Avoid_: feature, plugin, bundle
@@ -57,7 +61,7 @@ Loading a **resource** in stages. Its **context pointer** is always in context; 
 _Avoid_: lazy loading, on-demand context
 
 **Marker file**:
-The file whose presence makes a directory a **resource folder**: `SKILL.md`, `WORKFLOW.yaml`, `HOOK.yaml`, `RULE.md`, `MCP.yaml`, `SUITE.yaml`.
+The file whose presence makes a directory a **resource folder**: `SKILL.md`, `WORKFLOW.yaml`, `HOOK.yaml`, `RULE.md`, `MCP.yaml`, `SUITE.yaml`, `DRIVER.yaml`, `RUNTIME.yaml`, `TOOL.yaml`.
 _Avoid_: manifest, index file
 
 **Resource folder**:
@@ -77,7 +81,7 @@ Where a definition comes from. Resolution order: `teamai` (**teamai default**), 
 _Avoid_: level, source, scope (that is a **scope**)
 
 **teamai default**:
-A **resource** teamai ships, named `teamai-<name>`. A team replaces it with the same name at the **team root**. Short form: default, as in default workflow or default scorer.
+A **resource** teamai ships, named `teamai-<name>`. A team replaces it with the same name at the **team root**. A **driver definition** or **step runtime** looked up by name is taken by the exact name in every **layer** first, then as `teamai-<name>`, so a team's `t3` replaces `teamai-t3`. Short form: default, as in default workflow or default scorer.
 _Avoid_: built-in, shipped, preset
 
 **Team root**:
@@ -148,11 +152,11 @@ What moves a run's steps forward: the local driver, the skill driver in a coding
 _Avoid_: executor (a step's `command` or `prompt`), runner (an install that takes a published run)
 
 **Driver definition**:
-A YAML file `--driver <name>` selects: the **step runtimes** that run each step, in order, with their options, and optionally the **tool** prompt steps use. The ones teamai ships are **teamai defaults**, such as `teamai-local`, `teamai-t3` and `teamai-sandbox`. Short form: definition.
+A YAML file `--driver <name>` selects, `drivers/<name>.yaml` or a **resource folder** with `DRIVER.yaml`: the **step runtimes** that run each step, in order, with their options, and optionally the **tool** prompt steps use. The ones teamai ships are **teamai defaults**, such as `teamai-local`, `teamai-t3` and `teamai-sandbox`. Short form: definition.
 _Avoid_: driver for the file, profile
 
 **Step runtime**:
-Where and how a step's work runs: the **host slot**, or what one entry of a **driver definition** names with `use`: the **`tools` runtime** and `fleet`, in teamai's process, or an external program that speaks the **runtime protocol**, such as `t3`, `paseo` or `sandbox`. Short form: runtime, where nothing else could be meant.
+Where and how a step's work runs: the **host slot**, or what one entry of a **driver definition** names with `use`: the **`tools` runtime** and `fleet`, in teamai's process, or an external program that speaks the **runtime protocol**, such as `t3`, `paseo` or `sandbox`. An external one is a **resource** of the member, the team or teamai: `runtimes/<name>.yaml`, whose `entry` names an executable on PATH, or a **resource folder** whose `RUNTIME.yaml` names its code. Short form: runtime, where nothing else could be meant.
 _Avoid_: runtime for a tool's bundled runtime (the Node that WorkBuddy unpacks), backend
 
 **Runtime protocol**:
@@ -208,7 +212,7 @@ What runs the `sandbox` runtime's places, as its `provider` option names it: `do
 _Avoid_: bare provider where a **model provider** or a **repo provider** could be meant
 
 **Provider instance**:
-A tool as T3 Code or Paseo configures it, with its own command and home. A team's tool instance (`tools:` in the team repo) runs on one, which teamai adds when the app has none.
+A tool as T3 Code or Paseo configures it, with its own command and home. A team's **tool instance** runs on one, which teamai adds when the app has none.
 _Avoid_: bare provider, bare instance
 
 **Fleet**:

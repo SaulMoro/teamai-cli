@@ -769,6 +769,9 @@ A directory that holds its type's marker, at any depth, is a folder: one resourc
 | `benchmarks/` | `SUITE.yaml` | Reads it: [suites](benchmarks.md#write-a-suite) |
 | `scorers/` | `SCORER.md` | Skips it |
 | `agents/` | `AGENT.md` | Skips it |
+| `drivers/` | `DRIVER.yaml` | Reads it: [where each part lives](workflow-advanced.md#where-each-part-lives) |
+| `runtimes/` | `RUNTIME.yaml` | Reads it: [where each part lives](workflow-advanced.md#where-each-part-lives) |
+| `tools/` | `TOOL.yaml` | Reads it: [where each part lives](workflow-advanced.md#where-each-part-lives) |
 
 A scorer or agent folder is skipped whole, and the rest of the team repo pulls as usual:
 

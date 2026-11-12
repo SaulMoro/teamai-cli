@@ -1631,6 +1631,34 @@ teamai 自带这些定义：
 | `teamai-paseo` | `paseo`（`max_parallel: 4`，连接你的 Paseo 配置指定的地址） |
 | `teamai-sandbox` | `sandbox`（`provider: sbx`、`max_parallel: 4`），然后 `tools` |
 
+### 各部分放在哪里
+
+运行用到的驱动、运行时和工具都是团队仓库中的文件，每个可以是一个文件，也可以是一个文件夹，存放它的标记文件和所需的内容：
+
+```text
+drivers/
+├── ci.yaml                     驱动定义 "ci"
+└── gpu/
+    └── DRIVER.yaml             驱动定义 "gpu"
+runtimes/
+├── acme.yaml                   步骤运行时 "acme"，PATH 上的可执行文件
+└── t3/
+    ├── RUNTIME.yaml            步骤运行时 "t3"，替换 teamai 自带的
+    └── runtime                 它的代码，随文件夹的修订一起接受
+tools/
+├── acme-claude.yaml            工具实例 "acme-claude"
+└── web-claude/
+    └── TOOL.yaml               工具实例 "web-claude"
+```
+
+| 想要 | 添加 | 参见 |
+| --- | --- | --- |
+| 在其他运行时上运行步骤，或在另一个工具上运行提示步骤 | 驱动定义 | [上面的查找顺序](#驱动定义和步骤运行时) |
+| 在你自己的程序里运行步骤，比如某个应用或远程机器 | 步骤运行时 | [编写步骤运行时](runtime-protocol.md) |
+| 用另一个命令或主目录运行某个工具 | 工具实例 | [团队工具](reference.md#团队工具tools) |
+
+每一种也可以放在你的角色或项目为 workflows 激活的命名空间下的 `<folder>/<namespace>/`，以及只给你自己用的 `~/.teamai/<folder>/`。驱动和运行时的名字先在每个位置按完全相同的名字查找，再查找 `teamai-<name>`，所以团队的 `runtimes/t3/` 会替换 teamai 自带的 `teamai-t3` 运行。
+
 ### 运行时选项
 
 运行时在 `init` 时自己检查 `options`，不接受的键会在任何步骤运行前失败为 `bad_option`。有两个键属于 teamai，运行时看不到：

@@ -1637,6 +1637,34 @@ teamai ships these definitions:
 | `teamai-paseo` | `paseo` (`max_parallel: 4`, at the address your Paseo config names) |
 | `teamai-sandbox` | `sandbox` (`provider: sbx`, `max_parallel: 4`), then `tools` |
 
+### Where each part lives
+
+A run's drivers, runtimes and tools are files in the team repo, each kept as a file or as a folder with its marker and what it needs:
+
+```text
+drivers/
+├── ci.yaml                     driver definition "ci"
+└── gpu/
+    └── DRIVER.yaml             driver definition "gpu"
+runtimes/
+├── acme.yaml                   step runtime "acme", an executable on PATH
+└── t3/
+    ├── RUNTIME.yaml            step runtime "t3", in place of teamai's
+    └── runtime                 its code, accepted with the folder's revision
+tools/
+├── acme-claude.yaml            tool instance "acme-claude"
+└── web-claude/
+    └── TOOL.yaml               tool instance "web-claude"
+```
+
+| To | Add | See |
+| --- | --- | --- |
+| Run steps on other runtimes, or prompt steps on another tool | a driver definition | [the lookup above](#driver-definitions-and-step-runtimes) |
+| Run steps in a program of your own, such as an app or a remote machine | a step runtime | [write a step runtime](runtime-protocol.md) |
+| Run a tool under another command or home | a tool instance | [team tools](reference.md#team-tools-tools) |
+
+Each may also sit in `<folder>/<namespace>/` for a namespace your roles or projects activate for workflows, and in `~/.teamai/<folder>/` for yourself. A driver or runtime name is looked up exactly in every place first, then as `teamai-<name>`, so a team's `runtimes/t3/` runs in place of teamai's `teamai-t3`.
+
 ### Runtime options
 
 A runtime checks its own `options` at `init`, and a key it does not take fails `bad_option` before any step runs. Two keys are teamai's, and the runtime never sees them:
