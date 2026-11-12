@@ -33,7 +33,7 @@ it('stops an attached child through child.kill without probing other PIDs', asyn
 
 it.each([false, true])('signals nothing for a child whose spawn failed, whose handle would signal pid 0, this process\'s whole group (detached: %s)', async (detached) => {
   const child = spawn(path.join(os.tmpdir(), 'teamai-no-such-command'), [], { detached, stdio: 'ignore' });
-  const failed = new Promise<string>((resolve) => { child.once('error', (error) => resolve(String(z.object({ code: z.string() }).parse(error).code))); });
+  const failed = new Promise<string>((resolve) => { child.once('error', (error) => resolve(z.object({ code: z.string() }).parse(error).code)); });
   // Spied before the stop, so a regression reaches no process: Node's kill of this handle would send SIGTERM to pid 0.
   const kill = vi.spyOn(child, 'kill').mockReturnValue(true);
   const processKill = vi.spyOn(process, 'kill').mockReturnValue(true);
@@ -479,6 +479,12 @@ it.skipIf(process.platform === 'win32')('tells the process a record names from a
     expect(await isSameProcess({ pid, startedAt: spawnedAt - 3_600_000 })).toBe('other');
     expect(await isSameProcess({ pid })).toBe('unknown');
     expect(await isSameProcess({ pid: 2147483646 })).toBe('other');
+
+    // kill(0) reads this process's own group and kill(1) init, so neither is probed, and neither is a process teamai started.
+    const probe = vi.spyOn(process, 'kill');
+    expect(await isSameProcess({ pid: 0, spawnedAt })).toBe('other');
+    expect(await isSameProcess({ pid: 1, spawnedAt })).toBe('other');
+    expect(probe).not.toHaveBeenCalled();
   } finally {
     child.kill('SIGKILL');
   }

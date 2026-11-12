@@ -275,6 +275,8 @@ export async function isSameProcess(recorded: ProcessIdentity, { signal }: { sig
   // Its pid names another process here, or none, so neither says anything of the recorded one.
   if (isOtherPidNamespace(recorded.pidNamespace, namespace)) return 'foreign';
 
+  if (!isSignallable(recorded.pid)) return 'other';
+
   try {
     process.kill(recorded.pid, 0);
   } catch (error) {
@@ -490,12 +492,16 @@ async function readGroup(file: string): Promise<Recorded | undefined> {
 }
 
 /**
- * Sends `name` to process `pid`, or with `isGroup` to the process group it leads: the one way this module signals.
- * Refuses a pid that is not an integer above 1, as `kill` reads 0 as this process's own group and -1 as every process
- * it may signal, and 1 is init. Whether the signal reached a process.
+ * Whether `pid` may go to `kill`, which every call of it here checks first: an integer above 1, as `kill` reads 0 as
+ * this process's own group and -1 as every process it may signal, and 1 is init.
  */
+function isSignallable(pid: number): boolean {
+  return Number.isSafeInteger(pid) && pid > 1;
+}
+
+/** Sends `name` to process `pid`, or with `isGroup` to the process group it leads. Whether the signal reached a process. */
 function sendSignal(pid: number, name: NodeJS.Signals | 0, { isGroup = false }: { isGroup?: boolean } = {}): boolean {
-  if (!Number.isSafeInteger(pid) || pid <= 1) return false;
+  if (!isSignallable(pid)) return false;
 
   try {
     return process.kill(isGroup ? -pid : pid, name);
