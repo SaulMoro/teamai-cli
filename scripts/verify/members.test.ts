@@ -1,6 +1,10 @@
-import { describe, expect, it } from 'vitest';
+import { execFileSync } from 'node:child_process';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { afterEach, describe, expect, it } from 'vitest';
 import { addMember, ensureOrigin, memberLayout, setupBaseline } from './members.js';
-import type { World } from './world.js';
+import { gitconfigText, TEAM_URL, type World } from './world.js';
 import { parseTarget } from './target.js';
 
 const RUN = '20261112T113044-479be0';
@@ -55,5 +59,38 @@ describe('a cleaned world', () => {
   it('gets no origin and no member, and says to make a new world', () => {
     expect(() => ensureOrigin(cleaned)).toThrow(`World ${RUN} was cleaned up at 2026-11-12T12:00:00.000Z. Make a new one.`);
     expect(() => addMember(cleaned, { name: 'bob' })).toThrow(`World ${RUN} was cleaned up at 2026-11-12T12:00:00.000Z. Make a new one.`);
+  });
+});
+
+describe("a world's origin", () => {
+  const roots: string[] = [];
+
+  afterEach(() => {
+    for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true });
+  });
+
+  it("keeps every setting already in the world HOME's ~/.gitconfig", () => {
+    const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'world-origin-')));
+    roots.push(dir);
+    const home = path.join(dir, 'home');
+    const project = path.join(dir, 'project');
+    const env = { HOME: home, PATH: process.env.PATH ?? '/usr/bin:/bin', GIT_CONFIG_NOSYSTEM: '1' };
+    fs.mkdirSync(home);
+    fs.mkdirSync(project);
+    // As `sh <run> git config --global alias.co checkout` leaves it.
+    fs.writeFileSync(path.join(home, '.gitconfig'), `${gitconfigText({ name: 'TeamAI World', email: 'world@teamai.test', urls: [{ repo: path.join(dir, 'team.git'), url: TEAM_URL }] })}[alias]\n\tco = checkout\n`);
+    execFileSync('git', ['init', '--quiet', '-b', 'main'], { cwd: project, env });
+    execFileSync('git', ['commit', '--quiet', '--allow-empty', '-m', 'base'], { cwd: project, env });
+    const world: World = {
+      runId: RUN, dir, project, team: path.join(dir, 'team.git'), home, tmp: path.join(dir, 'tmp'), logs: path.join(dir, 'logs'), bin: path.join(dir, 'bin'),
+      build: { commit: 'c', dirty: false, version: '0.0.0', tarball: 't.tgz', sha256: 's', node: 'v20' }, createdAt: '2026-11-12T11:30:44.000Z',
+      baseline: { teamRefs: {}, checkoutStatus: [] }, env,
+    };
+    fs.writeFileSync(path.join(dir, 'world.json'), JSON.stringify(world));
+
+    ensureOrigin(world);
+
+    expect(execFileSync('git', ['config', '--global', 'alias.co'], { env, encoding: 'utf8' }).trim()).toBe('checkout');
+    expect(execFileSync('git', ['ls-remote', 'origin', 'main'], { cwd: project, env, encoding: 'utf8' })).toMatch(/refs\/heads\/main/);
   });
 });

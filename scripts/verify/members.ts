@@ -75,18 +75,18 @@ export function ensureOrigin(world: World): World {
   const bare = path.join(world.dir, 'origin.git');
   const before = worldFiles(world);
 
-  const gitconfig = path.join(world.home, '.gitconfig');
-  const gitconfigBefore = fs.readFileSync(gitconfig, 'utf8');
+  // One setting added, so what a command of the world set in ~/.gitconfig before stays.
+  const mapping = `url.file://${bare}.insteadOf`;
 
   try {
     setupGit(env, ['init', '--quiet', '--bare', bare], world.dir);
-    fs.writeFileSync(gitconfig, gitconfigText({ name: 'TeamAI World', email: 'world@teamai.test', urls: [{ repo: world.team, url: TEAM_URL }, { repo: bare, url: ORIGIN_URL }] }));
+    setupGit(env, ['config', '--global', '--add', mapping, ORIGIN_URL], world.dir);
     setupGit(env, ['remote', 'add', 'origin', ORIGIN_URL], world.project);
     setupGit(env, ['push', '--quiet', '-u', 'origin', 'HEAD:main'], world.project);
   } catch (error) {
     // Undone, so the next try starts from the world as it was.
     spawnSync('git', ['remote', 'remove', 'origin'], { cwd: world.project, env, stdio: 'ignore' });
-    fs.writeFileSync(gitconfig, gitconfigBefore);
+    spawnSync('git', ['config', '--global', '--unset-all', mapping], { cwd: world.dir, env, stdio: 'ignore' });
     fs.rmSync(bare, { recursive: true, force: true });
     throw error;
   }
