@@ -85,6 +85,9 @@ function calleeName(/** @type {ESTree.Node} */ callee) {
   return callee.type === 'MemberExpression' && !callee.computed && callee.property.type === 'Identifier' ? callee.property.name : undefined;
 }
 
+/** The variables whose values `isProcess` is judging. */
+const judging = new Set();
+
 /**
  * Whether `node` is Node's `process`: the global, `globalThis.process`, the `process` module imported or required
  * whole, or a name bound to one of these.
@@ -99,10 +102,32 @@ function isProcess(sourceCode, node) {
 
       if (def === undefined) return node.name === 'process';
 
-      // A default or namespace import of the process module; `import { kill }` is checked where it is imported.
-      if (def.type === 'ImportBinding') return def.node.type !== 'ImportSpecifier' && def.parent?.type === 'ImportDeclaration' && PROCESS_MODULES.has(String(def.parent.source.value));
+      // The process module imported whole, or as its default; `import { kill }` is checked where it is imported.
+      if (def.type === 'ImportBinding') {
+        const specifier = def.node;
 
-      return def.type === 'Variable' && def.node.type === 'VariableDeclarator' && def.node.id.type === 'Identifier' && def.node.init !== null && def.node.init !== undefined && isProcess(sourceCode, def.node.init);
+        return def.parent?.type === 'ImportDeclaration' && PROCESS_MODULES.has(String(def.parent.source.value))
+          && (specifier.type === 'ImportSpecifier' || specifier.type === 'ImportDefaultSpecifier' || specifier.type === 'ImportNamespaceSpecifier') && ['default', '*'].includes(importedName(specifier));
+      }
+
+      // A parameter whose default is process: `(target = process) => …`.
+      if (def.type === 'Parameter') return def.name.parent?.type === 'AssignmentPattern' && def.name.parent.left === def.name && isProcess(sourceCode, def.name.parent.right);
+
+      if (def.type !== 'Variable') return false;
+
+      const variable = variableOf(sourceCode, node, node.name);
+
+      // A variable met again while its own values are judged (`a = b; b = a`) adds nothing to what they say.
+      if (variable === undefined || judging.has(variable)) return false;
+      judging.add(variable);
+
+      try {
+        // Its initial value, or any value assigned to it later: `let target; target = process;`.
+        return variable.references.some((reference) => reference.isWrite() && reference.writeExpr !== null && reference.writeExpr !== undefined
+          && isProcess(sourceCode, reference.writeExpr));
+      } finally {
+        judging.delete(variable);
+      }
     }
 
     case 'MemberExpression': {
@@ -119,7 +144,8 @@ function isProcess(sourceCode, node) {
       return isProcess(sourceCode, node.consequent) || isProcess(sourceCode, node.alternate);
 
     case 'CallExpression':
-      return node.callee.type === 'Identifier' && node.callee.name === 'require' && PROCESS_MODULES.has(textOf(node.arguments[0]) ?? '');
+      // `require('node:process')`, or the require `createRequire(…)` returns called at once.
+      return ((node.callee.type === 'Identifier' && node.callee.name === 'require') || node.callee.type === 'CallExpression') && PROCESS_MODULES.has(textOf(node.arguments[0]) ?? '');
     case 'ImportExpression':
       return PROCESS_MODULES.has(textOf(node.source) ?? '');
     case 'AwaitExpression':
@@ -139,9 +165,30 @@ function readsKill(/** @type {ESTree.MemberExpression} */ node) {
   return node.computed ? textOf(node.property) === 'kill' : node.property.type === 'Identifier' && node.property.name === 'kill';
 }
 
+/** Whether `node` reads a key lint cannot read, as `[name]`, which may be `kill`. */
+function readsUnknownKey(/** @type {ESTree.MemberExpression} */ node) {
+  return node.computed && textOf(node.property) === undefined;
+}
+
 /** Whether `node` is the target of an assignment, as `child.kill = …` puts a kill of its own on a child. */
 function isAssigned(/** @type {ESTree.MemberExpression} */ node) {
   return node.parent?.type === 'AssignmentExpression' && node.parent.left === node;
+}
+
+/**
+ * Whether the object pattern `node` takes key `kill` from `value`, as `{ kill } = process`, or reaches it under key
+ * `process` of the global object, as `{ process: { kill } } = globalThis`.
+ * @param {import('@oxlint/plugins').Context['sourceCode']} sourceCode
+ * @param {ESTree.ObjectPattern | ESTree.ObjectAssignmentTarget} node
+ * @param {ESTree.Node} value
+ */
+function takesKillOf(sourceCode, node, value) {
+  if (isProcess(sourceCode, value)) return takesKill(node);
+
+  if (value.type !== 'Identifier' || (value.name !== 'globalThis' && value.name !== 'global')) return false;
+
+  return node.properties.some((property) => property.type === 'Property' && !property.computed && property.key.type === 'Identifier' && property.key.name === 'process'
+    && property.value.type === 'ObjectPattern' && takesKill(property.value));
 }
 
 /** Whether the object pattern `node`, of a declaration or an assignment, takes key `kill`. */
@@ -155,7 +202,9 @@ export default defineRule({
     docs: { description: 'Send every signal by pid through @teamai/shared/process-group, which refuses a pid below 2.' },
   },
   create(context) {
-    if (isOneOf(context, OWNER) || isOneOf(context, RUN_AS_IS)) return {};
+    if (isOneOf(context, OWNER)) return {};
+    // A program run as it is keeps the owner's check inline, so only its own process.kill is let off.
+    const mayCallKill = isOneOf(context, RUN_AS_IS);
     const { sourceCode } = context;
     const report = (/** @type {ESTree.Node} */ node) => { context.report({ node, message: MESSAGE }); };
     const isScriptText = isOneOf(context, SCRIPT_TEXT);
@@ -180,24 +229,39 @@ export default defineRule({
     return {
       /** @param {ESTree.MemberExpression} node */
       MemberExpression(node) {
+        if (readsUnknownKey(node) && isProcess(sourceCode, node.object)) report(node);
+
         if (!readsKill(node)) return;
 
-        if (isProcess(sourceCode, node.object)) report(node);
+        if (isProcess(sourceCode, node.object)) {
+          if (!mayCallKill) report(node);
+        }
         else if (isChild(node.object) && !isAssigned(node)) context.report({ node, message: CHILD_MESSAGE });
       },
       /** @param {ESTree.VariableDeclarator} node */
       VariableDeclarator(node) {
-        if (node.id.type !== 'ObjectPattern' || !node.init || !takesKill(node.id)) return;
+        if (node.id.type !== 'ObjectPattern' || !node.init) return;
 
-        if (isProcess(sourceCode, node.init)) report(node);
-        else if (isChild(node.init)) context.report({ node, message: CHILD_MESSAGE });
+        if (takesKillOf(sourceCode, node.id, node.init)) report(node);
+        else if (takesKill(node.id) && isChild(node.init)) context.report({ node, message: CHILD_MESSAGE });
       },
       /** @param {ESTree.AssignmentExpression} node */
       AssignmentExpression(node) {
-        if (node.left.type !== 'ObjectPattern' || !takesKill(node.left)) return;
+        if (node.left.type !== 'ObjectPattern') return;
 
-        if (isProcess(sourceCode, node.right)) report(node);
-        else if (isChild(node.right)) context.report({ node, message: CHILD_MESSAGE });
+        if (takesKillOf(sourceCode, node.left, node.right)) report(node);
+        else if (takesKill(node.left) && isChild(node.right)) context.report({ node, message: CHILD_MESSAGE });
+      },
+      /** @param {ESTree.AssignmentPattern} node */
+      AssignmentPattern(node) {
+        // A destructured parameter whose default is process: `({ kill } = process) => …`.
+        if (node.left.type === 'ObjectPattern' && takesKillOf(sourceCode, node.left, node.right)) report(node);
+      },
+      /** @param {ESTree.ExportNamedDeclaration} node */
+      ExportNamedDeclaration(node) {
+        if (!PROCESS_MODULES.has(String(node.source?.value))) return;
+
+        for (const specifier of node.specifiers) if (specifier.local.type === 'Identifier' ? specifier.local.name === 'kill' : specifier.local.value === 'kill') report(specifier);
       },
       /** @param {ESTree.ImportDeclaration} node */
       ImportDeclaration(node) {
@@ -210,16 +274,19 @@ export default defineRule({
         const { callee } = node;
         const name = calleeName(callee);
 
-        // Reflect.get(process, 'kill') reads it with no member expression.
-        if (name === 'get' && callee.type === 'MemberExpression' && callee.object.type === 'Identifier' && callee.object.name === 'Reflect'
-          && textOf(node.arguments[1]) === 'kill' && node.arguments[0] && isProcess(sourceCode, node.arguments[0])) report(node);
+        // A call given process and the key `kill` reads it with no member expression: Reflect.get, a property descriptor.
+        // A spy is how a test observes a signal, and sends none once it is mocked.
+        if (name !== 'spyOn' && node.arguments.some((argument) => textOf(argument) === 'kill') && node.arguments.some((argument) => isProcess(sourceCode, argument))) report(node);
         const first = leadingTextOf(node.arguments[0]);
 
-        if (first === undefined || name === undefined) return;
+        if (first === undefined || name === undefined || (!STARTERS.has(name) && !SHELLS.has(name))) return;
+        // The first word: a command line under `shell: true` or exec names its executable first.
+        const executable = executableOf(first.trim().split(/\s+/)[0] ?? '');
+        const second = node.arguments[1];
+        // `env kill …` runs kill.
+        const launched = executable === 'env' && second?.type === 'ArrayExpression' ? executableOf(textOf(second.elements[0] ?? undefined) ?? '') : executable;
 
-        if (STARTERS.has(name) && KILL_EXECUTABLES.has(executableOf(first))) report(node);
-
-        if (SHELLS.has(name) && KILL_EXECUTABLES.has(executableOf(first.trim().split(/\s+/)[0] ?? ''))) report(node);
+        if (KILL_EXECUTABLES.has(launched)) report(node);
       },
       Literal: checkText,
       TemplateLiteral: checkText,

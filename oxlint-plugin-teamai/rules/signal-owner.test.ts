@@ -46,6 +46,27 @@ spawn('/bin/kill', ['-KILL', String(pid)]);`, (output) => {
   expect(reports(output)).toBe(4);
 });
 
+rule.invalid('rejects process.kill reached through a parameter, a later assignment, a nested pattern, a renamed default, a re-export, createRequire, a key it cannot read, or a call given process and its key', `import { execFile, spawn } from 'node:child_process';
+import { createRequire } from 'node:module';
+import { default as proc } from 'node:process';
+export { kill } from 'node:process';
+export function stop(target = process): void { target.kill(2, 0); }
+export const end = ({ kill: ended } = process): boolean => ended(2, 0);
+let later;
+later = process;
+later.kill(2, 0);
+const { process: { kill: nested } } = globalThis;
+proc.kill(2, 0);
+createRequire(import.meta.url)('node:process').kill(2, 0);
+spawn('kill -9 2', { shell: true });
+execFile('/usr/bin/env', ['kill', '-9', '2']);
+const name = 'kill';
+process[name](2, 0);
+Object.getOwnPropertyDescriptor(process, 'kill');
+export { nested };`, (output) => {
+  expect(reports(output)).toBe(11);
+});
+
 rule.invalid('rejects kill of the process module, imported or required', `import { kill as end } from 'node:process';
 import proc from 'process';
 import * as nodeProcess from 'node:process';
@@ -78,6 +99,13 @@ rule.invalid('rejects one in a program node runs as it is, unless the rule names
 rule.valid('allows the owner, which every signal goes through', `export const signal = (pid: number): boolean => process.kill(pid, 0);`, { filename: 'packages/shared/src/process-group.ts' });
 
 rule.valid('allows the program node runs as it is that the rule names, which keeps the check inline', `process.kill(-Number(process.argv[2]), 'SIGKILL');`, { filename: 'packages/runtime-sandbox/src/testing/fake-engine.mjs' });
+
+rule.invalid('rejects a child\'s kill in the program node runs as it is, which the rule lets off only its process.kill', `import { spawn } from 'node:child_process';
+process.kill(-Number(process.argv[2]), 'SIGKILL');
+spawn('sleep', ['9']).kill('SIGKILL');`, (output) => {
+  expect(output.match(/Signal a child process through signalChild/g)).toHaveLength(1);
+  expect(reports(output)).toBe(0);
+}, { filename: 'packages/runtime-sandbox/src/testing/fake-engine.mjs' });
 
 rule.valid('allows the text of a program in a file the rule names for it', `export const script = "process.kill(process.ppid, 'SIGKILL')";`, { filename: 'src/__tests__/env-exec.test.ts' });
 
