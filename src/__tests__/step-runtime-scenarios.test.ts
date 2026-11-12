@@ -28,6 +28,7 @@ import { fakeAgent } from '@teamai/tool-testing/fake-agent';
 import { claudeFake } from '@teamai/tool-claude/testing';
 import { leaseNext, reportAttempt } from '../workflow/engine.js';
 import { fleetStepRuntime } from '../workflow/fleet/owner.js';
+import { attemptRun } from '../workflow/runtimes/attempt.js';
 import { takeFleetAttempt, type MemberPlace } from '../workflow/fleet/member.js';
 import { claimAttempt, leaveOffer, markOffered, readAttemptRecord } from '../workflow/fleet/record.js';
 import { AttemptIdSchema, installOwner, readRun, RunIdSchema, runsDir } from '../workflow/store.js';
@@ -3328,6 +3329,54 @@ done`);
       .toEqual({ kind: 'exited', code: 0, stdout: 'set up\n' });
     expect(await readAttemptRecord(owner.alice.config, owner.run, owner.attempt)).toEqual({ ok: true, value: 'absent' });
   }, 15_000);
+
+  it('takes into the place the work a member finished while the owner\'s teamai was down, once a restarted teamai resumes the prompt', async () => {
+    const owner = await ownerOf({ workflow: PROMPTED, tools: ['claude'] });
+    const bin = path.join(path.dirname(owner.bob.checkout), 'bin');
+    const claude = fakeAgent(claudeFake, { bin, answer: '{"ok":true}', before: 'fs.writeFileSync(\'made.txt\', \'made\\n\');' });
+    vi.stubEnv('PATH', `${bin}${path.delimiter}${process.env.PATH ?? ''}`);
+    vi.stubEnv('HOME', path.join(path.dirname(owner.bob.checkout), 'bob-home'));
+    owner.bob.config.workflows = { tools: { default: 'claude' } };
+    const place = path.join(path.dirname(owner.alice.checkout), 'alice-place');
+    git(owner.alice.checkout, 'worktree', 'add', '-q', '--detach', place, 'HEAD');
+    /** An attempt of Alice's run as one teamai process of hers drives it on a fleet runtime of its own. */
+    const driven = async () => {
+      const runtime = fleetStepRuntime({ config: owner.alice.config, masks: {} });
+      fleetRuntimes.push(runtime);
+      expect(await runtime.init({ options: { stale_after: '60s' }, mode: 'unattended', checkout: owner.alice.checkout })).toMatchObject({ ok: true });
+      const attempt = attemptRun({ config: owner.alice.config, run: owner.run, attempt: owner.attempt, runtime, driver: 'fleet' });
+      expect(await attempt.open(undefined)).toMatchObject({ ok: true });
+      const prompt = async () => attempt.prompt({
+        env: {}, unset: [], credentials: {}, cwd: place,
+        lease: { step: 'work', tool: 'claude', prompt: 'A prompt this host rendered.', result: path.join(place, 'result.json'), permissions: 'unattended', interactive: false },
+      }, {});
+
+      return { runtime, prompt, stopLeft: async () => attempt.stopLeftOperation() };
+    };
+
+    try {
+      const first = await driven();
+      const left = first.prompt();
+      expect(await owner.record()).toMatchObject({ state: 'offered' });
+      // The owner's teamai stops while the prompt is out on the pool.
+      await first.runtime.dispose();
+      await left;
+      await readableReportsWorktree(owner.bob.config);
+      expect(await takeFleetAttempt(owner.bob.config, { pool: 'default', repository: getRepoIdentity(owner.bob.checkout) ?? '', root: owner.bob.checkout, member: await installOwner(owner.bob.config), secrets: {}, place: { command: { kind: 'here' }, prompt: { kind: 'here' } } }))
+        .toMatchObject({ data: { ran: { run: owner.run, attempt: owner.attempt, exit_code: 0 } } });
+      expect(await owner.record()).toMatchObject({ state: 'finished' });
+      // A workflow cancel with no live driver finds nothing of the step running, whatever work is left to take.
+      expect(await (await driven()).stopLeft()).toBeUndefined();
+
+      const resumed = await (await driven()).prompt();
+
+      expect(resumed).toMatchObject({ kind: 'finished', session: { tool: 'claude' }, result: { output: { ok: true } } });
+      expect(fs.readFileSync(path.join(place, 'made.txt'), 'utf8')).toBe('made\n');
+    } finally {
+      vi.unstubAllEnvs();
+      expect(claude.stopLeft(), 'fake agents left running').toEqual([]);
+    }
+  }, 90_000);
 
   it('reconnects a restarted teamai to the exec it left by the same id, and a cancel with no wait reaches the record', async () => {
     const owner = await ownerOf();

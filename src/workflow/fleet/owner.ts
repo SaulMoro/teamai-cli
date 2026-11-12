@@ -170,9 +170,35 @@ function localHandle({ run, attempt }: FleetPlace): string {
   return `local-${run}-${attempt}`;
 }
 
-/** What a record says of the exec that offered it, to a teamai that did not see it end. */
-function recordState(op: OpId, record: FleetRecord | 'absent'): OpState {
-  if (record === 'absent') return { op, state: 'running' };
+/**
+ * Whether the record ended with work its member pushed, which only the owner's wait takes into the place: a teamai that
+ * did not see the end has not taken it.
+ */
+function hasWorkToTake(record: FleetRecord): boolean {
+  switch (record.state) {
+    case 'finished': return record.result.to !== undefined;
+    case 'cancelled':
+    case 'expired': return record.pushed !== record.start;
+    case 'offered':
+    case 'claimed':
+    case 'asking':
+    case 'answered':
+    case 'cancelling':
+    case 'withdrawn': return false;
+    default: {
+      const unhandled: never = record;
+
+      return unhandled;
+    }
+  }
+}
+
+/**
+ * What a record says of the exec that offered it, to a teamai that did not see it end. An end with work still to take
+ * reports `running` while `isTaking`: the same op sent again waits on the record, which takes the work before it ends.
+ */
+function recordState(op: OpId, record: FleetRecord | 'absent', { isTaking }: { isTaking: boolean }): OpState {
+  if (record === 'absent' || (isTaking && hasWorkToTake(record))) return { op, state: 'running' };
 
   switch (record.state) {
     case 'offered':
@@ -267,6 +293,8 @@ export function fleetStepRuntime({ config, masks, openWake }: { config: LocalCon
   const waits = new Map<OpId, { place: FleetPlace; cancel: AbortController; end: Promise<Waited>; isWhole: boolean }>();
   // The exec of each place a restarted teamai read, so a cancel of it with no wait here reaches its record.
   const seen = new Map<OpId, FleetPlace>();
+  // The execs of `seen` a cancel reached: the work their members pushed is not taken, so their record's end is theirs.
+  const cancelled = new Set<OpId>();
   let settings: { pool: string; staleAfterMs: number; root: string; waker?: Waker } | undefined;
 
   // A whole workflow's exec answers how its nested run ended on stdout (`WholeEndSchema`).
@@ -427,8 +455,10 @@ export function fleetStepRuntime({ config, masks, openWake }: { config: LocalCon
       // A teamai before this one offered it: only the attempt's record reaches its member.
       const asked = await cancelFleetAttempt(config, place.run, place.attempt);
 
-      if (asked.ok) log.info(asked.message);
-      else log.warn(asked.message);
+      if (asked.ok) {
+        cancelled.add(op);
+        log.info(asked.message);
+      } else log.warn(asked.message);
     },
 
     async collect(handle) {
@@ -449,7 +479,7 @@ export function fleetStepRuntime({ config, masks, openWake }: { config: LocalCon
 
       if (!read.ok) return { kind: 'failed', failure: { code: read.error.code, message: read.error.message } };
 
-      return { kind: 'alive', ops: [recordState(offered, read.value)] };
+      return { kind: 'alive', ops: [recordState(offered, read.value, { isTaking: !cancelled.has(offered) })] };
     },
 
     async close(handle) {
