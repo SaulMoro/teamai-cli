@@ -199,6 +199,36 @@ describe("a world's world.json", () => {
   });
 });
 
+describe('every live world', () => {
+  it('skips a world whose world.json cannot be read, says why, and still lists the others', async () => {
+    const tmp = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'live-worlds-')));
+    roots.push(tmp);
+    vi.stubEnv('TMPDIR', tmp);
+    vi.resetModules();
+    const { liveWorlds, WORLDS_ROOT } = await import('./world.js');
+    const write = (runId: string, text: string): void => {
+      fs.mkdirSync(path.join(WORLDS_ROOT, runId), { recursive: true });
+      fs.writeFileSync(path.join(WORLDS_ROOT, runId, 'world.json'), text);
+    };
+    const good = '20261112T113044-479be0';
+    const dir = path.join(WORLDS_ROOT, good);
+    write(good, JSON.stringify({
+      runId: good, dir, project: `${dir}/project`, team: `${dir}/team.git`, home: `${dir}/home`, tmp: `${dir}/tmp`, logs: `${dir}/logs`, bin: `${dir}/bin`,
+      build: { commit: 'c', dirty: false, version: '0.0.0', tarball: 't.tgz', sha256: 's', node: 'v20' }, createdAt: '2026-11-12T11:30:44.000Z', baseline: { teamRefs: {}, checkoutStatus: [] },
+    }));
+    write('20261112T113045-000000', '{');
+    write('20261112T113046-000000', JSON.stringify({ runId: '20261112T113046-000000' }));
+
+    const live = liveWorlds();
+
+    expect(live.worlds.map((world) => world.runId)).toEqual([good]);
+    expect(live.skipped).toEqual([
+      { name: '20261112T113045-000000', why: expect.stringContaining('cannot be read as JSON') },
+      { name: '20261112T113046-000000', why: expect.stringContaining('is not a world.json this harness reads') },
+    ]);
+  });
+});
+
 describe('a rewrite of a file two commands of a world share', () => {
   const lockedFile = () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-verify-lock-'));

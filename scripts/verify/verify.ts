@@ -148,9 +148,12 @@ async function main(): Promise<number> {
     case 'ledger':
       return await runLedger(loadWorld(parseTarget(rest[0]).runId)) ? 0 : 1;
     case 'cleanup': {
-      let isClean = true;
+      const { worlds, skipped } = rest[0] === '--all' ? liveWorlds() : { worlds: [loadWorld(parseTarget(rest[0]).runId)], skipped: [] };
+      let isClean = skipped.length === 0;
 
-      for (const world of rest[0] === '--all' ? liveWorlds() : [loadWorld(parseTarget(rest[0]).runId)]) isClean = await cleanup(world) && isClean;
+      for (const { name, why } of skipped) console.error(`Skipped ${name}: ${why}`);
+
+      for (const world of worlds) isClean = await cleanup(world) && isClean;
 
       return isClean ? 0 : 1;
     }
@@ -163,9 +166,13 @@ async function main(): Promise<number> {
 
     case 'dir': {
       if (rest[0] === '--all') {
-        for (const world of liveWorlds()) console.log(`${world.runId} ${world.dir}`);
+        const { worlds, skipped } = liveWorlds();
 
-        return 0;
+        for (const { name, why } of skipped) console.error(`Skipped ${name}: ${why}`);
+
+        for (const world of worlds) console.log(`${world.runId} ${world.dir}`);
+
+        return skipped.length === 0 ? 0 : 1;
       }
 
       const { runId, target } = parseTarget(rest[0]);

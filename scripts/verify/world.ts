@@ -502,7 +502,18 @@ export function loadWorld(runId: string | undefined): World {
 
   if (!fs.existsSync(file)) throw new Error(`No world ${runId} under ${WORLDS_ROOT}. Make one with \`npm run verify:world\`.`);
 
-  const world = WorldSchema.parse(JSON.parse(fs.readFileSync(file, 'utf8')));
+  let text: unknown;
+
+  try {
+    text = JSON.parse(fs.readFileSync(file, 'utf8'));
+  } catch (error) {
+    throw new Error(`${file} cannot be read as JSON (${error instanceof Error ? error.message : String(error)}).`, { cause: error });
+  }
+
+  const parsed = WorldSchema.safeParse(text);
+
+  if (!parsed.success) throw new Error(`${file} is not a world.json this harness reads, such as one an older harness wrote.`);
+  const world = parsed.data;
 
   // cleanup empties world.dir, so it must be this run's directory and nothing else.
   if (world.dir !== path.join(fs.realpathSync.native(WORLDS_ROOT), runId)) throw new Error(`${file} names ${world.dir}, which is not world ${runId}'s directory.`);
@@ -510,14 +521,24 @@ export function loadWorld(runId: string | undefined): World {
   return world;
 }
 
-export function liveWorlds(): World[] {
-  if (!fs.existsSync(WORLDS_ROOT)) return [];
+/** Every world not cleaned up, and each folder whose world.json cannot be loaded, with why: one never hides the others. */
+export function liveWorlds() {
+  const worlds: World[] = [];
+  const skipped: Array<{ name: string; why: string }> = [];
 
-  return fs
-    .readdirSync(WORLDS_ROOT)
-    .filter((name) => fs.existsSync(path.join(WORLDS_ROOT, name, 'world.json')))
-    .map((name) => loadWorld(name))
-    .filter((world) => world.cleanedAt === undefined);
+  for (const name of fs.existsSync(WORLDS_ROOT) ? fs.readdirSync(WORLDS_ROOT).toSorted() : []) {
+    if (!fs.existsSync(path.join(WORLDS_ROOT, name, 'world.json'))) continue;
+
+    try {
+      const world = loadWorld(name);
+
+      if (world.cleanedAt === undefined) worlds.push(world);
+    } catch (error) {
+      skipped.push({ name, why: error instanceof Error ? error.message : String(error) });
+    }
+  }
+
+  return { worlds, skipped };
 }
 
 /** Programs a member runs on their own: what one of them writes is theirs, such as a tool's sessions. A shell may run teamai. */
