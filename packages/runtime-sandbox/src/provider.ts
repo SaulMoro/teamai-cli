@@ -92,9 +92,26 @@ export const HostRouteSchema = z.discriminatedUnion('ok', [z.object({ ok: z.lite
 
 export type HostRoute = z.infer<typeof HostRouteSchema>;
 
-/** What every provider does, whichever way its sandbox sees the place. */
 /** The image `warm` made or found for one open, which that open's `create` starts from rather than working the key out again. */
 export interface WarmedImage { image: string }
+
+/** What an open gives the creation of its sandbox. */
+export interface SandboxOpen {
+  view: PlaceView;
+  /** The attempt's prompt tool, as `open` names it (none for a command step), which picks sbx's template when no agent is set. */
+  tool: string | undefined;
+  /** The open's, the latest time the attempt's limits allow, which a hosted sandbox's lifetime must reach. */
+  deadline?: string;
+  /** What `warm` answered for this open, when it named the image the sandbox starts from. */
+  warmed?: WarmedImage;
+  /**
+   * The ports of this machine the attempt's credentials name (a model gateway on localhost): on a provider that keeps
+   * its sandbox from this machine, the only ones of it the sandbox reaches.
+   */
+  hostPorts: readonly number[];
+}
+
+/** What every provider does, whichever way its sandbox sees the place. */
 
 interface Sandboxing {
   /**
@@ -122,13 +139,8 @@ interface Sandboxing {
    * the ids of the scratch sandboxes of warm builds whose process no longer runs (warm.ts), which `destroy` removes.
    */
   owned?(): Promise<{ ok: true; sandboxes: Array<PlaceKey & { id: string }>; leftWarm?: string[] } | { ok: false; failure: RuntimeFailure }>;
-  /**
-   * Creates the attempt's sandbox with the view at its host paths and no credential, and returns its id. `tool` is the
-   * attempt's prompt tool, as `open` names it (none for a command step), which picks sbx's template when no agent is set.
-   * `deadline` is the open's, the latest time the attempt's limits allow, which a hosted sandbox's lifetime must reach.
-   * `warmed` is what `warm` answered for this open, when it named the image the sandbox starts from.
-   */
-  create(key: PlaceKey, view: PlaceView, tool: string | undefined, deadline?: string, warmed?: WarmedImage): Promise<{ ok: true; id: string } | { ok: false; failure: RuntimeFailure }>;
+  /** Creates the attempt's sandbox with the view at its host paths and no credential, and returns its id. */
+  create(key: PlaceKey, open: SandboxOpen): Promise<{ ok: true; id: string } | { ok: false; failure: RuntimeFailure }>;
   /**
    * On a provider with a warm image: makes the one an attempt with `view` and `tool` starts from, when it is not there
    * yet, before `create`, which then finds it, or starts from the image it names. It may take minutes, and nothing but

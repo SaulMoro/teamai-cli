@@ -380,7 +380,7 @@ export function sbxProvider({ agent, owner, env, warm, profile }: { agent: strin
       return tag === undefined ? { ok: true } : { ok: true, warmed: { image: tag } };
     },
 
-    async create(key, view, tool) {
+    async create(key, { view, tool }) {
       const template = templateOf(tool);
 
       if (template === undefined) {

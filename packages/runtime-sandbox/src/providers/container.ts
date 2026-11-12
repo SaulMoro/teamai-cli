@@ -317,7 +317,7 @@ export function containerProvider({ engine, image, owner, host, warm, profile }:
       return from.ok ? { ok: true, warmed: { image: from.image } } : from;
     },
 
-    async create(key, view, _tool, _deadline, warmed) {
+    async create(key, { view, warmed }) {
       const mounted = mountsOf(engine, view);
 
       if (!mounted.ok) return mounted;

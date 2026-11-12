@@ -1,7 +1,9 @@
 import { spawn } from 'node:child_process';
 import fs from 'node:fs';
+import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
+import { z } from 'zod';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { bundleRuntime, tempDir, type Connection, type Message } from '../testing/harness.js';
 import { exec, failStandIn, HANDLE, init, nativeHost, openPlace, placeIn, startOn, type NativeHost } from '../testing/native-harness.js';
@@ -266,6 +268,38 @@ describe.runIf(process.platform === 'darwin')('seatbelt: on this Mac', () => {
 
     expect(end).toMatchObject({ event: 'exited', code: 0 });
     expect(JSON.parse(output)).toEqual(['ok', 'EPERM', 'EPERM']);
+  });
+});
+
+// A step reaches no port of this Mac but the ones its credentials name: not the member's daemons on loopback, such as
+// Paseo's, which take any local client and run what it asks outside the sandbox.
+describe.runIf(process.platform === 'darwin')('seatbelt: this Mac\'s own ports, on this Mac', () => {
+  const servers: net.Server[] = [];
+
+  /** A listener on this Mac's loopback that answers every connection with `reply`, and its port. */
+  async function listening(reply: string): Promise<number> {
+    const server = net.createServer((socket) => { socket.end(reply); });
+    servers.push(server);
+    await new Promise<void>((resolve) => { server.listen(0, '127.0.0.1', resolve); });
+
+    return z.object({ port: z.number() }).parse(server.address()).port;
+  }
+
+  afterEach(async () => {
+    await Promise.all(servers.splice(0).map((server) => new Promise((resolve) => { server.close(resolve); })));
+  });
+
+  it("refuses a step a port of this Mac's loopback, and lets it reach the gateway its credentials name there", async () => {
+    const daemon = await listening('daemon');
+    const gateway = await listening('gateway');
+    host.tool('connects', "const net = require('node:net'); const [host, port] = process.argv.slice(2); const socket = net.connect(Number(port), host); socket.on('data', (data) => { console.log(String(data)); process.exit(0); }); socket.on('error', (error) => { console.log(error.code); process.exit(0); });");
+    const connection = startOn(executable, host, open, { PATH: [host.tools, path.dirname(process.execPath), '/usr/bin', '/bin'].join(path.delimiter), TMPDIR: fs.realpathSync(host.dir), SANDBOX_TEST_SYSTEM_BIN: undefined });
+    expect(await init(connection, { provider: 'seatbelt' })).toMatchObject({ ok: true });
+    const at = placeIn(host.dir);
+    await openPlace(connection, at, { credentials: { ANTHROPIC_BASE_URL: `http://127.0.0.1:${gateway}/anthropic` } });
+    const reach = async (address: string, port: number): Promise<string> => (await exec(connection, { argv: ['connects', address, String(port)], cwd: at.worktree })).output.trim();
+
+    expect({ daemon: await reach('127.0.0.1', daemon), byName: await reach('localhost', daemon), gateway: await reach('127.0.0.1', gateway) }).toEqual({ daemon: 'EPERM', byName: 'EPERM', gateway: 'gateway' });
   });
 });
 

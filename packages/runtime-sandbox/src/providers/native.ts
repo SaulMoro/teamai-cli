@@ -57,6 +57,8 @@ export interface Sandboxed {
   tmp: string;
   /** Whether the command starts detached, as an exec does: leading a process group and a session of its own, with no terminal. */
   isDetached: boolean;
+  /** The ports of this machine the attempt's credentials name: on seatbelt, the only ones of its loopback the step reaches. */
+  hostPorts: readonly number[];
 }
 
 /** The variables of the runtime's own environment a step's process keeps: what a shell and a locale need, no secret. */
@@ -207,12 +209,14 @@ export function nativeProvider({ sandbox, state, env, home }: { sandbox: NativeS
     return failed(`${provider} could not stop the processes of sandbox ${id} (process groups ${left.join(', ')}). Stop them with \`kill -KILL ${left.map((pgid) => `-${pgid}`).join(' ')}\`.`);
   };
 
-  const ViewFileSchema = z.object({ view: PlaceViewSchema });
+  // A place an earlier runtime wrote names no port: its steps reach none of this machine's.
+  const ViewFileSchema = z.object({ view: PlaceViewSchema, hostPorts: z.array(z.number().int().min(1).max(65_535)).default([]) });
 
-  const viewOf = (id: string): PlaceView | undefined => {
+  /** The place of sandbox `id`: the view open gave, and the ports of this machine its credentials name. */
+  const placeOf = (id: string): z.infer<typeof ViewFileSchema> | undefined => {
     const file = path.join(dirOf(id), 'view.json');
 
-    return fs.existsSync(file) ? ViewFileSchema.parse(JSON.parse(readRegularFileSync(file, 'utf8'))).view : undefined;
+    return fs.existsSync(file) ? ViewFileSchema.parse(JSON.parse(readRegularFileSync(file, 'utf8'))) : undefined;
   };
 
   /**
@@ -221,9 +225,10 @@ export function nativeProvider({ sandbox, state, env, home }: { sandbox: NativeS
    * directory, and the spec's names, less those it withholds.
    */
   const launchOf = (id: string, spec: ExecSpec, { isDetached }: Pick<Sandboxed, 'isDetached'>): { ok: true; command: string; args: string[]; env: NodeJS.ProcessEnv } | { ok: false; failure: RuntimeFailure } => {
-    const view = viewOf(id);
+    const place = placeOf(id);
 
-    if (view === undefined) return { ok: false, failure: { code: 'runtime_gone', message: `Sandbox ${id} has no place on this machine any more.` } };
+    if (place === undefined) return { ok: false, failure: { code: 'runtime_gone', message: `Sandbox ${id} has no place on this machine any more.` } };
+    const { view, hostPorts } = place;
     const [argv0 = ''] = spec.argv;
     const own = { home: realOf(path.join(dirOf(id), 'home')), tmp: realOf(path.join(dirOf(id), 'tmp')) };
     const kept = Object.fromEntries(KEPT.flatMap((name) => (env[name] === undefined ? [] : [[name, env[name]]])));
@@ -242,6 +247,7 @@ export function nativeProvider({ sandbox, state, env, home }: { sandbox: NativeS
       home: own.home,
       tmp: own.tmp,
       isDetached,
+      hostPorts,
     });
 
     return { ok: true, command: onPath(command, env.PATH) ?? command, args, env: childEnv };
@@ -288,14 +294,14 @@ export function nativeProvider({ sandbox, state, env, home }: { sandbox: NativeS
       };
     },
 
-    async create(key, view) {
+    async create(key, { view, hostPorts }) {
       const id = handleOf(key);
 
       // A writable path made here is the member's, as a bind mount's is.
       for (const at of [view.worktree, view.result, view.runDir, ...Object.values(view.toolHome)]) fs.mkdirSync(at, { recursive: true });
 
       for (const sub of ['home', 'tmp', 'pids']) fs.mkdirSync(path.join(dirOf(id), sub), { recursive: true, mode: 0o700 });
-      fs.writeFileSync(path.join(dirOf(id), 'view.json'), JSON.stringify({ view }), { mode: 0o600 });
+      fs.writeFileSync(path.join(dirOf(id), 'view.json'), JSON.stringify({ view, hostPorts }), { mode: 0o600 });
 
       return { ok: true, id };
     },
