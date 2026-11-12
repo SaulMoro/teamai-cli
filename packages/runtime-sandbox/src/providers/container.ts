@@ -196,6 +196,9 @@ export function containerProvider({ engine, image, owner, host, warm, profile, s
   let steps: StepNetwork = { isFiltered: false, alias: undefined };
 
   const filters = path.join(state, 'filters');
+
+  // Also for a provider a place opened earlier is reached through, whose offer never ran: its filter reads them too.
+  if (engine === 'docker') watchThisMachine(filters);
   /** The folder a step filter of `key` reads the addresses of this machine from. */
   const thisMachineOf = (key: PlaceKey): string => path.join(filters, handleOf(key));
 
@@ -236,7 +239,6 @@ export function containerProvider({ engine, image, owner, host, warm, profile, s
       fs.mkdirSync(thisMachineOf(key), { recursive: true });
       fs.writeFileSync(path.join(thisMachineOf(key), THIS_MACHINE_FILE), '');
       keepThisMachine(filters);
-      watchThisMachine(filters);
     }
 
     const filter = await cli(['run', '-d', '--name', filterOf(key), '--label', `teamai.run=${key.run}`, '--label', `teamai.filter=${key.attempt}`, '--label', `teamai.owner=${owner}`, ...user(), ...LOCKED, ...own, ...HOST_GATEWAY, '--entrypoint', 'node', image, '-e', FILTER_SCRIPT, String(FILTER_PORT), ...rules, ...(isStep ? [thisMachineFileRule(`${THIS_MACHINE_DIR}/${THIS_MACHINE_FILE}`)] : [])]);
@@ -412,8 +414,6 @@ export function containerProvider({ engine, image, owner, host, warm, profile, s
       const knowsThisMachine = system === 'Docker Desktop' || (process.platform === 'linux' && daemonHost === os.hostname());
       steps = { isFiltered: canFilter && knowsThisMachine, alias: route.ok ? route.alias : undefined };
 
-      // A resumed attempt's filter keeps reading this machine's addresses as they are now.
-      if (steps.isFiltered) watchThisMachine(filters);
       const judges = canFilter ? shipped : [];
 
       for (const tool of judges) {

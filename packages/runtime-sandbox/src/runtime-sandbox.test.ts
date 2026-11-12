@@ -1214,6 +1214,27 @@ describe('a prompt attempt in a container', () => {
     expect(fs.existsSync(path.dirname(file))).toBe(false);
   });
 
+  it("keeps the addresses of this machine a resumed step's filter reads current, when the resume after a profile change inits another provider", async () => {
+    engine.image(IMAGE, { claude: CLAUDE, node: '' });
+    const first = start();
+    await init(first, { provider: 'docker', image: IMAGE });
+    const at = place();
+    await openPlace(first, at);
+    first.child.kill('SIGKILL');
+    await first.end();
+    const file = path.join(dir, 'home', '.teamai', 'runtime-state', 'sandbox', 'docker', 'filters', HANDLE, 'this-machine');
+    const lan = Object.values(os.networkInterfaces()).flatMap((found) => found ?? []).filter((one) => !one.internal && one.family === 'IPv4').map((one) => one.address);
+    // What the file held when the addresses it lists were not this machine's yet.
+    fs.writeFileSync(file, '');
+    const second = start();
+    await init(second, { provider: 'podman', image: IMAGE });
+
+    expect(await exec(second, { argv: ['/bin/sh', '-c', 'echo again'], cwd: at.worktree })).toMatchObject({ end: { event: 'exited', code: 0 } });
+    await expect.poll(() => fs.readFileSync(file, 'utf8').split('\n'), { timeout: 10_000 }).toEqual(expect.arrayContaining(lan));
+    second.send({ type: 'close', handle: HANDLE });
+    expect(await second.next((message) => message.event === 'closed' || message.event === 'close_failed', 30_000)).toEqual({ event: 'closed', handle: HANDLE });
+  });
+
   it('leaves no network of a first open whose network filter could not start, which no sweep would find', async () => {
     engine.image(IMAGE, { claude: CLAUDE, node: '' });
     engine.failFilter(true);
