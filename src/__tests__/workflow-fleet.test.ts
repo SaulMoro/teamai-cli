@@ -1,7 +1,8 @@
+import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, onTestFinished, vi } from 'vitest';
 import { leaseNext, startRun } from '../workflow/engine.js';
 import { answerCancel, answerQuestion, cancelAttempt, claimAttempt, expireClaim, finishAttempt, lastGoneWork, leaveOffer, leaseEnv, leaseValues, listOpenAttempts, listRecords, markOffered, offerAttempt, offersAmong, readAttemptRecord, readOfferedMarker, recordProgress, woken, type FleetRecord, type HeldAttempt } from '../workflow/fleet/record.js';
 import { startGroupedCommand } from '../workflow/shell-command.js';
@@ -1011,6 +1012,34 @@ describe('cancelling an attempt through its record', () => {
     expect(git(alice.checkout, 'show', `${cancelled.pushed}:begun.txt`)).toBe('begun');
     await readableReportsWorktree(alice.config);
     expect(await lastGoneWork(alice.config, { run, step: 'work' })).toEqual({ attempt: ATTEMPT, pushed: cancelled.pushed });
+  }, 60_000);
+
+  it('goes on with its step when teamai-reports cannot be read for a moment after another write landed over its own', async () => {
+    const { alice, bob, run, startCommit } = await offerSlow(3_000, { definition: SLOW.replace('sleep 60', 'sleep 6'), command: 'echo begun > begun.txt; sleep 6' });
+    // A git on PATH that, while `cut` exists, fails each read of teamai-reports from the team clone, as a moment
+    // origin cannot be reached does; the member's writes go through its reports checkout and still land.
+    const bin = fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-fleet-git-'));
+    onTestFinished(() => { fs.rmSync(bin, { recursive: true, force: true }); });
+    const cut = path.join(bin, 'cut');
+    const real = execFileSync('sh', ['-c', 'command -v git'], { encoding: 'utf8' }).trim();
+    fs.writeFileSync(path.join(bin, 'git'), `#!/bin/sh\nif [ -f '${cut}' ] && [ "$(pwd -P)" = '${fs.realpathSync(bob.config.repo.localPath)}' ]; then case " $* " in *" ls-remote "*) echo 'fatal: unable to access origin' >&2; exit 128;; esac; fi\nexec '${real}' "$@"\n`, { mode: 0o755 });
+    vi.stubEnv('PATH', `${bin}${path.delimiter}${process.env.PATH ?? ''}`);
+    onTestFinished(() => { vi.unstubAllEnvs(); });
+    const taking = takeFleetAttempt(bob.config, { pool: 'default', repository: 'github.com/acme/business', root: bob.checkout, member: await installOwner(bob.config), secrets: {}, place: HERE });
+    const running = await eventually(async () => {
+      const record = await recordOf(alice, run);
+
+      return record?.state === 'claimed' && record.pushed !== startCommit ? record : undefined;
+    });
+
+    fs.writeFileSync(cut, '');
+    // Another write over the member's own, so its next beat is refused and it reads the record again.
+    expect(await recordProgress(bob.config, running, running.pushed)).toMatchObject({ ok: true });
+    await new Promise((resolve) => setTimeout(resolve, 2_500));
+    fs.rmSync(cut);
+
+    expect(await taking).toEqual({ data: { ran: { run, attempt: ATTEMPT, step: 'work', exit_code: 0 } } });
+    expect(await recordOf(alice, run)).toMatchObject({ state: 'finished', result: { exitCode: 0 } });
   }, 60_000);
 
   it('runs nothing on the member\'s step runtime when the cancel comes while its place there opens', async () => {

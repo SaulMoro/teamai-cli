@@ -529,6 +529,9 @@ async function runClaim(config: LocalConfig, { lock, claim, root, secrets, membe
   const moved = async (error: FleetError): Promise<void> => {
     if (gone !== undefined || cancelling !== undefined) return;
     const now = await readAttemptRecord(config, run, attempt);
+
+    // A read that failed shows nothing of what landed: the next beat reads again.
+    if (!now.ok) return;
     const record = now.ok && now.value !== 'absent' && 'member' in now.value && now.value.member.id === member.id ? now.value : undefined;
 
     if (record?.state === 'claimed' || record?.state === 'asking') {
