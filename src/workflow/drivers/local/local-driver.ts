@@ -835,14 +835,15 @@ async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, given: 
     // still run its tool, so it keeps the login until a person stops that tool.
     if (notClosed) log.warn(notClosed.message);
 
-    // One in teamai's process left its tool home under the attempt, which a killed judge refreshed its login in. One
-    // that did not run again beside what its earlier run left keeps its login while that may still use it.
-    if (slot?.kind !== 'external' && leftRunning.has(attempt)) {
+    // One that did not run again beside what its earlier run left here keeps its login while that may still use it,
+    // whatever runtime it was to run on.
+    if (leftRunning.has(attempt)) {
       await stopLeftInProcess(config, runId, attempt);
 
       return;
     }
 
+    // One in teamai's process left its tool home under the attempt, which a killed judge refreshed its login in.
     if (slot?.kind !== 'external') return endLeftLogins(config, runId, attempt);
 
     if (!notClosed) {

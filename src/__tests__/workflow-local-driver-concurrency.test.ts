@@ -13,6 +13,7 @@ import { driverIdentity } from '../driver-identity.js';
 import { attemptDir, readRun, RunIdSchema, takeRunLock, type AttemptId, type RunId } from '../workflow/store.js';
 import { attemptRuntimePath, attemptToolHome } from '../workflow/runtimes/attempt.js';
 import { stopCancelledAttempts } from '../workflow/runtimes/cancelled.js';
+import { hostStepRuntime } from '../workflow/runtimes/host.js';
 import { isSkillRunnerHolding } from '../workflow/drivers/skill/skill-driver.js';
 import { log } from '@teamai/shared/log';
 import { holdLogin, holdLoginFrom, loginHolder, loginHome, loginLockFile } from '../workflow/runtimes/login.js';
@@ -618,7 +619,8 @@ steps:
     expect(await loginHolder('codex')).toBeUndefined();
   });
 
-  it('runs no attempt again beside what a killed driver left of it that no stop confirms ended, and keeps the Codex login its judge held', async () => {
+  // On a step runtime too: what the killed driver left of the attempt ran here, whatever runs the attempt now.
+  it.each([['here', false], ['on a step runtime', true]])('runs no attempt again beside what a killed driver left of it that no stop confirms ended, and keeps the Codex login its judge held, %s', async (_where, isOnRuntime) => {
     const { config, workspace, runId } = await workflowFixture(`schemaVersion: v1alpha1
 name: build
 description: A step whose earlier driver was killed while its Codex judge held the member's login.
@@ -642,7 +644,10 @@ steps:
     const warn = vi.spyOn(log, 'warn').mockImplementation(() => undefined);
     onTestFinished(() => { fs.rmSync(loginLockFile('codex'), { force: true }); });
 
-    await runLocalDriver(config, runId, workspace);
+    const runtime = hostStepRuntime();
+    await runLocalDriver(config, runId, workspace, isOnRuntime ? {
+      runtimes: { driver: 'step-runtime', asked: 'step-runtime', runtimes: [{ kind: 'external', use: 'step-runtime', runtime, can: { workspace: ['read-only', 'new', 'continue'] }, launchesAgents: false, engine: { logins: [] }, credentials: {}, found: [], masks: {}, optionsFrom: 'test' }] },
+    } : {});
 
     expect(warn).toHaveBeenCalledWith(expect.stringContaining(`Kept the codex login attempt ${attempt} of run ${run} holds: teamai could not confirm that process 424242, which that attempt left, ended`));
     expect({
