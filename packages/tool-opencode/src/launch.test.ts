@@ -47,7 +47,7 @@ describe('fake opencode', () => {
     const root = scratch();
     const agent = fakeAgent(opencodeFake, { bin: path.join(root, 'b'), always: ['hang'] });
 
-    const out = await runFakeAgent(agent.executable, call.args({ prompt: '', promptFile: '', lastMessageFile: '', opencodeMajor: 2 }), 'Go.', { cwd: root, stopAfterMs: 800 });
+    const out = await runFakeAgent(agent.executable, call.args({ prompt: '', promptFile: '', lastMessageFile: '', opencodeMajor: 2 }), 'Go.', { cwd: root, stopAfterOutputMs: 800 });
 
     expect(out.stdout.trim().split('\n').map((line) => JSON.parse(line))).toEqual([expect.objectContaining({ type: 'step_start' })]);
   });

@@ -88,7 +88,7 @@ describe('fake codex', () => {
     const { repo, home, bin, codexHome } = scratch();
     const agent = fakeAgent(codexFake, { bin, always: ['hang'] });
 
-    const out = await runFakeAgent(agent.executable, stepArgs('Go.'), '', { cwd: repo, env: { HOME: home, CODEX_HOME: codexHome }, stopAfterMs: 800 });
+    const out = await runFakeAgent(agent.executable, stepArgs('Go.'), '', { cwd: repo, env: { HOME: home, CODEX_HOME: codexHome }, stopAfterOutputMs: 800 });
 
     expect(out.stdout.trim().split('\n').map((line) => JSON.parse(line))).toEqual([{ type: 'thread.started', thread_id: expect.any(String) }]);
   });

@@ -73,11 +73,17 @@ describe('fakeAgent', () => {
     expect(await runFakeAgent(agent.executable, [], `Go. ${FAKE_AGENT_MARKERS.fail}`, { cwd })).toEqual({ stdout: 'start\nerror: recorded failure\n', code: 1 });
   });
 
-  it('goes silent after its first line when it hangs, until it is stopped', async () => {
+  it.each([
+    ['as it starts', 0],
+    // A machine under load can take longer than the wait to start the fake at all.
+    ['when it starts slowly', 1_000],
+  ])('goes silent after its first line when it hangs, until it is stopped, %s', async (_case, startMs) => {
     const cwd = scratch();
     const agent = fakeAgent(RECORDING, { bin: path.join(cwd, 'b'), always: ['hang'] });
+    const slow = path.join(cwd, 'slow-start');
+    fs.writeFileSync(slow, `#!/bin/sh\nsleep ${startMs / 1000}\nexec '${agent.executable}' "$@"\n`, { mode: 0o755 });
 
-    expect(await runFakeAgent(agent.executable, [], 'Go.', { cwd, stopAfterMs: 800 })).toEqual({ stdout: 'start\n', code: null });
+    expect(await runFakeAgent(slow, [], 'Go.', { cwd, stopAfterOutputMs: 800 })).toEqual({ stdout: 'start\n', code: null });
   });
 
   it('spaces its lines out when slow', async () => {

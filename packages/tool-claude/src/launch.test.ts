@@ -47,7 +47,7 @@ describe('fake claude', () => {
     const { root, home, bin } = scratch();
     const agent = fakeAgent(claudeFake, { bin, always: ['hang'] });
 
-    const out = await runFakeAgent(agent.executable, ['-p', '--output-format', 'stream-json', '--verbose', '--model', 'claude-fixture'], 'Go.', { cwd: root, env: { HOME: home }, stopAfterMs: 800 });
+    const out = await runFakeAgent(agent.executable, ['-p', '--output-format', 'stream-json', '--verbose', '--model', 'claude-fixture'], 'Go.', { cwd: root, env: { HOME: home }, stopAfterOutputMs: 800 });
 
     expect(out.stdout.trim().split('\n').map((line) => JSON.parse(line))).toEqual([{ type: 'system', subtype: 'init', session_id: expect.any(String), model: 'claude-fixture', cwd: root }]);
   });

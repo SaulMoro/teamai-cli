@@ -150,20 +150,22 @@ const started = new Set<number>();
 
 /**
  * Runs a fake as a tool launch does, with `prompt` on stdin, in its own process group, and gives what it printed and
- * its exit code (null when `stopAfterMs` stopped it).
+ * its exit code (null when `stopAfterOutputMs` stopped it). `stopAfterOutputMs` counts from its first output, since a
+ * machine under load can take longer than that to start it.
  */
-export function runFakeAgent(executable: string, args: readonly string[], prompt: string, { cwd, env = {}, stopAfterMs }: { cwd: string; env?: Readonly<Record<string, string>>; stopAfterMs?: number }): Promise<{ stdout: string; code: number | null }> {
+export function runFakeAgent(executable: string, args: readonly string[], prompt: string, { cwd, env = {}, stopAfterOutputMs }: { cwd: string; env?: Readonly<Record<string, string>>; stopAfterOutputMs?: number }): Promise<{ stdout: string; code: number | null }> {
   return new Promise((resolve) => {
     const child = spawn(executable, args, { cwd, env: { ...process.env, ...env }, detached: true });
     const pid = child.pid;
     let stdout = '';
 
     if (pid !== undefined) started.add(pid);
-    child.stdout.on('data', (chunk: Buffer) => { stdout += chunk.toString('utf8'); });
+    child.stdout.on('data', (chunk: Buffer) => {
+      if (stdout === '' && stopAfterOutputMs !== undefined && pid !== undefined) setTimeout(() => process.kill(-pid, 'SIGTERM'), stopAfterOutputMs);
+      stdout += chunk.toString('utf8');
+    });
     child.on('close', (code) => resolve({ stdout, code }));
     child.stdin.end(prompt);
-
-    if (stopAfterMs !== undefined && pid !== undefined) setTimeout(() => process.kill(-pid, 'SIGTERM'), stopAfterMs);
   });
 }
 
