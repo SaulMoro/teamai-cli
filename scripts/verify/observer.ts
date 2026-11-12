@@ -9,7 +9,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { promisify } from 'node:util';
 import { collectEnvSecrets } from '@teamai/shared/redact';
-import YAML from 'yaml';
+import { parseYaml } from '@teamai/shared/yaml';
 import { z } from 'zod';
 import { journal, sandboxJournalRoot } from '../../packages/runtime-sandbox/src/journal.js';
 import { CONTAINER_ENGINES, PROVIDER_COMMANDS } from '../../packages/runtime-sandbox/src/options.js';
@@ -37,9 +37,13 @@ function homesOf(world: World): string[] {
 
 const DriverCredentialsSchema = z.looseObject({ runtimes: z.array(z.looseObject({ credentials: z.record(z.string(), z.unknown()).optional() })).optional() });
 
-/** The credential names every driver definition in the world declares, by the definitions' own `credentials` keys. */
-function declaredCredentials(world: World): Set<string> {
+/**
+ * The credential names every driver definition in the world declares, by the definitions' own `credentials` keys, and
+ * each definition that is not YAML, whose credentials then count as undeclared.
+ */
+function declaredCredentials(world: World) {
   const declared = new Set<string>();
+  const unreadable: string[] = [];
 
   const walk = (dir: string, depth: number): void => {
     for (const entry of depth > 8 || !fs.existsSync(dir) ? [] : fs.readdirSync(dir, { withFileTypes: true })) {
@@ -47,7 +51,16 @@ function declaredCredentials(world: World): Set<string> {
 
       if (entry.isDirectory() && entry.name !== 'node_modules' && entry.name !== '.git') walk(full, depth + 1);
       else if (entry.isFile() && /\.ya?ml$/.test(entry.name) && full.split(path.sep).includes('drivers')) {
-        const parsed = DriverCredentialsSchema.safeParse(YAML.parse(fs.readFileSync(full, 'utf8')));
+        let text: unknown;
+
+        try {
+          text = parseYaml(fs.readFileSync(full, 'utf8'));
+        } catch {
+          unreadable.push(path.relative(world.dir, full));
+          continue;
+        }
+
+        const parsed = DriverCredentialsSchema.safeParse(text);
 
         for (const runtime of parsed.success ? parsed.data.runtimes ?? [] : []) for (const name of Object.keys(runtime.credentials ?? {})) declared.add(name);
       }
@@ -56,7 +69,7 @@ function declaredCredentials(world: World): Set<string> {
 
   for (const home of homesOf(world)) walk(path.join(home, '.teamai'), 0);
 
-  return declared;
+  return { declared, unreadable };
 }
 
 /** Each environment `ENVIRONS` printed. */
@@ -80,7 +93,7 @@ const SbxListedSchema = z.array(z.looseObject({ name: z.string(), status: z.stri
 export function startObserver(world: World, { pass, label }: { pass: ReadonlyMap<string, string>; label: string }) {
   const canary = world.env?.[CANARY_NAME] ?? '';
   const secrets = new Map([...Object.entries(collectEnvSecrets(process.env)), ...pass]);
-  const declared = declaredCredentials(world);
+  const { declared, unreadable } = declaredCredentials(world);
   const owners = new Set<string>(homesOf(world).map((home) => journal(sandboxJournalRoot(home)).owner));
   const seen = new Map<string, Seen>();
   const unobserved = new Set<string>();
@@ -187,11 +200,20 @@ export function startObserver(world: World, { pass, label }: { pass: ReadonlyMap
 
   let polling: Promise<void> | undefined;
 
-  const poll = (): Promise<void> => (polling ??= Promise.all([containers(), sbx()]).then(() => {
-    bwraps();
-    // A place's record goes once it closes, so each look notes whether one runs on seatbelt.
-    sawSeatbelt ||= homesOf(world).some(usesSeatbelt);
-  }).finally(() => { polling = undefined; }));
+  const look = async (): Promise<void> => {
+    try {
+      await Promise.all([containers(), sbx()]);
+      bwraps();
+      // A place's record goes once it closes, so each look notes whether one runs on seatbelt.
+      sawSeatbelt ||= homesOf(world).some(usesSeatbelt);
+    } catch (error) {
+      unobserved.add(`a look at the sandboxes, ${error instanceof Error ? error.message : String(error)}`);
+    } finally {
+      polling = undefined;
+    }
+  };
+
+  const poll = (): Promise<void> => (polling ??= look());
 
   const timer = setInterval(() => void poll(), POLL_MS);
 
@@ -211,6 +233,7 @@ export function startObserver(world: World, { pass, label }: { pass: ReadonlyMap
         ...records.map((record) => `[verify] observed ${record.what}: ${record.read === 0 ? 'NOT OBSERVED, no environment could be read' : record.names.length === 0 ? 'env ok' : `ENV LEAK ${record.names.join(', ')}`}`),
         ...[...unobserved].map((what) => `[verify] NOT OBSERVED: ${what}`),
         ...(sawSeatbelt ? ['[verify] seatbelt has no observer: the env check proves nothing for a seatbelt step'] : []),
+        ...unreadable.map((file) => `[verify] ${file} is not YAML: a credential only it declares counts as undeclared`),
       ];
     },
   };

@@ -172,9 +172,22 @@ function hasRuntimeState(world: World): boolean {
 function watchSandboxes(world: World, { pass, label }: { pass: ReadonlyMap<string, string>; label: string }) {
   let observer: Promise<{ stop(): Promise<string[]> }> | undefined;
 
+  // A failure of the observer's own is a line of the command's output, never the end of the harness's process.
+  const startWatching = async (): Promise<{ stop(): Promise<string[]> }> => {
+    try {
+      const { startObserver } = await import('./observer.js');
+
+      return startObserver(world, { pass, label });
+    } catch (error) {
+      const why = error instanceof Error ? error.message : String(error);
+
+      return { stop: () => Promise.resolve([`[verify] NOT OBSERVED: the sandbox observer stopped, ${why}`]) };
+    }
+  };
+
   const look = (): void => {
     if (observer !== undefined || !hasRuntimeState(world)) return;
-    observer = import('./observer.js').then(({ startObserver }) => startObserver(world, { pass, label }));
+    observer = startWatching();
   };
 
   const timer = setInterval(look, 1_000);
