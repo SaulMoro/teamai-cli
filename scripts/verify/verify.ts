@@ -3,7 +3,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { runLedger } from './ledger.js';
 import { passedKeys, splitPassOption } from './secrets.js';
-import { parseTarget, runOn } from './target.js';
+import { addMember, ensureOrigin, memberLayout } from './members.js';
+import { memberOf, parseTarget, runOn } from './target.js';
 import { checkoutStatus, createWorld, git, liveWorlds, loadWorld, REPO_ROOT, saveWorld, TEAM_URL, TOOL_COMMANDS, type World } from './world.js';
 
 const HELP = `Verify a teamai change end to end: the real CLI, packed and installed, in an isolated world.
@@ -69,8 +70,10 @@ function cleanup(world: World): void {
     fs.rmSync(path.join(world.dir, name), { recursive: true, force: true });
   }
 
-  // A world made since its TMPDIR moved out of its directory, to /tmp.
-  if (path.relative(world.dir, world.tmp).startsWith('..')) fs.rmSync(world.tmp, { recursive: true, force: true });
+  // A world made since its TMPDIR moved out of its directory, to /tmp; each member's sits beside it.
+  for (const tmp of [world.tmp, ...(world.members ?? []).map((member) => member.tmp)]) {
+    if (path.relative(world.dir, tmp).startsWith('..')) fs.rmSync(tmp, { recursive: true, force: true });
+  }
 
   saveWorld({ ...world, cleanedAt: new Date().toISOString() });
   console.log(`Cleaned ${world.runId}. Evidence kept in ${world.dir}`);
@@ -87,9 +90,29 @@ async function main(): Promise<number> {
     }
 
     case 'doctor':
-      doctor(rest[0]);
+      doctor(rest[0] === undefined ? undefined : parseTarget(rest[0]).runId);
 
       return 0;
+    case 'origin': {
+      const world = ensureOrigin(loadWorld(parseTarget(rest[0]).runId));
+      console.log(`${world.origin?.url ?? ''} -> ${world.origin?.bare ?? ''}`);
+
+      return 0;
+    }
+
+    case 'member': {
+      const [run, name, ...flags] = rest;
+
+      if (name === undefined) throw new Error('member needs a run id and a name, such as `member <run> bob`.');
+      const unknown = flags.filter((flag) => flag !== '--machine' && flag !== 'host');
+
+      if (unknown.length > 0) throw new Error(`member does not take ${unknown.join(' ')}.`);
+      const world = addMember(loadWorld(parseTarget(run).runId), { name });
+      console.log(memberOf(world, name).project);
+
+      return 0;
+    }
+
     case 'teamai':
     case 'sh': {
       const { runId, target } = parseTarget(rest[0]);
@@ -97,23 +120,34 @@ async function main(): Promise<number> {
       const passed = passedKeys(names, process.env);
 
       if (!passed.ok) throw new Error(`--pass names ${passed.missing.join(', ')}, which this shell does not set to a value. Export each one first, or leave it out.`);
+
       if (verb === 'sh' && command.length === 0) throw new Error('sh needs a run id and a command.');
       const argv = verb === 'teamai' ? ['teamai', ...command] : command;
 
       return (await runOn(loadWorld(runId), target, argv, { pass: passed.keys })).exit;
     }
 
+    // The ledger and cleanup cover the world and every member of it, whichever one names it.
     case 'ledger':
-      return await runLedger(loadWorld(rest[0])) ? 0 : 1;
+      return await runLedger(loadWorld(parseTarget(rest[0]).runId)) ? 0 : 1;
     case 'cleanup':
-      for (const world of rest[0] === '--all' ? liveWorlds() : [loadWorld(rest[0])]) cleanup(world);
+      for (const world of rest[0] === '--all' ? liveWorlds() : [loadWorld(parseTarget(rest[0]).runId)]) cleanup(world);
 
       return 0;
-    case 'dir':
-      if (rest[0] === '--all') for (const world of liveWorlds()) console.log(`${world.runId} ${world.dir}`);
-      else console.log(loadWorld(rest[0]).dir);
+    case 'dir': {
+      if (rest[0] === '--all') {
+        for (const world of liveWorlds()) console.log(`${world.runId} ${world.dir}`);
+
+        return 0;
+      }
+
+      const { runId, target } = parseTarget(rest[0]);
+      const world = loadWorld(runId);
+      console.log(target.kind === 'member' ? memberLayout(world, { name: memberOf(world, target.name).name, tmpRoot: '' }).root : world.dir);
 
       return 0;
+    }
+
     case undefined:
     case 'help':
     case '--help':

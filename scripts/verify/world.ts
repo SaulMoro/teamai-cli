@@ -20,6 +20,27 @@ export const WORLDS_ROOT = path.join(os.tmpdir(), 'teamai-verify');
 /** teamai takes only https or ssh team repo URLs, so the world's git maps this one onto its bare repo. */
 export const TEAM_URL = 'https://teamai.test/team/repo.git';
 
+const FilesSchema = z.record(z.string(), z.string());
+
+/** What a member has of its own: a HOME, a TMPDIR and a clone of the world's project, and the env its commands get. */
+const MemberPlaceSchema = z.object({
+  name: z.string(),
+  home: z.string(),
+  project: z.string(),
+  tmp: z.string(),
+  writers: z.string(),
+  env: z.record(z.string(), z.string()),
+  baseline: z.object({ files: FilesSchema }),
+});
+
+/** A member on this machine, or one in a Linux container of its own: its own hostname and process table. */
+const MemberSchema = z.discriminatedUnion('machine', [
+  MemberPlaceSchema.extend({ machine: z.literal('host') }),
+  MemberPlaceSchema.extend({ machine: z.literal('container'), container: z.string() }),
+]);
+
+export type Member = z.infer<typeof MemberSchema>;
+
 const WorldSchema = z.object({
   runId: z.string(),
   dir: z.string(),
@@ -41,6 +62,9 @@ const WorldSchema = z.object({
   baseline: z.object({ teamRefs: z.record(z.string(), z.string()), checkoutStatus: z.array(z.string()), files: z.record(z.string(), z.string()).optional() }),
   /** The only variables a command gets, frozen at creation; absent in a world made before it, whose commands run through bin/run. */
   env: z.record(z.string(), z.string()).optional(),
+  /** The project's bare origin behind a fake https URL, made on first need, and its refs once the harness set it up. */
+  origin: z.object({ bare: z.string(), url: z.string(), refs: z.record(z.string(), z.string()) }).optional(),
+  members: z.array(MemberSchema).optional(),
   cleanedAt: z.string().optional(),
 });
 
@@ -96,6 +120,13 @@ export function worldFiles(world: Pick<World, 'home' | 'project'>) {
   walk(world.project, 'project', '');
 
   return files;
+}
+
+/** A HOME's ~/.gitconfig in a world: who commits, no background git, and each fake https URL mapped onto its bare repo. */
+export function gitconfigText({ name, email, urls }: { name: string; email: string; urls: ReadonlyArray<{ repo: string; url: string }> }): string {
+  const mapped = urls.map(({ repo, url }) => `[url "file://${repo}"]\n\tinsteadOf = ${url}\n`).join('');
+
+  return `[user]\n\tname = ${name}\n\temail = ${email}\n[init]\n\tdefaultBranch = main\n[gc]\n\tauto = 0\n[maintenance]\n\tauto = false\n${mapped}`;
 }
 
 export function git(cwd: string, ...args: string[]): string {
@@ -229,10 +260,7 @@ function buildWorld(runId: string, dir: string, tmp: string): World {
   });
 
   const team = at('team.git');
-  fs.writeFileSync(
-    path.join(at('home'), '.gitconfig'),
-    `[user]\n\tname = TeamAI World\n\temail = world@teamai.test\n[init]\n\tdefaultBranch = main\n[gc]\n\tauto = 0\n[maintenance]\n\tauto = false\n[url "file://${team}"]\n\tinsteadOf = ${TEAM_URL}\n`,
-  );
+  fs.writeFileSync(path.join(at('home'), '.gitconfig'), gitconfigText({ name: 'TeamAI World', email: 'world@teamai.test', urls: [{ repo: team, url: TEAM_URL }] }));
   const bin = at('bin');
   fs.mkdirSync(bin);
   writeFakeGh(at('fakes'));
@@ -352,29 +380,28 @@ const Writer = z.object({ program: z.string(), value: z.string().nullable() });
 
 export type Writers = Record<string, z.infer<typeof Writer>>;
 
-function writersFile(world: World): string {
+/** Where the world's own HOME and project keep their writers; a member keeps its own (`Member.writers`). */
+export function worldWritersFile(world: Pick<World, 'dir'>): string {
   return path.join(world.dir, 'writers.json');
 }
 
-/** For each entry of the world's HOME and project a member's program changed, the last such program and what it left there. */
-export function loadWriters(world: World): Writers {
-  const file = writersFile(world);
-
+/** For each entry of a HOME and project a member's program changed, the last such program and what it left there. */
+export function loadWriters(file: string): Writers {
   return fs.existsSync(file) ? z.record(z.string(), Writer).parse(JSON.parse(fs.readFileSync(file, 'utf8'))) : {};
 }
 
 /** Records, for each entry a member's program run as `args` changed, that program and what it left there. */
-export function recordWriters(world: World, args: readonly string[], before: Record<string, string>, after: Record<string, string>): void {
+export function recordWriters(file: string, args: readonly string[], before: Record<string, string>, after: Record<string, string>): void {
   const program = memberProgramOf(args);
 
   if (program === undefined) return;
-  const writers = loadWriters(world);
+  const writers = loadWriters(file);
 
   for (const entry of new Set([...Object.keys(before), ...Object.keys(after)])) {
     if (before[entry] !== after[entry]) writers[entry] = { program, value: after[entry] ?? null };
   }
 
-  fs.writeFileSync(writersFile(world), `${JSON.stringify(writers, null, 2)}\n`);
+  fs.writeFileSync(file, `${JSON.stringify(writers, null, 2)}\n`);
 }
 
 /** Writes the next logs/<n>-<name>.log of a command and returns its path. */
@@ -398,7 +425,7 @@ export function runInWorld(world: World, args: readonly string[]): number {
   process.stdout.write(result.stdout ?? '');
   process.stderr.write(result.stderr ?? '');
   writeCommandLog(world, args, `${result.stdout ?? ''}${result.stderr ?? ''}`, result.status);
-  recordWriters(world, args, before, worldFiles(world));
+  recordWriters(worldWritersFile(world), args, before, worldFiles(world));
 
   return result.status ?? 1;
 }

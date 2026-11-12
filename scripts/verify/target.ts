@@ -6,23 +6,50 @@
 import { spawn } from 'node:child_process';
 import path from 'node:path';
 import { lineRedactor, worldRedactor } from './secrets.js';
-import { recordWriters, worldFiles, writeCommandLog, type World } from './world.js';
+import { MEMBER_NAME } from './members.js';
+import { recordWriters, worldFiles, worldWritersFile, writeCommandLog, type Member, type World } from './world.js';
 
-export type Target = { kind: 'world' };
+export type Target = { kind: 'world' } | { kind: 'member'; name: string };
 
-/** The run id and the target a verb's first argument names. */
+/** The run id and the target a verb's first argument names: `<run>`, or `<run>@<member>`. */
 export function parseTarget(arg: string | undefined) {
-  const target: Target = { kind: 'world' };
+  const at = arg?.indexOf('@') ?? -1;
 
-  return { runId: arg, target };
+  if (arg === undefined || at === -1) {
+    const target: Target = { kind: 'world' };
+
+    return { runId: arg, target };
+  }
+
+  const name = arg.slice(at + 1);
+
+  if (!MEMBER_NAME.test(name)) throw new Error(`${name} is not a member name: a lowercase letter, then up to 11 lowercase letters, digits or dashes.`);
+  const target: Target = { kind: 'member', name };
+
+  return { runId: arg.slice(0, at), target };
 }
 
-/** The HOME and project a target's commands run with. */
+/** The member `name` of `world`, or why there is none. */
+export function memberOf(world: World, name: string): Member {
+  const member = world.members?.find((each) => each.name === name);
+
+  if (member === undefined) throw new Error(`World ${world.runId} has no member ${name}. Add one with \`npm run -s verify -- member ${world.runId} ${name}\`.`);
+
+  return member;
+}
+
+/** The HOME, project, env and writers a target's commands run with. */
 function placeOf(world: World, target: Target) {
   switch (target.kind) {
-    case 'world': return { home: world.home, project: world.project, env: world.env };
+    case 'world': return { home: world.home, project: world.project, env: world.env, writers: worldWritersFile(world) };
+    case 'member': {
+      const { home, project, env, writers } = memberOf(world, target.name);
+
+      return { home, project, env, writers };
+    }
+
     default: {
-      const unknown: never = target.kind;
+      const unknown: never = target;
 
       return unknown;
     }
@@ -47,7 +74,7 @@ export async function runOn(world: World, target: Target, argv: readonly string[
 
   if (pass.size > 0 && place.env === undefined) throw new Error(`World ${world.runId} was made before --pass, and its commands run with what bin/run sets. Make a new world.`);
   const mask = worldRedactor({ passed: pass, harnessEnv: process.env });
-  const before = worldFiles(world);
+  const before = worldFiles(place);
   const { command, args, env, cwd } = hostCommand(world, place, argv);
   const child = spawn(command, args, { cwd, env: { ...env, ...Object.fromEntries(pass) }, stdio: ['inherit', 'pipe', 'pipe'] });
   let output = '';
@@ -82,7 +109,7 @@ export async function runOn(world: World, target: Target, argv: readonly string[
 
   await Promise.all(closed);
   const log = writeCommandLog(world, argv.map(mask), output, status);
-  recordWriters(world, argv, before, worldFiles(world));
+  recordWriters(place.writers, argv, before, worldFiles(place));
 
   return { exit: status ?? 1, log };
 }

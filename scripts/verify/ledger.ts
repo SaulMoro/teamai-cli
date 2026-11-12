@@ -13,8 +13,8 @@ import { z } from 'zod';
 import { defaultToolHome, envToolHome, toolHome } from '../../src/tool-home.js';
 import { detectToolRoot, RELOCATABLE_TOOLS, TeamaiConfigBaseSchema } from '../../src/types.js';
 import { PERSONAL_DIRS } from '../../src/workflow/runtimes/layers.js';
-import { runOn } from './target.js';
-import { checkoutStatus, git, loadWriters, REPO_ROOT, teamRefs, worldFiles, type World } from './world.js';
+import { runOn, type Target } from './target.js';
+import { checkoutStatus, git, loadWriters, REPO_ROOT, teamRefs, worldFiles, worldWritersFile, type World } from './world.js';
 
 interface Section {
   readonly title: string;
@@ -35,14 +35,28 @@ function teamRepo(world: World): Section {
   }
 
   if (notes.length === 0) notes.push('team repo unchanged since the world was created');
-  const dirty = git(world.project, 'status', '--porcelain');
-  notes.push(dirty ? `project changes:\n${dirty.split('\n').map((line) => `      ${line}`).join('\n')}` : 'project working tree clean');
+
+  // What teamai pushes to the origin is a run's result or the member's own work: a note, never a leak.
+  if (world.origin !== undefined) {
+    const { refs: was } = world.origin;
+    const now = teamRefs(world.origin.bare);
+    const moved = [...new Set([...Object.keys(was), ...Object.keys(now)])].sort().filter((ref) => was[ref] !== now[ref]);
+
+    for (const ref of moved) notes.push(`origin ${ref}: ${was[ref]?.slice(0, 7) ?? 'absent'} -> ${now[ref]?.slice(0, 7) ?? 'deleted'}${RUN_BRANCH.test(`project/.git/${ref}`) ? ", a run's branch" : ''}`);
+
+    if (moved.length === 0) notes.push('origin unchanged since the harness made it');
+  }
+
+  for (const place of ledgerPlaces(world)) {
+    const dirty = git(place.project, 'status', '--porcelain');
+    notes.push(dirty ? `${place.label}project changes:\n${dirty.split('\n').map((line) => `      ${line}`).join('\n')}` : `${place.label}project working tree clean`);
+  }
 
   return { title: '(a) Team repo and project', leaks: [], notes };
 }
 
 function worktrees(world: World): Section {
-  const leaks = [world.project, world.team]
+  const leaks = [...ledgerPlaces(world).map((place) => place.project), world.team, ...world.origin === undefined ? [] : [world.origin.bare]]
     .flatMap((repo) =>
       git(repo, 'worktree', 'list', '--porcelain')
         .split('\n')
@@ -273,14 +287,50 @@ function teamaiPlace(entry: string, value: string | undefined): boolean {
     || (/#core\.hookspath$/i.test(entry) && /teamai/i.test(value ?? ''));
 }
 
-/** A way in has a way out: after `teamai uninstall` the world's HOME and project match the snapshot taken at creation. */
+/** One install the ledger uninstalls and compares: the world's own, or a member's, whose lines start with `@<name> `. */
+interface LedgerPlace {
+  readonly label: string;
+  readonly target: Target;
+  readonly home: string;
+  readonly project: string;
+  readonly writers: string;
+  readonly baseline: Record<string, string> | undefined;
+}
+
+function ledgerPlaces(world: World): LedgerPlace[] {
+  return [
+    { label: '', target: { kind: 'world' }, home: world.home, project: world.project, writers: worldWritersFile(world), baseline: world.baseline.files },
+    ...(world.members ?? []).map((member): LedgerPlace => ({ label: `@${member.name} `, target: { kind: 'member', name: member.name }, home: member.home, project: member.project, writers: member.writers, baseline: member.baseline.files })),
+  ];
+}
+
+/** The file a `worldFiles` entry names: `home/…` under the place's HOME, `project/…` under its project. */
+function entryPath(place: LedgerPlace, entry: string): string {
+  const [base, ...rest] = entry.split('#')[0]?.split('/') ?? [];
+
+  return path.join(base === 'home' ? place.home : place.project, ...rest);
+}
+
+/** A way in has a way out: after `teamai uninstall` each install's HOME and project match the snapshot taken when it was made. */
 async function reverseState(world: World): Promise<Section> {
   const title = '(e) After teamai uninstall';
+  const leaks: string[] = [];
+  const notes: string[] = [];
 
-  if (world.baseline.files === undefined) return { title, leaks: ['this world has no snapshot to compare: make a new world'], notes: [] };
-  const before = world.baseline.files;
+  for (const place of ledgerPlaces(world)) {
+    const reversed = await reverseOf(world, place);
+    leaks.push(...reversed.leaks.map((line) => `${place.label}${line}`));
+    notes.push(...reversed.notes.map((line) => `${place.label}${line}`));
+  }
+
+  return { title, leaks, notes };
+}
+
+async function reverseOf(world: World, place: LedgerPlace): Promise<{ leaks: string[]; notes: string[] }> {
+  if (place.baseline === undefined) return { leaks: ['this world has no snapshot to compare: make a new world'], notes: [] };
+  const before = place.baseline;
   // Uninstall drops a clone's registrations with it, so a worktree outside HOME and the project is listed first.
-  const repos = Object.keys(worldFiles(world)).flatMap((entry) => (entry.endsWith('/.git') ? [path.join(world.dir, path.dirname(entry))] : []));
+  const repos = Object.keys(worldFiles(place)).flatMap((entry) => (entry.endsWith('/.git') ? [path.dirname(entryPath(place, entry))] : []));
 
   const registered = new Set(
     repos.flatMap((repo) =>
@@ -291,15 +341,15 @@ async function reverseState(world: World): Promise<Section> {
     ),
   );
 
-  const { exit: status } = await runOn(world, { kind: 'world' }, ['teamai', 'uninstall', '--force'], { pass: new Map() });
-  const after = worldFiles(world);
+  const { exit: status } = await runOn(world, place.target, ['teamai', 'uninstall', '--force'], { pass: new Map() });
+  const after = worldFiles(place);
   const leaks = status === 0 ? [] : [`teamai uninstall exited ${status}`];
 
   for (const dir of registered) if (fs.existsSync(dir)) leaks.push(`worktree ${dir} left behind after uninstall`);
   const notes: string[] = [];
 
   const leaked: string[] = [];
-  const writers = loadWriters(world);
+  const writers = loadWriters(place.writers);
   const theirs = new Map<string, string[]>();
   const under = (entry: string, dirs: Iterable<string>): boolean => [...dirs].some((dir) => entry.startsWith(`${dir}/`));
 
@@ -307,8 +357,8 @@ async function reverseState(world: World): Promise<Section> {
     if (!under(entry, [...theirs.values()].flat())) theirs.set(why, [...theirs.get(why) ?? [], entry]);
   };
 
-  const repository = repositoryView(world.project);
-  const namesTeamai = (entry: string): boolean => /teamai/i.test(fs.readFileSync(path.join(world.dir, entry), 'utf8'));
+  const repository = repositoryView(place.project);
+  const namesTeamai = (entry: string): boolean => /teamai/i.test(fs.readFileSync(entryPath(place, entry), 'utf8'));
   const remoteTips = new Set(Object.entries(after).flatMap(([entry, value]) => (REMOTE_REF.test(entry) && value !== 'dir' ? [value] : [])));
 
   for (const entry of [...new Set([...Object.keys(before), ...Object.keys(after)])].sort()) {
@@ -359,7 +409,7 @@ async function reverseState(world: World): Promise<Section> {
     }
 
     if (tracked !== undefined && within(repository.tracked) && /^[0-9a-f]{64}$/.test(after[entry] ?? '')
-      && !/teamai/i.test(fs.readFileSync(path.join(world.project, tracked), 'utf8'))) {
+      && !/teamai/i.test(fs.readFileSync(path.join(place.project, tracked), 'utf8'))) {
       excuse("teamai's part taken out of a file the repository tracks, for the member to commit", entry);
       continue;
     }
@@ -382,7 +432,7 @@ async function reverseState(world: World): Promise<Section> {
 
   if (leaks.length === 0 && notes.length === 0) notes.push('HOME and project match the world as it was made');
 
-  return { title, leaks, notes };
+  return { leaks, notes };
 }
 
 /** Uninstalls teamai in the world, writes the next LEDGER-<n>.md and returns whether it is clean. */
