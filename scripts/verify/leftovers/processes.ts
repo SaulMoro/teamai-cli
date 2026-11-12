@@ -64,24 +64,25 @@ export const processes: LeftoverKind = {
   title: 'world process',
   onCleanup: 'refuse',
   async observe({ world, self, others }) {
-    return machinesOf(world).map((machine): Observed => {
+    return machinesOf(world).flatMap((machine): Observed[] => {
       let procs: Proc[];
       const notes: string[] = [];
+      const unobserved: Observed[] = [];
 
       if (machine.platform === 'darwin') {
         const listed = captureOn(world, machine.target, ['ps', '-axo', 'pid=,ppid=,command=']);
 
-        if (listed.code !== 0) return { kind: 'not_observed', what: `processes on ${machine.label}`, why: `ps failed: ${listed.why}` };
+        if (listed.code !== 0) return [{ kind: 'not_observed', what: `processes on ${machine.label}`, why: `ps failed: ${listed.why}` }];
         const cwds = captureOn(world, machine.target, ['lsof', '-a', '-d', 'cwd', '-Fpn']);
 
         // lsof exits 1 when one process it could not read, and still lists the rest.
-        if (cwds.stdout === '') notes.push(`NOT OBSERVED: working directories on ${machine.label}, lsof listed none (${cwds.why})`);
+        if (cwds.stdout === '') unobserved.push({ kind: 'not_observed', what: `working directories on ${machine.label}`, why: `lsof listed none (${cwds.why})` });
         const cwdOf = parseLsofCwd(cwds.stdout);
         procs = parsePs(listed.stdout).map((proc) => ({ ...proc, cwd: cwdOf.get(proc.pid) }));
       } else {
         const listed = captureOn(world, machine.target, ['sh', '-c', PROC_SCRIPT]);
 
-        if (listed.code !== 0 || listed.stdout === '') return { kind: 'not_observed', what: `processes on ${machine.label}`, why: `/proc could not be read: ${listed.why}` };
+        if (listed.code !== 0 || listed.stdout === '') return [{ kind: 'not_observed', what: `processes on ${machine.label}`, why: `/proc could not be read: ${listed.why}` }];
         procs = parseProcLines(listed.stdout);
 
         // A container's table is not this machine's: say it was read, so a clean section still shows it was looked at.
@@ -95,7 +96,7 @@ export const processes: LeftoverKind = {
         attribution: attributeLeftover({ paths: [...proc.cwd === undefined ? [] : [proc.cwd], ...pathsNamed(proc.command)], journals: [], runs: [], marked: false }, self, others),
       }));
 
-      return { kind: 'observed', findings: findings.filter((finding) => finding.attribution.kind !== 'unrelated'), notes };
+      return [{ kind: 'observed', findings: findings.filter((finding) => finding.attribution.kind !== 'unrelated'), notes }, ...unobserved];
     });
   },
 };

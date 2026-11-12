@@ -229,12 +229,16 @@ function otherWorlds(self: World | undefined, journalOf: ((home: string) => stri
 }
 
 /** One line per finding and note of a row, and its LEAK lines: only a finding of this world's own is a LEAK. */
-function linesOf(title: string, observed: readonly Observed[], mask: (text: string) => string) {
+/** A row's LEAK lines and notes in section (f), and `no <title> left` when it looked everywhere and found nothing. */
+export function linesOf(title: string, observed: readonly Observed[], mask: (text: string) => string) {
   const leaks: string[] = [];
   const notes: string[] = [];
+  const rowNotes: string[] = [];
+  let isWhole = true;
 
   for (const seen of observed) {
     if (seen.kind === 'not_observed') {
+      isWhole = false;
       notes.push(`NOT OBSERVED: ${seen.what}, ${seen.why}`);
       continue;
     }
@@ -261,12 +265,12 @@ function linesOf(title: string, observed: readonly Observed[], mask: (text: stri
       }
     }
 
-    notes.push(...seen.notes);
+    rowNotes.push(...seen.notes);
   }
 
-  if (leaks.length === 0 && notes.length === 0) notes.push(`no ${title} left`);
+  if (isWhole && leaks.length === 0 && notes.length === 0) notes.push(`no ${title} left`);
 
-  return { leaks, notes };
+  return { leaks, notes: [...notes, ...rowNotes] };
 }
 
 /** The rows, by the tier that asks them: the process and open-place checks always, the engines only for a driver world. */

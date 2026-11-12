@@ -34,20 +34,20 @@ export function parseLabelled(stdout: string): Array<{ id: string; name: string;
   });
 }
 
-function onEngine(engine: (typeof CONTAINER_ENGINES)[number], self: WorldTies, others: readonly WorldTies[]): Observed {
+function onEngine(engine: (typeof CONTAINER_ENGINES)[number], self: WorldTies, others: readonly WorldTies[]): Observed[] {
   const command = PROVIDER_COMMANDS[engine];
   const info = probeHere([command, 'info', '--format', '{{.ServerVersion}}'], { timeoutMs: 15_000 });
 
-  if (info.kind === 'missing') return { kind: 'observed', findings: [], notes: [`${engine}: not installed here`] };
+  if (info.kind === 'missing') return [{ kind: 'observed', findings: [], notes: [`${engine}: not installed here`] }];
 
-  if (info.code !== 0) return { kind: 'not_observed', what: `${engine} containers`, why: `\`${engine} info\` failed, so the engine is not up: ${info.why}` };
+  if (info.code !== 0) return [{ kind: 'not_observed', what: `${engine} containers`, why: `\`${engine} info\` failed, so the engine is not up: ${info.why}` }];
   const listed = probeHere([command, 'ps', '-a', '--no-trunc', '--filter', `label=${OWNER}`, '--format', `{{.ID}}\t{{.Names}}\t{{.Label "${OWNER}"}}\t{{.Label "teamai.run"}}\t{{.State}}`]);
 
-  if (listed.kind !== 'ran' || listed.code !== 0) return { kind: 'not_observed', what: `${engine} containers`, why: `\`${engine} ps\` failed: ${listed.kind === 'ran' ? listed.why : 'not installed'}` };
+  if (listed.kind !== 'ran' || listed.code !== 0) return [{ kind: 'not_observed', what: `${engine} containers`, why: `\`${engine} ps\` failed: ${listed.kind === 'ran' ? listed.why : 'not installed'}` }];
   const found = parseContainers(listed.stdout);
   const inspected = found.length === 0 ? undefined : probeHere([command, 'inspect', '--format', `{{.Id}}{{range .Mounts}}\t{{.Source}}{{end}}`, ...found.map((one) => one.id)]);
   const mounts = inspected?.kind === 'ran' && inspected.code === 0 ? parseMounts(inspected.stdout) : new Map<string, string[]>();
-  const notes = inspected !== undefined && mounts.size === 0 ? [`NOT OBSERVED: mounts of ${engine} containers, \`${engine} inspect\` failed`] : [];
+  const unobserved: Observed[] = inspected !== undefined && mounts.size === 0 ? [{ kind: 'not_observed', what: `mounts of ${engine} containers`, why: `\`${engine} inspect\` failed` }] : [];
   const tie = (owner: string, paths: readonly string[], runs: readonly string[]) => attributeLeftover({ paths, journals: owner === '' ? [] : [owner], runs, marked: true }, self, others);
 
   const findings: Finding[] = found.map((one) => ({
@@ -61,20 +61,20 @@ function onEngine(engine: (typeof CONTAINER_ENGINES)[number], self: WorldTies, o
     const ls = probeHere([command, kind === 'network' ? 'network' : 'image', 'ls', '--filter', `label=${OWNER}`, '--format', format]);
 
     if (ls.kind !== 'ran' || ls.code !== 0) {
-      notes.push(`NOT OBSERVED: ${engine} ${kind}s, \`${engine} ${kind} ls\` failed`);
+      unobserved.push({ kind: 'not_observed', what: `${engine} ${kind}s`, why: `\`${engine} ${kind} ls\` failed` });
       continue;
     }
 
     findings.push(...parseLabelled(ls.stdout).map((one) => ({ what: `${engine} ${kind} ${one.name}`, attribution: tie(one.owner, [], []), remove: [command, kind, remove, one.id] })));
   }
 
-  return { kind: 'observed', findings, notes };
+  return [{ kind: 'observed', findings, notes: [] }, ...unobserved];
 }
 
 export const containers: LeftoverKind = {
   title: 'teamai container, network or image',
   onCleanup: 'remove',
   observe({ self, others }) {
-    return Promise.resolve(CONTAINER_ENGINES.map((engine) => onEngine(engine, self, others)));
+    return Promise.resolve(CONTAINER_ENGINES.flatMap((engine) => onEngine(engine, self, others)));
   },
 };

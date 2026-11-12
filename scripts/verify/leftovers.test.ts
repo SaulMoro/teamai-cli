@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { attributeLeftover, cleanupPlan, worldTier, type WorldTies } from './leftovers.js';
+import { attributeLeftover, cleanupPlan, linesOf, worldTier, type WorldTies } from './leftovers.js';
 
 const SELF: WorldTies = { runId: '20261112T120000-aaaaaa', paths: ['/w/20261112T120000-aaaaaa', '/private/tmp/teamai-verify-20261112T120000-aaaaaa'], journals: ['0123456789abcdef'], runs: ['r00000000000000aa'] };
 const OTHER: WorldTies = { runId: '20261112T110000-bbbbbb', paths: ['/w/20261112T110000-bbbbbb'], journals: ['fedcba9876543210'], runs: ['r00000000000000bb'] };
@@ -60,6 +60,17 @@ describe('what each row reads from what an engine or the process table printed',
     expect(journalOfSbxName('teamai-0123456789abcdef-r1-a1')).toBe('0123456789abcdef');
     expect(journalOfSbxName('teamai-0123456789abcdef-warm-42-x')).toBe('0123456789abcdef');
     expect(journalOfSbxName('my-sandbox')).toBeUndefined();
+  });
+});
+
+describe("a row's lines in section (f)", () => {
+  const same = (text: string): string => text;
+
+  it('says the row found none left even beside a note of its own, and never when part of it was not looked at', () => {
+    expect(linesOf('open attempt place', [{ kind: 'observed', findings: [], notes: ['run r1 attempt a1 ran on seatbelt'] }], same)).toEqual({ leaks: [], notes: ['no open attempt place left', 'run r1 attempt a1 ran on seatbelt'] });
+    expect(linesOf('teamai container', [{ kind: 'observed', findings: [], notes: [] }, { kind: 'observed', findings: [], notes: ['podman: not installed here'] }], same)).toEqual({ leaks: [], notes: ['no teamai container left', 'podman: not installed here'] });
+    expect(linesOf('teamai container', [{ kind: 'observed', findings: [], notes: [] }, { kind: 'not_observed', what: 'podman containers', why: 'podman info failed' }], same)).toEqual({ leaks: [], notes: ['NOT OBSERVED: podman containers, podman info failed'] });
+    expect(linesOf('teamai container', [{ kind: 'observed', findings: [{ what: 'docker container c', attribution: { kind: 'ambiguous', why: 'tied to no world' } }], notes: [] }], same)).toEqual({ leaks: [], notes: ['docker container c: tied to no world, so not counted here'] });
   });
 });
 
