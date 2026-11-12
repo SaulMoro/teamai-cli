@@ -7,7 +7,7 @@ import type { SessionPlatformFacts } from '@teamai/tool-core/sessions/platform';
 import { isSessionPlatform, SESSION_PLATFORM_FACTS, sessionPlatformFacts, type SessionPlatform } from './session-flow/adapters/platform-facts.js';
 import type { JsonSyntax } from '@teamai/shared/json';
 import { STEP_LAUNCH_ADAPTERS, TOOLS, type AgentToolId, type ToolId, type ShippedDescriptor } from './tools.js';
-import { type HookFormat, type InstallGate, type RuleFolderReach, type RunTimeVia } from '@teamai/tool-core/definition';
+import { type FolderReach, type HookFormat, type InstallGate, type RunTimeVia } from '@teamai/tool-core/definition';
 
 /**
  * The one reader of the tool tables (`TOOLS`): every lookup of a tool id goes through here, so a new kind of
@@ -172,11 +172,11 @@ const CUSTOM_TOOL = {
   },
 } as const satisfies Pick<ShippedDescriptor, 'rules' | 'blocks' | 'agents' | 'mcp' | 'hooks'>;
 
-/** How `tool` reads a rule folder's files (`RuleFolderReach`): a custom tool, or one with no cell, gets `copy`. */
-export function ruleFolderReachOf(tool: string): RuleFolderReach {
+/** How `tool` reads a rule or agent folder's files (`FolderReach`): a custom tool, or one with no cell, gets `copy`. */
+export function folderReachOf(tool: string): FolderReach {
   const descriptor: ShippedDescriptor | undefined = isToolId(tool) ? descriptorOf(tool) : undefined;
 
-  return descriptor?.ruleFolders ?? { reach: 'copy' };
+  return descriptor?.folderReach ?? { reach: 'copy' };
 }
 
 /** The channels of `tool`: its descriptor's, the descriptor of the tool an instance extends, or `CUSTOM_TOOL`'s for a custom tool id. */
