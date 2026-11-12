@@ -9,7 +9,7 @@ import path from 'node:path';
 import { lineRedactor, worldRedactor } from './secrets.js';
 import { MEMBER_NAME } from './members.js';
 import { sandboxJournalRoot } from '../../packages/runtime-sandbox/src/journal-root.js';
-import { markDriverSeen, recordWriters, runtimeStateDirs, updateWorld, worldFiles, worldHomes, worldWritersFile, writeCommandLog, type Member, type World } from './world.js';
+import { markDriverSeen, recordWriters, refuseCleaned, runtimeStateDirs, updateWorld, worldFiles, worldHomes, worldWritersFile, writeCommandLog, type Member, type World } from './world.js';
 
 export type Target = { kind: 'world' } | { kind: 'member'; name: string };
 
@@ -110,7 +110,7 @@ function commandOf(world: World, place: ReturnType<typeof placeOf>, argv: readon
  * comes and kept in the next logs/<n>-<name>.log, each passed and secret-looking value masked by name in both.
  */
 export async function runOn(world: World, target: Target, argv: readonly string[], { pass }: { pass: ReadonlyMap<string, string> }): Promise<{ exit: number; log: string }> {
-  if (world.cleanedAt !== undefined) throw new Error(`World ${world.runId} was cleaned up at ${world.cleanedAt}. Make a new one.`);
+  refuseCleaned(world);
   const place = placeOf(world, target);
 
   if (pass.size > 0 && place.env === undefined) throw new Error(`World ${world.runId} was made before --pass, and its commands run with what bin/run sets. Make a new world.`);

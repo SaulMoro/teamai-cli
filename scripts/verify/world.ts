@@ -444,6 +444,11 @@ function isAlive(pid: number): boolean {
   }
 }
 
+/** Stops a verb that would act in `world` once cleanup removed its files. */
+export function refuseCleaned(world: Pick<World, 'runId' | 'cleanedAt'>): void {
+  if (world.cleanedAt !== undefined) throw new Error(`World ${world.runId} was cleaned up at ${world.cleanedAt}. Make a new one.`);
+}
+
 /** Records, once, that a runtime outside teamai's process ran in `world`, read fresh so no other change to world.json is lost. */
 export function markDriverSeen(world: Pick<World, 'runId' | 'driverSeen'>): void {
   if (world.driverSeen === true) return;
@@ -552,7 +557,7 @@ export function writeCommandLog(world: Pick<World, 'logs'>, args: readonly strin
  * agent wait budget measures through it: nothing else runs beside the command. The verbs run through target.ts.
  */
 export function runInWorld(world: World, args: readonly string[]): number {
-  if (world.cleanedAt !== undefined) throw new Error(`World ${world.runId} was cleaned up at ${world.cleanedAt}. Make a new one.`);
+  refuseCleaned(world);
   const before = worldFiles(world);
   const result = spawnSync(path.join(world.bin, 'run'), args, { encoding: 'utf8', stdio: ['inherit', 'pipe', 'pipe'], maxBuffer: 1024 ** 3 });
   process.stdout.write(result.stdout ?? '');

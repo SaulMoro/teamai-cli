@@ -6,7 +6,7 @@
 import { execFileSync, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
-import { gitconfigText, shortTmpRoot, TEAM_URL, teamRefs, updateWorld, worldFiles, worldTmpDir, type Member, type World } from './world.js';
+import { gitconfigText, refuseCleaned, shortTmpRoot, TEAM_URL, teamRefs, updateWorld, worldFiles, worldTmpDir, type Member, type World } from './world.js';
 
 /** A member's name: a path segment, a hostname and a container name alike. */
 export const MEMBER_NAME = /^[a-z][a-z0-9-]{0,11}$/;
@@ -68,6 +68,8 @@ function frozenEnv(world: World): Record<string, string> {
 
 /** Gives the world's project a bare origin behind ORIGIN_URL, once, with main pushed; answers the world as it is now. */
 export function ensureOrigin(world: World): World {
+  refuseCleaned(world);
+
   if (world.origin !== undefined) return world;
   const env = frozenEnv(world);
   const bare = path.join(world.dir, 'origin.git');
@@ -158,6 +160,7 @@ export function machineName(world: Pick<World, 'runId'>, name: string): string {
  * `machine: 'container'`, its commands run in a Linux container of its own, with its own hostname and process table.
  */
 export function addMember(world: World, { name, machine = 'host' }: { name: string; machine?: 'host' | 'container' }): World {
+  refuseCleaned(world);
   if (!MEMBER_NAME.test(name)) throw new Error(`${name} is not a member name: a lowercase letter, then up to 11 lowercase letters, digits or dashes.`);
 
   if (world.members?.some((member) => member.name === name)) throw new Error(`World ${world.runId} already has member ${name}.`);

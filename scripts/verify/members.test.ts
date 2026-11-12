@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { memberLayout, setupBaseline } from './members.js';
+import { addMember, ensureOrigin, memberLayout, setupBaseline } from './members.js';
+import type { World } from './world.js';
 import { parseTarget } from './target.js';
 
 const RUN = '20261112T113044-479be0';
@@ -41,5 +42,18 @@ describe("the harness's own setup", () => {
     const kept = { 'home/.gitconfig': 'git config', 'project/.git/refs/remotes/origin/main': 'c1' };
 
     expect(setupBaseline(kept, kept, { 'home/.gitconfig': 'git config' })).toEqual({ 'home/.gitconfig': 'git config' });
+  });
+});
+
+describe('a cleaned world', () => {
+  const cleaned: World = {
+    runId: RUN, dir: `/nonexistent/${RUN}`, project: `/nonexistent/${RUN}/project`, team: `/nonexistent/${RUN}/team.git`, home: `/nonexistent/${RUN}/home`, tmp: `/nonexistent/${RUN}/tmp`,
+    logs: `/nonexistent/${RUN}/logs`, bin: `/nonexistent/${RUN}/bin`, build: { commit: 'c', dirty: false, version: '0.0.0', tarball: 't.tgz', sha256: 's', node: 'v20' },
+    createdAt: '2026-11-12T11:30:44.000Z', baseline: { teamRefs: {}, checkoutStatus: [] }, env: {}, cleanedAt: '2026-11-12T12:00:00.000Z',
+  };
+
+  it('gets no origin and no member, and says to make a new world', () => {
+    expect(() => ensureOrigin(cleaned)).toThrow(`World ${RUN} was cleaned up at 2026-11-12T12:00:00.000Z. Make a new one.`);
+    expect(() => addMember(cleaned, { name: 'bob' })).toThrow(`World ${RUN} was cleaned up at 2026-11-12T12:00:00.000Z. Make a new one.`);
   });
 });
