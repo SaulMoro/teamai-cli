@@ -155,12 +155,18 @@ describe('init', () => {
   it.each<{ label: string; options: Message; tools: Record<string, string> }>([
     { label: 'docker with no node in the image', options: { provider: 'docker', image: IMAGE }, tools: { claude: CLAUDE } },
     { label: 'podman, whose rootless network cannot connect the filter', options: { provider: 'podman', image: IMAGE }, tools: { claude: CLAUDE, node: '' } },
-  ])('offers isolation worktree and no unattended step on $label', async ({ options, tools }) => {
+  ])('offers isolation worktree, no unattended step and no attempt socket on $label', async ({ options, tools }) => {
     engine.image(IMAGE, tools);
-    const reply = await init(start(), options);
+    const connection = start();
+    const reply = await init(connection, options);
+    const at = place();
+    const op = newOp();
+    connection.send({ type: 'open', op, run: RUN, attempt: ATTEMPT, tool: 'claude', credentials: {}, view: { worktree: at.worktree, readonly: [at.git], result: at.result, runDir: at.runDir, toolHome: { CLAUDE_CONFIG_DIR: at.toolHome } } });
+    const accepted = await connection.next((message) => message.op === op && message.event === 'accepted');
 
     expect(reply).toMatchObject({ ok: true, can: { isolation: 'worktree', tools: ['claude'] } });
     expect(reply.can).not.toHaveProperty('unattended');
+    expect(accepted.handle).toBe(HANDLE);
   });
 });
 
@@ -3148,6 +3154,7 @@ describe('a warm image', () => {
   });
 
   it('keeps no place and serves no attempt socket for an attempt whose first open failed after it was accepted', async () => {
+    engine.image(IMAGE, { claude: CLAUDE, node: '' });
     const connection = start();
     await init(connection, { provider: 'docker', image: IMAGE, warm: { prepare: 'exit 7', cache: ['package-lock.json'] } });
     const at = checkout();

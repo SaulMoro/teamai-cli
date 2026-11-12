@@ -198,8 +198,9 @@ export function serve({ input, write: send, journal, warn, provider: providerFor
     }
 
     // A place whose tool an app may launch through teamai's wrapper serves the attempt socket from now on; its path
-    // travels in the handle, which teamai gives that app's runtime as `outer`.
-    const outer = tool !== undefined && provider.client !== undefined ? { socket: socketPathOf({ result: view.result, place: handle }), worktree: view.worktree, toolHome: view.toolHome } : undefined;
+    // travels in the handle, which teamai gives that app's runtime as `outer`. Only a sandbox that keeps the tool from
+    // this machine's ports serves one, so an app's open through another fails before its agent starts.
+    const outer = tool !== undefined && provider.client !== undefined && current.can.isolation === 'sandbox' ? { socket: socketPathOf({ result: view.result, place: handle }), worktree: view.worktree, toolHome: view.toolHome } : undefined;
     // An open again of a place an earlier open made keeps it whatever this one ends with; a first open that fails after
     // it was accepted leaves neither its record nor its socket, which holds the step's credentials. teamai's close of
     // the handle then finds nothing, and a sandbox the engine made meanwhile is this journal's to sweep.
