@@ -318,14 +318,17 @@ export async function withToolInstances(tree: TeamToolTree, config: TeamaiConfig
   return { ...config, toolPaths };
 }
 
-// ─── Accepting a team instance's command ─────────────────
+// ─── Accepting a team file's command ─────────────────────
 //
-//  A team instance that sets `command` runs a program a teammate named on the member's machine. Before its first run
-//  with a given file content, a person accepts that content: an attended run asks, and an unattended one refuses.
-//  A member's own instance, and one that sets only home or paths, need no acceptance.
+//  A team file that names a command, a tool instance's `command` or a step runtime's `entry: { command }`, runs a
+//  program a teammate named on the member's machine. Before its first run with a given file content, a person accepts
+//  that content: an attended run asks, and an unattended one refuses. A member's own file, and an instance that sets
+//  only home or paths, need no acceptance.
 //
 
-const TrustFileSchema = z.object({ accepted: z.array(z.object({ name: z.string(), revision: z.string(), acceptedAt: z.string() })) });
+const TrustFileSchema = z.object({
+  accepted: z.array(z.object({ kind: z.literal('runtime').optional(), name: z.string(), revision: z.string(), acceptedAt: z.string() })),
+});
 
 function trustFile(): string {
   return path.join(getTeamaiHomeDir(), 'trust', 'tools.json');
@@ -339,6 +342,83 @@ async function readTrust(): Promise<z.infer<typeof TrustFileSchema>> {
   }
 }
 
+/**
+ * A command a file of the team repo names, accepted at that file's content (`revision`, its sha256): a tool instance's,
+ * which runs in place of the tool it extends, or a step runtime's. One name of each kind is accepted at one content.
+ */
+export type TeamCommand =
+  | { readonly kind: 'tool'; readonly name: string; readonly command: string; readonly file: string; readonly revision: string; readonly extends: string }
+  | { readonly kind: 'runtime'; readonly name: string; readonly command: string; readonly file: string; readonly revision: string };
+
+/** Why a team file's command did not run: the person said no, closed the question unanswered, or was not there to ask. */
+export interface UnacceptedTeamCommand {
+  readonly ok: false;
+  readonly reason: 'declined' | 'unanswered' | 'unattended';
+  readonly message: string;
+}
+
+function labelOf(subject: TeamCommand): string {
+  switch (subject.kind) {
+    case 'tool':
+      return `Tool "${subject.name}"`;
+    case 'runtime':
+      return `Step runtime "${subject.name}"`;
+    default: {
+      const unhandled: never = subject;
+
+      return unhandled;
+    }
+  }
+}
+
+/** Whether `entry` of the trust file accepts `subject` at its content. */
+function accepts(entry: z.infer<typeof TrustFileSchema>['accepted'][number], subject: TeamCommand): boolean {
+  return (entry.kind ?? 'tool') === subject.kind && entry.name === subject.name;
+}
+
+/**
+ * Whether the command of `subject` may run here: a person must have accepted its file's content on this machine. `ask`,
+ * given when a person at a terminal answers, puts the question to them and returns the line they typed, or nothing once
+ * the run stopped asking; a yes is recorded, and anything else declines. With no one to ask, an unaccepted content is
+ * refused, naming what to run.
+ */
+export async function acceptTeamCommand(
+  subject: TeamCommand,
+  { ask }: { ask: ((question: string) => Promise<string | undefined>) | undefined },
+): Promise<{ ok: true } | UnacceptedTeamCommand> {
+  const trust = await readTrust();
+
+  if (trust.accepted.some((entry) => accepts(entry, subject) && entry.revision === subject.revision)) return { ok: true };
+  const short = subject.revision.slice(0, 12);
+  const label = labelOf(subject);
+
+  if (ask) {
+    const inPlaceOf = subject.kind === 'tool' ? `, in place of ${subject.extends}` : '';
+
+    const question = `${label} comes from the team repo (${subject.file}, content ${short}), which you have not accepted on this machine. `
+      + `It runs ${subject.command} as you, with your files${inPlaceOf}. Review the file before you accept it.\nRun it? [y/N] `;
+
+    const answer = await ask(question);
+
+    if (/^y(es)?$/i.test(answer?.trim() ?? '')) {
+      const kept = trust.accepted.filter((entry) => !accepts(entry, subject));
+      const entry = { ...(subject.kind === 'runtime' && { kind: subject.kind }), name: subject.name, revision: subject.revision, acceptedAt: new Date().toISOString() };
+      await writeJsonAtomic(trustFile(), { accepted: [...kept, entry] });
+
+      return { ok: true };
+    }
+
+    return { ok: false, reason: answer === undefined ? 'unanswered' : 'declined', message: `${label} (content ${short}) was not accepted, so ${subject.command} did not run.` };
+  }
+
+  return {
+    ok: false,
+    reason: 'unattended',
+    message: `${label} comes from the team repo (${subject.file}, content ${short}) and runs ${subject.command}, which no one has accepted on this machine, and an unattended run does not ask. `
+      + 'Run the same command once in a terminal, attended, to review and accept it, then run it unattended again.',
+  };
+}
+
 /** Why a team instance's command did not run. */
 export interface UnacceptedCommand {
   readonly ok: false;
@@ -347,38 +427,14 @@ export interface UnacceptedCommand {
 }
 
 /**
- * Whether `instance`'s command may run here. Only a team instance that sets one needs it: a person must have accepted
- * its file's content on this machine. `ask`, given when a person at a terminal answers, puts the question to them and
- * returns the line they typed, or nothing once the run stopped asking; a yes is recorded, and anything else declines.
- * With no one to ask, an unaccepted content is refused, naming what to run.
+ * Whether `instance`'s command may run here (`acceptTeamCommand`). Only a team instance that sets one needs it.
  */
 export async function acceptToolCommand(
   instance: ResolvedToolInstance,
   { ask }: { ask: ((question: string) => Promise<string | undefined>) | undefined },
 ): Promise<{ ok: true } | UnacceptedCommand> {
   if (instance.source !== 'team' || instance.command === undefined) return { ok: true };
-  const trust = await readTrust();
+  const accepted = await acceptTeamCommand({ kind: 'tool', name: instance.name, command: instance.command, file: instance.file, revision: instance.revision, extends: instance.extends }, { ask });
 
-  if (trust.accepted.some((entry) => entry.name === instance.name && entry.revision === instance.revision)) return { ok: true };
-  const short = instance.revision.slice(0, 12);
-
-  if (ask) {
-    const question = `Tool "${instance.name}" comes from the team repo (${instance.file}, content ${short}), which you have not accepted on this machine. `
-      + `It runs ${instance.command} as you, with your files, in place of ${instance.extends}. Review the file before you accept it.\nRun it? [y/N] `;
-
-    if (/^y(es)?$/i.test((await ask(question))?.trim() ?? '')) {
-      await writeJsonAtomic(trustFile(), { accepted: [...trust.accepted.filter((entry) => entry.name !== instance.name), { name: instance.name, revision: instance.revision, acceptedAt: new Date().toISOString() }] });
-
-      return { ok: true };
-    }
-
-    return { ok: false, code: 'tool_not_accepted', message: `Tool "${instance.name}" (content ${short}) was not accepted, so ${instance.command} did not run.` };
-  }
-
-  return {
-    ok: false,
-    code: 'tool_not_accepted',
-    message: `Tool "${instance.name}" comes from the team repo (${instance.file}, content ${short}) and runs ${instance.command}, which no one has accepted on this machine, and an unattended run does not ask. `
-      + 'Run the same command once in a terminal, attended, to review and accept it, then run it unattended again.',
-  };
+  return accepted.ok ? accepted : { ok: false, code: 'tool_not_accepted', message: accepted.message };
 }
