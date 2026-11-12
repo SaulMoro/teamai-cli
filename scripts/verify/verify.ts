@@ -1,44 +1,13 @@
 import { execFileSync, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
+import { helpFor } from './help.js';
 import { runLedger } from './ledger.js';
 import { planCleanup } from './leftovers.js';
 import { passedKeys, splitPassOption } from './secrets.js';
 import { addMember, ensureOrigin, memberLayout, parseMachine } from './members.js';
 import { memberOf, parseTarget, runOn } from './target.js';
-import { checkoutStatus, createWorld, git, liveWorlds, loadWorld, REPO_ROOT, saveWorld, TEAM_URL, TOOL_COMMANDS, type World } from './world.js';
-
-const HELP = `Verify a teamai change end to end: the real CLI, packed and installed, in an isolated world.
-
-  npm run verify:world                        build, pack, create a world; print its run id alone on stdout
-  npm run -s verify -- doctor [run]           node, git and each tool on PATH; whether the world matches the checkout
-  npm run -s verify -- teamai <run> <args>    the world's installed teamai, in its project
-  npm run -s verify -- sh <run> <cmd> [args]  any command in the world (git, claude -p, a second checkout)
-  npm run -s verify -- ledger <run>           uninstall teamai in the world, then what is left, in LEDGER-<n>.md; exit 1 on any LEAK
-  npm run -s verify -- cleanup <run>|--all    remove the world and the containers and sandboxes its runs left, keeping world.json,
-                                              logs/ and every ledger; refuses while a process of the world runs
-  npm run -s verify -- dir <run>|--all        the world's directory, or every live world
-
-A world holds a project repo with one commit, a bare team repo at ${TEAM_URL}, the npm pack tarball of
-this checkout installed on its own, a HOME and TMPDIR of its own, and a fake gh first on PATH: \`gh pr list\`
-prints fakes/gh-pr-list.json or [], anything else fails as when gh is not signed in, and each call goes to
-fakes/gh.log. Commands get an environment built from nothing: no tool home (CLAUDE_CONFIG_DIR, CODEX_HOME, ...)
-or TEAMAI_* variable of your shell reaches them. Set one on the command line when the claim needs it: \`sh <run> env CODEX_HOME=... teamai pull\`.
-
-A world freezes the build it was made from. Change teamai and the next proof needs a new world; doctor warns when
-the checkout has moved on. Start from \`teamai init ${TEAM_URL} --provider git --agent claude\`.
-
-Use the real tool on its cheapest model (claude -p --model haiku). A faked tool proves the fake. A tool that is not
-installed or not signed in here makes the claim UNVERIFIABLE, not passed.
-
-Verdicts, reported with the combination and entry point (VERIFIED: claude x git x project scope via teamai pull):
-  VERIFIED      every observable matched and the ledger is CLEAN
-  FAILED        an observable did not match, or the ledger found a LEAK; quote the output
-  UNVERIFIABLE  a prerequisite is missing (a tool, a sign-in, Windows); name it
-A fix is proved by a pair: FAILED in a world built from main, VERIFIED in a world built from the change.
-
-Run ledger after the last run, before cleanup. Paste the verdict, the commands, build.json's line from the run's
-first output, and the ledger's last line into the PR's real-CLI record.`;
+import { checkoutStatus, createWorld, git, liveWorlds, loadWorld, REPO_ROOT, saveWorld, TOOL_COMMANDS, type World } from './world.js';
 
 const [verb, ...rest] = process.argv.slice(2);
 
@@ -210,11 +179,11 @@ async function main(): Promise<number> {
     case undefined:
     case 'help':
     case '--help':
-      console.log(HELP);
+      console.log(helpFor(rest[0]));
 
       return 0;
     default:
-      console.error(`Unknown verb ${verb}.\n\n${HELP}`);
+      console.error(`Unknown verb ${verb}.\n\n${helpFor(undefined)}`);
 
       return 1;
   }
