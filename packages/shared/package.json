@@ -6,6 +6,7 @@
   "exports": {
     "./cli-path": "./src/cli-path.ts",
     "./debug-log": "./src/debug-log.ts",
+    "./entries-under": "./src/entries-under.ts",
     "./exec": "./src/exec.ts",
     "./home": "./src/home.ts",
     "./json": "./src/json.ts",
