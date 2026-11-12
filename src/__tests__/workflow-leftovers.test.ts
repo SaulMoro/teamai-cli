@@ -421,6 +421,7 @@ describe('doctor --fix past workflows.retention', () => {
     expect(branches(cwd, runId)).toEqual(['change/p1']);
     expect(worktrees()).toBe(1);
     expect(git(cwd, ['for-each-ref', 'refs/teamai/'])).toBe('');
+    expect(fs.existsSync(path.join(cwd, '.git', 'refs', 'teamai'))).toBe(false);
     expect(await sweepLeftovers(config, null, { now: settled + 15 * DAY, checkout: cwd })).toMatchObject({ swept: [] });
   });
 

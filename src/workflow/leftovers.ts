@@ -24,7 +24,7 @@ import { parseSnapshot, snapshotPath } from './snapshot.js';
 import { AttemptIdSchema, attemptsDir, installOwner, readRun, readRuns, RunIdSchema, updateRun, withCleanupLock } from './store.js';
 import type { KeptBranchReason, RunLeftovers, RunState } from './types.js';
 import { runBranchPrefix, runCopyToMerge } from './workspace.js';
-import { fetchMissingCommits, git, gitAnswer, removeWorktree, saidYes, unansweredGit, worktreeCheckout } from './worktree.js';
+import { fetchMissingCommits, git, gitAnswer, gitPath, removeWorktree, saidYes, unansweredGit, worktreeCheckout } from './worktree.js';
 import { readRegularFile } from '@teamai/shared/regular-file';
 
 /** Where each branch of a run points: in the checkout, and on `origin`, which is absent when the checkout has none. */
@@ -578,6 +578,21 @@ async function keptRefs(checkout: string, attempts: string[]): Promise<{ refs: s
   return listed.code === 0 ? { refs: listed.stdout.split('\n').filter(Boolean) } : { error: `its kept refs could not be listed (${listed.stderr.trim() || 'git for-each-ref failed'})` };
 }
 
+/** Removes `refs/teamai` once no ref is left in it: git deletes a ref's empty parents but never the one right under `refs/`. */
+async function removeEmptyRefsDir(checkout: string): Promise<void> {
+  const dir = await gitPath(checkout, 'refs/teamai');
+
+  if (dir === undefined) return;
+
+  try {
+    await fs.rmdir(dir);
+  } catch (error) {
+    const code = errnoCode(error);
+
+    if (code !== 'ENOENT' && code !== 'ENOTEMPTY' && code !== 'EEXIST') log.warn(`${dir} was not removed (${code ?? String(error)}); it holds no ref of teamai's.`);
+  }
+}
+
 /**
  * Removes what run `runId` left in `checkout` and on its origin: the worktrees teamai made on its branches, the refs of
  * `attempts`, and every branch but `keep`. A worktree that stays is named on the deletion of its branch, or, on a branch
@@ -621,6 +636,8 @@ async function removeRun(
       log.warn(`Ref ${ref} of run ${runId} was not removed (${deleted.stderr.trim() || 'git update-ref -d failed'}). teamai doctor --fix tries again.`);
     }
   }
+
+  if (refs.length > 0) await removeEmptyRefsDir(checkout);
 
   const all = namesOf(tips);
   const { deleted, failed, sessionHostKept } = await deleteBranches({ checkout, runId, branches: all.filter((branch) => !keep.has(branch)), tips });
