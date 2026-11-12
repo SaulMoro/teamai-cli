@@ -21,6 +21,8 @@ import type { StepRuntime } from '@teamai/runtime-protocol/step-runtime';
 import type { DriverCan } from '../requirements.js';
 import { teamCommitReach, type PinnedFolder } from '../cache.js';
 import { WorkflowFolder } from '../folder.js';
+import { loadTeamConfig } from '../../config.js';
+import { resolveRetention, retentionEnds, type Retention } from '../retention.js';
 import { retryCommand } from '../runtimes/retry-command.js';
 import { answerCancel, attemptRef, claimAttempt, finishAttempt, fleetFailure, leaveOffer, leaseEnv, leaseInputs, leasePrompt, listRecords, memberRecordsAmong, noteHeldFolders, offersAmong, readAttemptRecord, recordProgress, isHeld, type Cancelling, type FleetRecord, type HeldAttempt, type Offered, type FleetError, type FleetLease, type FleetResult } from './record.js';
 import type { ExecAnswer, ExecQuestion } from '@teamai/runtime-protocol/step-runtime';
@@ -344,6 +346,9 @@ export async function takeFleetAttempt(config: LocalConfig, input: { pool: strin
  * this install that is still live holds the run's lock, so what it runs is left alone. Undefined when it held no claim.
  */
 async function finishLeftClaims(config: LocalConfig, records: FleetRecord[], { repository, root, member, secrets, place }: { repository: string; root: string; member: HandoffOwner; secrets: Record<string, string>; place: MemberPlace }): Promise<WorkflowEnvelope | undefined> {
+  let resolved: Promise<Retention> | undefined;
+  const retention = (): Promise<Retention> => (resolved ??= loadTeamConfig(config.repo.localPath, config).then((team) => resolveRetention(config, team)));
+
   for (const record of await memberRecordsAmong(config, records, { member, repository })) {
     const held = await takeRunLock(config, record.run, async (lock): Promise<WorkflowEnvelope | undefined> => {
       // A member killed mid-step leaves its command's process group running, or its exec on a step runtime: nothing
@@ -368,9 +373,12 @@ async function finishLeftClaims(config: LocalConfig, records: FleetRecord[], { r
       // Its place there is closed: a run of the attempt starts again with a place and an exec of its own.
       await fs.rm(attemptRuntimePath(config, record.run, record.attempt), { force: true });
 
-      // What the member kept of an ended attempt goes, its claim marker with it, once nothing it left may still run.
+      // What the member kept of an ended attempt, such as the log a failure named, goes with its claim marker once nothing
+      // it left may still run and `workflows.retention` passed since it ended, as what a run leaves does.
       if (isEnded) {
-        if (!isLeftRunning) await removeEndedAttempt(config, record.run, record.attempt);
+        const removedAt = retentionEnds(endedAt(record), await retention());
+
+        if (!isLeftRunning && removedAt !== undefined && removedAt <= Date.now()) await removeEndedAttempt(config, record.run, record.attempt);
 
         return undefined;
       }
@@ -404,6 +412,23 @@ async function finishLeftClaims(config: LocalConfig, records: FleetRecord[], { r
   }
 
   return undefined;
+}
+
+/** When the record of an attempt that ended says it ended. */
+function endedAt(record: Extract<FleetRecord, { state: 'finished' | 'expired' | 'cancelled' }>): string {
+  switch (record.state) {
+    case 'finished':
+      return record.finishedAt;
+    case 'expired':
+      return record.expiredAt;
+    case 'cancelled':
+      return record.cancelledAt;
+    default: {
+      const unhandled: never = record;
+
+      return unhandled;
+    }
+  }
 }
 
 /**

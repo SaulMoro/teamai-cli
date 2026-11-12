@@ -1219,7 +1219,13 @@ describe('a restarted member', () => {
     expect(warn).not.toHaveBeenCalledWith(expect.stringContaining('the claim is kept'));
     expect(fs.existsSync(unconfirmed)).toBe(true);
 
+    // What the member kept, such as the log a failure pointed the person to, stays as the run's own leftovers do.
     fs.rmSync(unconfirmed);
+    expect(await take()).toEqual({ data: { idle: { offered: 0 } } });
+    expect(fs.existsSync(attemptDir(bob.config, run, offered.attempt))).toBe(true);
+
+    bob.config.workflows = { tools: {}, ...bob.config.workflows, retention: '1s' };
+    await new Promise((resolve) => setTimeout(resolve, 1_100));
     expect(await take()).toEqual({ data: { idle: { offered: 0 } } });
     expect(fs.existsSync(attemptDir(bob.config, run, offered.attempt))).toBe(false);
   }, 60_000);

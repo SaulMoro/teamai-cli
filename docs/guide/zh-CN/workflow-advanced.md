@@ -1800,7 +1800,7 @@ runtimes:
 
 领取尝试的成员每个 `stale_after` 内会写三次自己仍在运行，并附上到目前为止推送的产出。你的驱动超过 `stale_after` 没有收到它的消息时，尝试以 `fleet_member_gone` 失败。它最后一次推送之前的产出留在步骤的位置里，`teamai workflow retry <run> <step>` 会从那里再次发布这个步骤。
 
-每个尝试的分支 `teamai/attempts/<run>/<attempt>` 会留在 origin 上，直到 `workflows.retention` 过去后 `teamai doctor --fix` 删除这个运行的分支（[运行留下的分支](workflow.md#运行留下的分支)）。尝试的记录结束后，成员会在下一次 `teamai workflow resume --next --pool` 时删除它为该尝试保留的内容。
+每个尝试的分支 `teamai/attempts/<run>/<attempt>` 会留在 origin 上，直到 `workflows.retention` 过去后 `teamai doctor --fix` 删除这个运行的分支（[运行留下的分支](workflow.md#运行留下的分支)）。成员为某个尝试保留的内容（例如它的日志）会一直留到该尝试的记录结束后 `workflows.retention` 过去，之后在下一次 `teamai workflow resume --next --pool` 时删除。
 
 `teamai workflow cancel <run>` 结束在外的尝试，无论你的驱动在运行还是已停止。没有人领取的尝试会被撤回。已领取的成员会停止步骤，推送到目前为止的产出，并输出 `{"data":{"cancelled":{"run":…,"attempt":…,"step":…}}}`；这些产出会进入步骤的位置。成员在 `stale_after` 内没有回应时，尝试以 `fleet_member_gone` 失败，同上。如果取消在 60 秒内都无法写入尝试的记录（例如你的另一个 teamai 命令正占用 `teamai-reports`），或者在 `stale_after` 内完全读不到这条记录，teamai 会停止尝试并说明原因，同时保留该尝试；请再次运行 `teamai workflow cancel <run>`。
 
