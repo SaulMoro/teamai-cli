@@ -1229,7 +1229,7 @@ describe('a prompt that continues an earlier prompt\'s conversation', () => {
     const fix = await opened(runtime, { attempt: 'a0123abce', op: 'op-0000000c' });
 
     // The person deletes the agent in the Paseo app.
-    behave({ output: { fixed: true }, forget_finished: true });
+    behave({ output: { fixed: true }, forget_creates: ['op-0000000b'] });
 
     runtime.send(fixing(fix, 'op-0000000d', review, 'op-0000000b'));
     const end = await runtime.next(isEnd('op-0000000d'));
