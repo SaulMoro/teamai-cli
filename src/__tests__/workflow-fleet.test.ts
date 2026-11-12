@@ -3,7 +3,7 @@ import path from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { leaseNext, startRun } from '../workflow/engine.js';
-import { answerCancel, answerQuestion, cancelAttempt, claimAttempt, expireClaim, finishAttempt, lastGoneWork, leaveOffer, leaseEnv, leaseValues, listOffers, listOpenAttempts, markOffered, offerAttempt, readAttemptRecord, readOfferedMarker, recordProgress, woken, type FleetRecord, type HeldAttempt } from '../workflow/fleet/record.js';
+import { answerCancel, answerQuestion, cancelAttempt, claimAttempt, expireClaim, finishAttempt, lastGoneWork, leaveOffer, leaseEnv, leaseValues, listOpenAttempts, listRecords, markOffered, offerAttempt, offersAmong, readAttemptRecord, readOfferedMarker, recordProgress, woken, type FleetRecord, type HeldAttempt } from '../workflow/fleet/record.js';
 import { startGroupedCommand } from '../workflow/shell-command.js';
 import { publishRun } from '../workflow/handoff.js';
 import { definitionHash } from '../workflow/snapshot.js';
@@ -85,7 +85,29 @@ describe('fleet attempts on teamai-reports', () => {
       code: 'fleet_record_newer',
       message: `The record of attempt ${ATTEMPT} of run ${RUN} on teamai-reports was written by teamai 9.1.0, in a format this teamai cannot read. Upgrade teamai to 9.1.0 or later.`,
     } });
-    expect(await listOffers(bob.config, { pool: 'default', repository: 'github.com/acme/business' })).toEqual([]);
+    expect(offersAmong(await listRecords(bob.config), { pool: 'default', repository: 'github.com/acme/business' })).toEqual([]);
+  });
+
+  it('warns once per pass of a member about a record a newer teamai wrote, which it skips', async () => {
+    const acme = team();
+    const [alice, bob] = [await acme.member('alice'), await acme.member('bob')];
+    const offered = await offer(alice);
+    if (!offered.ok) throw new Error(offered.error.message);
+    const rel = `workflows/attempts/${RUN}/${ATTEMPT}.json`;
+    await updateReports(alice.config, async (worktree) => {
+      fs.writeFileSync(path.join(worktree, rel), JSON.stringify({ ...offered.value, version: 3, teamai: '9.1.0', shape: 'new' }));
+
+      return { value: undefined, write: { files: [rel], message: 'a newer record' } };
+    });
+    await readableReportsWorktree(bob.config);
+    const warned = vi.spyOn(log, 'warn').mockImplementation(() => {});
+
+    try {
+      expect(await takeFleetAttempt(bob.config, { pool: 'default', repository: 'github.com/acme/business', root: bob.checkout, member: await installOwner(bob.config), secrets: {}, place: HERE })).toEqual({ data: { idle: { offered: 0 } } });
+      expect(warned.mock.calls.filter(([line]) => String(line).startsWith('Skipped an attempt:'))).toEqual([[`Skipped an attempt: The record of attempt ${ATTEMPT} of run ${RUN} on teamai-reports was written by teamai 9.1.0, in a format this teamai cannot read. Upgrade teamai to 9.1.0 or later.`]]);
+    } finally {
+      warned.mockRestore();
+    }
   });
 
   it('writes the teamai version that wrote a record into it', async () => {
@@ -128,7 +150,7 @@ describe('fleet attempts on teamai-reports', () => {
     });
     await readableReportsWorktree(bob.config);
 
-    const [taken] = await listOffers(bob.config, { pool: 'default', repository: 'github.com/acme/business' });
+    const [taken] = offersAmong(await listRecords(bob.config), { pool: 'default', repository: 'github.com/acme/business' });
     if (taken === undefined) throw new Error('bob read no offer');
     const claimed = await claimAttempt(bob.config, taken, await installOwner(bob.config));
 
@@ -155,7 +177,7 @@ describe('fleet attempts on teamai-reports', () => {
       code: 'fleet_record_newer',
       message: `The record of attempt ${ATTEMPT} of run ${RUN} on teamai-reports was written by teamai 9.1.0, and needs "lease.${field}", which this teamai does not know. Upgrade teamai to 9.1.0 or later.`,
     } });
-    expect(await listOffers(bob.config, { pool: 'default', repository: 'github.com/acme/business' })).toEqual([]);
+    expect(offersAmong(await listRecords(bob.config), { pool: 'default', repository: 'github.com/acme/business' })).toEqual([]);
   });
 
   it('reads a record whose fields its reader must understand are all ones this teamai knows', async () => {
@@ -207,7 +229,7 @@ describe('fleet attempts on teamai-reports', () => {
       code: 'fleet_record_unreadable',
       message: `The record of attempt ${ATTEMPT} of run ${RUN} on teamai-reports was written by teamai 0.21.0, in an older format this teamai does not read. Upgrade teamai on the install that offered it.`,
     } });
-    expect(await listOffers(bob.config, { pool: 'default', repository: 'github.com/acme/business' })).toEqual([]);
+    expect(offersAmong(await listRecords(bob.config), { pool: 'default', repository: 'github.com/acme/business' })).toEqual([]);
   });
 
   it('lists only the offers of the pool and repository asked for, and no claimed one', async () => {
@@ -217,9 +239,9 @@ describe('fleet attempts on teamai-reports', () => {
     if (!offered.ok) throw new Error(offered.error.message);
     await readableReportsWorktree(bob.config);
 
-    expect(await listOffers(bob.config, { pool: 'default', repository: 'github.com/acme/business' })).toMatchObject([{ attempt: ATTEMPT }]);
-    expect(await listOffers(bob.config, { pool: 'gpu', repository: 'github.com/acme/business' })).toEqual([]);
-    expect(await listOffers(bob.config, { pool: 'default', repository: 'github.com/acme/other' })).toEqual([]);
+    expect(offersAmong(await listRecords(bob.config), { pool: 'default', repository: 'github.com/acme/business' })).toMatchObject([{ attempt: ATTEMPT }]);
+    expect(offersAmong(await listRecords(bob.config), { pool: 'gpu', repository: 'github.com/acme/business' })).toEqual([]);
+    expect(offersAmong(await listRecords(bob.config), { pool: 'default', repository: 'github.com/acme/other' })).toEqual([]);
   });
 
   it('keeps a member that went quiet from writing once the owner gave its claim up', async () => {

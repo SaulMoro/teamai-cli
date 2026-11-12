@@ -706,9 +706,10 @@ function parseRecord(text: string, run: string, attempt: string): Written<FleetR
 
 /**
  * The records of run `run`, or of every run, as this machine's copy of `teamai-reports` holds them: refresh it first. A
- * record that does not parse, or names another run or attempt than its path, is left out.
+ * record that does not parse, or names another run or attempt than its path, is left out, and one of another format
+ * is warned about: list once per pass, so each is warned about once.
  */
-async function listRecords(config: LocalConfig, run?: RunId): Promise<FleetRecord[]> {
+export async function listRecords(config: LocalConfig, run?: RunId): Promise<FleetRecord[]> {
   const root = path.join(getReportsDir(config), ATTEMPTS_DIR);
   const runs = run === undefined ? (await fs.readdir(root, { withFileTypes: true }).catch(() => [])).flatMap((entry) => (entry.isDirectory() ? [entry.name] : [])) : [run];
   const records: FleetRecord[] = [];
@@ -740,12 +741,9 @@ export async function listOpenAttempts(config: LocalConfig, repository: string):
   return open.sort((left, right) => left.offeredAt.localeCompare(right.offeredAt));
 }
 
-/**
- * The attempts offered to pool `pool` for business repository `repository`, oldest offer first, as this machine's copy
- * of `teamai-reports` holds them: refresh it first.
- */
-export async function listOffers(config: LocalConfig, { pool, repository }: { pool: string; repository: string }): Promise<Offered[]> {
-  const offers = (await listRecords(config)).flatMap((record) => (record.state === 'offered' && record.pool === pool && record.repository === repository ? [record] : []));
+/** The attempts among `records` (listRecords) offered to pool `pool` for business repository `repository`, oldest offer first. */
+export function offersAmong(records: FleetRecord[], { pool, repository }: { pool: string; repository: string }): Offered[] {
+  const offers = records.flatMap((record) => (record.state === 'offered' && record.pool === pool && record.repository === repository ? [record] : []));
 
   return offers.sort((left, right) => left.offeredAt.localeCompare(right.offeredAt));
 }
@@ -793,15 +791,15 @@ export async function lastGoneWork(config: LocalConfig, { run, step }: { run: Ru
 export type MemberRecord = Exclude<FleetRecord, Offered | Extract<FleetRecord, { state: 'withdrawn' }>>;
 
 /**
- * The records of claims this install wrote as member `member` for business repository `repository`, oldest claim
- * first, as this machine's copy of `teamai-reports` holds them: refresh it first. A member that starts stops what its
- * earlier runs of these left, and finishes the claims it still holds before it takes a new offer. A record that names
- * this member for a claim it never wrote here is not its own: anyone who can write teamai-reports can write one.
+ * The records among `records` (listRecords) of claims this install wrote as member `member` for business repository
+ * `repository`, oldest claim first. A member that starts stops what its earlier runs of these left, and finishes the
+ * claims it still holds before it takes a new offer. A record that names this member for a claim it never wrote here is
+ * not its own: anyone who can write teamai-reports can write one.
  */
-export async function listMemberRecords(config: LocalConfig, { member, repository }: { member: HandoffOwner; repository: string }): Promise<MemberRecord[]> {
+export async function memberRecordsAmong(config: LocalConfig, records: FleetRecord[], { member, repository }: { member: HandoffOwner; repository: string }): Promise<MemberRecord[]> {
   const named: MemberRecord[] = [];
 
-  for (const record of await listRecords(config)) {
+  for (const record of records) {
     if (record.state === 'offered' || record.state === 'withdrawn') continue;
 
     if (record.member.id === member.id && record.repository === repository && await isClaimedHere(config, record.run, record.attempt)) named.push(record);

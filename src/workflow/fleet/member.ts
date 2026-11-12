@@ -22,7 +22,7 @@ import type { DriverCan } from '../requirements.js';
 import { teamCommitReach, type PinnedFolder } from '../cache.js';
 import { WorkflowFolder } from '../folder.js';
 import { retryCommand } from '../runtimes/retry-command.js';
-import { answerCancel, attemptRef, claimAttempt, finishAttempt, fleetFailure, leaveOffer, leaseEnv, leaseInputs, leasePrompt, listMemberRecords, listOffers, noteHeldFolders, readAttemptRecord, recordProgress, isHeld, type Cancelling, type HeldAttempt, type Offered, type FleetError, type FleetLease, type FleetResult } from './record.js';
+import { answerCancel, attemptRef, claimAttempt, finishAttempt, fleetFailure, leaveOffer, leaseEnv, leaseInputs, leasePrompt, listRecords, memberRecordsAmong, noteHeldFolders, offersAmong, readAttemptRecord, recordProgress, isHeld, type Cancelling, type FleetRecord, type HeldAttempt, type Offered, type FleetError, type FleetLease, type FleetResult } from './record.js';
 import type { ExecAnswer, ExecQuestion } from '@teamai/runtime-protocol/step-runtime';
 import { definitionsOf, type Definitions } from '../handoff.js';
 import { createRun } from '../engine.js';
@@ -283,14 +283,16 @@ async function wholePromptToolLack(config: LocalConfig, step: WorkflowStep, at: 
  */
 export async function takeFleetAttempt(config: LocalConfig, input: { pool: string; repository: string; root: string; member: HandoffOwner; secrets: Record<string, string>; place: MemberPlace }): Promise<WorkflowEnvelope> {
   const { pool, repository, root, member, secrets, place } = input;
-  const finished = await finishLeftClaims(config, { repository, root, member, secrets, place });
+  // One listing for the pass: a record of another format is warned about once.
+  const records = await listRecords(config);
+  const finished = await finishLeftClaims(config, records, { repository, root, member, secrets, place });
 
   if (finished) return finished;
   const offers: Offered[] = [];
 
   // An offer of a kind of step this member's driver does not run, or that needs a label where it would run it does not
   // declare, is another member's to take.
-  for (const offer of await listOffers(config, { pool, repository })) {
+  for (const offer of offersAmong(records, { pool, repository })) {
     const at = place[offer.lease.kind];
 
     if (offer.owner.id === member.id || at === undefined) continue;
@@ -341,8 +343,8 @@ export async function takeFleetAttempt(config: LocalConfig, input: { pool: strin
  * still holds, which it finishes from the work it pushed, or, when the owner cancelled it meanwhile, answers. A run of
  * this install that is still live holds the run's lock, so what it runs is left alone. Undefined when it held no claim.
  */
-async function finishLeftClaims(config: LocalConfig, { repository, root, member, secrets, place }: { repository: string; root: string; member: HandoffOwner; secrets: Record<string, string>; place: MemberPlace }): Promise<WorkflowEnvelope | undefined> {
-  for (const record of await listMemberRecords(config, { member, repository })) {
+async function finishLeftClaims(config: LocalConfig, records: FleetRecord[], { repository, root, member, secrets, place }: { repository: string; root: string; member: HandoffOwner; secrets: Record<string, string>; place: MemberPlace }): Promise<WorkflowEnvelope | undefined> {
+  for (const record of await memberRecordsAmong(config, records, { member, repository })) {
     const held = await takeRunLock(config, record.run, async (lock): Promise<WorkflowEnvelope | undefined> => {
       // A member killed mid-step leaves its command's process group running, or its exec on a step runtime: nothing
       // else stops either. One that may still run keeps the claim, so no second copy of the step runs beside it. What ran
