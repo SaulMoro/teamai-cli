@@ -210,6 +210,10 @@ describe('a runtime through another in a definition', () => {
   it('refuses a runtime through itself, naming through', () => {
     expect(parseDriverDefinition('drivers/boxed.yaml', through('sandbox', 'sandbox'))).toMatchObject({ ok: false, failure: { code: 'driver_invalid', message: expect.stringContaining('runtimes.0.through: A runtime runs through another runtime, not through itself') } });
   });
+
+  it.each([['fleet', 'sandbox'], ['t3', 'fleet']])('refuses %s through %s, naming the entry and saying the fleet composes without through', (use, by) => {
+    expect(parseDriverDefinition('drivers/boxed.yaml', through(use, by))).toMatchObject({ ok: false, failure: { code: 'driver_invalid', message: expect.stringContaining('runtimes.0.through: fleet runs no step through another runtime, and no runtime runs through fleet: a fleet entry composes without through, since each member runs the step on its own driver') } });
+  });
 });
 
 describe('the host driver, which teamai builds in', () => {
