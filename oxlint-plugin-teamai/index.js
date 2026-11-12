@@ -11,6 +11,7 @@ import launchThroughWorkflows from './rules/launch-through-workflows.js';
 import noProviderMerge from './rules/no-provider-merge.js';
 import workflowBoundaries from './rules/workflow-boundaries.js';
 import windowsTests from './rules/windows-tests.js';
+import launcherConformance from './rules/launcher-conformance.js';
 import rulesLocate from './rules/rules-locate.js';
 import workflowFailureCodes from './rules/workflow-failure-codes.js';
 import configLoadOptions from './rules/config-load-options.js';
@@ -55,6 +56,7 @@ export default definePlugin({
     'no-provider-merge': noProviderMerge,
     'workflow-boundaries': workflowBoundaries,
     'windows-tests': windowsTests,
+    'launcher-conformance': launcherConformance,
     'rules-locate': rulesLocate,
     'workflow-failure-codes': workflowFailureCodes,
     'home-env': homeEnv,

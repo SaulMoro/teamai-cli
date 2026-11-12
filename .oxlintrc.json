@@ -120,6 +120,7 @@
     "teamai/workflow-boundaries": "error",
     "teamai/no-provider-merge": "error",
     "teamai/windows-tests": "error",
+    "teamai/launcher-conformance": "error",
     "teamai/rules-locate": "error",
     "teamai/workflow-failure-codes": "error",
     "teamai/tool-facts": "error",
