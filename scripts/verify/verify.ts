@@ -68,6 +68,9 @@ function cleanup(world: World): void {
     fs.rmSync(path.join(world.dir, name), { recursive: true, force: true });
   }
 
+  // A world made since its TMPDIR moved out of its directory, to /tmp.
+  if (path.relative(world.dir, world.tmp).startsWith('..')) fs.rmSync(world.tmp, { recursive: true, force: true });
+
   saveWorld({ ...world, cleanedAt: new Date().toISOString() });
   console.log(`Cleaned ${world.runId}. Evidence kept in ${world.dir}`);
 }

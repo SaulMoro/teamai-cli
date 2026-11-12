@@ -2,6 +2,7 @@ import { execFile } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { readRegularFileSync } from '@teamai/shared/regular-file';
+import { PROVIDER_COMMANDS } from '../options.js';
 import { OS_RELEASE } from '../this-machine.js';
 import { isWithin, onPath, type NativeSandbox, type Sandboxed } from './native.js';
 
@@ -93,7 +94,7 @@ export const bwrap: NativeSandbox = {
   isUnattended: true,
 
   async preflight(env) {
-    const executable = onPath('bwrap', env.PATH);
+    const executable = onPath(PROVIDER_COMMANDS.bwrap, env.PATH);
 
     if (executable === undefined) return { ok: false, message: notInstalled() };
 
@@ -112,5 +113,5 @@ export const bwrap: NativeSandbox = {
     };
   },
 
-  wrap: (sandboxed) => ({ command: 'bwrap', args: argsOf(sandboxed) }),
+  wrap: (sandboxed) => ({ command: PROVIDER_COMMANDS.bwrap, args: argsOf(sandboxed) }),
 };

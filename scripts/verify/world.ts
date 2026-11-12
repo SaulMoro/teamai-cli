@@ -10,6 +10,9 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { z } from 'zod';
+import { PROVIDER_COMMANDS } from '../../packages/runtime-sandbox/src/options.js';
+import { T3_COMMAND } from '../../packages/runtime-t3/src/t3-command.js';
+import { PASEO_COMMAND } from '../../packages/runtime-paseo/src/daemon/client.js';
 
 export const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 export const WORLDS_ROOT = path.join(os.tmpdir(), 'teamai-verify');
@@ -120,6 +123,24 @@ const quote = (value: string): string => `'${value.replace(/'/g, `'\\''`)}'`;
 
 export const TOOL_COMMANDS = ['claude', 'codex', 'codebuddy', 'opencode'];
 
+/** Every command a world's PATH reaches on this machine: git, the tools, each sandbox provider's own and the driver apps'. */
+export function worldCommandNames(): string[] {
+  return ['git', ...TOOL_COMMANDS, ...Object.values(PROVIDER_COMMANDS).flatMap((command) => command ?? []), T3_COMMAND, PASEO_COMMAND];
+}
+
+/**
+ * A world's or a member's TMPDIR, outside the world's directory: macOS keeps $TMPDIR under /var/folders, too deep for
+ * the attempt socket teamai binds there once the attempt's own path is too long (103 bytes on macOS).
+ */
+export function worldTmpDir({ root, runId, member }: { root: string; runId: string; member?: string | undefined }): string {
+  return path.join(root, `teamai-verify-${runId}${member === undefined ? '' : `-${member}`}`);
+}
+
+/** The short root every world's TMPDIR is made in: /tmp, as its real path. */
+export function shortTmpRoot(): string {
+  return fs.realpathSync.native('/tmp');
+}
+
 /** Where the host finds a command, or undefined when it has none. */
 function hostCommand(name: string): string | undefined {
   const found = spawnSync('sh', ['-c', `command -v ${name}`], { encoding: 'utf8' }).stdout.trim();
@@ -129,7 +150,7 @@ function hostCommand(name: string): string | undefined {
 
 /** The only variables a world's commands get. Anything else, a tool home or a teamai setting, must be set on the command line. */
 function worldEnv(home: string, tmp: string, bin: string, fakes: string, npmCache: string) {
-  const commands = ['git', ...TOOL_COMMANDS].flatMap((name) => hostCommand(name) ?? []);
+  const commands = worldCommandNames().flatMap((name) => hostCommand(name) ?? []);
   const search = [fakes, bin, path.dirname(process.execPath), ...commands.map((command) => path.dirname(command)), '/usr/bin', '/bin', '/usr/sbin', '/sbin'];
 
   return {
@@ -175,20 +196,23 @@ export function createWorld(): World {
   const runId = `${new Date().toISOString().replace(/[-:]/g, '').slice(0, 15)}-${crypto.randomBytes(3).toString('hex')}`;
   fs.mkdirSync(WORLDS_ROOT, { recursive: true });
   const dir = path.join(fs.realpathSync.native(WORLDS_ROOT), runId);
+  const tmp = worldTmpDir({ root: shortTmpRoot(), runId });
 
   // Before world.json exists neither cleanup route can find the directory.
   try {
-    return buildWorld(runId, dir);
+    return buildWorld(runId, dir, tmp);
   } catch (error) {
     fs.rmSync(dir, { recursive: true, force: true });
+    fs.rmSync(tmp, { recursive: true, force: true });
     throw error;
   }
 }
 
-function buildWorld(runId: string, dir: string): World {
+function buildWorld(runId: string, dir: string, tmp: string): World {
   const at = (name: string): string => path.join(dir, name);
 
-  for (const name of ['home', 'tmp', 'pkg', 'install', 'project', 'logs']) fs.mkdirSync(at(name), { recursive: true });
+  for (const name of ['home', 'pkg', 'install', 'project', 'logs']) fs.mkdirSync(at(name), { recursive: true });
+  fs.mkdirSync(tmp, { recursive: true, mode: 0o700 });
 
   const commit = git(REPO_ROOT, 'rev-parse', 'HEAD');
   const status = checkoutStatus();
@@ -212,7 +236,7 @@ function buildWorld(runId: string, dir: string): World {
   const bin = at('bin');
   fs.mkdirSync(bin);
   writeFakeGh(at('fakes'));
-  const env = worldEnv(at('home'), at('tmp'), path.join(at('install'), 'node_modules', '.bin'), at('fakes'), at('npm-cache'));
+  const env = worldEnv(at('home'), tmp, path.join(at('install'), 'node_modules', '.bin'), at('fakes'), at('npm-cache'));
   const run = path.join(bin, 'run');
   fs.writeFileSync(
     run,
@@ -231,7 +255,7 @@ function buildWorld(runId: string, dir: string): World {
   };
 
   inWorld('git', 'init', '--quiet', '--bare', team);
-  const teamSeed = path.join(at('tmp'), 'team-seed');
+  const teamSeed = path.join(tmp, 'team-seed');
   inWorld('git', 'init', '--quiet', teamSeed);
   seed(teamSeed, 'World team');
   inWorld('git', '-C', teamSeed, 'push', '--quiet', TEAM_URL, 'main');
@@ -246,7 +270,7 @@ function buildWorld(runId: string, dir: string): World {
     project: at('project'),
     team,
     home: at('home'),
-    tmp: at('tmp'),
+    tmp,
     logs: at('logs'),
     bin,
     build: {

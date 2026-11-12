@@ -2,6 +2,7 @@ import { execFile, execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { isWithin, onPath, type NativeSandbox, type Sandboxed } from './native.js';
+import { PROVIDER_COMMANDS } from '../options.js';
 import { SYSTEM_BIN } from '../this-machine.js';
 
 // ─── seatbelt: macOS's own sandbox, through sandbox-exec ───
@@ -27,7 +28,7 @@ import { SYSTEM_BIN } from '../this-machine.js';
 //  can change the profile. A step here is at `isolation: worktree`: it has no PID namespace and keeps this Mac's network.
 //
 
-const SANDBOX_EXEC = path.join(SYSTEM_BIN, 'sandbox-exec');
+const SANDBOX_EXEC = PROVIDER_COMMANDS.seatbelt;
 const SW_VERS = path.join(SYSTEM_BIN, 'sw_vers');
 
 const NOT_MACOS = `seatbelt runs only on macOS 14 or later, and this machine has no ${SW_VERS}. On Linux, use provider: bwrap; anywhere, provider: sbx or docker`;

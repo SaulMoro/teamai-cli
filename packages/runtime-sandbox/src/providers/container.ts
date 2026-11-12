@@ -1,5 +1,5 @@
 import crypto from 'node:crypto';
-import type { ContainerEngine, ProfileOption, WarmOptions } from '../options.js';
+import { PROVIDER_COMMANDS, type ContainerEngine, type ProfileOption, type WarmOptions } from '../options.js';
 import type { JournalId } from '../journal.js';
 import type { Can, ConfinedOffer, RuntimeFailure } from '@teamai/runtime-protocol';
 import { EVIDENCE_DIR, FILTER_PORT, FILTER_SCRIPT, judgeTool } from '../judge.js';
@@ -90,7 +90,7 @@ export function containerProvider({ engine, image, owner, host, warm, profile }:
     ? 'docker is not installed here, or not on PATH. Install Docker Desktop (https://docs.docker.com/get-docker/) or Docker Engine, start it, and start again.'
     : 'podman is not installed here, or not on PATH. Install Podman (https://podman.io/docs/installation), run `podman machine init && podman machine start` on macOS or Windows, and start again.';
 
-  const { run: cli, why, executable } = cliOf({ name: engine, env: host.env, notInstalled });
+  const { run: cli, why, executable } = cliOf({ name: PROVIDER_COMMANDS[engine], env: host.env, notInstalled });
 
   /** The engine CLI's environment for an exec: the spec's names over this runtime's own, the CLI's settings kept. */
   const execEnv = (spec: ExecSpec): NodeJS.ProcessEnv => {

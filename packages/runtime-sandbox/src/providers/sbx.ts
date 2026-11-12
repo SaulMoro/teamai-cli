@@ -4,7 +4,7 @@ import { z } from 'zod';
 import type { Can, RuntimeFailure } from '@teamai/runtime-protocol';
 import { mayBeRunning } from '@teamai/shared/process-group';
 import type { JournalId } from '../journal.js';
-import type { ProfileOption, WarmOptions } from '../options.js';
+import { PROVIDER_COMMANDS, type ProfileOption, type WarmOptions } from '../options.js';
 import { oneBuildPerKey, planWarm, scratchOf, WARM_REPOSITORY, warmFailed, type WarmPlan } from '../warm.js';
 import { COMMAND_MS, type ExecEnd, type ExecSpec, type PlaceKey, type Provider } from '../provider.js';
 import { offerSignedIn, type MissingCommand } from '../sign-in.js';
@@ -93,7 +93,7 @@ function namesListed(stdout: string): string[] | undefined {
  * template each attempt starts from, saved from that template.
  */
 export function sbxProvider({ agent, owner, env, warm, profile }: { agent: string | undefined; owner: JournalId; env: NodeJS.ProcessEnv; warm?: Extract<WarmOptions, { prepare: string }>; profile?: ProfileOption }): Provider {
-  const { run: cli, executable } = cliOf({ name: 'sbx', env, notInstalled: NOT_INSTALLED });
+  const { run: cli, executable } = cliOf({ name: PROVIDER_COMMANDS.sbx, env, notInstalled: NOT_INSTALLED });
 
   /** `sbx exec`'s arguments and environment: the spec's names by name only, never sbx's own settings, which stay. */
   const execOf = (id: string, spec: ExecSpec, { isInteractive }: { isInteractive: boolean }) => {

@@ -43,10 +43,13 @@ export interface T3Command {
   locate(): string | undefined;
 }
 
+/** The name of T3 Code's command, on PATH or in `<T3 home>/bin`. */
+export const T3_COMMAND = 't3';
+
 /** The `t3` command: `$T3CODE_CLI_PATH`, then `t3` on PATH, then `<T3 home>/bin/t3`, the first one there is. */
 export function t3Command(env: NodeJS.ProcessEnv, t3Home: string): T3Command {
-  const atHome = path.join(t3Home, 'bin', 't3');
-  const candidates = [...(env['T3CODE_CLI_PATH'] ? [env['T3CODE_CLI_PATH']] : []), 't3', atHome];
+  const atHome = path.join(t3Home, 'bin', T3_COMMAND);
+  const candidates = [...(env['T3CODE_CLI_PATH'] ? [env['T3CODE_CLI_PATH']] : []), T3_COMMAND, atHome];
 
   const missing = env['T3CODE_CLI_PATH']
     ? `found no t3 command at $T3CODE_CLI_PATH, on PATH, or at ${atHome}`
