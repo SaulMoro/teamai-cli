@@ -10,6 +10,9 @@ import { journalOfSbxName } from './leftovers/sbx.js';
 import type { World } from './world.js';
 
 /** `reap [<run>] [--delete] [vercel:<name>…]`. */
+/** The start of every name teamai gives a Vercel sandbox, the only ones reap lists. */
+const NAME_PREFIX = 'teamai-';
+
 export function parseReapArgs(args: readonly string[]): { ok: true; run: string | undefined; isDeleting: boolean; named: string[] } | { ok: false; message: string } {
   let run: string | undefined;
   const named: string[] = [];
@@ -17,7 +20,8 @@ export function parseReapArgs(args: readonly string[]): { ok: true; run: string 
 
   for (const arg of args) {
     if (arg === '--delete') isDeleting = true;
-    else if (arg.startsWith('vercel:') && arg.length > 'vercel:'.length) named.push(arg.slice('vercel:'.length));
+    else if (arg.startsWith(`vercel:${NAME_PREFIX}`) && arg.length > `vercel:${NAME_PREFIX}`.length) named.push(arg.slice('vercel:'.length));
+    else if (arg.startsWith('vercel:') && arg.length > 'vercel:'.length) return { ok: false, message: `reap lists only the sandboxes whose names start with teamai-, so it cannot find ${arg}. Delete it from Vercel itself.` };
     else if (run === undefined && /^\d{8}T\d{6}-[0-9a-f]{6}$/.test(arg)) run = arg;
     else return { ok: false, message: `reap takes a run id, --delete and vercel:<name> words; ${arg} is none of them.` };
   }
@@ -79,7 +83,7 @@ export async function reap(args: readonly string[], loadWorld: (run: string) => 
 
   const { Sandbox } = await import('@vercel/sandbox');
   const { self, others } = await tiesOnThisMachine(parsed.run === undefined ? undefined : loadWorld(parsed.run));
-  const list = async () => judgeRemote({ listed: await (await Sandbox.list({ namePrefix: 'teamai-', ...signIn.credentials })).toArray(), self, others, named: parsed.named });
+  const list = async () => judgeRemote({ listed: await (await Sandbox.list({ namePrefix: NAME_PREFIX, ...signIn.credentials })).toArray(), self, others, named: parsed.named });
   let found = await list();
 
   if (parsed.isDeleting) {

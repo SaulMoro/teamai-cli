@@ -19,6 +19,8 @@ describe('reap', () => {
     expect(parseReapArgs(['20261112T120000-aaaaaa', '--delete', 'vercel:teamai-x'])).toEqual({ ok: true, run: '20261112T120000-aaaaaa', isDeleting: true, named: ['teamai-x'] });
     expect(parseReapArgs([])).toEqual({ ok: true, run: undefined, isDeleting: false, named: [] });
     expect(parseReapArgs(['docker:x'])).toMatchObject({ ok: false });
+    // reap lists only names teamai gives, so one outside them would never be found.
+    expect(parseReapArgs(['--delete', 'vercel:my-box'])).toEqual({ ok: false, message: 'reap lists only the sandboxes whose names start with teamai-, so it cannot find vercel:my-box. Delete it from Vercel itself.' });
   });
 
   it("judges each teamai sandbox by its journal or its run's tag, and only this world's own or a named one may be deleted", () => {
