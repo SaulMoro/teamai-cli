@@ -69,6 +69,12 @@ describe('the sandbox observer', () => {
     ], ['/w/x'])).toEqual([{ bwrap: '100', steps: ['102'] }]);
   });
 
+  it('names a bwrap by the attempt place it binds, so section (f) can tell its attempt was read', () => {
+    const args = ['/usr/bin/bwrap', '--bind', '/w/x/home/.teamai/runtime-state/sandbox/teamai-r0123abcd-a0123abcd/home', '/w/x/home/.teamai/runtime-state/sandbox/teamai-r0123abcd-a0123abcd/home', 'sh'];
+
+    expect(bwrapSteps([{ pid: '100', ppid: '50', args }, { pid: '102', ppid: '100', args: ['sh'] }], ['/w/x'])).toEqual([{ bwrap: 'teamai-r0123abcd-a0123abcd', steps: ['102'] }]);
+  });
+
   it("reads no second step from a bwrap the step's own tool runs further down", () => {
     const args = ['/usr/bin/bwrap', '--bind', '/w/x/project', '/w/x/project', 'sh', '-c', 'step'];
 

@@ -1,6 +1,6 @@
 /**
  * The attempt places teamai's own records say an external step runtime still keeps open, under every HOME of the world,
- * and each attempt that ran on seatbelt. The record is the product's (`readAttemptPlacementAt`), read the way a cancel
+ * and each sandboxed attempt whose environment no observer line read (observer.ts `attemptsObserved`). The record is the product's (`readAttemptPlacementAt`), read the way a cancel
  * reads it, and judged open by the predicate `teamai uninstall` refuses with (`isPlaceLeftOpen`): cleanup refuses while
  * one is open or unreadable, since the record it would remove is what closes the place.
  */
@@ -34,6 +34,9 @@ function cancelOf(world: Pick<World, 'runId' | 'home' | 'members'>, file: string
   return `\`npm run -s verify -- teamai ${world.runId}${member === undefined ? '' : `@${member.name}`} workflow cancel ${keyOf(file).run}\``;
 }
 
+/** The providers no observer reads: seatbelt has no environment to list, and vercel runs on another machine. */
+const UNWATCHED = new Set(['seatbelt', 'vercel']);
+
 export const places: LeftoverKind = {
   title: 'open attempt place',
   onCleanup: {
@@ -60,11 +63,23 @@ export const places: LeftoverKind = {
     });
 
     // The record keeps the provider once the place closes, which a short step does before the observer looks.
-    const notes = records.files.flatMap((file, index) => {
+    const sandboxed = records.files.flatMap((file, index) => {
       const placement = placements[index];
-      const isSeatbelt = placement?.kind === 'external' && (placement.record.sources ?? []).some((source) => source.sandbox?.provider === 'seatbelt');
+      const provider = placement?.kind === 'external' ? (placement.record.sources ?? []).find((source) => source.sandbox !== undefined)?.sandbox?.provider : undefined;
 
-      return isSeatbelt ? [`run ${attemptOf(file)} ran on seatbelt, which no observer reads: the env check proves nothing for it`] : [];
+      return provider === undefined ? [] : [{ file, provider }];
+    });
+
+    const observed = sandboxed.length === 0 ? new Set<string>() : (await import('../observer.js')).attemptsObserved(world);
+
+    const notes = sandboxed.flatMap(({ file, provider }) => {
+      const { run, attempt } = keyOf(file);
+
+      if (observed.has(`${run}/${attempt}`)) return [];
+
+      return [UNWATCHED.has(provider)
+        ? `NOT OBSERVED: run ${attemptOf(file)}'s environment on ${provider}, which no observer reads: the env check proves nothing for it`
+        : `NOT OBSERVED: run ${attemptOf(file)}'s environment on ${provider}, which no observer line read: its sandbox closed before the observer looked, or could not be read`];
     });
 
     return [{ kind: 'observed', findings, notes }];

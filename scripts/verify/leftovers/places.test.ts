@@ -2,7 +2,10 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
+import { journal } from '../../../packages/runtime-sandbox/src/journal.js';
+import { sandboxJournalRoot } from '../../../packages/runtime-sandbox/src/journal-root.js';
 import { cleanupPlan, type LeftoverContext } from '../leftovers.js';
+import { startObserver } from '../observer.js';
 import type { World } from '../world.js';
 import { places } from './places.js';
 
@@ -12,11 +15,11 @@ afterEach(() => {
   for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true });
 });
 
-/** A closed attempt record of run r1, written where teamai keeps it, whose sandbox profile ran on `provider`. */
+/** A closed record of attempt a0123abcd of run r0123abcd, written where teamai keeps it, whose sandbox profile ran on `provider`. */
 function closedRecord(provider: string): string {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'places-'));
   roots.push(root);
-  const file = path.join(root, 'runs', 'r1', 'attempts', 'a1', 'runtime.json');
+  const file = path.join(root, 'runs', 'r0123abcd', 'attempts', 'a0123abcd', 'runtime.json');
   const origin = { layer: 'personal', location: 'drivers/box.yaml', revision: 'r' };
   fs.mkdirSync(path.dirname(file), { recursive: true });
   fs.writeFileSync(file, JSON.stringify({
@@ -27,8 +30,38 @@ function closedRecord(provider: string): string {
   return file;
 }
 
-function contextOf(files: string[]): LeftoverContext {
-  return { world: {} as World, self: { runId: 'w', paths: [], journals: [], runs: [] }, others: [], records: { files, runs: ['r1'], runtimeJournals: 0 } };
+/** A world of its own, with what an observer needs to start in it. */
+function sandboxWorld(): World {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'places-world-'));
+  roots.push(dir);
+  const at = (name: string): string => path.join(dir, name);
+
+  return {
+    runId: RUN, dir, project: at('project'), team: at('team.git'), home: at('home'), tmp: at('tmp'), logs: at('logs'), bin: at('bin'),
+    build: { commit: 'c', dirty: false, version: '0', tarball: 't', sha256: 's', node: 'v24' },
+    createdAt: '2026-11-12T12:00:00.000Z', baseline: { teamRefs: {}, checkoutStatus: [] }, env: { VERIFY_WORLD_CANARY: 'c4n4ry0123456789' }, members: [],
+  };
+}
+
+function contextOf(files: string[], world: World = sandboxWorld()): LeftoverContext {
+  return { world, self: { runId: RUN, paths: [], journals: [], runs: [] }, others: [], records: { files, runs: ['r0123abcd'], runtimeJournals: 0 } };
+}
+
+/** docker as the observer asks it: up, listing `containers` of `world`'s journal, and every exec printing one plain environment. */
+function dockerListing(world: World, containers: readonly string[]) {
+  const owner = journal(sandboxJournalRoot(world.home)).owner;
+
+  return (argv: readonly string[]): Promise<string | undefined> => {
+    const [command = '', verb = ''] = argv;
+
+    if (command !== 'docker') return Promise.resolve(undefined);
+
+    if (verb === 'info') return Promise.resolve('29.0.0\n');
+
+    if (verb === 'ps') return Promise.resolve(containers.map((name) => `c0ffee\t${name}\t${owner}\n`).join(''));
+
+    return Promise.resolve(verb === 'exec' ? 'PATH=/usr/bin\0HOME=/root\0\0' : undefined);
+  };
 }
 
 const RUN = '20261112T120000-aaaaaa';
@@ -84,11 +117,28 @@ describe('cleanup while an attempt place is still open', () => {
   });
 });
 
-describe('open attempt places', () => {
-  it("notes that a closed attempt ran on seatbelt, which no observer reads, and says nothing of another provider's", async () => {
-    expect(await places.observe(contextOf([closedRecord('seatbelt')]))).toEqual([
-      { kind: 'observed', findings: [], notes: ["run r1 attempt a1 ran on seatbelt, which no observer reads: the env check proves nothing for it"] },
+describe("a sandboxed attempt's environment in section (f)", () => {
+  it('is NOT OBSERVED when its step ended before the observer first looked', async () => {
+    const world = sandboxWorld();
+    const observer = startObserver(world, { pass: new Map(), label: 'teamai workflow start', listed: dockerListing(world, []) });
+
+    expect(await observer.stop()).toEqual([]);
+    expect(await places.observe(contextOf([closedRecord('docker')], world))).toEqual([
+      { kind: 'observed', findings: [], notes: ["NOT OBSERVED: run r0123abcd attempt a0123abcd's environment on docker, which no observer line read: its sandbox closed before the observer looked, or could not be read"] },
     ]);
-    expect(await places.observe(contextOf([closedRecord('docker')]))).toEqual([{ kind: 'observed', findings: [], notes: [] }]);
+  });
+
+  it('says nothing more once an observer line read it', async () => {
+    const world = sandboxWorld();
+    const observer = startObserver(world, { pass: new Map(), label: 'teamai workflow start', listed: dockerListing(world, ['teamai-r0123abcd-a0123abcd']) });
+
+    expect(await observer.stop()).toEqual(['[verify] observed docker:teamai-r0123abcd-a0123abcd: env ok']);
+    expect(await places.observe(contextOf([closedRecord('docker')], world))).toEqual([{ kind: 'observed', findings: [], notes: [] }]);
+  });
+
+  it('is NOT OBSERVED on a provider no observer reads', async () => {
+    expect(await places.observe(contextOf([closedRecord('seatbelt')]))).toEqual([
+      { kind: 'observed', findings: [], notes: ["NOT OBSERVED: run r0123abcd attempt a0123abcd's environment on seatbelt, which no observer reads: the env check proves nothing for it"] },
+    ]);
   });
 });

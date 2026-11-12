@@ -3,7 +3,8 @@
  * `judgeSandboxEnv`: containers and sbx sandboxes tied to the world, and on Linux each bwrap whose arguments name a world
  * path. Values are read and compared in memory only; what is written (observed.jsonl, the `[verify] observed` lines)
  * holds names. Loaded only once a sandbox place opens or closes in a HOME of the world during the command (target.ts).
- * A sandbox of the world it lists but cannot read is NOT OBSERVED, never left out.
+ * A sandbox of the world it lists but cannot read is NOT OBSERVED, never left out; one it never saw, ledger section (f)
+ * says is NOT OBSERVED from these records (`attemptsObserved`).
  */
 import { execFile } from 'node:child_process';
 import fs from 'node:fs';
@@ -18,12 +19,57 @@ import { journal } from '../../packages/runtime-sandbox/src/journal.js';
 import { sandboxJournalRoot } from '../../packages/runtime-sandbox/src/journal-root.js';
 import { CONTAINER_ENGINES } from '../../packages/runtime-sandbox/src/options.js';
 import { PROVIDER_COMMANDS } from '../../packages/runtime-sandbox/src/provider-commands.js';
+import { ATTEMPT_ID, RUN_ID } from '../../packages/runtime-sandbox/src/provider.js';
+import { errnoCode } from '../../src/utils/fs.js';
 import { journalOfSbxName } from './leftovers/sbx.js';
 import { declaredCredentialNames, judgeSandboxEnv, parseEnviron, type EnvVerdict } from './secrets.js';
 import { CANARY_NAME, worldHomes, type World } from './world.js';
 
 const run = promisify(execFile);
 const POLL_MS = 500;
+const OBSERVED_FILE = 'observed.jsonl';
+
+/**
+ * The attempt `name` names as `<run>/<attempt>`: a sandbox's name or a path segment `teamai-<run>-<attempt>`, the
+ * handle of its place (provider.ts `handleOf`), which sbx starts with its journal, `teamai-<journal>-<run>-<attempt>`.
+ */
+function attemptNamed(name: string): string | undefined {
+  const parts = name.split('-');
+  const [runId = '', attempt = ''] = parts.slice(-2);
+
+  return parts[0] === 'teamai' && parts.length >= 3 && RUN_ID.test(runId) && ATTEMPT_ID.test(attempt) ? `${runId}/${attempt}` : undefined;
+}
+
+const ObservedRecordSchema = z.looseObject({ what: z.string(), read: z.number() });
+
+/**
+ * The attempts, as `<run>/<attempt>`, whose sandbox environment an observer line of `world` read: its records in
+ * observed.jsonl with an environment read. A line this harness cannot parse names none.
+ */
+export function attemptsObserved(world: Pick<World, 'dir'>): Set<string> {
+  let text: string;
+
+  try {
+    text = fs.readFileSync(path.join(world.dir, OBSERVED_FILE), 'utf8');
+  } catch (error) {
+    if (errnoCode(error) === 'ENOENT') return new Set();
+    throw error;
+  }
+
+  return new Set(text.split('\n').flatMap((line) => {
+    let record: z.infer<typeof ObservedRecordSchema>;
+
+    try {
+      record = ObservedRecordSchema.parse(JSON.parse(line));
+    } catch {
+      return [];
+    }
+
+    const attempt = attemptNamed(record.what.slice(record.what.indexOf(':') + 1));
+
+    return attempt === undefined || record.read === 0 ? [] : [attempt];
+  }));
+}
 
 /** Every process's environment inside a sandbox, one block per process, blocks split by an empty entry. Never printed. */
 const ENVIRONS = 'for f in /proc/[0-9]*/environ; do cat "$f" 2>/dev/null && printf "\\0\\0"; done';
@@ -95,7 +141,8 @@ export interface ProcEntry {
 }
 
 /**
- * Each bwrap step in `procs` whose arguments name a path under one of `roots`: its outermost bwrap, and the first of
+ * Each bwrap step in `procs` whose arguments name a path under one of `roots`: its outermost bwrap, by the place its
+ * arguments name (`teamai-<run>-<attempt>`, the step's own home is bound from there) or else its pid, and the first of
  * its descendants that are not bwrap, whose environment is the step's. A bwrap anywhere below another is that step's own.
  */
 export function bwrapSteps(procs: readonly ProcEntry[], roots: readonly string[]): Array<{ bwrap: string; steps: string[] }> {
@@ -122,7 +169,7 @@ export function bwrapSteps(procs: readonly ProcEntry[], roots: readonly string[]
       const children = procs.filter((proc) => frontier.includes(proc.ppid));
       const first = children.filter((proc) => !isBwrap(proc.args));
 
-      if (first.length > 0) return [{ bwrap: outer.pid, steps: first.map((proc) => proc.pid) }];
+      if (first.length > 0) return [{ bwrap: outer.args.flatMap((arg) => arg.split('/')).find((segment) => attemptNamed(segment) !== undefined) ?? outer.pid, steps: first.map((proc) => proc.pid) }];
       frontier = children.map((proc) => proc.pid);
     }
 
@@ -257,7 +304,7 @@ export function startObserver(world: World, { pass, label, listed = listedHere }
 
       for (const [name, status] of notRunning) if (!seen.has(`sbx:${name}`)) unobserved.add(`sbx:${name}'s environment, sbx listed it as ${status}, and only a running one is asked`);
 
-      if (records.length > 0) fs.appendFileSync(path.join(world.dir, 'observed.jsonl'), records.map((record) => `${JSON.stringify(record)}\n`).join(''));
+      if (records.length > 0) fs.appendFileSync(path.join(world.dir, OBSERVED_FILE), records.map((record) => `${JSON.stringify(record)}\n`).join(''));
 
       return [
         ...records.map((record) => `[verify] observed ${record.what}: ${record.read === 0 ? 'NOT OBSERVED, no environment could be read' : record.names.length === 0 ? 'env ok' : `ENV LEAK ${record.names.join(', ')}`}`),
