@@ -350,8 +350,11 @@ async function finishLeftClaims(config: LocalConfig, records: FleetRecord[], { r
       // else stops either. One that may still run keeps the claim, so no second copy of the step runs beside it. What ran
       // in its own process, such as a Codex judge, also left its login held: that is written back and released.
       const stopped = await stopLeftInProcess(config, record.run, record.attempt);
+      const isEnded = !isHeld(record) && record.state !== 'cancelling';
+      const isLeftRunning = stopped.kind !== 'ended' && stopped.left.length > 0;
 
-      if (stopped.kind !== 'ended' && stopped.left.length > 0) {
+      // An attempt whose record ended runs nothing of its step again, so only a claim still held waits on what it left.
+      if (!isEnded && isLeftRunning) {
         return { error: { code: 'runtime_lost', message: `teamai could not confirm that process ${stopped.left.join(', ')}, which its killed run of step "${record.lease.step}" started, ended, so the claim is kept and the step does not run again beside it. Once that process has ended, run teamai workflow resume --next --pool ${record.pool} again.` } };
       }
 
@@ -365,9 +368,9 @@ async function finishLeftClaims(config: LocalConfig, records: FleetRecord[], { r
       // Its place there is closed: a run of the attempt starts again with a place and an exec of its own.
       await fs.rm(attemptRuntimePath(config, record.run, record.attempt), { force: true });
 
-      // An attempt whose record ended needs nothing more here: what the member kept of it goes, its claim marker with it.
-      if (!isHeld(record) && record.state !== 'cancelling') {
-        await removeEndedAttempt(config, record.run, record.attempt);
+      // What the member kept of an ended attempt goes, its claim marker with it, once nothing it left may still run.
+      if (isEnded) {
+        if (!isLeftRunning) await removeEndedAttempt(config, record.run, record.attempt);
 
         return undefined;
       }

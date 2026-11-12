@@ -1209,7 +1209,17 @@ describe('a restarted member', () => {
     expect(await take()).toMatchObject({ data: { ran: { run, attempt: offered.attempt } } });
     expect(await recordOf(alice, run)).toMatchObject({ state: 'finished' });
     expect(fs.existsSync(attemptDir(bob.config, run, offered.attempt))).toBe(true);
+    // A group no stop here can tell ended, as a pid namespace that changed since leaves: an ended attempt runs nothing
+    // again, so it refuses nothing, but keeps the record of what may still run.
+    const unconfirmed = path.join(attemptDir(bob.config, run, offered.attempt), 'group-424242.json');
+    fs.writeFileSync(unconfirmed, JSON.stringify({ pid: 424242, spawnedAt: Date.now(), pidNamespace: 'pid:[1]' }));
+    const warn = vi.spyOn(log, 'warn').mockImplementation(() => undefined);
 
+    expect(await take()).toEqual({ data: { idle: { offered: 0 } } });
+    expect(warn).not.toHaveBeenCalledWith(expect.stringContaining('the claim is kept'));
+    expect(fs.existsSync(unconfirmed)).toBe(true);
+
+    fs.rmSync(unconfirmed);
     expect(await take()).toEqual({ data: { idle: { offered: 0 } } });
     expect(fs.existsSync(attemptDir(bob.config, run, offered.attempt))).toBe(false);
   }, 60_000);
