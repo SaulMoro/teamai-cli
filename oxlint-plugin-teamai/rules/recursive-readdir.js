@@ -1,7 +1,7 @@
 /** @import { ESTree } from '@oxlint/plugins' */
 import { defineRule } from '@oxlint/plugins';
 
-import { fsFunctionOf } from '../fs-calls.js';
+import { fsFunctionOf, isCalled, refersToValue } from '../fs-calls.js';
 import { repositoryPath, scopedFiles, stringLiteralValue } from '../utils.js';
 
 /** The calls that list a folder, and with `recursive` every folder under it. */
@@ -9,10 +9,10 @@ const LISTS = new Set(['readdir', 'readdirSync', 'opendir', 'opendirSync']);
 
 const MESSAGE = 'List a folder and what is under it with entriesUnder from @teamai/shared/entries-under, not readdir or opendir with recursive: true, which enters a link to a folder (on Node 26 every form of it does): a link out of the folder lists what is outside it, and two links to a parent never end. entriesUnder lists a link and does not enter it.';
 
-const UNREAD_MESSAGE = 'Give readdir or opendir its options as an object literal with no spread, or none, so lint can see whether it lists recursively: a recursive listing enters a link to a folder, so list a folder and what is under it with entriesUnder from @teamai/shared/entries-under.';
+const UNREAD_MESSAGE = 'Give readdir or opendir its options as an object literal with no spread, or none, in a call of it where it stands, so lint can see whether it lists recursively: a recursive listing enters a link to a folder, so list a folder and what is under it with entriesUnder from @teamai/shared/entries-under.';
 
 /**
- * Files that still list a folder recursively, each with how many such calls it has. A new call goes through
+ * Files that still list a folder recursively, or may (with options lint cannot read), each with how many such calls it has. A new call goes through
  * entriesUnder instead, in these files too: a count only falls, and a file that has fewer calls than its count fails
  * until the count is lowered.
  * @type {ReadonlyMap<string, number>}
@@ -28,6 +28,7 @@ export const NOT_YET_MOVED = new Map(Object.entries({
   'src/__tests__/contribute-outcomes.test.ts': 1,
   'src/__tests__/contribute.test.ts': 2,
   'src/__tests__/default-workflows.test.ts': 1,
+  'src/__tests__/desired-skills.test.ts': 1,
   'src/__tests__/e2e/benchmark-team-resources.test.ts': 2,
   'src/__tests__/e2e/benchmark-try.test.ts': 1,
   'src/__tests__/e2e/ci-extract-mr-workflow.test.ts': 1,
@@ -85,12 +86,19 @@ scopedFiles([...NOT_YET_MOVED.keys()]);
 
 /**
  * Whether `options`, the second argument of a listing, may list recursively: `recursive` with any value but `false`, or
- * options lint cannot read, such as a variable or a spread. A string encoding, or no options, lists one folder.
+ * options lint cannot read, such as a variable or a spread. A string encoding, no options (`null`, `undefined`, or a
+ * callback in their place) lists one folder.
  * @param {ESTree.Node | undefined} options
  * @returns {'recursive' | 'unread' | undefined}
  */
 function recursionOf(options) {
   if (options === undefined || stringLiteralValue(options) !== undefined) return undefined;
+
+  if ((options.type === 'Literal' && options.value === null) || (options.type === 'Identifier' && options.name === 'undefined')) return undefined;
+
+  if (options.type === 'ArrowFunctionExpression' || options.type === 'FunctionExpression') return undefined;
+
+  if (options.type === 'SpreadElement') return 'unread';
 
   if (options.type !== 'ObjectExpression') return 'unread';
 
@@ -114,25 +122,44 @@ export default defineRule({
     const { sourceCode } = context;
     const from = repositoryPath(context).relative;
     const allowed = NOT_YET_MOVED.get(from);
-    /** @type {ESTree.Node[]} */
+    /** @type {Array<{ node: ESTree.Node, message: string }>} */
     const recursive = [];
+
+    /**
+     * Reports a listing that may be recursive at once, or, in a file NOT_YET_MOVED names, once its count is known.
+     * @param {ESTree.Node} node
+     * @param {string} message
+     */
+    const found = (node, message) => {
+      if (allowed === undefined) context.report({ node, message });
+      else recursive.push({ node, message });
+    };
 
     return {
       CallExpression(node) {
         const called = fsFunctionOf(sourceCode, node.callee);
 
         if (called === undefined || !LISTS.has(called)) return;
-        const recursion = recursionOf(node.arguments[1]);
+        const recursion = node.arguments[0]?.type === 'SpreadElement' ? 'unread' : recursionOf(node.arguments[1]);
 
-        if (recursion === 'unread') context.report({ node, message: UNREAD_MESSAGE });
-        else if (recursion === 'recursive' && allowed === undefined) context.report({ node, message: MESSAGE });
-        else if (recursion === 'recursive') recursive.push(node);
+        if (recursion !== undefined) found(node, recursion === 'unread' ? UNREAD_MESSAGE : MESSAGE);
+      },
+      // A listing passed on, aliased or called through `.call`, `.apply` or `.bind` gets options lint does not see here.
+      'Identifier, MemberExpression'(/** @type {ESTree.Node} */ node) {
+        if (isCalled(node)) return;
+        const { parent } = node;
+        const isCalledThrough = parent?.type === 'MemberExpression' && parent.object === node && !parent.computed && parent.property.type === 'Identifier' && ['call', 'apply', 'bind'].includes(parent.property.name);
+
+        if (!isCalledThrough && !refersToValue(node)) return;
+        const used = fsFunctionOf(sourceCode, node);
+
+        if (used !== undefined && LISTS.has(used)) found(node, UNREAD_MESSAGE);
       },
       'Program:exit'(node) {
         if (allowed === undefined) return;
 
         if (recursive.length > allowed) {
-          for (const call of recursive) context.report({ node: call, message: `${MESSAGE} NOT_YET_MOVED in oxlint-plugin-teamai/rules/recursive-readdir.js lets this file keep ${allowed} such calls, and it has ${recursive.length}.` });
+          for (const call of recursive) context.report({ node: call.node, message: `${call.message} NOT_YET_MOVED in oxlint-plugin-teamai/rules/recursive-readdir.js lets this file keep ${allowed} such calls, and it has ${recursive.length}.` });
         } else if (recursive.length < allowed) {
           context.report({ node, message: `This file lists a folder recursively fewer times than NOT_YET_MOVED in oxlint-plugin-teamai/rules/recursive-readdir.js lets it: set its count there to ${recursive.length}, or remove the file from the list at 0.` });
         }

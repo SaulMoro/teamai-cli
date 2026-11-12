@@ -42,6 +42,21 @@ export const all = (dir: string, more: object) => [fs.readdirSync(dir, deep), fs
   expect(output.match(/Give readdir or opendir its options as an object literal/g)).toHaveLength(2);
 });
 
+invalid('rejects a listing passed on as a value or given spread arguments, whose options lint cannot see', `import fs from 'node:fs';
+import { promisify } from 'node:util';
+const list = fs.readdirSync;
+const listLater = promisify(fs.readdir);
+export const all = (dir: string, args: [string, object]) => [
+  list(dir),
+  listLater(dir),
+  fs.readdirSync.call(fs, dir, { recursive: true }),
+  fs.readdirSync.bind(fs)(dir),
+  fs.readdirSync(...args),
+  fs.readdirSync(dir, ...[{ recursive: true }]),
+];`, (output) => {
+  expect(output.match(/Give readdir or opendir its options as an object literal/g)).toHaveLength(6);
+});
+
 for (const filename of ['src/__tests__/new-area.test.ts', 'packages/runtime-zzz/src/testing/walk.ts', 'scripts/new-check.ts', 'oxlint-plugin-teamai/rules/new-rule.test.ts']) {
   invalid(`rejects a recursive listing in ${filename}, a test, a new package or a script included, with no rule edit`, `import fs from 'node:fs';
 export const all = (dir: string) => fs.readdirSync(dir, { recursive: true });`, (output) => {
@@ -51,6 +66,14 @@ export const all = (dir: string) => fs.readdirSync(dir, { recursive: true });`, 
 
 valid('allows a listing of one folder, and one that says it is not recursive', `import fs from 'node:fs';
 export const one = async (dir: string) => [fs.readdirSync(dir), fs.readdirSync(dir, 'utf8'), await fs.promises.readdir(dir, { withFileTypes: true }), fs.readdirSync(dir, { recursive: false })];`);
+
+valid('allows a listing of one folder given a callback, or no options before it', `import fs from 'node:fs';
+export const one = (dir: string) => {
+  fs.readdir(dir, (error, names) => names);
+  fs.readdir(dir, function done() {});
+  fs.readdir(dir, undefined, () => {});
+  fs.readdir(dir, null, () => {});
+};`);
 
 valid('allows entriesUnder, and a readdir that is no file module\'s', `import { entriesUnder } from '@teamai/shared/entries-under';
 declare const archive: { readdir(dir: string, options: object): string[] };
