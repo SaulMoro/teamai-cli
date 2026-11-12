@@ -45,6 +45,14 @@ function personal(name: string, text: string): void {
   fs.writeFileSync(path.join(dir, `${name}.yaml`), text);
 }
 
+/** The member's user-scope config, whose team repo is `repo`, with `fields` (`projects: [...]`) set. */
+function memberOf(repo: string, fields: { projects?: string[] }): void {
+  const dir = path.join(home, '.teamai');
+  fs.mkdirSync(dir, { recursive: true });
+  const projects = fields.projects ? `projects: [${fields.projects.join(', ')}]\n` : '';
+  fs.writeFileSync(path.join(dir, 'config.yaml'), `repo:\n  localPath: ${repo}\n  remote: https://example.test/acme/team.git\nusername: tester\nscope: user\n${projects}`);
+}
+
 const ACME_CLAUDE = `schemaVersion: v1alpha1
 name: acme-claude
 extends: claude
@@ -172,6 +180,55 @@ describe('team tool instances', () => {
     const { registry } = await load(teamRepo({ 'tools/acme-claude.yaml': ACME_CLAUDE, 'tools/web/acme-claude.yaml': ACME_CLAUDE.replace('command: acme-claude', 'command: acme-claude-web') }));
 
     expect(registry.toolOf('acme-claude')?.instance?.command).toBe('acme-claude-web');
+  });
+
+  it('reads an instance in a namespace only for a member whose project or role selects it, as drivers and workflows are', async () => {
+    const repo = teamRepo({
+      'manifest/projects.yaml': 'version: 1\nprojects:\n  - id: checkout\n    resources: { workflows: [web] }\n  - id: billing\n    resources: { workflows: [mobile] }\n',
+      'tools/web/web-claude.yaml': ACME_CLAUDE.replaceAll('acme-claude', 'web-claude'),
+      'tools/mobile/mobile-claude.yaml': ACME_CLAUDE.replaceAll('acme-claude', 'mobile-claude'),
+    });
+    memberOf(repo, { projects: ['checkout'] });
+    const { loadLocalConfig } = await import('../config.js');
+    await loadLocalConfig();
+    const { registry, config } = await load(repo);
+
+    expect(registry.toolOf('web-claude')?.instance?.command).toBe('web-claude');
+    expect(registry.toolOf('mobile-claude')).toBeUndefined();
+    expect(config?.toolPaths['mobile-claude']).toBeUndefined();
+  });
+
+  it('reads only the root instances of a team repo whose manifest selects namespaces, when no member of it was loaded', async () => {
+    const { registry } = await load(teamRepo({
+      'manifest/projects.yaml': 'version: 1\nprojects:\n  - id: checkout\n    resources: { workflows: [web] }\n',
+      'tools/acme-claude.yaml': ACME_CLAUDE,
+      'tools/web/web-claude.yaml': ACME_CLAUDE.replaceAll('acme-claude', 'web-claude'),
+    }));
+
+    expect(registry.toolOf('acme-claude')?.instance?.source).toBe('team');
+    expect(registry.toolOf('web-claude')).toBeUndefined();
+  });
+});
+
+describe('team instances of two scopes', () => {
+  it('takes the workspace\'s team instance over the user scope\'s of the same name, as a driver definition is', async () => {
+    const userRepo = teamRepo({ 'tools/acme-claude.yaml': ACME_CLAUDE });
+    const workspaceRepo = path.join(root, 'workspace-repo');
+    fs.mkdirSync(path.join(workspaceRepo, 'tools'), { recursive: true });
+    fs.writeFileSync(path.join(workspaceRepo, 'teamai.yaml'), 'team: acme\nrepo: acme/workspace\n');
+    fs.writeFileSync(path.join(workspaceRepo, 'tools', 'acme-claude.yaml'), ACME_CLAUDE.replace('command: acme-claude', 'command: acme-claude-workspace'));
+    memberOf(userRepo, {});
+    const project = path.join(root, 'project');
+    fs.mkdirSync(path.join(project, '.teamai'), { recursive: true });
+    fs.writeFileSync(path.join(project, '.teamai', 'config.yaml'), `repo:\n  localPath: ${workspaceRepo}\n  remote: https://example.test/acme/workspace.git\nusername: tester\nscope: workspace\n`);
+    const { loadLocalConfig, readConfigFrom } = await import('../config.js');
+    await loadLocalConfig();
+    expect(await readConfigFrom(path.join(project, '.teamai'), project)).toMatchObject({ scope: 'project' });
+    const { registry, errors } = await load(workspaceRepo);
+    await load(userRepo);
+
+    expect(registry.toolOf('acme-claude')?.instance?.command).toBe('acme-claude-workspace');
+    expect(errors).toEqual([]);
   });
 });
 

@@ -4,13 +4,12 @@ import path from 'node:path';
 import { z } from 'zod';
 import { isBareCommandName } from '@teamai/shared/cli-path';
 import { INSTANCE_KEYS, type ToolInstance, type ToolInstanceHome } from '@teamai/tool-core/instance';
-import { isSafeNamespaceSegment } from './manifest-schema.js';
-import { resolveNamespacedItems, type NamespaceCandidate } from './namespace-resolver.js';
+import { RESOURCE_LAYOUTS, Resources, type TeamTree } from './resources/resolver.js';
 import { isSessionPlatform } from './session-flow/adapters/platform-facts.js';
 import { homeEnvOf } from './tool-home.js';
 import { homeVariables, isToolId, TOOL_ORDER, useToolInstances } from './tool-registry.js';
 import type { ToolId } from './tools.js';
-import { DEFAULT_TOOL_PATHS, getTeamaiHomeDir, rerootToolPaths, ToolPathsSchema, type TeamaiConfig } from './types.js';
+import { DEFAULT_TOOL_PATHS, getTeamaiHomeDir, rerootToolPaths, ToolPathsSchema, type Scope, type TeamaiConfig } from './types.js';
 import { writeJsonAtomic } from './utils/fs.js';
 import { getUserHome } from '@teamai/shared/home';
 import { log } from '@teamai/shared/log';
@@ -131,59 +130,59 @@ async function yamlFiles(dir: string): Promise<string[]> {
   return entries.filter((entry) => entry.isFile() && entry.name.endsWith('.yaml')).map((entry) => entry.name).sort();
 }
 
-async function namespaceDirs(dir: string): Promise<string[]> {
-  const entries = await fs.readdir(dir, { withFileTypes: true }).catch(() => []);
-
-  return entries.filter((entry) => entry.isDirectory() && !entry.name.startsWith('.') && isSafeNamespaceSegment(entry.name)).map((entry) => entry.name).sort();
-}
-
 /** Each instance in `files`, parsed; one that does not parse is logged and left out. */
-async function readInstances(files: readonly string[], source: InstanceSource, locationOf: (file: string) => string = (file) => file): Promise<ResolvedToolInstance[]> {
+async function readInstances(files: readonly string[], source: InstanceSource): Promise<ResolvedToolInstance[]> {
   const read = await Promise.all(files.map(async (file) => {
     const text = await readText(file);
 
-    return text === undefined ? undefined : parseToolInstance({ file, text, source, location: locationOf(file) });
+    return text === undefined ? undefined : parseToolInstance({ file, text, source, location: file });
   }));
 
-  return read.flatMap((parsed) => {
-    if (parsed === undefined) return [];
+  return read.flatMap(usable);
+}
 
-    if (!parsed.ok) {
-      errorOnce(parsed.problem);
+/** The instance `parsed` gives, or none after logging why it is not used. */
+function usable(parsed: ReturnType<typeof parseToolInstance> | undefined): ResolvedToolInstance[] {
+  if (parsed === undefined) return [];
 
-      return [];
-    }
+  if (!parsed.ok) {
+    errorOnce(parsed.problem);
 
-    return [parsed.instance];
-  });
+    return [];
+  }
+
+  return [parsed.instance];
+}
+
+/** The team's layers a scope reads its instances from, and which scope that is: a workspace's instance replaces the user scope's. */
+export interface TeamToolTree extends TeamTree {
+  readonly scope: Scope | undefined;
 }
 
 /**
- * The instances of the team repo at `repoPath`: `tools/<name>.yaml`, and `tools/<namespace>/<name>.yaml`, which
- * replaces the root one. Two of one name in two namespaces are a conflict, and neither is used.
+ * The instances of the team tree `team`: `tools/<name>.yaml`, and `tools/<namespace>/<name>.yaml` for each namespace
+ * active for the member, which replaces the root one. Two of one name in two active namespaces are a conflict, and
+ * neither is used; an instance an active namespace replaces is not used even when the namespace's does not parse.
  */
-export async function teamToolInstances(repoPath: string): Promise<ResolvedToolInstance[]> {
-  const root = path.join(repoPath, 'tools');
-  const namespaces = await namespaceDirs(root);
-  const places: Array<{ namespace: string | null; dir: string }> = [{ namespace: null, dir: root }, ...namespaces.map((namespace) => ({ namespace, dir: path.join(root, namespace) }))];
+export async function teamToolInstances(team: TeamTree): Promise<ResolvedToolInstance[]> {
+  const { resolutions, diagnostics } = await Resources.survey(RESOURCE_LAYOUTS.tools, { team });
 
-  const candidates = (await Promise.all(places.map(async ({ namespace, dir }) => {
-    const instances = await readInstances((await yamlFiles(dir)).map((name) => path.join(dir, name)), 'team', (file) => path.relative(repoPath, file).split(path.sep).join('/'));
+  for (const diagnostic of diagnostics) if (diagnostic.kind === 'invalid') errorOnce(diagnostic.message);
 
-    return instances.map((instance): NamespaceCandidate<ResolvedToolInstance> => ({ name: instance.name, source: path.relative(repoPath, instance.file), namespace, value: instance }));
-  }))).flat();
+  const read = await Promise.all(resolutions.map(async (resolution) => {
+    if (resolution.kind === 'conflict') {
+      log.error(`Tool instance "${resolution.name}" is defined twice in the team repo (${resolution.first.source.path} and ${resolution.second.source.path}), so teamai uses neither. Keep one, push it, and run teamai pull.`);
 
-  return resolveWithoutConflicts(candidates, namespaces);
-}
+      return undefined;
+    }
 
-/** The items `candidates` resolve to; a name two of them conflict on is logged and left out, and the rest resolve. */
-function resolveWithoutConflicts(candidates: readonly NamespaceCandidate<ResolvedToolInstance>[], namespaces: readonly string[]): ResolvedToolInstance[] {
-  const resolution = resolveNamespacedItems(candidates, namespaces);
+    const { source } = resolution.item;
+    const text = await readText(source.full);
 
-  if (resolution.kind === 'resolved') return resolution.items.map((item) => item.value);
-  log.error(`Tool instance "${resolution.name}" is defined twice in the team repo (${resolution.first.source} and ${resolution.second.source}), so teamai uses neither. Keep one, push it, and run teamai pull.`);
+    return text === undefined ? undefined : parseToolInstance({ file: source.full, text, source: 'team', location: source.path });
+  }));
 
-  return resolveWithoutConflicts(candidates.filter((candidate) => candidate.name !== resolution.name), namespaces);
+  return read.flatMap(usable);
 }
 
 /**
@@ -218,8 +217,8 @@ export async function personalToolInstances(): Promise<ResolvedToolInstance[]> {
 
 // ─── The instances this process sees ─────────────────────
 
-/** The instances read from each team repo this process loaded, by repo path. */
-const teamByRepo = new Map<string, readonly ResolvedToolInstance[]>();
+/** The instances read from each team repo this process loaded, by repo path, with the scope that repo serves. */
+const teamByRepo = new Map<string, { readonly scope: Scope | undefined; readonly instances: readonly ResolvedToolInstance[] }>();
 let personal: readonly ResolvedToolInstance[] = [];
 let readsPersonal = true;
 
@@ -232,23 +231,34 @@ export function ignorePersonalToolInstances(): void {
   publish();
 }
 
-/** The instances a lookup sees: the member's own first, then the team's. One name two team repos define apart is left out. */
+/**
+ * The instances a lookup sees: the member's own first, then the team's. A workspace's team instance replaces the user
+ * scope's of the same name, as its driver definitions do; one name two team repos of one scope define apart is left out.
+ */
 function effectiveInstances(): Map<string, ResolvedToolInstance> {
   const table = new Map<string, ResolvedToolInstance>();
-  const conflicted = new Set<string>();
+  const repos = [...teamByRepo.values()];
 
-  for (const instance of [...teamByRepo.values()].flat()) {
-    const known = table.get(instance.name);
+  for (const scope of ['user', 'project'] as const) {
+    const ofScope = repos.filter((repo) => (repo.scope ?? 'user') === scope).flatMap((repo) => repo.instances);
+    const conflicted = new Set<string>();
+    const own = new Map<string, ResolvedToolInstance>();
 
-    if (known === undefined) table.set(instance.name, instance);
-    else if (known.revision !== instance.revision) conflicted.add(instance.name);
-  }
+    for (const instance of ofScope) {
+      const known = own.get(instance.name);
 
-  for (const name of conflicted) {
-    const files = [...teamByRepo.values()].flat().filter((instance) => instance.name === name).map((instance) => instance.file);
+      if (known === undefined) own.set(instance.name, instance);
+      else if (known.revision !== instance.revision) conflicted.add(instance.name);
+    }
 
-    warnOnce(`Tool instance "${name}" is defined apart in two team repos (${files.join(' and ')}), so teamai uses neither. Make them the same, or rename one.`);
-    table.delete(name);
+    for (const name of conflicted) {
+      const files = ofScope.flatMap((instance) => (instance.name === name ? [instance.file] : []));
+
+      warnOnce(`Tool instance "${name}" is defined apart in two team repos (${files.join(' and ')}), so teamai uses neither. Make them the same, or rename one.`);
+      own.delete(name);
+    }
+
+    for (const [name, instance] of own) table.set(name, instance);
   }
 
   if (readsPersonal) for (const instance of personal) table.set(instance.name, instance);
@@ -276,12 +286,12 @@ export function defaultPathsOf(instance: ResolvedToolInstance): z.infer<typeof T
 }
 
 /**
- * `config`, the team config of the repo at `repoPath`, with the instances of that repo and the member's own read,
+ * `config`, the team config of the tree `tree`, with the instances of that tree and the member's own read,
  * every lookup of a tool name seeing them, and their tool paths in `toolPaths`. A member's instance replaces the team's.
  */
-export async function withToolInstances(repoPath: string, config: TeamaiConfig): Promise<TeamaiConfig> {
-  const [team, own] = await Promise.all([teamToolInstances(repoPath), readsPersonal ? personalToolInstances() : []]);
-  teamByRepo.set(repoPath, team);
+export async function withToolInstances(tree: TeamToolTree, config: TeamaiConfig): Promise<TeamaiConfig> {
+  const [team, own] = await Promise.all([teamToolInstances(tree), readsPersonal ? personalToolInstances() : []]);
+  teamByRepo.set(tree.root, { scope: tree.scope, instances: team });
   personal = own;
   publish();
 
