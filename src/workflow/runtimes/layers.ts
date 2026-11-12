@@ -3,6 +3,7 @@ import path from 'node:path';
 import { teamaiPackageDir } from '../../default-drivers.js';
 import { workflowNamespacesOf } from '../../resource-namespaces.js';
 import { isSymlink, RESOURCE_LAYOUTS, Resources, type ShippedFile, type TeamTree } from '../../resources/resolver.js';
+import { PERSONAL_TOOLS_DIR } from '../../tool-instances.js';
 import { getKnowledgeDir, getTeamaiHomeDir, type LocalConfig } from '../../types.js';
 import { firstLink } from './resource-folder.js';
 
@@ -16,7 +17,7 @@ import { firstLink } from './resource-folder.js';
 //
 
 /** The member's own directories, which teamai reads and never writes, so team code it caches never reads as the member's. */
-export const PERSONAL_DIRS = { drivers: 'drivers', runtimes: 'runtimes', sandboxes: 'sandboxes', tools: 'tools' } as const;
+export const PERSONAL_DIRS = { drivers: 'drivers', runtimes: 'runtimes', sandboxes: 'sandboxes', tools: PERSONAL_TOOLS_DIR } as const;
 
 /** The prefix of every name teamai ships a driver, a runtime or a sandbox profile by. */
 export const SHIPPED_PREFIX = 'teamai-';

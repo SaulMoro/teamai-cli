@@ -238,9 +238,12 @@ function movesSharedHome(variable: string, base: string): boolean {
   return isToolId(base) && (homeEnvOf(base) === variable || homeVariables(base).includes(variable));
 }
 
+/** The name of the member's own instance directory in `~/.teamai/`. */
+export const PERSONAL_TOOLS_DIR = 'tools';
+
 /** The member's own instance directory, `~/.teamai/tools/`: teamai reads it and never writes it. */
 export function personalToolsDir(): string {
-  return path.join(getTeamaiHomeDir(), 'tools');
+  return path.join(getTeamaiHomeDir(), PERSONAL_TOOLS_DIR);
 }
 
 /** The member's own instances, from `personalToolsDir()`. */
