@@ -4,7 +4,7 @@ import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { journal } from '../../packages/runtime-sandbox/src/journal.js';
 import { sandboxJournalRoot } from '../../packages/runtime-sandbox/src/journal-root.js';
-import { startObserver } from './observer.js';
+import { bwrapSteps, startObserver } from './observer.js';
 import type { World } from './world.js';
 
 const roots: string[] = [];
@@ -53,5 +53,19 @@ describe('the sandbox observer', () => {
     const observer = startObserver(world, { pass: new Map(), label: 'teamai workflow start', listed: () => Promise.resolve(undefined) });
 
     expect(await observer.stop()).toContain("[verify] NOT OBSERVED: bwrap steps in @carol's container, the observer reads their environment from /proc on Linux only");
+  });
+
+  // bwrap with --unshare-pid runs a second bwrap as the namespace's first process, with the same arguments.
+  it('reads one step from a bwrap that runs a bwrap inside it, the first process below both', () => {
+    const args = ['/usr/bin/bwrap', '--unshare-pid', '--bind', '/w/x/project', '/w/x/project', 'sh', '-c', 'step'];
+
+    expect(bwrapSteps([
+      { pid: '50', ppid: '1', args: ['node', '/w/x/install/teamai'] },
+      { pid: '100', ppid: '50', args },
+      { pid: '101', ppid: '100', args },
+      { pid: '102', ppid: '101', args: ['sh', '-c', 'step'] },
+      { pid: '200', ppid: '50', args: ['/usr/bin/bwrap', '--bind', '/elsewhere', '/elsewhere', 'sh'] },
+      { pid: '201', ppid: '200', args: ['sh'] },
+    ], ['/w/x'])).toEqual([{ bwrap: '100', steps: ['102'] }]);
   });
 });

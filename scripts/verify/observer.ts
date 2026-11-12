@@ -88,6 +88,35 @@ async function listedHere(argv: readonly string[]): Promise<string | undefined> 
 const SbxListedSchema = z.array(z.looseObject({ name: z.string(), status: z.string().optional() }));
 
 /** Starts watching; `stop` takes a last look and answers the lines to show, and has written them to observed.jsonl. */
+/** A process as /proc lists it: its pid, its parent's, and its arguments. */
+export interface ProcEntry {
+  readonly pid: string;
+  readonly ppid: string;
+  readonly args: readonly string[];
+}
+
+/**
+ * Each bwrap step in `procs` whose arguments name a path under one of `roots`: its outermost bwrap, and the first of
+ * its descendants that are not bwrap, whose environment is the step's. A bwrap inside another is that step's own.
+ */
+export function bwrapSteps(procs: readonly ProcEntry[], roots: readonly string[]): Array<{ bwrap: string; steps: string[] }> {
+  const isBwrap = (args: readonly string[]): boolean => path.basename(args[0] ?? '') === 'bwrap';
+  const bwrapPids = new Set(procs.flatMap((proc) => (isBwrap(proc.args) ? [proc.pid] : [])));
+  const outermost = procs.filter((proc) => bwrapPids.has(proc.pid) && !bwrapPids.has(proc.ppid) && proc.args.some((arg) => roots.some((root) => arg.startsWith(root))));
+
+  return outermost.flatMap((outer) => {
+    for (let frontier = [outer.pid]; frontier.length > 0;) {
+      const children = procs.filter((proc) => frontier.includes(proc.ppid));
+      const first = children.filter((proc) => !isBwrap(proc.args));
+
+      if (first.length > 0) return [{ bwrap: outer.pid, steps: first.map((proc) => proc.pid) }];
+      frontier = children.map((proc) => proc.pid);
+    }
+
+    return [];
+  });
+}
+
 export function startObserver(world: World, { pass, label, listed = listedHere }: { pass: ReadonlyMap<string, string>; label: string; listed?: (argv: readonly string[]) => Promise<string | undefined> }) {
   const canary = world.env?.[CANARY_NAME] ?? '';
   const secrets = new Map([...Object.entries(collectEnvSecrets(process.env)), ...pass]);
@@ -174,28 +203,13 @@ export function startObserver(world: World, { pass, label, listed = listedHere }
       }
     });
 
-    const isBwrap = (args: readonly string[]): boolean => path.basename(args[0] ?? '') === 'bwrap';
-
-    for (const outer of procs.filter((proc) => isBwrap(proc.args) && proc.args.some((arg) => arg.startsWith(world.dir) || arg.startsWith(world.tmp)))) {
-      let frontier = [outer.pid];
-
-      while (frontier.length > 0) {
-        const children = procs.filter((proc) => frontier.includes(proc.ppid));
-        const first = children.filter((proc) => !isBwrap(proc.args));
-
-        if (first.length > 0) {
-          for (const proc of first) {
-            try {
-              judge(`bwrap:${outer.pid}`, `bwrap:${outer.pid}`, [parseEnviron(fs.readFileSync(`/proc/${proc.pid}/environ`, 'utf8'))]);
-            } catch {
-              unobserved.add(`bwrap:${outer.pid}'s environment, /proc/${proc.pid}/environ could not be read`);
-            }
-          }
-
-          break;
+    for (const { bwrap, steps } of bwrapSteps(procs, [world.dir, world.tmp])) {
+      for (const step of steps) {
+        try {
+          judge(`bwrap:${bwrap}`, `bwrap:${bwrap}`, [parseEnviron(fs.readFileSync(`/proc/${step}/environ`, 'utf8'))]);
+        } catch {
+          unobserved.add(`bwrap:${bwrap}'s environment, /proc/${step}/environ could not be read`);
         }
-
-        frontier = children.map((proc) => proc.pid);
       }
     }
   };
