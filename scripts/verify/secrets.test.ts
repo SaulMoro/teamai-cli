@@ -55,6 +55,13 @@ describe("what a sandbox's environment may hold", () => {
     expect(JSON.stringify(judged)).not.toContain('tok-');
   });
 
+  it('takes a short host value for a leak only as a whole word, as the masking of logs does', () => {
+    const short = new Map([['FEATURE_FLAG', 'on']]);
+
+    expect(judgeSandboxEnv({ env: new Map([['HOSTNAME', 'container'], ['LANG', 'C.UTF-8']]), canary, secrets: short, declared: new Set() })).toEqual({ kind: 'ok' });
+    expect(judgeSandboxEnv({ env: new Map([['COPIED', 'on'], ['ARGS', '--mode on']]), canary, secrets: short, declared: new Set() })).toEqual({ kind: 'leak', names: ['ARGS', 'COPIED'] });
+  });
+
   it("takes the credential names a driver definition's runtime options or a member's driver settings declare", () => {
     const definition: JsonObject = { name: 'containers', runtimes: [{ use: 'sandbox', options: { credentials: { CLAUDE_CODE_OAUTH_TOKEN: 'env:CLAUDE_CODE_OAUTH_TOKEN', NPM_TOKEN: 'env:ACME_NPM_TOKEN' } } }, { use: 'tools' }] };
     const settings = { workflows: { drivers: { containers: { runtimes: { sandbox: { credentials: { GH_TOKEN: 'env:MY_GH_TOKEN' } } } } } } };

@@ -84,15 +84,17 @@ export type EnvVerdict = { kind: 'ok' } | { kind: 'leak'; names: string[] };
 
 /**
  * Judges `env`, a sandbox's environment: a variable leaks when it holds the world's canary, which no step may receive, or
- * the value of a host secret (`secrets`) under a name the step's credentials did not declare.
+ * the value of a host secret (`secrets`) under a name the step's credentials did not declare. A value holds a secret
+ * where `redact` would mask it there: a short one only as a whole word.
  */
 export function judgeSandboxEnv({ env, canary, secrets, declared }: { env: ReadonlyMap<string, string>; canary: string; secrets: ReadonlyMap<string, string>; declared: ReadonlySet<string> }): EnvVerdict {
-  const hostValues = [...secrets.values()].filter((value) => value !== '');
+  const envSecrets = Object.fromEntries(secrets);
+  const holdsSecret = (value: string): boolean => redact(value, { envSecrets, patterns: false }) !== value;
 
   const names = [...env].flatMap(([name, value]) => {
     if (canary !== '' && value.includes(canary)) return [name];
 
-    return !declared.has(name) && hostValues.some((secret) => value.includes(secret)) ? [name] : [];
+    return !declared.has(name) && holdsSecret(value) ? [name] : [];
   });
 
   return names.length === 0 ? { kind: 'ok' } : { kind: 'leak', names: names.toSorted() };
