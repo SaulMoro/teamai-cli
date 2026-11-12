@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { expect, it } from 'vitest';
 import { z } from 'zod';
 import { ruleHarness } from '../test/harness.ts';
-import { OWNER, RUN_AS_IS, SCRIPT_TEXT } from './signal-owner.js';
+import { NOT_A_CHILD, OWNER, RUN_AS_IS, SCRIPT_TEXT } from './signal-owner.js';
 
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 
@@ -84,6 +84,31 @@ local.kill(2);
 function stop(process: { kill(): void }): void { process.kill(); }
 export { spy, stop };`);
 
+const childReports = (output: string): number => output.match(/Signal a child process through signalChild/g)?.length ?? 0;
+
+rule.invalid('rejects a child\'s own kill in production source, which on a failed spawn signals the caller\'s whole group', `import { spawn } from 'node:child_process';
+const child = spawn('git', ['fetch']);
+const timer = setTimeout(() => child.kill('SIGKILL'), 1000);
+const kill = child.kill.bind(child);
+const { kill: end } = child;
+child?.kill();
+child['kill']('SIGTERM');
+export { end, kill, timer };`, (output) => {
+  expect(childReports(output)).toBe(5);
+}, { filename: 'src/utils/fetch.ts' });
+
+rule.valid('allows signalChild in production source, and a kill of its own put on a child', `import { spawn } from 'node:child_process';
+import { signalChild } from '@teamai/shared/process-group';
+const child = spawn('git', ['fetch']);
+child.kill = (signal) => signalChild(child, signal) === 'sent';
+signalChild(child, 'SIGTERM');`, { filename: 'packages/runtime-new/src/fetch.ts' });
+
+rule.valid('allows the kill of a remote sandbox\'s command, by the name the rule gives for its file', `export const stop = (command: { kill(signal: string): Promise<void> }) => command.kill('SIGTERM');`, { filename: 'packages/runtime-sandbox/src/providers/vercel.ts' });
+
+rule.invalid('rejects a child\'s kill in that file under any other name', `import { spawn } from 'node:child_process';
+const child = spawn('tar', ['-cf', '-']);
+child.kill('SIGKILL');`, undefined, { filename: 'packages/runtime-sandbox/src/providers/vercel.ts' });
+
 const Config = z.object({
   ignorePatterns: z.array(z.string()),
   rules: z.record(z.string(), z.unknown()),
@@ -102,9 +127,11 @@ it('names only files that exist and still need what the rule lets them do', () =
 
   expect(OWNER).toEqual(['packages/shared/src/process-group.ts']);
 
-  for (const file of [...OWNER, ...RUN_AS_IS, ...SCRIPT_TEXT]) expect(fs.existsSync(path.join(REPO, file)), file).toBe(true);
+  for (const file of [...OWNER, ...RUN_AS_IS, ...SCRIPT_TEXT, ...NOT_A_CHILD.keys()]) expect(fs.existsSync(path.join(REPO, file)), file).toBe(true);
 
   for (const file of [...OWNER, ...RUN_AS_IS, ...SCRIPT_TEXT]) expect(read(file), file).toMatch(/\bprocess\.kill\(/);
+
+  for (const [file, name] of NOT_A_CHILD) expect(read(file), file).toContain(`${name}.kill(`);
 });
 
 it('holds every source file lint reads in this checkout, the packages\' and the scripts\' included', () => {

@@ -10,7 +10,7 @@ import { copyRegularTree, openRegularFileSync, readRegularFile } from '@teamai/s
 import { GitError, simpleGit, type SimpleGit, type SimpleGitOptions, type outputHandler } from 'simple-git';
 import { z } from 'zod';
 import { execCommand } from '@teamai/shared/exec';
-import { descendantsOf, signalStillRunning } from '@teamai/shared/process-group';
+import { descendantsOf, signalChild, signalStillRunning } from '@teamai/shared/process-group';
 import { errnoCode } from './fs.js';
 import { GitAnswers } from './git-answers.js';
 import { gitFindsNoRepository, linkedWorktreesStamp, repositoryStamp } from './git-discovery.js';
@@ -329,17 +329,18 @@ export function createGitWithBlockTimeout(basePath?: string, abort?: AbortSignal
     lastChildProcess = undefined;
 
     if (child?.stdout !== stdout) return;
-    const kill = child.kill.bind(child);
-
     // simple-git ends git through this kill on both the timeout and the abort.
     child.kill = (signal) => {
       if (!abort?.aborted) stalled = gitCommandLine(args);
+      // The handle's own kill again: endProcessTree signals git through it, and so does a later kill of simple-git's.
+      Reflect.deleteProperty(child, 'kill');
 
-      if (child.pid === undefined || child.exitCode !== null || child.signalCode !== null) return kill(signal);
-      // endProcessTree signals git through this handle, and so does a later kill of simple-git's.
-      child.kill = kill;
+      if (child.pid === undefined || child.exitCode !== null || child.signalCode !== null) return signalChild(child, signal) === 'sent';
+
       // git is signalled once its tree is listed: the processes under a git that ended move to init, out of its tree.
-      void endProcessTree(child).then(() => kill(signal), () => kill(signal));
+      const end = (): void => { signalChild(child, signal); };
+
+      void endProcessTree(child).then(end, end);
 
       return true;
     };
@@ -408,7 +409,7 @@ export async function endProcessTree(child: ChildProcess): Promise<void> {
 
   const found = await descendantsOf(child.pid);
 
-  child.kill('SIGTERM');
+  signalChild(child, 'SIGTERM');
   await signalStillRunning(found, 'SIGTERM');
 }
 

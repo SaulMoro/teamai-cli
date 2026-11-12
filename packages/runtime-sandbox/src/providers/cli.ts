@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import type { Can, InitInstance, PlaceView, RuntimeFailure } from '@teamai/runtime-protocol';
 import { boundedTail, STDERR_CHARS } from '../bounded-tail.js';
+import { signalChild } from '@teamai/shared/process-group';
 
 // ─── What every bind-mount provider shares: its CLI, and the place view as mounts ───
 //
@@ -76,7 +77,7 @@ export function cliOf({ name, env, notInstalled }: { name: string; env: NodeJS.P
       const child = spawn(executable, args, { env: runEnv, stdio: ['ignore', 'pipe', 'pipe'] });
 
       const timer = timeoutMs === undefined ? undefined : setTimeout(() => {
-        child.kill('SIGKILL');
+        signalChild(child, 'SIGKILL');
         resolve({ kind: 'timed_out', message: `\`${name} ${args[0]}\` did not answer within ${timeoutMs / 1000} s` });
       }, timeoutMs);
 

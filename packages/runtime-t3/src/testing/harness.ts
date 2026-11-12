@@ -6,6 +6,7 @@ import { z } from 'zod';
 import { bundleOnce, bundleRuntime as bundleRuntimeAt } from '@teamai/runtime-testing/bundle';
 import { connectRuntime, type Connection, type Line } from '@teamai/runtime-testing/connect';
 import type { StepMode } from '../t3.js';
+import { signalChild } from '@teamai/shared/process-group';
 
 // ─── Test support: the runtime over its stdio, on a fake T3 Code server ───
 //
@@ -287,7 +288,7 @@ export function fakeT3(dir: string, workspaceRoot: string, { t3HomeInHome = fals
 
       if (!running || running.exitCode !== null) return;
       const exited = new Promise((resolve) => running.once('exit', resolve));
-      running.kill('SIGTERM');
+      signalChild(running, 'SIGTERM');
       await exited;
     },
   };

@@ -5,7 +5,7 @@ import path from 'node:path';
 import { afterEach, expect, it, vi } from 'vitest';
 import { z } from 'zod';
 import diagnostics from 'node:diagnostics_channel';
-import { descendantsOf, identityOf, isSameProcess, ownGroups, PROCESS_READ_CHANNEL, recordGroup, signalGroup, signalPid, signalStillRunning, stopGroup, stopProcess, stopRecordedGroup } from './process-group.js';
+import { descendantsOf, identityOf, isSameProcess, ownGroups, PROCESS_READ_CHANNEL, recordGroup, signalChild, signalGroup, signalPid, signalStillRunning, stopGroup, stopProcess, stopRecordedGroup } from './process-group.js';
 
 /** Whether this platform tells start times through ps rather than `/proc`, so a fake ps on PATH is what is read. */
 const READS_PS = process.platform !== 'win32' && process.platform !== 'linux';
@@ -107,6 +107,17 @@ it.each([false, true])('signals nothing for a child whose spawn failed, whose ha
   expect(await stopProcess(child, failed, detached)()).toBe('ENOENT');
   expect(kill).not.toHaveBeenCalled();
   expect(processKill).not.toHaveBeenCalled();
+});
+
+it('sends nothing through the handle of a child whose spawn failed, in the tick it failed, when the handle would signal pid 0', async () => {
+  const child = spawn(path.join(os.tmpdir(), 'teamai-no-such-command'), [], { stdio: 'ignore' });
+  const failed = new Promise<string>((resolve) => { child.once('error', (error) => resolve(z.object({ code: z.string() }).parse(error).code)); });
+  // Spied, so a regression reaches no process.
+  const kill = vi.spyOn(child, 'kill').mockReturnValue(true);
+
+  expect(signalChild(child, 'SIGKILL')).toBe('refused');
+  expect(kill).not.toHaveBeenCalled();
+  expect(await failed).toBe('ENOENT');
 });
 
 it('gives an attached child five seconds before SIGKILL and waits for its exit', async () => {

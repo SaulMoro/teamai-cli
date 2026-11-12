@@ -6,6 +6,7 @@ import { log } from '@teamai/shared/log';
 import { resolveCliPath } from '@teamai/shared/cli-path';
 import { isInteractive } from '../../utils/prompt.js';
 import { endedRequest, mergedAs, type CiStatus, type CommitRef, type PullRequestRecord, type PullRequestRef } from '../types.js';
+import { signalChild } from '@teamai/shared/process-group';
 
 // ─── Constants ───────────────────────────────────────────
 
@@ -844,7 +845,7 @@ function ghSpawn(ghPath: string, args: string[], { env, timeoutMs }: { env: Node
 
     const deadline = setTimeout(() => {
       finish(1);
-      child.kill('SIGKILL');
+      signalChild(child, 'SIGKILL');
       child.stdin?.destroy();
       child.stdout?.destroy();
       child.stderr?.destroy();

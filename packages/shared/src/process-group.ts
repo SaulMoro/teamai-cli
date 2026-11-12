@@ -527,6 +527,17 @@ export function signalPid(pid: number, name: NodeJS.Signals | 0): SignalOutcome 
   return sendSignal(pid, name, { isGroup: false });
 }
 
+/**
+ * Sends `name` to `child` through its handle, which names the process it started even once its pid is reused. Sends
+ * nothing to a child that never spawned: Node's kill of a handle whose spawn failed signals pid 0 until the error is
+ * delivered, the caller's whole process group.
+ */
+export function signalChild(child: Pick<ChildProcess, 'pid' | 'kill'>, name: Parameters<ChildProcess['kill']>[0] = 'SIGTERM'): SignalOutcome {
+  if (child.pid === undefined || !isSignallable(child.pid)) return 'refused';
+
+  return child.kill(name) ? 'sent' : 'gone';
+}
+
 /** Sends `name` to every process of group `pgid`, or with signal 0 tells whether any runs. Sends nothing to a group below 2. */
 export function signalGroup(pgid: number, name: NodeJS.Signals | 0): SignalOutcome {
   return sendSignal(pgid, name, { isGroup: true });
@@ -742,7 +753,7 @@ export function stopProcess<T>(child: ChildProcess, exit: Promise<T>, detached: 
 
       const reached = targets.reduce((any, found) => signalPid(found.pid, name) === 'sent' || any, false);
 
-      return child.kill(name) || reached;
+      return signalChild(child, name) === 'sent' || reached;
     } catch {
       return false;
     }

@@ -8,6 +8,7 @@ import { parseRuntimeLine, type HandleEvent, type OpEvent, type Shown } from './
 import type { Accepted, ExecEnd, ExecEvents, Initialized, Opened, PromptEnd, Reattached, StepRuntime, WakeEnd } from '@teamai/runtime-protocol/step-runtime';
 import { MAX_TIMER_MS } from '@teamai/shared/timer';
 import type { DriverCan } from '../requirements.js';
+import { signalChild } from '@teamai/shared/process-group';
 
 /** How long `dispose` waits for a runtime to exit once its stdin ends; one that runs on is left to finish its own work. */
 const DISPOSE_WAIT_MS = 2000;
@@ -169,7 +170,8 @@ export function stdioStepRuntime({ name, command, args = [], cwd, secrets = {} }
 
     for (const waiters of handles.values()) for (const waiter of waiters) waiter.settle(dead);
     handles.clear();
-    child?.kill('SIGKILL');
+
+    if (child) signalChild(child, 'SIGKILL');
   };
 
   /** Fails every request still waiting, as the runtime left them unanswered: `why` says how. */

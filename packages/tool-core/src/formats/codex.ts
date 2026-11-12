@@ -1204,7 +1204,7 @@ export class CodexAdapter extends AgentAdapter {
         }
 
         try {
-          child.kill();
+          this.host.processes.signalChild(child);
         } catch {
           // ignore
         }

@@ -271,7 +271,7 @@ const teamHooks = (event, ctx, payload) => new Promise((resolve) => {
       }
     };
     const timer = setTimeout(() => {
-      try { child.kill(); } catch {}
+      try { if (child.pid !== undefined) child.kill(); } catch {}
       out = "";
       finish();
     }, TEAM_HOOKS_TIMEOUT_MS);

@@ -2,7 +2,7 @@
 import { defineRule } from '@oxlint/plugins';
 
 import { importedName } from '../imports.js';
-import { isOneOf, scopedFiles, stringLiteralValue, variableOf } from '../utils.js';
+import { inProductionSource, isOneOf, scopedFiles, stringLiteralValue, variableOf } from '../utils.js';
 
 /** The one module that calls `process.kill`, behind `signalPid` and `signalGroup`. */
 export const OWNER = scopedFiles(['packages/shared/src/process-group.ts']);
@@ -26,7 +26,20 @@ export const SCRIPT_TEXT = scopedFiles([
   'src/__tests__/helpers/benchmark-fixture.ts',
 ]);
 
+/**
+ * The names whose `.kill` is not a local child's, by file: a remote sandbox's command, which no local process backs,
+ * and a test harness's stop of a runtime, which signals the child through signalChild itself.
+ */
+export const NOT_A_CHILD = new Map([
+  ['packages/runtime-sandbox/src/providers/vercel.ts', 'command'],
+  ['packages/runtime-paseo/src/testing/suite.ts', 'runtime'],
+]);
+
+scopedFiles([...NOT_A_CHILD.keys()]);
+
 const MESSAGE = 'Send a signal through signalPid or signalGroup from @teamai/shared/process-group, not process.kill: they send nothing to a pid below 2, which kill reads as the caller\'s own process group (0), every process it may signal (-1) or init (1), and they tell what the signal came to instead of throwing. A test observes signals with vi.spyOn(process, \'kill\').';
+
+const CHILD_MESSAGE = 'Signal a child process through signalChild from @teamai/shared/process-group, not its own kill: until a failed spawn\'s error is delivered, Node 20 sends that kill to pid 0, the caller\'s whole process group, and signalChild sends nothing to a child with no pid. A remote sandbox\'s command is not a child: name its file in NOT_A_CHILD (oxlint-plugin-teamai/rules/signal-owner.js).';
 
 const TEXT_MESSAGE = 'This text calls process.kill in a program a test runs, which lint does not read as code. Signal through @teamai/shared/process-group in code, or name the file in SCRIPT_TEXT (oxlint-plugin-teamai/rules/signal-owner.js) and keep the pid it signals above 1.';
 
@@ -105,6 +118,11 @@ function readsKill(/** @type {ESTree.MemberExpression} */ node) {
   return node.computed ? textOf(node.property) === 'kill' : node.property.type === 'Identifier' && node.property.name === 'kill';
 }
 
+/** Whether `node` is the target of an assignment, as `child.kill = …` puts a kill of its own on a child. */
+function isAssigned(/** @type {ESTree.MemberExpression} */ node) {
+  return node.parent?.type === 'AssignmentExpression' && node.parent.left === node;
+}
+
 /** Whether the object pattern `node`, of a declaration or an assignment, takes key `kill`. */
 function takesKill(/** @type {ESTree.ObjectPattern | ESTree.ObjectAssignmentTarget} */ node) {
   return node.properties.some((property) => property.type === 'Property' && (property.computed ? textOf(property.key) === 'kill' : property.key.type === 'Identifier' && property.key.name === 'kill'));
@@ -120,6 +138,11 @@ export default defineRule({
     const { sourceCode } = context;
     const report = (/** @type {ESTree.Node} */ node) => { context.report({ node, message: MESSAGE }); };
     const isScriptText = isOneOf(context, SCRIPT_TEXT);
+    // A test may kill a child it saw spawn; production code cannot tell a failed spawn from a live one by timing.
+    const checksChildren = inProductionSource(context);
+    const notAChild = [...NOT_A_CHILD].find(([file]) => isOneOf(context, [file]))?.[1];
+    /** @param {ESTree.Node} object */
+    const isChild = (object) => checksChildren && !(object.type === 'Identifier' && object.name === notAChild);
 
     /** @param {ESTree.Node} node */
     const checkText = (node) => {
@@ -131,15 +154,24 @@ export default defineRule({
     return {
       /** @param {ESTree.MemberExpression} node */
       MemberExpression(node) {
-        if (readsKill(node) && isProcess(sourceCode, node.object)) report(node);
+        if (!readsKill(node)) return;
+
+        if (isProcess(sourceCode, node.object)) report(node);
+        else if (isChild(node.object) && !isAssigned(node)) context.report({ node, message: CHILD_MESSAGE });
       },
       /** @param {ESTree.VariableDeclarator} node */
       VariableDeclarator(node) {
-        if (node.id.type === 'ObjectPattern' && node.init && takesKill(node.id) && isProcess(sourceCode, node.init)) report(node);
+        if (node.id.type !== 'ObjectPattern' || !node.init || !takesKill(node.id)) return;
+
+        if (isProcess(sourceCode, node.init)) report(node);
+        else if (isChild(node.init)) context.report({ node, message: CHILD_MESSAGE });
       },
       /** @param {ESTree.AssignmentExpression} node */
       AssignmentExpression(node) {
-        if (node.left.type === 'ObjectPattern' && takesKill(node.left) && isProcess(sourceCode, node.right)) report(node);
+        if (node.left.type !== 'ObjectPattern' || !takesKill(node.left)) return;
+
+        if (isProcess(sourceCode, node.right)) report(node);
+        else if (isChild(node.right)) context.report({ node, message: CHILD_MESSAGE });
       },
       /** @param {ESTree.ImportDeclaration} node */
       ImportDeclaration(node) {

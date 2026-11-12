@@ -6,7 +6,7 @@
  */
 
 import { spawn } from 'node:child_process';
-import { signalGroup } from '@teamai/shared/process-group';
+import { signalChild, signalGroup } from '@teamai/shared/process-group';
 import { findGitBashWindows } from './bundled-runtime.js';
 
 /** What one hook command did. */
@@ -53,7 +53,7 @@ export function runHookCommand(command: string, opts: { cwd: string | undefined;
 
     const kill = (): void => {
       try {
-        child.kill('SIGKILL');
+        signalChild(child, 'SIGKILL');
       } catch {
         // The child already exited.
       }

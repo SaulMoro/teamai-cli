@@ -16,7 +16,7 @@ import os from 'node:os';
 import path from 'node:path';
 import type { ChildProcess } from 'node:child_process';
 import { spawnCommand } from '@teamai/shared/exec';
-import { ownGroups, signalPid } from '@teamai/shared/process-group';
+import { ownGroups, signalChild, signalPid } from '@teamai/shared/process-group';
 import { resolveTeamaiEntryScript } from './builtin-hooks.js';
 import { resolveConfigForDir } from './config.js';
 import { reportMissingSecrets } from './env-advisories.js';
@@ -378,7 +378,7 @@ function run(
       return;
     }
 
-    const forward = (signal: NodeJS.Signals): void => { child.kill(signal); };
+    const forward = (signal: NodeJS.Signals): void => { signalChild(child, signal); };
     const ignore = (): void => {};
 
     for (const signal of forwarded) process.on(signal, forward);

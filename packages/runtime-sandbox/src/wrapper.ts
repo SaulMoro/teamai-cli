@@ -3,6 +3,7 @@ import { askSocket } from './attempt-socket.js';
 import type { Journal } from './journal.js';
 import { LAUNCHABLE } from './providers/cli.js';
 import { isWithin, realOf } from './providers/native.js';
+import { signalChild } from '@teamai/shared/process-group';
 
 // ─── The sandbox wrapper: `teamai-sandbox-<tool>` ────────
 //
@@ -34,7 +35,7 @@ function passThrough({ argv, env, signalling }: { argv: readonly string[]; env: 
 
     const forward = (received: NodeJS.Signals): void => {
       if (signalling === undefined) {
-        child.kill(received);
+        signalChild(child, received);
 
         return;
       }
@@ -42,8 +43,8 @@ function passThrough({ argv, env, signalling }: { argv: readonly string[]; env: 
       const [sender = '', ...senderArgs] = signalling;
 
       // A signal the tool cannot get yet (it has not started) still ends the client.
-      spawn(sender, [...senderArgs, received.replace(/^SIG/, '')], { env, stdio: 'ignore' }).on('error', () => child.kill(received)).on('exit', (code) => {
-        if (code !== 0) child.kill(received);
+      spawn(sender, [...senderArgs, received.replace(/^SIG/, '')], { env, stdio: 'ignore' }).on('error', () => signalChild(child, received)).on('exit', (code) => {
+        if (code !== 0) signalChild(child, received);
       });
     };
 

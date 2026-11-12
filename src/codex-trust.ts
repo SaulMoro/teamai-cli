@@ -12,6 +12,7 @@ import { lenientList, type JsonValue, JsonValueSchema, JsonObjectSchema } from '
 import { log } from '@teamai/shared/log';
 import { findOnPath } from '@teamai/shared/lookpath';
 import { isBareCommandName } from '@teamai/shared/cli-path';
+import { signalChild } from '@teamai/shared/process-group';
 
 /**
  * Trusting what teamai writes into Codex (#955).
@@ -366,7 +367,7 @@ async function openAppServer(codexHome: string, command: string): Promise<AppSer
     close() {
       fail(new AppServerError('closed'));
       child.stdin?.end();
-      child.kill();
+      signalChild(child);
     },
   };
 

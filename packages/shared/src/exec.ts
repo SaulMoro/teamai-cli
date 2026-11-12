@@ -8,6 +8,7 @@ import path from 'node:path';
 import { isBareCommandName, pickWindowsCommand } from './cli-path.js';
 import { WIN_EXEC_EXTENSIONS } from './lookpath.js';
 import { pathDirs } from './lookpath.js';
+import { signalChild } from './process-group.js';
 
 export interface ExecOptions {
   cwd?: string;
@@ -71,7 +72,7 @@ export const execCommand: CommandExecutor = (
   });
 
   const timer = setTimeout(() => {
-    child.kill();
+    signalChild(child);
     finish(() => reject(new Error(
       `Command timed out after ${timeoutMs}ms: ${command} ${args.join(' ')}`,
     )));
@@ -274,7 +275,8 @@ export interface Processes {
   readonly spawn: typeof spawnCommand;
   readonly spawnSync: typeof spawnCommandSync;
   readonly probe: typeof probeBinary;
+  readonly signalChild: typeof signalChild;
 }
 
 /** This process's own: what the host gives a module that runs through `Processes`. */
-export const HOST_PROCESSES: Processes = { exec: execCommand, spawn: spawnCommand, spawnSync: spawnCommandSync, probe: probeBinary };
+export const HOST_PROCESSES: Processes = { exec: execCommand, spawn: spawnCommand, spawnSync: spawnCommandSync, probe: probeBinary, signalChild };

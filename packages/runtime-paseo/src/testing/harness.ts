@@ -4,6 +4,7 @@ import { RuntimeMessageSchema, type RuntimeMessage, type RuntimeRequestSchema } 
 import { bundleRuntime as bundleRuntimeAt } from '@teamai/runtime-testing/bundle';
 import { connectRuntime, type Connection } from '@teamai/runtime-testing/connect';
 import type { z } from 'zod';
+import { signalChild } from '@teamai/shared/process-group';
 
 // ─── Test support: the runtime over its stdio, on a fake Paseo daemon ───
 //
@@ -85,7 +86,7 @@ export function startRuntime(executable: string, home: string, env: Record<strin
       await exited;
     },
     async kill() {
-      child.kill('SIGKILL');
+      signalChild(child, 'SIGKILL');
       await exited;
     },
   };

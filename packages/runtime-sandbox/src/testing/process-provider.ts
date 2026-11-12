@@ -1,5 +1,6 @@
 import { spawn, type ChildProcess } from 'node:child_process';
 import { unreachable, type Provider } from '../provider.js';
+import { signalChild } from '@teamai/shared/process-group';
 
 /** A bind provider whose one sandbox is this machine: its exec spawns the process here, and its stop ends what runs. */
 export function processProvider(): Provider {
@@ -18,7 +19,7 @@ export function processProvider(): Provider {
       child.on('close', (code, signal) => { running.delete(child); resolve({ kind: 'exited', code: code ?? (signal ? 128 : 1) }); });
     }),
     stop: async () => {
-      for (const child of running) child.kill('SIGKILL');
+      for (const child of running) signalChild(child, 'SIGKILL');
 
       return { ok: true };
     },
