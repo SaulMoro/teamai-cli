@@ -525,13 +525,23 @@ export function recordWriters(file: string, args: readonly string[], before: Rec
 }
 
 /** Writes the next logs/<n>-<name>.log of a command and returns its path. */
-export function writeCommandLog(world: World, args: readonly string[], output: string, status: number | null): string {
-  const n = fs.readdirSync(world.logs).length + 1;
+export function writeCommandLog(world: Pick<World, 'logs'>, args: readonly string[], output: string, status: number | null): string {
   const name = path.basename(args[0] ?? 'command').replace(/[^\w.-]/g, '_');
-  const file = path.join(world.logs, `${n}-${name}.log`);
-  fs.writeFileSync(file, `$ ${args.join(' ')}\n${output}exit ${status ?? 'signal'}\n`);
+  const taken = new Set(fs.readdirSync(world.logs).map((log) => /^(\d+)-/.exec(log)?.[1]));
 
-  return file;
+  // Two commands ending together count the same logs: the one that loses the number takes the next free one.
+  for (let n = taken.size + 1; ; n += 1) {
+    if (taken.has(String(n))) continue;
+    const file = path.join(world.logs, `${n}-${name}.log`);
+
+    try {
+      fs.writeFileSync(file, `$ ${args.join(' ')}\n${output}exit ${status ?? 'signal'}\n`, { flag: 'wx' });
+
+      return file;
+    } catch (error) {
+      if (!(error instanceof Error && 'code' in error && error.code === 'EEXIST')) throw error;
+    }
+  }
 }
 
 /**

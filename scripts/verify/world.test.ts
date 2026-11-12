@@ -5,7 +5,7 @@ import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { socketPathOf } from '../../packages/runtime-sandbox/src/attempt-socket.js';
-import { REPO_ROOT, updateWorld, worldCommandNames, worldEnv, worldTmpDir, type World } from './world.js';
+import { REPO_ROOT, updateWorld, worldCommandNames, worldEnv, worldTmpDir, writeCommandLog, type World } from './world.js';
 
 const roots: string[] = [];
 
@@ -120,5 +120,17 @@ describe("a world's world.json", () => {
     updateWorld(loaded, (fresh) => ({ ...fresh, cleanedAt: '2026-11-12T12:00:00.000Z' }));
 
     expect(JSON.parse(fs.readFileSync(path.join(loaded.dir, 'world.json'), 'utf8'))).toMatchObject({ driverSeen: true, cleanedAt: '2026-11-12T12:00:00.000Z' });
+  });
+
+  it("keeps each command's log when another command of the world took the next number first", () => {
+    const { logs } = writtenWorld();
+    fs.mkdirSync(logs);
+    // Another command counted the same one log and wrote number 2 before this one did.
+    fs.writeFileSync(path.join(logs, '2-sh.log'), 'the other command\n');
+
+    const file = writeCommandLog({ logs }, ['sh', '-c', 'true'], 'out\n', 0);
+
+    expect(fs.readFileSync(path.join(logs, '2-sh.log'), 'utf8')).toBe('the other command\n');
+    expect(fs.readFileSync(file, 'utf8')).toBe('$ sh -c true\nout\nexit 0\n');
   });
 });
