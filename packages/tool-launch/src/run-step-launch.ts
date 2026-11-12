@@ -381,16 +381,26 @@ export async function runStepLaunch({ tool, input, start, canReattach = false, l
   if (!canReattach) await removeLeftResult(input.resultPath);
   const processRun = start({ executable: tool.executable, args, cwd: input.cwd, env, interactive, onStart: started, onStdout });
 
+  // Every stop goes through here. The port's `stop` never rejects by its contract, which nothing enforces at run time:
+  // one that rejects anyway is reported rather than left to end teamai as an unhandled rejection.
+  const stopTool = async (forwarded?: NodeJS.Signals): Promise<void> => {
+    try {
+      await processRun.stop(forwarded);
+    } catch (error) {
+      log.warn(`teamai could not confirm that ${name} stopped: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  };
+
   function stopAt(limit: 'timeout' | 'budget' | 'idle'): void {
     stopCause ??= limit;
-    void processRun.stop();
+    void stopTool();
   }
 
   const abort = (): void => {
     const reason: unknown = signal?.reason;
     const forwarded = reason === 'SIGINT' || reason === 'SIGQUIT' || reason === 'SIGTERM' || reason === 'SIGHUP' ? reason : undefined;
     stopCause ??= 'aborted';
-    void processRun.stop(interactive ? forwarded : undefined);
+    void stopTool(interactive ? forwarded : undefined);
   };
 
   signal?.addEventListener('abort', abort, { once: true });
@@ -407,7 +417,7 @@ export async function runStepLaunch({ tool, input, start, canReattach = false, l
     signal?.removeEventListener('abort', abort);
   }
 
-  if (stopCause !== undefined) await processRun.stop();
+  if (stopCause !== undefined) await stopTool();
 
   if (stopCause === 'idle' && idleMs !== undefined) {
     return {
