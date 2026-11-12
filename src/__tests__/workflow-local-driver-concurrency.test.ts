@@ -654,12 +654,12 @@ steps:
       steps: [{ id: 'check', status: 'failed', failure: { code: 'runtime_lost', message: expect.stringContaining('teamai could not confirm that process 424242') } }],
     });
 
-    // A cancel of the run keeps the login while that process may still run, and ends it once it has.
-    const cancelHere = (): ReturnType<typeof takeRunLock> => takeRunLock(config, run, (lock) => stopCancelledAttempts(config, lock, { isRunnerHolding: isSkillRunnerHolding }), { waitMs: 0 });
-    expect(await cancelHere()).toMatchObject({ kind: 'held' });
+    // Neither a cancel nor a retry lets the login go while that process may still run; the retry once it ended does.
+    expect(await takeRunLock(config, run, (lock) => stopCancelledAttempts(config, lock, { isRunnerHolding: isSkillRunnerHolding }), { waitMs: 0 })).toMatchObject({ kind: 'held' });
+    expect(await retryStep(config, runId, {}, 'check')).toMatchObject({ error: { code: 'not_retryable', message: expect.stringContaining('process 424242') } });
     expect(await loginHolder('codex')).toEqual(expect.objectContaining({ run, attempt }));
     fs.rmSync(path.join(attemptDir(config, run, attempt), 'group-424242.json'));
-    expect(await cancelHere()).toMatchObject({ kind: 'held' });
+    expect(await retryStep(config, runId, {}, 'check')).not.toHaveProperty('error');
     expect({ daily: JSON.parse(fs.readFileSync(path.join(daily, 'auth.json'), 'utf8')).tokens.refresh_token, holder: await loginHolder('codex') }).toEqual({ daily: 'refresh-2', holder: undefined });
   });
 
