@@ -107,8 +107,9 @@ it: \`docker image rm teamai-verify-machine:node<major>\` removes it once no wor
 const KEYS = `A key reaches one command only when you pass it, by name: \`sh <run> --pass NAME[,NAME...] <cmd>\` or
 \`teamai <run> --pass NAME ...\` copies those variables from your shell into that command's environment.
 Its output in the terminal and in logs/ shows each passed value, and each secret-looking value of your shell, as
-<REDACTED:NAME>, and the ledger masks each name the world's commands were given (world.json keeps the names, never
-a value). A value typed on the command line is not passed: it lands in logs/ as typed.
+<REDACTED:NAME>. The ledger masks each name the world's commands were given that your shell still sets, and names any
+it does not (world.json keeps the names, never a value), so run it with the same keys exported. A value typed on the
+command line is not passed: it lands in logs/ as typed.
 \`doctor --drivers\` lists the keys your shell holds, by name.
 Prove a run kept a key out: \`grep -rF -c "$VALUE" <world> /tmp/teamai-verify-<run>*\` with a dummy value you made counts
 0 under the world's directory and each TMPDIR of the world. Count before cleanup: it removes the TMPDIRs.`;

@@ -33,10 +33,13 @@ export function worldRedactor({ passed, harnessEnv }: { passed: ReadonlyMap<stri
 
 /**
  * How the ledger masks what it writes of a world: as its commands' output was, each name they were given with --pass
- * (`passedNames`) by the value it has in the harness now.
+ * (`passedNames`) by the value it has in the harness now; `unmasked` names those the harness does not set, whose values
+ * it cannot mask.
  */
-export function ledgerRedactor({ passedNames, harnessEnv }: { passedNames: readonly string[]; harnessEnv: NodeJS.ProcessEnv }): (text: string) => string {
-  return worldRedactor({ passed: new Map(passedNames.flatMap((name) => (harnessEnv[name] ? [[name, harnessEnv[name]] as const] : []))), harnessEnv });
+export function ledgerRedactor({ passedNames, harnessEnv }: { passedNames: readonly string[]; harnessEnv: NodeJS.ProcessEnv }) {
+  const passed = new Map(passedNames.flatMap((name) => (harnessEnv[name] ? [[name, harnessEnv[name]] as const] : [])));
+
+  return { mask: worldRedactor({ passed, harnessEnv }), unmasked: passedNames.filter((name) => !passed.has(name)) };
 }
 
 /** Feeds output through `mask` a whole line at a time, so a value split across two chunks is still masked. */

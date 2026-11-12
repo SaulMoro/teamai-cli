@@ -28,10 +28,11 @@ describe("a world's redaction", () => {
     expect(redact(`calling https://gw.internal.example with ${TOKEN} from /Users/me`)).toBe('calling <REDACTED:GATEWAY_URL> with <REDACTED:ANTHROPIC_AUTH_TOKEN> from /Users/me');
   });
 
-  it("masks in a ledger the value of every name the world's commands were given, whatever the name, and no other", () => {
-    const mask = ledgerRedactor({ passedNames: ['PLAIN_SETTING', 'GONE'], harnessEnv: { PLAIN_SETTING: 'plain-value-1234', OTHER: 'other-value-5678' } });
+  it("masks in a ledger the value of every name the world's commands were given, whatever the name, and no other, and names those this shell lacks", () => {
+    const { mask, unmasked } = ledgerRedactor({ passedNames: ['PLAIN_SETTING', 'GONE'], harnessEnv: { PLAIN_SETTING: 'plain-value-1234', OTHER: 'other-value-5678' } });
 
     expect(mask('process 42 (tool --flag plain-value-1234 other-value-5678)')).toBe('process 42 (tool --flag <REDACTED:PLAIN_SETTING> other-value-5678)');
+    expect(unmasked).toEqual(['GONE']);
   });
 
   it('masks a value that arrives split across two chunks, line by line', () => {

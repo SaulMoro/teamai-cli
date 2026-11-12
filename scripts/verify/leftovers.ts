@@ -314,9 +314,9 @@ export async function tiesOnThisMachine(world: World | undefined): Promise<{ sel
 /** Ledger section (f): each row the world's tier asks, its LEAK lines and notes. A world that ran no step runtime gets one line. */
 export async function leftoversSection(world: World): Promise<{ leaks: string[]; notes: string[] }> {
   const { context, tier } = await contextOf(world);
-  const mask = ledgerRedactor({ passedNames: world.passed ?? [], harnessEnv: process.env });
+  const { mask, unmasked } = ledgerRedactor({ passedNames: world.passed ?? [], harnessEnv: process.env });
   const leaks: string[] = [];
-  const notes: string[] = [];
+  const notes: string[] = unmasked.length === 0 ? [] : [`not masked: ${unmasked.join(', ')}, which this shell does not set; run the ledger with each exported to mask its value in these lines`];
 
   for (const row of await rowsFor(tier)) {
     const lines = linesOf(row.title, await row.observe(context), mask);
