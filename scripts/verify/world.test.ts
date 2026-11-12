@@ -5,7 +5,7 @@ import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { socketPathOf } from '../../packages/runtime-sandbox/src/attempt-socket.js';
-import { REPO_ROOT, updateWorld, worldCommandNames, worldEnv, worldTmpDir, writeCommandLog, type World } from './world.js';
+import { REPO_ROOT, rewriteLocked, updateWorld, worldCommandNames, worldEnv, worldTmpDir, writeCommandLog, type World } from './world.js';
 
 const roots: string[] = [];
 
@@ -196,5 +196,40 @@ describe("a world's world.json", () => {
 
     expect(fs.readFileSync(path.join(logs, '2-sh.log'), 'utf8')).toBe('the other command\n');
     expect(fs.readFileSync(file, 'utf8')).toBe('$ sh -c true\nout\nexit 0\n');
+  });
+});
+
+describe('a rewrite of a file two commands of a world share', () => {
+  const lockedFile = () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-verify-lock-'));
+    roots.push(root);
+
+    return path.join(root, 'world.json');
+  };
+  const exitedPid = () => spawnSync(process.execPath, ['-e', '']).pid;
+
+  it('gives up with the holder named once a live command keeps the lock past the limit', () => {
+    const file = lockedFile();
+    fs.writeFileSync(`${file}.lock`, String(process.pid));
+
+    expect(() => rewriteLocked(file, () => ({ value: 1, text: '{}\n' }), { waitMs: 200 })).toThrow(`${file}.lock is held by process ${process.pid} for 0.2 s.`);
+    expect(fs.existsSync(file)).toBe(false);
+  });
+
+  it('gives up, naming the break file, when a command that died breaking a dead lock left its break file', () => {
+    const file = lockedFile();
+    fs.writeFileSync(`${file}.lock`, String(exitedPid()));
+    fs.writeFileSync(`${file}.lock.break`, String(exitedPid()));
+
+    expect(() => rewriteLocked(file, () => ({ value: 1, text: '{}\n' }), { waitMs: 200 })).toThrow(`remove that file and ${file}.lock.break if it is there.`);
+  });
+
+  it('takes a lock whose holder died and writes the file', () => {
+    const file = lockedFile();
+    fs.writeFileSync(`${file}.lock`, String(exitedPid()));
+
+    expect(rewriteLocked(file, () => ({ value: 'written', text: '{}\n' }), { waitMs: 200 })).toBe('written');
+    expect(fs.readFileSync(file, 'utf8')).toBe('{}\n');
+    expect(fs.existsSync(`${file}.lock`)).toBe(false);
   });
 });

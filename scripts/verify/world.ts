@@ -414,11 +414,13 @@ export function updateWorld(world: Pick<World, 'dir'>, change: (fresh: World) =>
 /**
  * Rewrites `file` from its text as it is on disk now (undefined when there is none) under `<file>.lock`, through a
  * rename, so two commands of the world never lose each other's change or read a half-written file; answers `value`.
+ * A live holder past `waitMs` (30 s) is an error that names it, as is a break file a dead command left.
  */
-function rewriteLocked<T>(file: string, rewrite: (text: string | undefined) => { value: T; text: string }): T {
+export function rewriteLocked<T>(file: string, rewrite: (text: string | undefined) => { value: T; text: string }, { waitMs = 30_000 }: { waitMs?: number } = {}): T {
   const lock = `${file}.lock`;
+  const started = Date.now();
 
-  for (let waited = 0; ; waited += 20) {
+  for (;;) {
     try {
       fs.writeFileSync(lock, String(process.pid), { flag: 'wx' });
       break;
@@ -428,7 +430,7 @@ function rewriteLocked<T>(file: string, rewrite: (text: string | undefined) => {
 
       if (holder === undefined) continue;
 
-      if (waited >= 30_000) throw new Error(`${lock} is held by process ${holder} for 30 s. If no command of the world runs, remove that file and ${lock}.break if it is there.`, { cause: error });
+      if (Date.now() - started >= waitMs) throw new Error(`${lock} is held by process ${holder} for ${waitMs / 1000} s. If no command of the world runs, remove that file and ${lock}.break if it is there.`, { cause: error });
 
       // A holder that died leaves its lock: no write of it can still come.
       if (Number.isInteger(holder) && signalPid(holder, 0) === 'gone') breakDeadLock(lock, holder);
