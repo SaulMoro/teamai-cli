@@ -163,11 +163,16 @@ function hostFiles(world: World): Section {
   return { title: '(c) Host files', leaks, notes };
 }
 
-function environment(world: World): Section {
+/** Section (d)'s lines: the variables, by name, each install's commands got. */
+export function environmentNotes(world: Pick<World, 'bin' | 'members'>): string[] {
   const run = fs.readFileSync(path.join(world.bin, 'run'), 'utf8');
   const names = [...run.matchAll(/ ([A-Z_]+)='/g)].map((match) => match[1]);
 
-  return { title: '(d) Environment', leaks: [], notes: [`commands got only: ${names.join(', ')}`] };
+  return [`commands got only: ${names.join(', ')}`, ...(world.members ?? []).map((member) => `@${member.name}'s commands got only: ${Object.keys(member.env).join(', ')}`)];
+}
+
+function environment(world: World): Section {
+  return { title: '(d) Environment', leaks: [], notes: environmentNotes(world) };
 }
 
 /** What `teamai uninstall` leaves today, each tracked in KNOWN_LEFTOVERS_ISSUE; any other leftover is a LEAK. */
