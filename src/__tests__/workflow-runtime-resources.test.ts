@@ -133,6 +133,15 @@ describe('which runtime a name finds', () => {
     expect(await located(team)).toMatchObject({ layer: 'personal', resource: 'teamai-acme' });
   });
 
+  it('runs no teamai-runtime-<name> it finds only on PATH, and says where to declare the runtime', async () => {
+    onPath('teamai-runtime-acme');
+
+    expect(await located(teamWith({}))).toEqual({
+      code: 'runtime_not_found',
+      message: 'Driver "acme" uses runtime "acme", and none is declared: add runtimes/acme.yaml (or runtimes/acme/RUNTIME.yaml with its code) to the team repo and run teamai pull, or add ~/.teamai/runtimes/acme.yaml for yourself.',
+    });
+  });
+
   it('reads a team runtime in a namespace the member\'s project selects for workflows, and not in one it does not', async () => {
     onPath('acme-runtime');
     const team = { ...teamWith({

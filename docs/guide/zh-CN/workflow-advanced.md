@@ -1602,8 +1602,9 @@ runtimes:
 ~/.teamai/runtimes/<name>.yaml 或 <name>/RUNTIME.yaml   你自己的
 runtimes/<name>.yaml 或 <name>/RUNTIME.yaml             团队仓库，以及每个生效命名空间的 runtimes/<namespace>/
 runtimes/teamai-<name>.yaml                              teamai 自带的，在它的包里
-teamai-runtime-<name>                                    PATH 上的
 ```
+
+PATH 上的可执行文件只作为上面某个声明的 `entry` 运行：teamai 不再单独运行它在 PATH 上找到的 `teamai-runtime-<name>`。
 
 ```yaml
 # runtimes/acme/RUNTIME.yaml，放在运行时代码旁边

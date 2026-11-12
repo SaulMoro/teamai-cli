@@ -1608,8 +1608,9 @@ A scored pass's judge runs on a runtime that [answers confined prompts](runtime-
 ~/.teamai/runtimes/<name>.yaml, or <name>/RUNTIME.yaml   yours
 runtimes/<name>.yaml, or <name>/RUNTIME.yaml             team repo, and runtimes/<namespace>/ for each active namespace
 runtimes/teamai-<name>.yaml                              teamai's own, in its package
-teamai-runtime-<name>                                    on PATH
 ```
+
+An executable on PATH runs only as the `entry` of one of these: teamai no longer runs a `teamai-runtime-<name>` it finds there alone.
 
 ```yaml
 # runtimes/acme/RUNTIME.yaml, beside the runtime's code

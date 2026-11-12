@@ -343,15 +343,11 @@ export async function locateRuntime(driver: ResolvedDriver, use: string): Promis
     }
   }
 
-  const onPath = resolvePathCommand(`teamai-runtime-${use}`);
-
-  if (onPath) return { ok: true, source: { kind: 'external', name: use, resource: `teamai-runtime-${use}`, layer: 'personal', marker: onPath, location: onPath, launch: { kind: 'executable', executable: onPath }, revision: '', trust: { kind: 'none' } } };
-
   return {
     ok: false,
     failure: {
       code: 'runtime_not_found',
-      message: `Driver "${driver.name}" uses runtime "${use}", and none is installed: no ~/.teamai/runtimes/${use}.yaml or ${use}/${RUNTIME_MARKER}, none in the team repo's runtimes/, none that teamai ships, and no teamai-runtime-${use} on PATH.`,
+      message: `Driver "${driver.name}" uses runtime "${use}", and none is declared: add runtimes/${use}.yaml (or runtimes/${use}/${RUNTIME_MARKER} with its code) to the team repo and run teamai pull, or add ~/.teamai/runtimes/${use}.yaml for yourself.`,
     },
   };
 }
