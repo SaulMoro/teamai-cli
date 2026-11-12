@@ -1,5 +1,6 @@
 import path from 'node:path';
 import type { RuntimeFailure, RuntimeMessage } from '@teamai/runtime-protocol';
+import { runtimeStateRoot } from '@teamai/runtime-protocol/state-root';
 import { getUserHome } from '@teamai/shared/home';
 import { z } from 'zod';
 import { addedProjects } from './added-projects.js';
@@ -22,7 +23,7 @@ process.stdout.on('error', () => { stdoutOpen = false; });
 
 process.stderr.on('error', () => {});
 
-const state = path.join(getUserHome(), '.teamai', 'runtime-state', 't3');
+const state = path.join(runtimeStateRoot(getUserHome()), 't3');
 
 /** T3 Code's data directory on this machine, where its server says where it listens. */
 const t3Home = t3HomeOf(process.env, getUserHome());

@@ -1,5 +1,6 @@
 import path from 'node:path';
 import { RuntimeMessageSchema, type RuntimeMessage } from '@teamai/runtime-protocol';
+import { runtimeStateRoot } from '@teamai/runtime-protocol/state-root';
 import { getUserHome } from '@teamai/shared/home';
 import { journal } from './journal.js';
 import { serve } from './runtime.js';
@@ -28,7 +29,7 @@ const status = await serve({
   note: (text: string) => {
     if (stderrOpen) process.stderr.write(`${text}\n`);
   },
-  journal: journal(path.join(getUserHome(), '.teamai', 'runtime-state', 'paseo')),
+  journal: journal(path.join(runtimeStateRoot(getUserHome()), 'paseo')),
   ...(startedFrom && { startedFrom }),
 });
 

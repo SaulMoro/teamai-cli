@@ -4,7 +4,8 @@ import type { LocalConfig } from '../../types.js';
 import { log } from '@teamai/shared/log';
 import type { RunStatus, WorkflowFailure } from '../types.js';
 import { existingCheckout } from '../run-location.js';
-import { attemptDir, AttemptIdSchema, attemptsDir, readRun, type AttemptId, type RunId, type RunLock } from '../store.js';
+import { errnoCode } from '../../utils/fs.js';
+import { attemptDir, AttemptIdSchema, attemptsDir, readRun, RunIdSchema, runsDir, type AttemptId, type RunId, type RunLock } from '../store.js';
 import { knownSecrets } from '../../env-resolution.js';
 import { attemptRun, attemptRuntimePath, attemptToolHome, isPlaceLeftOpen, maskAttemptResults, readAttemptPlacement, releaseAttemptRuntime, type AttemptRuntimeRecord } from './attempt.js';
 import { endLogin, LOGIN_TOOLS, loginHolder, type LoginTool } from './login.js';
@@ -129,6 +130,30 @@ type AttemptStop = 'closed' | 'released' | 'none' | 'running';
 
 /** How `stopAttempt` ended: still `running`, with why, or done; `masked` holds the values its runtime's messages are masked with. */
 type Stopped = ({ ended: Exclude<AttemptStop, 'running'> } | { ended: 'running'; why: string }) & { masked?: Record<string, string> };
+
+/**
+ * Each run of `config`'s scope with an attempt whose record says a step runtime still holds its place, leased or not,
+ * and those attempts: `teamai workflow cancel <run>` closes them, and only while the run's records are there.
+ */
+export async function runsWithPlacesLeftOpen(config: LocalConfig): Promise<Array<{ run: RunId; attempts: AttemptId[] }>> {
+  // A runs folder that is there but cannot be read may hold one: the caller learns that rather than none.
+  const names = await fs.readdir(runsDir(config)).catch((error: unknown) => {
+    if (errnoCode(error) === 'ENOENT') return [];
+    throw error;
+  });
+  const runs: Array<{ run: RunId; attempts: AttemptId[] }> = [];
+
+  for (const name of names.sort()) {
+    const run = RunIdSchema.safeParse(name);
+
+    if (!run.success) continue;
+    const attempts = await placesLeftOpen(config, run.data, new Set());
+
+    if (attempts.length > 0) runs.push({ run: run.data, attempts });
+  }
+
+  return runs;
+}
 
 /** The attempts of `run` that no lease runs, whose record says a step runtime still holds their place. */
 async function placesLeftOpen(config: LocalConfig, run: RunId, leased: ReadonlySet<string>): Promise<AttemptId[]> {

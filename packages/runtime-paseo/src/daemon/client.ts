@@ -8,6 +8,7 @@ import type { buildAgentDeepLink } from '@getpaseo/protocol/agent-deep-link';
 import { getUserHome } from '@teamai/shared/home';
 import { findOnPath } from '@teamai/shared/lookpath';
 import type { RuntimeFailure } from '@teamai/runtime-protocol';
+import { runtimeStateRoot } from '@teamai/runtime-protocol/state-root';
 import type WebSocket from 'ws';
 import { z } from 'zod';
 import { clientInApp } from './app-client.js';
@@ -114,7 +115,7 @@ function findClient(env: NodeJS.ProcessEnv, unpackInto: string | undefined): { d
     }
 
     const beside = clientBeside(cli);
-    const located = beside === undefined ? clientInApp(cli, { keep: path.join(getUserHome(), '.teamai', 'runtime-state', 'paseo-client'), ...(unpackInto !== undefined && { unpackInto }) }) : { dir: beside };
+    const located = beside === undefined ? clientInApp(cli, { keep: path.join(runtimeStateRoot(getUserHome()), 'paseo-client'), ...(unpackInto !== undefined && { unpackInto }) }) : { dir: beside };
 
     if (located && 'code' in located) return located;
     dir = located?.dir;

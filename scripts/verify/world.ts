@@ -11,6 +11,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { pathToFileURL } from 'node:url';
 import { z } from 'zod';
+import { runtimeStateRoot } from '@teamai/runtime-protocol/state-root';
 
 export const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 export const WORLDS_ROOT = path.join(os.tmpdir(), 'teamai-verify');
@@ -234,7 +235,7 @@ export function worldHomes(world: { home: string; members?: ReadonlyArray<{ home
 
 /** Where each install of the world keeps the state of the runtimes outside teamai's process (sandbox, T3, Paseo), one folder each. */
 export function runtimeStateDirs(world: Pick<World, 'home' | 'members'>): string[] {
-  return worldHomes(world).map((home) => path.join(home, '.teamai', 'runtime-state'));
+  return worldHomes(world).map((home) => runtimeStateRoot(home));
 }
 
 /** The variable every world's commands carry with a value of its own, which no step may receive: the observer looks for it. */
