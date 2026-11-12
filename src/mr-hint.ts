@@ -6,6 +6,7 @@ import path from 'node:path';
 import { z } from 'zod';
 
 import { getTGitToken, tgitFetch } from './providers/tgit/rest-auth.js';
+import { getGitHubToken } from './providers/github/gh-cli.js';
 import { log } from '@teamai/shared/log';
 import { lenientList, JsonObjectSchema } from '@teamai/shared/json';
 import { getUserHome } from '@teamai/shared/home';
@@ -15,7 +16,7 @@ import { type LocalConfig } from './types.js';
 import type { SessionRun } from './launch-context.js';
 import { WorkflowOffers, type Proposal } from './workflow-offers.js';
 import type { OutputSchema } from './workflow/types.js';
-import { DefaultHooks, type DefaultHook, type HintLanguage } from './default-hooks.js';
+import { DefaultFolders, type DefaultFolder, type TextLanguage } from './default-folders.js';
 
 // ─── MR Hint data flow ──────────────────────────────────
 //
@@ -296,7 +297,7 @@ const GitHubRestPRSchema = z.object({
  * Fetch merged PRs from the GitHub REST API.
  *
  * Used as fallback when `gh` CLI is unavailable. Supports public repos
- * without a token; uses GITHUB_TOKEN env var when present to raise rate limits.
+ * without a token; uses GITHUB_TOKEN or GH_TOKEN env var when present to raise rate limits.
  *
  * @param owner   Repository owner
  * @param repo    Repository name
@@ -308,7 +309,7 @@ async function listGitHubMergedMRsViaREST(
   repo: string,
   { since, limit }: MergedSince,
 ): Promise<MRSummary[]> {
-  const token = process.env['GITHUB_TOKEN'];
+  const token = getGitHubToken();
   const baseHeaders = { 'User-Agent': 'teamai-cli', Accept: 'application/vnd.github+json' };
   const headers = token ? { ...baseHeaders, Authorization: `Bearer ${token}` } : baseHeaders;
 
@@ -406,8 +407,8 @@ async function listGitHubMergedMRs(
  */
 export function buildHintMessage(
   mrs: MRSummary[],
-  hook: DefaultHook<'teamai-mr-hint'>,
-  { language, offersWorkflow = false }: { language?: HintLanguage; offersWorkflow?: boolean } = {},
+  hook: DefaultFolder<'hooks', 'teamai-mr-hint'>,
+  { language, offersWorkflow = false }: { language?: TextLanguage; offersWorkflow?: boolean } = {},
 ): string {
   // One run for every MR: teamai-import-from-mr takes several URLs, publishes the
   // accepted learnings once and updates each repository's teamwiki once (#1104).
@@ -491,7 +492,7 @@ type MrHint = z.infer<typeof MrHintSchema>;
  * nothing to hint or the scope's switch turns it off. Writes nothing: showing it records it ({@link recordShown}).
  */
 async function computeMrHint(
-  language: HintLanguage,
+  language: TextLanguage,
   localConfig?: LocalConfig | null,
   session?: { sessionId: string; cwd: string; run: SessionRun },
 ): Promise<MrHint | null> {
@@ -531,7 +532,7 @@ async function computeMrHint(
 
   // Load cache to filter already-hinted MRs
   const alreadyHinted = new Set(loadCache(owner, repo).hintedMrIds);
-  const hook = await DefaultHooks.load('teamai-mr-hint', localConfig ?? null);
+  const hook = await DefaultFolders.load({ kind: 'hooks', name: 'teamai-mr-hint' }, localConfig ?? null);
   const { lookback_days: lookbackDays, max_mrs: limit } = hook.params;
 
   // Query the MRs merged in the past lookback_days days
@@ -584,7 +585,7 @@ function hookOutput(hookEventName: 'SessionStart' | 'UserPromptSubmit', message:
  * — safe to call from the hook dispatcher (which has already consumed STDIN) as well as from the standalone command.
  */
 export async function computeMrHintOutput(
-  language: HintLanguage,
+  language: TextLanguage,
   localConfig?: LocalConfig | null,
   session?: { sessionId: string; cwd: string; run: SessionRun },
 ): Promise<string | null> {
@@ -606,7 +607,7 @@ function pendingPath(sessionId: string): string {
  * session start that finds nothing new drops that one. Nothing is recorded until the hint is shown.
  */
 export async function stashMrHint(
-  language: HintLanguage,
+  language: TextLanguage,
   localConfig: LocalConfig | null,
   session: { sessionId: string; cwd: string; run: SessionRun },
 ): Promise<void> {

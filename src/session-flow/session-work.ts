@@ -1,7 +1,7 @@
 /**
  * A finished agent session as judge work (#1178, #1179). One redacted read gives the evidence of every judge call and
  * the context its labels carry. A session captured in a scope is judge work there once it is finished, for each scorer
- * that sets `sessions: true`: an attended one once nothing happened in it for six hours, an unattended one once
+ * that sets `sessions: true`: an attended one once nothing happened in it for the `idle` of teamai-finished-sessions, an unattended one once
  * `teamai score --drain` reached it. teamai-finished-sessions lists it and teamai-score judges it.
  */
 import fs from 'node:fs/promises';
@@ -30,7 +30,7 @@ import { mapStrings, isJsonObject, JsonValueSchema, type JsonValue } from '@team
 import { redact } from '@teamai/shared/redact';
 import { AgentSession, sessionKey } from './agent-session.js';
 import type { SubagentsRead } from '@teamai/tool-core/sessions/base';
-import { FINISHED_AFTER_MS, SessionCaptures, type CapturedSession, type SessionCapture } from './captures.js';
+import { SessionCaptures, type CapturedSession, type SessionCapture } from './captures.js';
 import type { ArchivedEvidence, EvidenceFile } from './session-evidence.js';
 import type { Session } from '@teamai/tool-core/sessions/ir';
 import { pushedSession, type TeamSession } from './scoring.js';
@@ -469,11 +469,11 @@ async function isGone(captured: CapturedSession): Promise<boolean> {
 
 /**
  * The sessions of `captured` finished at `now`, oldest activity first, of the run modes `includes` keeps (a capture with
- * no mode counts as attended): an attended session once nothing happened in it for `idleMs`, six hours unless given, an
+ * no mode counts as attended): an attended session once nothing happened in it for `idleMs`, as {@link SessionCaptures.finishedAfter} gives it, an
  * unattended one once a drain reached it (#1385), each with when something last happened in it. A session whose file
  * is gone is never finished.
  */
-async function finished(captured: readonly CapturedSession[], now: string, includes: (mode: RunMode) => boolean, idleMs = FINISHED_AFTER_MS): Promise<Array<CapturedSession & { activeAt: number }>> {
+async function finished(captured: readonly CapturedSession[], now: string, includes: (mode: RunMode) => boolean, idleMs: number): Promise<Array<CapturedSession & { activeAt: number }>> {
   const events = await lastEvents();
   const found: Array<{ captured: CapturedSession; activeAt: number }> = [];
 

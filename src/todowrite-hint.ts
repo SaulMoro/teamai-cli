@@ -6,7 +6,7 @@ import { HookStdinSchema, stdinString, type HookStdin } from './hook-dispatch.js
 import { log } from '@teamai/shared/log';
 import { deriveSessionId } from './utils/session-id.js';
 import { getUserHome } from '@teamai/shared/home';
-import { DefaultHooks, type DefaultHook, type HintLanguage } from './default-hooks.js';
+import { DefaultFolders, type DefaultFolder, type TextLanguage } from './default-folders.js';
 
 // ─── TodoWrite hint data flow ───────────────────────────
 //
@@ -127,7 +127,7 @@ export async function readStdin(): Promise<HookInput | null> {
 }
 
 /** The reminder emitted via additionalContext: `message.md` of `hook`, or `message.en.md` when language is `en`. */
-export function buildHintMessage(hook: DefaultHook<'teamai-todowrite-hint'>, language?: HintLanguage): string {
+export function buildHintMessage(hook: DefaultFolder<'hooks', 'teamai-todowrite-hint'>, language?: TextLanguage): string {
   return hook.text('message', language).render({});
 }
 
@@ -171,7 +171,7 @@ export async function todoWriteHint(tool?: string): Promise<void> {
   const hookOutput = JSON.stringify({
     hookSpecificOutput: {
       hookEventName: 'PostToolUse',
-      additionalContext: buildHintMessage(await DefaultHooks.load('teamai-todowrite-hint', scope), language),
+      additionalContext: buildHintMessage(await DefaultFolders.load({ kind: 'hooks', name: 'teamai-todowrite-hint' }, scope), language),
     },
   });
 

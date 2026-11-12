@@ -9,7 +9,7 @@ import { stepDefinitions, topScope, type GrantedAllowance, type Scope } from './
 import { passOf, settled, stopAttempt, stopWhere, timeOut, type LeasedStep, type LimitsFrom, type StepState, type StoppedAttempt } from './step-state.js';
 import { budgeted, type TokenUsage } from '@teamai/tool-core/stdout';
 import type { LocalConfig } from '../types.js';
-import { durationMs } from './parse.js';
+import { durationMs } from '../utils/duration.js';
 import { z } from 'zod';
 import type { WorkflowResult } from './engine.js';
 import { isWorkflowFile, workflowRunBy, type RunState, type WorkflowFailure, type WorkflowStep } from './types.js';

@@ -10,6 +10,7 @@ import { isDeepStrictEqual } from 'node:util';
 import { z } from 'zod';
 import { AgentObservationSchema, CommitStateSchema, observeCheckout, sameHarness, settleObservation, type AgentObservation, type ToolLaunch } from '../agent-observation.js';
 import { getAgentVersion } from '../agent-version.js';
+import { DefaultFolders } from '../default-folders.js';
 import { agreedRunMode, launchedBy, resolveRunMode, RunModeSchema, type RunMode } from '../launch-context.js';
 import type { CheckoutRecord } from '../pull.js';
 import { DeliveredSkillInfoSchema, deliveredTeamSkills, type DeliveredSkillInfo } from '../skill-use.js';
@@ -49,8 +50,13 @@ export type SessionCapture = z.infer<typeof SessionCaptureSchema>;
 /** The hook payload field the foreground dispatcher hands the background pass the capture it wrote in. */
 export const CAPTURE_PAYLOAD_KEY = 'teamai_capture';
 
-/** Nothing happened in an attended session for this long: it is finished, and judge work. */
-export const FINISHED_AFTER_MS = 6 * 60 * 60 * 1000;
+/**
+ * How long nothing happens in an attended session before it is finished, and judge work: the `idle` of
+ * teamai-finished-sessions's params.yaml in `config`.
+ */
+async function finishedAfter(config: LocalConfig): Promise<{ text: string; ms: number }> {
+  return (await DefaultFolders.load({ kind: 'workflows', name: 'teamai-finished-sessions' }, config)).params.idle;
+}
 
 const SEGMENT = /^(?!\.{1,2}$)[A-Za-z0-9._-]{1,200}$/;
 
@@ -512,4 +518,4 @@ function runModeOf(captures: readonly SessionCapture[]): RunMode | undefined {
   return agreedRunMode(captures.map((capture) => capture.runMode));
 }
 
-export const SessionCaptures = { atStart, atStop, addToolVersion, checkoutDelivery, markTeamChanged, read, list, markDrained, platformsOf, agentOf, archivedFacts, reportedModelOf, runModeOf, sweep } as const;
+export const SessionCaptures = { finishedAfter, atStart, atStop, addToolVersion, checkoutDelivery, markTeamChanged, read, list, markDrained, platformsOf, agentOf, archivedFacts, reportedModelOf, runModeOf, sweep } as const;

@@ -22,7 +22,7 @@ import { pathExists } from '../utils/fs.js';
 import { log } from '@teamai/shared/log';
 import { readWorkspaceChildren } from '../workspace-children.js';
 import { runDeadline } from '../workflow/limits.js';
-import { durationMs } from '../workflow/parse.js';
+import { durationMs } from '../utils/duration.js';
 import { startAsCli } from '../workflow/cli-start.js';
 import type { WorkflowClient } from '../workflow/protocol.js';
 import { findRunConfig } from '../workflow/run-location.js';
@@ -94,7 +94,8 @@ export type Shareable =
   | Refusal;
 
 interface Request {
-  idleMs: number;
+  /** Null when `--idle` is not given, so the scope's teamai-finished-sessions decides. */
+  idleMs: number | null;
   publish: (typeof PUBLISH)[number];
   scorers: string[];
 }
@@ -114,8 +115,8 @@ function scorerNames(text: string): string[] | undefined {
   }
 }
 
-function requestOf({ idle = '6h', publish = 'policy', scorers = '[]' }: ListOptions): Request | Refusal {
-  const idleMs = durationMs(idle);
+function requestOf({ idle, publish = 'policy', scorers = '[]' }: ListOptions): Request | Refusal {
+  const idleMs = idle === undefined ? null : durationMs(idle);
 
   if (idleMs === undefined) return refused('invalid_arguments', `--idle ${idle} is not a duration. Pass a whole number of s, m or h, such as 6h.`);
   const policy = z.enum(PUBLISH).safeParse(publish);
@@ -216,7 +217,7 @@ async function shareable({ within = SHARE_WITHIN, suite, sizes, ...options }: Sh
 
   if (!scope.ok) return scope;
   const since = Date.parse(ctx.now) - withinMs;
-  const finished = (await SessionWork.finished(await SessionCaptures.list(scope.config), ctx.now, () => true, request.idleMs)).filter((session) => session.activeAt >= since);
+  const finished = (await SessionWork.finished(await SessionCaptures.list(scope.config), ctx.now, () => true, request.idleMs ?? (await SessionCaptures.finishedAfter(scope.config)).ms)).filter((session) => session.activeAt >= since);
 
   if (suite !== undefined) return candidates(scope.config, finished, { dir: suite, sizes: parsedSizes?.sizes });
   const found: ShareableSession[] = [];
@@ -351,7 +352,7 @@ async function listIn(config: LocalConfig, request: Request, now: string): Promi
 
   if (!RUN_MODES.some(wanted)) return { ok: true, list: listed };
 
-  for (const session of await SessionWork.finished(await SessionCaptures.list(config), now, wanted, request.idleMs)) {
+  for (const session of await SessionWork.finished(await SessionCaptures.list(config), now, wanted, request.idleMs ?? (await SessionCaptures.finishedAfter(config)).ms)) {
     const item = await itemOf(config, { wants, session, now });
 
     if (item) listed.push(item);

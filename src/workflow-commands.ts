@@ -41,7 +41,7 @@ import { startAsCli } from './workflow/cli-start.js';
 import { commandExitMessage, inProcessClient, isRefusal, resumeRefusal, workflowNotFound, type InvokeCaller, type NextPrepare, type StartedRun, invokeRefusal } from './workflow/protocol.js';
 import { isSkillRunnerHolding, parseInputsFlag, parseSkillCall, parseSkillResume, runSkillCall, sessionDrivesRun, skillContext, whileNoDriverHere } from './workflow/drivers/skill/skill-driver.js';
 import { loadCachedWorkflow, namespaceConflictOf, resolveStart } from './workflow/cache.js';
-import { durationMs } from './workflow/parse.js';
+import { durationMs } from './utils/duration.js';
 import { findRunConfig } from './workflow/run-location.js';
 import { resolveRunMode } from './launch-context.js';
 import { memberTools } from './workflow/member-tools.js';

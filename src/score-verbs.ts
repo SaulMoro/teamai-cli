@@ -22,7 +22,7 @@ import type { JsonObject } from '@teamai/shared/json';
 import { isSameRealPath } from './utils/fs.js';
 import { createGit } from './utils/git.js';
 import { log, setStderrOnly } from '@teamai/shared/log';
-import { durationMs } from './workflow/parse.js';
+import { durationMs } from './utils/duration.js';
 import { isIsolated } from './workflow/workspace.js';
 
 /** Where a verb runs: the process's environment, the scope of its directory, and the time it reads as now. */
