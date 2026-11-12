@@ -104,6 +104,25 @@ describe('runStepLaunch', () => {
     }
   });
 
+  it('marks a stop the port could not make, which ends the tool\'s run with a failure, as one it could not confirm', async () => {
+    const start: ToolLauncher = ({ onStart, onStdout }) => {
+      let end: (closed: ToolClosed) => void = () => {};
+      const closed = new Promise<ToolClosed>((resolve) => { end = resolve; });
+
+      queueMicrotask(() => {
+        onStart();
+        onStdout(`${JSON.stringify({ type: 'stream_event', event: { type: 'message_start', message: { id: 'm1', usage: { input_tokens: 200, output_tokens: 1 } } } })}\n`);
+      });
+
+      // As a sandbox's does: the stop settles, and the run ends naming what still runs.
+      return { closed, started: () => true, stop: async () => { end({ failure: { code: 'cancel_failed', message: 'the tool reached a limit of its step and could not be stopped' } }); } };
+    };
+
+    const ran = await runStepLaunch({ tool: claude, input: { prompt: 'Fix it.', cwd: os.tmpdir(), resultPath: await resultPathIn(), secrets: {}, expected: 'a summary' }, start, limits: { budget: 100 }, interactive: false, host });
+
+    expect(ran).toMatchObject({ started: true, stopUnconfirmed: true, failure: { code: 'cancel_failed' } });
+  });
+
   it('opens nothing for a step stopped before its launch, and ends it cancelled', async () => {
     const controller = new AbortController();
     controller.abort();

@@ -99,7 +99,8 @@ export interface ToolProcess {
   /**
    * Stops the process and everything it started; a signal from the person is forwarded to an interactive one. It may be
    * called at any time, before the process started, again, or after it ended, and it settles and never rejects: a stop
-   * that failed is the adapter's to report. `toolLauncherConformance` checks it.
+   * that failed ends `closed` with a failure, which the launch takes as a stop it could not confirm (`stopUnconfirmed`).
+   * `toolLauncherConformance` checks it.
    */
   stop(signal?: NodeJS.Signals): Promise<void>;
 }
@@ -432,6 +433,10 @@ export async function runStepLaunch({ tool, input, start, canReattach = false, l
   }
 
   if (stopCause !== undefined) await stopTool();
+
+  // A port says a stop it could not make by ending the run with a failure (a sandbox's `stopFailed`, a runtime's lost
+  // exec), never by rejecting: after a stop, any failure may leave the tool running.
+  if (stopCause !== undefined && 'failure' in completed) isStopUnconfirmed = true;
   const settled = isStopUnconfirmed ? { ...applied, stopUnconfirmed: true as const } : applied;
 
   if (stopCause === 'idle' && idleMs !== undefined) {
