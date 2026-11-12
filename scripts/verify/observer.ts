@@ -9,12 +9,14 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { promisify } from 'node:util';
 import { collectEnvSecrets } from '@teamai/shared/redact';
+import type { JsonValue } from '@teamai/shared/json';
 import { parseYaml } from '@teamai/shared/yaml';
+import { SIGN_INS } from '@teamai/tool-definitions';
 import { z } from 'zod';
 import { journal, sandboxJournalRoot } from '../../packages/runtime-sandbox/src/journal.js';
 import { CONTAINER_ENGINES, PROVIDER_COMMANDS } from '../../packages/runtime-sandbox/src/options.js';
 import { journalOfSbxName } from './leftovers/sbx.js';
-import { judgeSandboxEnv, parseEnviron, type EnvVerdict } from './secrets.js';
+import { declaredCredentialNames, judgeSandboxEnv, parseEnviron, type EnvVerdict } from './secrets.js';
 import { CANARY_NAME, type World } from './world.js';
 
 const run = promisify(execFile);
@@ -35,14 +37,13 @@ function homesOf(world: World): string[] {
   return [world.home, ...(world.members ?? []).map((member) => member.home)];
 }
 
-const DriverCredentialsSchema = z.looseObject({ runtimes: z.array(z.looseObject({ credentials: z.record(z.string(), z.unknown()).optional() })).optional() });
-
 /**
- * The credential names every driver definition in the world declares, by the definitions' own `credentials` keys, and
- * each definition that is not YAML, whose credentials then count as undeclared.
+ * The credential names a step of the world may carry: every `credentials` mapping in the YAML under each HOME's and
+ * project's `.teamai` (driver definitions, a member's driver settings), and the tools' sign-in variables, which teamai
+ * gives a runtime entry that declares none. Each file that is not YAML is named: what only it declares counts as undeclared.
  */
 function declaredCredentials(world: World) {
-  const declared = new Set<string>();
+  const declared = new Set<string>(Object.values(SIGN_INS).flatMap((signIn) => [...signIn.variables, ...('alongside' in signIn ? signIn.alongside : [])]));
   const unreadable: string[] = [];
 
   const walk = (dir: string, depth: number): void => {
@@ -50,8 +51,8 @@ function declaredCredentials(world: World) {
       const full = path.join(dir, entry.name);
 
       if (entry.isDirectory() && entry.name !== 'node_modules' && entry.name !== '.git') walk(full, depth + 1);
-      else if (entry.isFile() && /\.ya?ml$/.test(entry.name) && full.split(path.sep).includes('drivers')) {
-        let text: unknown;
+      else if (entry.isFile() && /\.ya?ml$/.test(entry.name)) {
+        let text: JsonValue;
 
         try {
           text = parseYaml(fs.readFileSync(full, 'utf8'));
@@ -60,14 +61,12 @@ function declaredCredentials(world: World) {
           continue;
         }
 
-        const parsed = DriverCredentialsSchema.safeParse(text);
-
-        for (const runtime of parsed.success ? parsed.data.runtimes ?? [] : []) for (const name of Object.keys(runtime.credentials ?? {})) declared.add(name);
+        for (const name of declaredCredentialNames(text)) declared.add(name);
       }
     }
   };
 
-  for (const home of homesOf(world)) walk(path.join(home, '.teamai'), 0);
+  for (const root of [...homesOf(world), world.project, ...(world.members ?? []).map((member) => member.project)]) walk(path.join(root, '.teamai'), 0);
 
   return { declared, unreadable };
 }

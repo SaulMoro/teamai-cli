@@ -1,5 +1,6 @@
+import type { JsonObject } from '@teamai/shared/json';
 import { describe, expect, it } from 'vitest';
-import { judgeSandboxEnv, lineRedactor, parseEnviron, passedKeys, splitPassOption, worldRedactor } from './secrets.js';
+import { declaredCredentialNames, judgeSandboxEnv, lineRedactor, parseEnviron, passedKeys, splitPassOption, worldRedactor } from './secrets.js';
 
 const TOKEN = 'tok-0123456789abcdef';
 
@@ -52,6 +53,15 @@ describe("what a sandbox's environment may hold", () => {
 
     expect(judged).toEqual({ kind: 'leak', names: ['LEAKED', 'OTHER_API_KEY', 'VERIFY_WORLD_CANARY'] });
     expect(JSON.stringify(judged)).not.toContain('tok-');
+  });
+
+  it("takes the credential names a driver definition's runtime options or a member's driver settings declare", () => {
+    const definition: JsonObject = { name: 'containers', runtimes: [{ use: 'sandbox', options: { credentials: { CLAUDE_CODE_OAUTH_TOKEN: 'env:CLAUDE_CODE_OAUTH_TOKEN', NPM_TOKEN: 'env:ACME_NPM_TOKEN' } } }, { use: 'tools' }] };
+    const settings = { workflows: { drivers: { containers: { runtimes: { sandbox: { credentials: { GH_TOKEN: 'env:MY_GH_TOKEN' } } } } } } };
+
+    expect(declaredCredentialNames(definition)).toEqual(['CLAUDE_CODE_OAUTH_TOKEN', 'NPM_TOKEN']);
+    expect(declaredCredentialNames(settings)).toEqual(['GH_TOKEN']);
+    expect(declaredCredentialNames({ runtimes: [{ use: 'tools' }], credentials: 'not a mapping' })).toEqual([]);
   });
 
   it("reads a process's environment as /proc gives it, NUL-separated", () => {

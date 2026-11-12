@@ -2,6 +2,7 @@
  * Keys in a world, by name only: what `--pass` copies from the harness's environment into one command's, and the
  * redaction that keeps every passed value, and every secret-looking value of the harness, out of the terminal and logs/.
  */
+import { JsonObjectSchema, type JsonValue } from '@teamai/shared/json';
 import { collectEnvSecrets, redact } from '@teamai/shared/redact';
 
 const VARIABLE_NAME = /^[A-Za-z_]\w*$/;
@@ -58,6 +59,24 @@ export function parseEnviron(text: string): Map<string, string> {
 
     return at > 0 ? [[pair.slice(0, at), pair.slice(at + 1)] as const] : [];
   }));
+}
+
+/**
+ * The names of every `credentials` mapping in `document`, a parsed driver definition or a member's settings: a runtime
+ * entry's `options.credentials`, or `workflows.drivers.<name>.runtimes.<use>.credentials`.
+ */
+export function declaredCredentialNames(document: JsonValue): string[] {
+  if (Array.isArray(document)) return document.flatMap(declaredCredentialNames);
+  const mapping = JsonObjectSchema.safeParse(document);
+
+  if (!mapping.success) return [];
+
+  return Object.entries(mapping.data).flatMap(([key, value]) => {
+    if (key !== 'credentials') return declaredCredentialNames(value);
+    const credentials = JsonObjectSchema.safeParse(value);
+
+    return credentials.success ? Object.keys(credentials.data) : [];
+  });
 }
 
 /** Whether a sandbox's environment is what a step may carry, or the names of the variables that leak: names only, never a value. */
