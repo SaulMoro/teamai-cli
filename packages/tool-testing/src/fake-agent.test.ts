@@ -42,7 +42,8 @@ describe('fakeAgent', () => {
   it('signals no pid below 2 that its pid list names, as a line read while a fake still wrote it can', async () => {
     const cwd = scratch();
     const agent = fakeAgent(RECORDING, { bin: path.join(cwd, 'b') });
-    fs.writeFileSync(path.join(cwd, 'b', 'tool.pids'), '0\n1\n');
+    // A whole record of pid 1, and a record of pid 0 cut where a fake was still writing it.
+    fs.writeFileSync(path.join(cwd, 'b', 'tool.pids'), `${JSON.stringify({ pid: 1, spawnedAt: Date.now() })}\n{"pid":0,"spawned`);
     // Spied, so a regression reaches no process: pid 0 is this test run's own group, and 1 is init.
     const kill = vi.spyOn(process, 'kill').mockReturnValue(true);
     try {
