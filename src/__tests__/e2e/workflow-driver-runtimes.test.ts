@@ -10,7 +10,7 @@ import { resolveProjectDataHome } from '../../config.js';
 import type { RunState } from '../../workflow/types.js';
 import { attemptOf, CLAUDE_SESSIONS, CLI, codexOnPath, envelope, fakeTool, ROOT, runCLI, type Ran } from '../helpers/step-runtime-e2e.js';
 import { hasPython, TYPED_TERMINAL } from '../helpers/in-terminal.js';
-import { TOY_RUNTIME } from '../helpers/toy-runtime.js';
+import { installToyRuntime, TOY_RUNTIME, TOY_RUNTIME_MARKER } from '../helpers/toy-runtime.js';
 import { t3OnFakeServer } from '../helpers/t3-runtime.js';
 
 // A driver definition that lists several runtimes: each `next` offers one runtime's `can`, in definition order, and a
@@ -99,8 +99,7 @@ describe('a driver definition with several runtimes', () => {
     fs.writeFileSync(path.join(bin, 'claude'), fakeTool({ tool: 'claude', version: '2.1.0 (Claude Code)', homeVariable: 'CLAUDE_CONFIG_DIR', sessions: CLAUDE_SESSIONS }), { mode: 0o755 });
     const runtimeDir = path.join(os.homedir(), '.teamai', 'runtimes', 'toy');
     fs.mkdirSync(runtimeDir, { recursive: true });
-    fs.copyFileSync(TOY_RUNTIME, path.join(runtimeDir, 'runtime'));
-    fs.chmodSync(path.join(runtimeDir, 'runtime'), 0o755);
+    installToyRuntime(runtimeDir);
     fs.mkdirSync(path.join(repo, '.teamai', 'workflows'), { recursive: true });
     writeFlow('mixed', `  - id: build
     workspace: new
@@ -428,8 +427,7 @@ steps:
     it('stops, through the driver recorded for it, the setup a killed driver left on a runtime the resumed run does not use, then runs the step again', async () => {
       const otherDir = path.join(os.homedir(), '.teamai', 'runtimes', 'othertoy');
       fs.mkdirSync(otherDir, { recursive: true });
-      fs.copyFileSync(TOY_RUNTIME, path.join(otherDir, 'runtime'));
-      fs.chmodSync(path.join(otherDir, 'runtime'), 0o755);
+      installToyRuntime(otherDir);
       const { runId, pid, options } = await killedDuringSetup('toymovedsetupflow', 'toymovedsetup');
       writeDefinition('othertoysetup', [{ use: 'othertoy', options: { state: fs.mkdtempSync(path.join(sandbox, 'othertoy-')), path: options.path } }]);
 
@@ -1464,10 +1462,10 @@ steps:
       expect(sends()).toEqual([]);
     });
 
-    it('refuses at start a runtime whose manifest says it runs no command while its init offers commands', async () => {
-      const manifest = path.join(os.homedir(), '.teamai', 'runtimes', 'toy', 'package.json');
-      fs.writeFileSync(manifest, JSON.stringify({ teamai: { exec: false } }));
-      onTestFinished(() => fs.rmSync(manifest, { force: true }));
+    it('refuses at start a runtime whose marker says it runs no command while its init offers commands', async () => {
+      const manifest = path.join(os.homedir(), '.teamai', 'runtimes', 'toy', 'RUNTIME.yaml');
+      fs.writeFileSync(manifest, `${TOY_RUNTIME_MARKER}exec: false\n`);
+      onTestFinished(() => fs.writeFileSync(manifest, TOY_RUNTIME_MARKER));
       writeDefinition('toymislabeled', [{ use: 'toy', options: { state } }, { use: 'local' }]);
 
       const ran = await runCLI(['workflow', 'start', 'mixed', '--driver', 'toymislabeled'], repo, env());
@@ -1790,8 +1788,7 @@ steps:
   it('refuses a runtime named host, the name of the command slot teamai adds to every definition, before a step runs', async () => {
     const hostDir = path.join(os.homedir(), '.teamai', 'runtimes', 'host');
     fs.mkdirSync(hostDir, { recursive: true });
-    fs.copyFileSync(TOY_RUNTIME, path.join(hostDir, 'runtime'));
-    fs.chmodSync(path.join(hostDir, 'runtime'), 0o755);
+    installToyRuntime(hostDir);
     writeDefinition('ownhost', [{ use: 'host', options: { state } }]);
 
     const ran = await runCLI(['workflow', 'start', 'oneprompt', '--driver', 'ownhost'], repo, env());
@@ -1939,7 +1936,7 @@ steps:
   });
 
   it('runs a shipped runtime from the packed package, found in teamai\'s package directory before a same-named executable on PATH', async () => {
-    // The package as npm packs it, with one more runtime entry, as a first-party runtime adds its own.
+    // The package as npm packs it, with one more runtime of teamai's own, as a first-party runtime adds its own.
     const packs = path.join(sandbox, 'packs');
     fs.mkdirSync(packs, { recursive: true });
     const packed = execFileSync('npm', ['pack', '--ignore-scripts', '--silent', '--pack-destination', packs], { cwd: ROOT, encoding: 'utf8' }).trim().split('\n').at(-1) ?? '';
@@ -1950,6 +1947,7 @@ steps:
     manifest.bin['teamai-runtime-shiptoy'] = 'dist/runtime-shiptoy.js';
     fs.writeFileSync(path.join(pkg, 'package.json'), JSON.stringify(manifest, null, 2));
     fs.copyFileSync(TOY_RUNTIME, path.join(pkg, 'dist', 'runtime-shiptoy.js'));
+    fs.writeFileSync(path.join(pkg, 'runtimes', 'teamai-shiptoy.yaml'), 'protocol: 1\nentry: { bin: teamai-runtime-shiptoy }\n');
     // A stray executable of the same name on PATH, which must never run.
     const stray = path.join(sandbox, 'stray-ran');
     fs.writeFileSync(path.join(bin, 'teamai-runtime-shiptoy'), `#!/bin/sh\ntouch "${stray}"\nexit 1\n`, { mode: 0o755 });
@@ -2973,8 +2971,7 @@ span('end');
       const stuck = { code: 'cancel_failed', message: 'The toy cannot stop that exec now: its provider is down. Start the provider, then run teamai workflow cancel again.' };
       const otherDir = path.join(os.homedir(), '.teamai', 'runtimes', 'othertoy');
       fs.mkdirSync(otherDir, { recursive: true });
-      fs.copyFileSync(TOY_RUNTIME, path.join(otherDir, 'runtime'));
-      fs.chmodSync(path.join(otherDir, 'runtime'), 0o755);
+      installToyRuntime(otherDir);
       const otherState = fs.mkdtempSync(path.join(sandbox, 'toy-state-'));
       // Both written before any run, so no read-only step sees the repository change under it: the first toy runs the
       // exec, which needs no cancel, and cannot stop it later.
@@ -3152,8 +3149,7 @@ span('end');
     beforeAll(() => {
       const outerDir = path.join(os.homedir(), '.teamai', 'runtimes', 'sandboxtoy');
       fs.mkdirSync(outerDir, { recursive: true });
-      fs.copyFileSync(TOY_RUNTIME, path.join(outerDir, 'runtime'));
-      fs.chmodSync(path.join(outerDir, 'runtime'), 0o755);
+      installToyRuntime(outerDir);
     });
 
     beforeEach(() => {

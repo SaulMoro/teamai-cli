@@ -1,16 +1,11 @@
-import { createHash } from 'node:crypto';
-import fs from 'node:fs/promises';
 import path from 'node:path';
-import { createInterface } from 'node:readline/promises';
 import { z } from 'zod';
 import type { RunMode } from '../../launch-context.js';
-import { getKnowledgeDir, getTeamaiHomeDir, type LocalConfig } from '../../types.js';
-import { resolveCliPath } from '@teamai/shared/cli-path';
-import { writeJsonAtomic } from '../../utils/fs.js';
+import { type LocalConfig } from '../../types.js';
 import type { DriverCan } from '../requirements.js';
 import type { WorkflowFailure } from '../types.js';
-import { RuntimeFactsSchema, shippedRuntime } from '../../default-drivers.js';
-import { personalDir, resolveDriver, teamItem, type DriverDefinition, type ResolvedDriver } from './definitions.js';
+import { resolveDriver, type DriverDefinition, type ResolvedDriver } from './definitions.js';
+import { acceptRuntime, isRuntimeAccepted, locateRuntime } from './locate.js';
 import { LOCAL_DRIVER } from '../driver-name.js';
 import { fleetStepRuntime, shadowedFleetEntries, type OpenWake } from '../fleet/owner.js';
 import { log } from '@teamai/shared/log';
@@ -28,16 +23,10 @@ import type { StepLaunchDeps } from '@teamai/runtime-tools';
 import { opencodeMajorVersion } from '../../opencode-version.js';
 import { agyGatewayEnv } from '../../models/agy-gateway.js';
 import { AttemptResult } from '../attempt-result.js';
-import { readRegularFile, readRegularFileNoLink } from '@teamai/shared/regular-file';
 
-// ─── Where a step runtime comes from ─────────────────────
+// ─── Opening a driver's runtimes ─────────────────────────
 //
-//  `tools` is built in: it launches the member's tools in teamai's own process, and `local` names it too. Any other runtime is an external program, found first in the member's own
-//  ~/.teamai/runtimes/<name>/, then in the team repo's runtimes/<name>/ (and runtimes/<namespace>/<name>/ for each
-//  active namespace), then among the runtimes teamai ships (the `teamai-runtime-<name>` entries of its package's
-//  `bin`, found in its own package directory), then as `teamai-runtime-<name>` on PATH. A runtime directory holds an executable named `runtime`.
-//  A team runtime is code a teammate pushed, so before its first spawn at a revision a person accepts that revision:
-//  an attended run asks, and an unattended one refuses.
+//  Each runtime of a definition is found (`locate.ts`), accepted when it is the team's, started, and given its options.
 //
 
 /**
@@ -52,250 +41,6 @@ const TOOLS_LAUNCH: StepLaunchDeps = {
 /** What every launch of the `tools` runtime reads from teamai. */
 export function toolsLaunchDeps(): StepLaunchDeps {
   return TOOLS_LAUNCH;
-}
-
-/** The file in a runtime directory that teamai spawns. */
-export const RUNTIME_ENTRY = 'runtime';
-
-/**
- * Where a runtime was found. `exec: false` is what its manifest declares when it runs no command, read without starting
- * it: teamai's package manifest for one it ships, the `package.json` beside a personal or team runtime's executable.
- */
-export type RuntimeSource =
-  | { kind: 'builtin'; name: 'tools' }
-  | { kind: 'personal'; name: string; executable: string; exec?: boolean }
-  | { kind: 'path'; name: string; executable: string }
-  /** A runtime teamai ships, as a built file of its package that the Node running teamai runs. */
-  | { kind: 'shipped'; name: string; file: string; exec?: boolean }
-  | { kind: 'team'; name: string; executable: string; dir: string; relative: string; exec?: boolean };
-
-async function isFile(at: string): Promise<boolean> {
-  return (await fs.lstat(at).catch(() => undefined))?.isFile() === true;
-}
-
-/**
- * The runtime facts the `package.json` in `dir` declares under `teamai`: none when it has none, cannot be read, or is a
- * link, whose target a team runtime's accepted revision does not hold (`runtimeRevision` hashes the link itself).
- */
-async function declaredFacts(dir: string): Promise<{ exec?: boolean }> {
-  try {
-    const exec = z.object({ teamai: RuntimeFactsSchema }).parse(JSON.parse(await readRegularFileNoLink(path.join(dir, 'package.json'), 'utf8'))).teamai.exec;
-
-    return exec === undefined ? {} : { exec };
-  } catch {
-    return {};
-  }
-}
-
-/** The runtime `use` names for `driver`, or why there is none. */
-export async function locateRuntime(driver: ResolvedDriver, use: string): Promise<{ ok: true; source: RuntimeSource } | { ok: false; failure: WorkflowFailure }> {
-  // `local` is the name `tools` had while it ran on the host beside the commands.
-  if (use === 'tools' || use === 'local') return { ok: true, source: { kind: 'builtin', name: 'tools' } };
-
-  if (use === 'skill') {
-    return { ok: false, failure: { code: 'runtime_not_found', message: `Driver "${driver.name}" uses runtime "${use}", which this version of teamai does not run from a definition. Use tools, or a runtime of your own or of the team.` } };
-  }
-
-  if (use === 'host') {
-    return { ok: false, failure: { code: 'runtime_not_found', message: `Driver "${driver.name}" uses runtime "host", the name teamai gives the command slot it adds to every definition. Name the runtime otherwise, or use tools.` } };
-  }
-
-  const personal = path.join(personalDir('runtimes'), use, RUNTIME_ENTRY);
-
-  if (await isFile(personal)) return { ok: true, source: { kind: 'personal', name: use, executable: personal, ...await declaredFacts(path.dirname(personal)) } };
-  const root = path.join(getKnowledgeDir(driver.config), 'runtimes');
-  const team = await teamItem(driver.config, root, use, '');
-
-  if (team.kind === 'conflict') {
-    return { ok: false, failure: { code: 'runtime_namespace_conflict', message: `Runtime "${use}" is defined in two active namespaces (${team.first} and ${team.second}). Keep it in one namespace, push it, run teamai pull, and start again.` } };
-  }
-
-  const linked = team.kind === 'found' ? await linkOnTheWay(getKnowledgeDir(driver.config), team.at) : undefined;
-
-  if (team.kind === 'found' && linked !== undefined) {
-    const relative = path.relative(getKnowledgeDir(driver.config), team.at).split(path.sep).join('/');
-
-    const message = linked === relative
-      ? `Driver "${driver.name}" uses runtime "${use}", whose folder ${relative} in the team repo is a link, and teamai runs a team runtime only from a folder the team repo holds. Replace the link with the folder, push it, run teamai pull, and start again.`
-      : `Driver "${driver.name}" uses runtime "${use}", whose folder ${relative} in the team repo is reached through the link ${linked}, and teamai runs a team runtime only from a folder the team repo holds. Replace the link with the folder, push it, run teamai pull, and start again.`;
-
-    return { ok: false, failure: { code: 'runtime_not_found', message } };
-  }
-
-  const link = team.kind === 'found' ? await firstLink(team.at) : undefined;
-
-  if (team.kind === 'found' && link !== undefined) {
-    const relative = path.relative(getKnowledgeDir(driver.config), team.at).split(path.sep).join('/');
-
-    return {
-      ok: false,
-      failure: {
-        code: 'runtime_not_found',
-        message: `Driver "${driver.name}" uses runtime "${use}", whose folder ${relative} in the team repo holds the link ${link}, and teamai runs a team runtime only when its folder holds no link, so the revision you accept is all it runs. Replace the link with what it names, push it, run teamai pull, and start again.`,
-      },
-    };
-  }
-
-  if (team.kind === 'found' && await isFile(path.join(team.at, RUNTIME_ENTRY))) {
-    return { ok: true, source: { kind: 'team', name: use, executable: path.join(team.at, RUNTIME_ENTRY), dir: team.at, relative: path.relative(getKnowledgeDir(driver.config), team.at), ...await declaredFacts(team.at) } };
-  }
-
-  const shipped = shippedRuntime(use);
-
-  if (shipped) return { ok: true, source: { kind: 'shipped', name: use, ...shipped } };
-  const onPath = resolveCliPath(`teamai-runtime-${use}`);
-
-  if (onPath) return { ok: true, source: { kind: 'path', name: use, executable: onPath } };
-
-  return {
-    ok: false,
-    failure: {
-      code: 'runtime_not_found',
-      message: `Driver "${driver.name}" uses runtime "${use}", and none is installed: no ~/.teamai/runtimes/${use}/${RUNTIME_ENTRY}, no runtimes/${use}/${RUNTIME_ENTRY} in the team repo, none that teamai ships, and no teamai-runtime-${use} on PATH.`,
-    },
-  };
-}
-
-/**
- * What a team runtime's folder holds, by relative path, sorted: its files, folders and links. A linked folder is not
- * walked, so nothing outside the folder is listed or read.
- */
-async function runtimeEntries(dir: string): Promise<string[]> {
-  const found: string[] = [];
-  const pending = [''];
-
-  for (let folder = pending.pop(); folder !== undefined; folder = pending.pop()) {
-    for (const entry of await fs.readdir(path.join(dir, folder), { withFileTypes: true })) {
-      const relative = path.join(folder, entry.name);
-      found.push(relative);
-
-      if (entry.isDirectory()) pending.push(relative);
-    }
-  }
-
-  return found.sort();
-}
-
-/**
- * The first link on the way from the team repo `base` down to `at`, `at` included, by relative path, or none: the
- * `runtimes` folder itself, a namespace folder, or the runtime's own.
- */
-async function linkOnTheWay(base: string, at: string): Promise<string | undefined> {
-  const segments = path.relative(base, at).split(path.sep);
-
-  for (let depth = 1; depth <= segments.length; depth++) {
-    const relative = segments.slice(0, depth).join('/');
-
-    if ((await fs.lstat(path.join(base, ...segments.slice(0, depth))).catch(() => undefined))?.isSymbolicLink() === true) return relative;
-  }
-
-  return undefined;
-}
-
-/** The first link a team runtime's folder holds, by relative path, or none. */
-async function firstLink(dir: string): Promise<string | undefined> {
-  for (const relative of await runtimeEntries(dir).catch(() => [])) {
-    if ((await fs.lstat(path.join(dir, relative)).catch(() => undefined))?.isSymbolicLink() === true) return relative.split(path.sep).join('/');
-  }
-
-  return undefined;
-}
-
-/**
- * A team runtime's revision: a hash of every file under its directory, by relative path, executable bit and content,
- * with a link hashed as the path it names, never what it points to. Any change a teammate pushes there is a new
- * revision.
- */
-export async function runtimeRevision(dir: string): Promise<string> {
-  const hash = createHash('sha256');
-
-  for (const relative of await runtimeEntries(dir)) {
-    const at = path.join(dir, relative);
-    const stat = await fs.lstat(at);
-
-    if (stat.isDirectory()) continue;
-    const body = stat.isSymbolicLink() ? `link:${await fs.readlink(at)}` : await readRegularFileNoLink(at);
-    hash.update(`${relative.split(path.sep).join('/')}\0${stat.mode & 0o111 ? 'x' : '-'}\0`).update(body).update('\0');
-  }
-
-  return hash.digest('hex');
-}
-
-const TrustFileSchema = z.object({ accepted: z.array(z.object({ dir: z.string(), revision: z.string(), acceptedAt: z.string() })) });
-
-function trustFile(): string {
-  return path.join(getTeamaiHomeDir(), 'trust', 'runtimes.json');
-}
-
-async function readTrust(): Promise<z.infer<typeof TrustFileSchema>> {
-  try {
-    return TrustFileSchema.parse(JSON.parse(await readRegularFile(trustFile(), 'utf8')));
-  } catch {
-    return { accepted: [] };
-  }
-}
-
-/**
- * Asks the person at this terminal: true for yes, false for anything else, undefined when they closed the question
- * unanswered with Ctrl-C or Ctrl-D, which stops the command as it stops a step's question.
- */
-export async function askAtTerminal(question: string): Promise<boolean | undefined> {
-  const terminal = createInterface({ input: process.stdin, output: process.stderr });
-
-  try {
-    return /^y(es)?$/i.test((await terminal.question(question)).trim());
-  } catch {
-    return undefined;
-  } finally {
-    terminal.close();
-  }
-}
-
-function isAcceptedIn(trust: z.infer<typeof TrustFileSchema>, dir: string, revision: string): boolean {
-  return trust.accepted.some((entry) => entry.dir === dir && entry.revision === revision);
-}
-
-/**
- * Whether `source` may be spawned on this machine. Only a team runtime needs it: its revision must be one a person
- * accepted here. `mode` attended with a person at the terminal (`canAsk`) asks and records a yes; otherwise an
- * unaccepted revision is refused, naming what to run.
- */
-export async function acceptRuntime(source: RuntimeSource, { mode, canAsk, ask = askAtTerminal }: { mode: RunMode; canAsk: boolean; ask?: (question: string) => Promise<boolean | undefined> }): Promise<{ ok: true } | { ok: false; failure: WorkflowFailure }> {
-  if (source.kind !== 'team') return { ok: true };
-  const revision = await runtimeRevision(source.dir);
-  const trust = await readTrust();
-
-  if (isAcceptedIn(trust, source.dir, revision)) return { ok: true };
-  const short = revision.slice(0, 12);
-  const files = await runtimeEntries(source.dir);
-
-  if (mode === 'attended' && canAsk) {
-    const question = `Step runtime "${source.name}" comes from the team repo (${source.relative}) at revision ${short}, which you have not accepted on this machine. `
-      + `It runs as you, with your files. Review ${source.dir} (${files.join(', ')}) before you accept it.\nRun it? [y/N] `;
-
-    const accepted = await ask(question);
-
-    if (accepted === undefined) {
-      return { ok: false, failure: { code: 'interrupted', message: `The question to accept step runtime "${source.name}" closed without an answer, so it did not run and nothing was accepted. Run the same command again to answer it.` } };
-    }
-
-    if (accepted) {
-      await writeJsonAtomic(trustFile(), { accepted: [...trust.accepted, { dir: source.dir, revision, acceptedAt: new Date().toISOString() }] });
-
-      return { ok: true };
-    }
-
-    return { ok: false, failure: { code: 'runtime_not_accepted', message: `Step runtime "${source.name}" at revision ${short} was not accepted, so it did not run. Nothing of the run changed.` } };
-  }
-
-  return {
-    ok: false,
-    failure: {
-      code: 'runtime_not_accepted',
-      message: `Step runtime "${source.name}" comes from the team repo (${source.relative}) at revision ${short}, which no one has accepted on this machine, and an unattended run does not ask. `
-        + 'Run the same command once in a terminal, attended, to review and accept that revision, then run it unattended again.',
-    },
-  };
 }
 
 /** An environment variable's name, as a credential's name and the variable it is read from are written. */
@@ -574,9 +319,9 @@ async function openRuntime(driver: ResolvedDriver, use: string, options: Runtime
   // the values the member's environment holds for them, which what the attempt left may echo.
   const masks = credentialSecrets(source.name, { ...values.values, ...found, ...(purpose === 'stop' && valuesSet(split.credentials, process.env)) });
 
-  const spawned = (): StepRuntime<DriverCan> => (source.kind === 'shipped'
-    ? stdioStepRuntime({ name: source.name, command: process.execPath, args: [source.file], cwd: checkout, secrets: masks })
-    : stdioStepRuntime({ name: source.name, command: source.executable, cwd: checkout, secrets: masks }));
+  const spawned = (): StepRuntime<DriverCan> => (source.launch.kind === 'node'
+    ? stdioStepRuntime({ name: source.name, command: process.execPath, args: [source.launch.file], cwd: checkout, secrets: masks })
+    : stdioStepRuntime({ name: source.name, command: source.launch.executable, cwd: checkout, secrets: masks }));
 
   let notRecovered: RuntimeFailure | undefined;
 
@@ -612,13 +357,12 @@ async function openRuntime(driver: ResolvedDriver, use: string, options: Runtime
   }
 
   // A run that needs no AI tool skips a runtime by this declaration, so one its init contradicts is never trusted.
-  if (ready.ok && source.kind !== 'path' && source.exec === false && ready.can.exec !== false) {
+  if (ready.ok && source.exec === false && ready.can.exec !== false) {
     await runtime.dispose();
-    const manifest = source.kind === 'shipped' ? 'teamai\'s package.json' : path.join(path.dirname(source.executable), 'package.json');
 
     return {
       ok: false,
-      failure: { code: 'runtime_failed', message: `Runtime "${source.name}" of driver "${driver.name}" declares exec: false in ${manifest}, but its init does not offer can.exec: false, so it runs commands. A run that needs no AI tool would skip it and run its commands on the host. Make the two agree.` },
+      failure: { code: 'runtime_failed', message: `Runtime "${source.name}" of driver "${driver.name}" declares exec: false in ${source.marker}, but its init does not offer can.exec: false, so it runs commands. A run that needs no AI tool would skip it and run its commands on the host. Make the two agree.` },
     };
   }
 
@@ -737,10 +481,9 @@ async function isSkippedWithoutAi(driver: ResolvedDriver, entry: DriverDefinitio
   if (entry.through !== undefined) return false;
   const located = await locateRuntime(driver, entry.use);
 
-  if (!located.ok || located.source.kind === 'builtin' || located.source.kind === 'path' || located.source.exec !== false) return false;
-  const { source } = located;
+  if (!located.ok || located.source.kind === 'builtin' || located.source.exec !== false) return false;
 
-  return source.kind !== 'team' || isAcceptedIn(await readTrust(), source.dir, await runtimeRevision(source.dir));
+  return isRuntimeAccepted(located.source);
 }
 
 /**

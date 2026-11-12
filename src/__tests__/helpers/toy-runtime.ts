@@ -35,3 +35,14 @@ function bundledToy(): string {
  * `state` option's directory, and with `die_at` kills the teamai that spawned it at a named point.
  */
 export const TOY_RUNTIME = bundledToy();
+
+/** The marker of a runtime folder whose code is its `runtime` file, as `installToyRuntime` writes it. */
+export const TOY_RUNTIME_MARKER = 'protocol: 1\nentry: ./runtime\n';
+
+/** Makes `dir` the toy as a runtime folder: its `runtime` and its `RUNTIME.yaml`. */
+export function installToyRuntime(dir: string): void {
+  fs.mkdirSync(dir, { recursive: true });
+  fs.copyFileSync(TOY_RUNTIME, path.join(dir, 'runtime'));
+  fs.chmodSync(path.join(dir, 'runtime'), 0o755);
+  fs.writeFileSync(path.join(dir, 'RUNTIME.yaml'), TOY_RUNTIME_MARKER);
+}

@@ -17,9 +17,9 @@ teamai 仓库中的 toy 运行时 `src/__tests__/fixtures/runtime-toy/runtime.mj
 
 teamai 自带的运行时则建立在 `@teamai/runtime-kit` 之上：它的请求循环（`serve`）只在 teamai 启动它时运行（`TEAMAI_RUNTIME_PROTOCOL=1`），不把这个变量传给它启动的进程，并让每个操作只结束一次。用它代替 toy 自己的循环，并去掉 toy 的测试选项，比如会杀掉启动它的进程的 `die_at`。
 
-把打包好的文件放在 teamai 查找运行时的位置，比如团队仓库中的 `runtimes/<name>/runtime`（[teamai 在哪里查找](workflow-advanced.md#驱动定义和步骤运行时)），再在驱动定义中用 `use: <name>` 指定它。
+把打包好的文件放进一个运行时文件夹，比如团队仓库中的 `runtimes/<name>/runtime`，旁边放一个写有 `protocol: 1` 和 `entry: ./runtime` 的 `RUNTIME.yaml`（[teamai 在哪里查找](workflow-advanced.md#驱动定义和步骤运行时)），再在驱动定义中用 `use: <name>` 指定它。
 
-不运行命令的运行时（如 T3 和 Paseo 只运行提示）在该文件旁的 `package.json` 中声明：`{ "teamai": { "exec": false } }`，与其 `init` 的 `can.exec: false` 一致。这样，不需要 AI 工具的运行就不会启动它，其命令在本机运行。没有这项声明的运行时照常启动；你尚未接受的版本的团队运行时也照常启动。声明了 `exec: false` 而其 `init` 却提供命令能力的运行时，启动时会失败，并指出该文件。
+不运行命令的运行时（如 T3 和 Paseo 只运行提示）在它的 `RUNTIME.yaml` 中用 `exec: false` 声明，与其 `init` 的 `can.exec: false` 一致。这样，不需要 AI 工具的运行就不会启动它，其命令在本机运行。没有这项声明的运行时照常启动；你尚未接受的版本的团队运行时也照常启动。声明了 `exec: false` 而其 `init` 却提供命令能力的运行时，启动时会失败，并指出该文件。
 
 ## 用场景测试套件测试它
 

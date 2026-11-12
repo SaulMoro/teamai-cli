@@ -3,14 +3,14 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
+import { parseYaml } from '@teamai/shared/yaml';
 import { dir, worktree, daemon, behave, received, start, isEnd, isInit, ready, opened, cannotRun, notInstalled, promptRequest, useRuntimeSuite } from './testing/suite.js';
 
-/** The `exec` teamai's package manifest declares for runtime `name` (`teamai.runtimes.<name>`), which teamai reads without starting it. */
+/** The `exec` teamai's own runtime `name` declares in its marker (`runtimes/teamai-<name>.yaml`), which teamai reads without starting it. */
 function declaredExec(name: string): unknown {
-  const manifest = z.object({ teamai: z.object({ runtimes: z.record(z.string(), z.object({ exec: z.unknown() })) }) })
-    .parse(JSON.parse(fs.readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..', 'package.json'), 'utf8')));
+  const marker = z.object({ exec: z.unknown() }).parse(parseYaml(fs.readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..', 'runtimes', `teamai-${name}.yaml`), 'utf8')));
 
-  return manifest.teamai.runtimes[name]?.exec;
+  return marker.exec;
 }
 
 describe('teamai-runtime-paseo', () => {

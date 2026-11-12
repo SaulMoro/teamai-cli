@@ -1596,15 +1596,29 @@ runtimes:
 
 打分 pass 的评判在[回答限定提示的运行时](runtime-protocol.md#回答限定提示的运行时)上运行；没有这种运行时而定义列出了 `tools` 时，用本机的工具；两者都没有时，运行以 `confined_pending` 停下。teamai 自己的工作流换个名字复制后，不会留在本机。运行状态中每个步骤都以 `runtime` 记录它运行在哪个运行时上：其条目的 `use`；在 teamai 进程中运行的步骤，命令和回答记为 `host`，提示记为 `tools`。
 
-`use: tools` 按 `--driver local` 的方式，在本机的工具上运行提示步骤。`use: local` 是它的旧名字。其他名字都是外部程序，按下面的顺序查找：
+`use: tools` 按 `--driver local` 的方式，在本机的工具上运行提示步骤。`use: local` 是它的旧名字。其他名字都是外部程序，用文件 `runtimes/<name>.yaml` 声明，或用文件夹 `runtimes/<name>/` 存放它的 `RUNTIME.yaml` 和代码。teamai 按下面的顺序在每个位置先找完全相同的名字，再用同样的方式找 `teamai-<name>`：
 
 ```text
-~/.teamai/runtimes/<name>/runtime          你自己的
-runtimes/<name>/runtime                    团队仓库，或 runtimes/<namespace>/<name>/runtime
-teamai-runtime-<name>                      先找 teamai 包里自带的，再找 PATH
+~/.teamai/runtimes/<name>.yaml 或 <name>/RUNTIME.yaml   你自己的
+runtimes/<name>.yaml 或 <name>/RUNTIME.yaml             团队仓库，以及每个生效命名空间的 runtimes/<namespace>/
+runtimes/teamai-<name>.yaml                              teamai 自带的，在它的包里
+teamai-runtime-<name>                                    PATH 上的
 ```
 
-团队运行时的文件夹必须是团队仓库中、不含任何链接的文件夹，这样你接受的修订就是它运行的全部内容：本身是链接或含有链接的文件夹以 `runtime_not_found` 失败。
+```yaml
+# runtimes/acme/RUNTIME.yaml，放在运行时代码旁边
+protocol: 1                          # 它使用的运行时协议
+entry: ./runtime                     # teamai 启动的、文件夹里的文件
+exec: false                          # 可选：它不运行命令，所以不需要 AI 工具的运行不会启动它
+```
+
+```yaml
+# runtimes/acme.yaml：单独安装的运行时
+protocol: 1
+entry: { command: acme-runtime }     # PATH 上的可执行文件，只写名字
+```
+
+团队文件夹在你接受它的修订后运行，团队文件在你接受文件内容后运行，和工具实例的命令一样。你自己的和 teamai 的不需要接受。团队运行时的文件夹必须是团队仓库中、不含任何链接的文件夹，这样你接受的修订就是它运行的全部内容：本身是链接或含有链接的文件夹，或者 `runtimes` 文件夹本身是链接，都以 `runtime_not_found` 失败。
 
 teamai 自带这些定义：
 

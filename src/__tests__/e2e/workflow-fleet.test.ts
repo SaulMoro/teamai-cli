@@ -11,7 +11,7 @@ import path from 'node:path';
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { stringify } from 'yaml';
 import { CLAUDE_SESSIONS, CLI, fakeTool } from '../helpers/step-runtime-e2e.js';
-import { TOY_RUNTIME } from '../helpers/toy-runtime.js';
+import { installToyRuntime } from '../helpers/toy-runtime.js';
 import { REPORTS_LOCK_FILENAME } from '../../types.js';
 
 const URL = 'https://github.com/acme/business.git';
@@ -468,8 +468,7 @@ describe('the fleet', () => {
     fs.writeFileSync(config, `${fs.readFileSync(config, 'utf8')}workflows:\n  max_parallel: 4\n  drivers:\n    wake-fleet:\n      runtimes:\n        toy:\n          state: ${path.join(homeOf('alice'), 'toy-state')}\n          wake_log: ${wakeLog()}\n`);
     const toy = path.join(homeOf('alice'), '.teamai', 'runtimes', 'toy');
     fs.mkdirSync(toy, { recursive: true });
-    fs.copyFileSync(TOY_RUNTIME, path.join(toy, 'runtime'));
-    fs.chmodSync(path.join(toy, 'runtime'), 0o755);
+    installToyRuntime(toy);
   }, 180_000);
 
   afterEach(async () => {

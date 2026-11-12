@@ -909,6 +909,7 @@ steps:
     const config = await finishedSessionsFor('acme-team', {
       'drivers/acme-team.yaml': 'schemaVersion: v1alpha1\nname: acme-team\nruntimes:\n  - use: teamtoy\n',
       'runtimes/teamtoy/runtime': '#!/bin/sh\nexit 1\n',
+      'runtimes/teamtoy/RUNTIME.yaml': 'protocol: 1\nentry: ./runtime\n',
     });
 
     const drained = await drain();

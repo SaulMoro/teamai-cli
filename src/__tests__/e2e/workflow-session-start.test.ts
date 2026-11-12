@@ -12,7 +12,7 @@ import { stringify } from 'yaml';
 import { resolveProjectDataHome } from '../../config.js';
 import type { RunState } from '../../workflow/types.js';
 import { envelope, runCLI } from '../helpers/step-runtime-e2e.js';
-import { TOY_RUNTIME } from '../helpers/toy-runtime.js';
+import { installToyRuntime } from '../helpers/toy-runtime.js';
 
 describe('a workflow started from an app\'s agent session', () => {
   let sandbox: string;
@@ -62,8 +62,7 @@ describe('a workflow started from an app\'s agent session', () => {
     execFileSync('git', ['push', '-q', '-u', 'origin', 'main'], { cwd: repo });
     const runtimeDir = path.join(os.homedir(), '.teamai', 'runtimes', 'toy');
     fs.mkdirSync(runtimeDir, { recursive: true });
-    fs.copyFileSync(TOY_RUNTIME, path.join(runtimeDir, 'runtime'));
-    fs.chmodSync(path.join(runtimeDir, 'runtime'), 0o755);
+    installToyRuntime(runtimeDir);
     fs.mkdirSync(path.join(repo, '.teamai', 'workflows'), { recursive: true });
     writeFlow('review', `invoke: allow
 steps:

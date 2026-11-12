@@ -3,9 +3,7 @@ import path from 'node:path';
 import { z } from 'zod';
 import { loadLocalConfigForScope } from '../../config.js';
 import { shippedDriverFile } from '../../default-drivers.js';
-import { isSafeNamespaceSegment } from '../../manifest-schema.js';
-import { resolveNamespacedItems, type NamespaceCandidate } from '../../namespace-resolver.js';
-import { resolveResourceNamespaces, workflowNamespacesOf } from '../../resource-namespaces.js';
+import { workflowNamespacesOf } from '../../resource-namespaces.js';
 import { isSymlink, RESOURCE_LAYOUTS, Resources, type TeamTree } from '../../resources/resolver.js';
 import { getKnowledgeDir, getTeamaiHomeDir, type LocalConfig } from '../../types.js';
 import { JsonValueSchema } from '@teamai/shared/json';
@@ -101,6 +99,26 @@ export function personalDir(kind: keyof typeof PERSONAL_DIRS): string {
   return path.join(getTeamaiHomeDir(), PERSONAL_DIRS[kind]);
 }
 
+/**
+ * The member's own item `name` of `kind`, as a file `<name>.yaml` or a folder `<name>/` holding `marker`, in their own
+ * directory, which teamai reads and never writes; `duplicate` when both are there.
+ */
+export async function personalItem(kind: keyof typeof PERSONAL_DIRS, name: string, marker: string): Promise<{ kind: 'file'; file: string } | { kind: 'folder'; folder: string } | { kind: 'missing' } | { kind: 'duplicate'; file: string; folder: string }> {
+  const file = path.join(personalDir(kind), `${name}.yaml`);
+  const folder = path.join(personalDir(kind), name);
+
+  const [isFile, isFolder] = await Promise.all([
+    fs.stat(file).then((stat) => stat.isFile(), () => false),
+    fs.stat(path.join(folder, marker)).then((stat) => stat.isFile(), () => false),
+  ]);
+
+  if (isFile && isFolder) return { kind: 'duplicate', file, folder: `${folder}${path.sep}` };
+
+  if (isFile) return { kind: 'file', file };
+
+  return isFolder ? { kind: 'folder', folder } : { kind: 'missing' };
+}
+
 async function readText(file: string): Promise<string | undefined> {
   try {
     return await readRegularFileNoLink(file, 'utf8');
@@ -144,57 +162,6 @@ export function parseDriverDefinition(file: string, text: string): { ok: true; d
   return { ok: true, definition };
 }
 
-async function namespaceDirs(dir: string): Promise<string[]> {
-  try {
-    const entries = await fs.readdir(dir, { withFileTypes: true });
-
-    return entries.filter((entry) => entry.isDirectory() && !entry.isSymbolicLink() && !entry.name.startsWith('.') && isSafeNamespaceSegment(entry.name)).map((entry) => entry.name).sort();
-  } catch {
-    return [];
-  }
-}
-
-/**
- * The namespaces the member receives workflows from: the workflow namespaces their roles and projects activate,
- * or, with no manifest to filter by, every namespace directory `onDisk` holds. A manifest that cannot be read activates
- * none.
- */
-export async function activeWorkflowNamespaces(config: LocalConfig, onDisk: string[]): Promise<string[]> {
-  if (onDisk.length === 0) return [];
-  let active: Awaited<ReturnType<typeof resolveResourceNamespaces>>;
-
-  try {
-    active = await resolveResourceNamespaces(config);
-  } catch {
-    return [];
-  }
-
-  return active ? active.activeNamespaces.workflows ?? [] : onDisk;
-}
-
-/**
- * The one team item named `name` under `root` (`root/<name><suffix>`, or `root/<ns>/<name><suffix>` for an active
- * namespace), or the conflict of two active namespaces that both define it.
- */
-export async function teamItem(config: LocalConfig, root: string, name: string, suffix: string): Promise<{ kind: 'found'; at: string } | { kind: 'missing' } | { kind: 'conflict'; first: string; second: string }> {
-  const onDisk = await namespaceDirs(root);
-  const candidates: NamespaceCandidate<string>[] = [];
-
-  for (const namespace of [null, ...onDisk]) {
-    const at = namespace === null ? path.join(root, `${name}${suffix}`) : path.join(root, namespace, `${name}${suffix}`);
-
-    if (await fs.lstat(at).then(() => true, () => false)) candidates.push({ name, source: path.relative(path.dirname(root), at), namespace, value: at });
-  }
-
-  if (candidates.length === 0) return { kind: 'missing' };
-  const resolution = resolveNamespacedItems(candidates, await activeWorkflowNamespaces(config, onDisk));
-
-  if (resolution.kind === 'conflict') return { kind: 'conflict', first: resolution.first.source, second: resolution.second.source };
-  const [item] = resolution.items;
-
-  return item ? { kind: 'found', at: item.value } : { kind: 'missing' };
-}
-
 type Lookup = { kind: 'found'; driver: ResolvedDriver } | { kind: 'missing' } | { kind: 'failed'; failure: WorkflowFailure };
 
 async function read(file: string, source: DefinitionSource, config: LocalConfig): Promise<Lookup> {
@@ -206,8 +173,11 @@ async function read(file: string, source: DefinitionSource, config: LocalConfig)
   return parsed.ok ? { kind: 'found', driver: { name: parsed.definition.name, definition: parsed.definition, source, file, config } } : { kind: 'failed', failure: parsed.failure };
 }
 
-/** The definitions of `config`'s team tree, as the resolver reads them: the root's, and those of each namespace active for the member. */
-function teamDrivers(config: LocalConfig): TeamTree {
+/**
+ * `config`'s team tree as the resolver reads drivers, runtimes and sandboxes from it: the root, and each namespace active
+ * for the member's workflows.
+ */
+export function teamTreeOf(config: LocalConfig): TeamTree {
   return { root: getKnowledgeDir(config), namespaces: () => workflowNamespacesOf(config) };
 }
 
@@ -216,7 +186,7 @@ function teamDrivers(config: LocalConfig): TeamTree {
  * it; or `linked` when the tree's `drivers` folder is a link, whose definitions are not the team repo's.
  */
 async function teamDefinition(config: LocalConfig, name: string): Promise<{ kind: 'found'; file: string } | { kind: 'missing' } | { kind: 'conflict'; first: string; second: string } | { kind: 'linked' }> {
-  const tree = teamDrivers(config);
+  const tree = teamTreeOf(config);
 
   if (await isSymlink(path.join(tree.root, RESOURCE_LAYOUTS.drivers.dir))) return { kind: 'linked' };
   const resolution = await Resources.resolve(RESOURCE_LAYOUTS.drivers, name, { team: tree });

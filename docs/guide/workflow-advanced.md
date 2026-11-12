@@ -1602,15 +1602,29 @@ runtimes:
 
 A scored pass's judge runs on a runtime that [answers confined prompts](runtime-protocol.md#a-runtime-that-answers-confined-prompts), else, when the definition lists `tools`, on this machine's tools; with neither, the run stops `confined_pending`. A copy of teamai's own workflows under another name is not kept on this machine. Each step's state in the run records the runtime it ran on as `runtime`: the `use` of its entry, or, for a step in teamai's process, `host` for a command or an answer and `tools` for a prompt.
 
-`use: tools` runs prompt steps on this machine's tools, the way `--driver local` does. `use: local` is its old name. Any other name is an external program, found in this order:
+`use: tools` runs prompt steps on this machine's tools, the way `--driver local` does. `use: local` is its old name. Any other name is an external program, declared as a file `runtimes/<name>.yaml` or a folder `runtimes/<name>/` that holds its `RUNTIME.yaml` and its code. teamai looks for the exact name in each place, in this order, then for `teamai-<name>` the same way:
 
 ```text
-~/.teamai/runtimes/<name>/runtime          yours
-runtimes/<name>/runtime                    team repo, or runtimes/<namespace>/<name>/runtime
-teamai-runtime-<name>                      shipped in teamai's package, then on PATH
+~/.teamai/runtimes/<name>.yaml, or <name>/RUNTIME.yaml   yours
+runtimes/<name>.yaml, or <name>/RUNTIME.yaml             team repo, and runtimes/<namespace>/ for each active namespace
+runtimes/teamai-<name>.yaml                              teamai's own, in its package
+teamai-runtime-<name>                                    on PATH
 ```
 
-A team runtime's folder must be a folder in the team repo that holds no link, so the revision you accept is all it runs: a folder that is a link, or holds one, fails `runtime_not_found`.
+```yaml
+# runtimes/acme/RUNTIME.yaml, beside the runtime's code
+protocol: 1                          # the runtime protocol it speaks
+entry: ./runtime                     # the file in the folder that teamai starts
+exec: false                          # optional: it runs no command, so a run that needs no AI tool does not start it
+```
+
+```yaml
+# runtimes/acme.yaml: a runtime installed apart
+protocol: 1
+entry: { command: acme-runtime }     # an executable on PATH, by its bare name
+```
+
+A team folder runs once you accept its revision, and a team file once you accept the file's content, as a tool instance's command. Yours and teamai's need no acceptance. A team runtime's folder must be a folder in the team repo that holds no link, so the revision you accept is all it runs: a folder that is a link, or holds one, or a `runtimes` folder that is a link, fails `runtime_not_found`.
 
 teamai ships these definitions:
 

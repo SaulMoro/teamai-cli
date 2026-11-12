@@ -10,7 +10,7 @@ import { parse as parseYaml } from 'yaml';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { z } from 'zod';
 import { benchmarkFixture, envelope, said, type BenchmarkFixture } from '../helpers/benchmark-fixture.js';
-import { TOY_RUNTIME } from '../helpers/toy-runtime.js';
+import { installToyRuntime } from '../helpers/toy-runtime.js';
 
 const workflow = (script: string, branch = 'teamai-reports'): string => `schemaVersion: v1alpha1
 name: ${branch === 'teamai-reports' ? 'publish-note' : 'publish-learning'}
@@ -86,8 +86,7 @@ fs.writeFileSync('stray.txt', 'not staged\\n');`);
     const state = path.join(fixture.root, 'toy-state-publish');
     // The member's own toy, which offers the team workspace too.
     fs.mkdirSync(path.join(fixture.home, '.teamai', 'runtimes', 'toy'), { recursive: true });
-    fs.copyFileSync(TOY_RUNTIME, path.join(fixture.home, '.teamai', 'runtimes', 'toy', 'runtime'));
-    fs.chmodSync(path.join(fixture.home, '.teamai', 'runtimes', 'toy', 'runtime'), 0o755);
+    installToyRuntime(path.join(fixture.home, '.teamai', 'runtimes', 'toy'));
     fs.mkdirSync(path.join(fixture.home, '.teamai', 'drivers'), { recursive: true });
     fs.writeFileSync(path.join(fixture.home, '.teamai', 'drivers', 'toyteam.yaml'), [
       'schemaVersion: v1alpha1', 'name: toyteam', 'runtimes:', '  - use: toy', '    options:',

@@ -17,7 +17,7 @@ import { errnoCode } from './utils/fs.js';
 import { log } from '@teamai/shared/log';
 import { warnOnce } from './utils/warn-once.js';
 
-const MARKED_TYPES = ['workflows', 'hooks', 'rules', 'mcp', 'benchmarks', 'scorers', 'agents'] as const;
+const MARKED_TYPES = ['workflows', 'hooks', 'rules', 'mcp', 'benchmarks', 'scorers', 'agents', 'runtimes'] as const;
 
 export type MarkedType = typeof MARKED_TYPES[number];
 
@@ -80,6 +80,11 @@ export const FOLDER_MARKERS = {
     marker: 'AGENT.md',
     supported: false,
     skipped: 'is an agent folder, which this teamai cannot read yet; it was skipped. Run teamai update.',
+  },
+  runtimes: {
+    kind: 'Runtime folder',
+    marker: 'RUNTIME.yaml',
+    supported: true,
   },
 } as const satisfies Readonly<Record<MarkedType, FolderMarker>>;
 

@@ -3,7 +3,8 @@ import os from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { parseDriverDefinition, resolveDriver } from '../workflow/runtimes/definitions.js';
-import { acceptRuntime, openDriver } from '../workflow/runtimes/sources.js';
+import { openDriver } from '../workflow/runtimes/sources.js';
+import { acceptRuntime, locateRuntime } from '../workflow/runtimes/locate.js';
 import { RESERVED_DRIVERS } from '../workflow/reserved-drivers.js';
 import { shippedDriverFile } from '../default-drivers.js';
 import { getTeamaiHomeDir, type LocalConfig } from '../types.js';
@@ -210,37 +211,46 @@ describe('the host driver, which teamai builds in', () => {
 });
 
 describe('a run that needs no AI tool and the runtimes that run no command', () => {
-  /** A team whose runtimes/agents/ holds a runtime, with `manifest` as its package.json when given, and a definition of it. */
-  function teamWithRuntime(manifest?: unknown): LocalConfig {
+  /** The marker of a runtime folder whose entry is ./runtime, with `exec` when given. */
+  const marker = (exec?: boolean): string => `protocol: 1\nentry: ./runtime\n${exec === undefined ? '' : `exec: ${exec}\n`}`;
+
+  /** A team whose runtimes/agents/ holds a runtime with `exec` in its marker when given, and a definition of it. */
+  function teamWithRuntime(exec?: boolean): LocalConfig {
     const team = teamWith([]);
     const dir = path.join(team.repo.localPath, 'runtimes', 'agents');
     fs.mkdirSync(dir, { recursive: true });
     fs.writeFileSync(path.join(dir, 'runtime'), 'not run: an unattended open refuses a revision no one accepted\n', { mode: 0o755 });
-    if (manifest !== undefined) fs.writeFileSync(path.join(dir, 'package.json'), JSON.stringify(manifest));
+    fs.writeFileSync(path.join(dir, 'RUNTIME.yaml'), marker(exec));
     fs.writeFileSync(path.join(team.repo.localPath, 'drivers', 'agents.yaml'), 'schemaVersion: v1alpha1\nname: agents\nruntimes:\n  - use: agents\n');
     return team;
   }
 
   const open = (config: LocalConfig, needsAiTool: boolean) => openDriver(config, 'agents', { personal: true, mode: 'unattended', canAsk: false, purpose: 'run', checkout: config.repo.localPath, needsAiTool });
 
-  it('does not open a team runtime whose manifest says it runs no command, for a run that needs no AI tool, once its revision is accepted here', async () => {
-    const team = teamWithRuntime({ teamai: { exec: false } });
-    const dir = path.join(team.repo.localPath, 'runtimes', 'agents');
-    const source = { kind: 'team' as const, name: 'agents', executable: path.join(dir, 'runtime'), dir, relative: 'runtimes/agents' };
-    expect(await acceptRuntime(source, { mode: 'attended', canAsk: true, ask: async () => true })).toEqual({ ok: true });
+  /** Accepts the team runtime `agents` of `team` at its revision, as a person at the terminal would. */
+  async function accept(team: LocalConfig): Promise<void> {
+    const resolved = await resolveDriver(team, 'agents', { personal: true });
+    if (!resolved.ok) throw new Error(resolved.failure.message);
+    const located = await locateRuntime(resolved.driver, 'agents');
+    if (!located.ok) throw new Error(located.failure.message);
+    expect(await acceptRuntime(located.source, { mode: 'attended', canAsk: true, ask: async () => true })).toEqual({ ok: true });
+  }
+
+  it('does not open a team runtime whose marker says it runs no command, for a run that needs no AI tool, once its revision is accepted here', async () => {
+    const team = teamWithRuntime(false);
+    await accept(team);
 
     expect(await open(team, false)).toMatchObject({ ok: true, opened: { runtimes: [] } });
   });
 
-  it('reads no declaration through a link, whose target the accepted revision does not hold', async () => {
+  it('refuses a team runtime whose marker is a link, whose target the accepted revision does not hold', async () => {
     const team = teamWithRuntime();
     const dir = path.join(team.repo.localPath, 'runtimes', 'agents');
-    fs.writeFileSync(path.join(team.repo.localPath, 'facts.json'), JSON.stringify({ teamai: { exec: false } }));
-    fs.symlinkSync(path.join(team.repo.localPath, 'facts.json'), path.join(dir, 'package.json'));
-    const source = { kind: 'team' as const, name: 'agents', executable: path.join(dir, 'runtime'), dir, relative: 'runtimes/agents' };
-    expect(await acceptRuntime(source, { mode: 'attended', canAsk: true, ask: async () => true })).toEqual({ ok: true });
+    fs.writeFileSync(path.join(team.repo.localPath, 'facts.yaml'), marker(false));
+    fs.rmSync(path.join(dir, 'RUNTIME.yaml'));
+    fs.symlinkSync(path.join(team.repo.localPath, 'facts.yaml'), path.join(dir, 'RUNTIME.yaml'));
 
-    expect(await open(team, false)).not.toMatchObject({ ok: true, opened: { runtimes: [] } });
+    expect(await open(team, false)).toMatchObject({ ok: false, failure: { code: 'runtime_not_found', message: expect.stringContaining('holds the link RUNTIME.yaml') } });
   });
 
   it('refuses a team runtime whose folder holds a link, since the revision a member accepts would not hold what it names', async () => {
@@ -265,7 +275,7 @@ describe('a run that needs no AI tool and the runtimes that run no command', () 
     const outside = fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-runtime-outside-'));
     dirs.push(outside);
     fs.writeFileSync(path.join(outside, 'runtime'), 'not run\n', { mode: 0o755 });
-    fs.writeFileSync(path.join(outside, 'package.json'), JSON.stringify({ teamai: { exec: false } }));
+    fs.writeFileSync(path.join(outside, 'RUNTIME.yaml'), marker(false));
     fs.mkdirSync(path.join(team.repo.localPath, 'runtimes'));
     fs.symlinkSync(outside, path.join(team.repo.localPath, 'runtimes', 'agents'));
     fs.writeFileSync(path.join(team.repo.localPath, 'drivers', 'agents.yaml'), 'schemaVersion: v1alpha1\nname: agents\nruntimes:\n  - use: agents\n');
@@ -285,7 +295,7 @@ describe('a run that needs no AI tool and the runtimes that run no command', () 
     dirs.push(outside);
     fs.mkdirSync(path.join(outside, 'agents'));
     fs.writeFileSync(path.join(outside, 'agents', 'runtime'), 'not run\n', { mode: 0o755 });
-    fs.writeFileSync(path.join(outside, 'agents', 'package.json'), JSON.stringify({ teamai: { exec: false } }));
+    fs.writeFileSync(path.join(outside, 'agents', 'RUNTIME.yaml'), marker(false));
     fs.symlinkSync(outside, path.join(team.repo.localPath, 'runtimes'));
     fs.writeFileSync(path.join(team.repo.localPath, 'drivers', 'agents.yaml'), 'schemaVersion: v1alpha1\nname: agents\nruntimes:\n  - use: agents\n');
 
@@ -293,20 +303,18 @@ describe('a run that needs no AI tool and the runtimes that run no command', () 
       ok: false,
       failure: {
         code: 'runtime_not_found',
-        message: 'Driver "agents" uses runtime "agents", whose folder runtimes/agents in the team repo is reached through the link runtimes, and teamai runs a team runtime only from a folder the team repo holds. Replace the link with the folder, push it, run teamai pull, and start again.',
+        message: 'Driver "agents" uses runtime "agents", and runtimes in the team repo is a link, and teamai runs a team runtime only from a folder the team repo holds. Replace the link with the folder, push it, run teamai pull, and start again.',
       },
     });
   });
 
-  it('opens it for a run that needs an AI tool or before its revision is accepted, and opens a team runtime whose manifest does not say, or says it runs commands', async () => {
+  it('opens it for a run that needs an AI tool or before its revision is accepted, and opens a team runtime whose marker does not say, or says it runs commands', async () => {
     const unaccepted = { ok: false, failure: { code: 'runtime_not_accepted' } };
 
-    expect(await open(teamWithRuntime({ teamai: { exec: false } }), true)).toMatchObject(unaccepted);
+    expect(await open(teamWithRuntime(false), true)).toMatchObject(unaccepted);
     // What a revision no one accepted declares decides nothing, so it cannot move the commands to the host slot.
-    expect(await open(teamWithRuntime({ teamai: { exec: false } }), false)).toMatchObject(unaccepted);
+    expect(await open(teamWithRuntime(false), false)).toMatchObject(unaccepted);
     expect(await open(teamWithRuntime(), false)).toMatchObject(unaccepted);
-    expect(await open(teamWithRuntime({ name: 'agents' }), false)).toMatchObject(unaccepted);
-    expect(await open(teamWithRuntime({ teamai: { exec: true } }), false)).toMatchObject(unaccepted);
-    expect(await open(teamWithRuntime({ teamai: { exec: 'no' } }), false)).toMatchObject(unaccepted);
+    expect(await open(teamWithRuntime(true), false)).toMatchObject(unaccepted);
   });
 });

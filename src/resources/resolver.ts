@@ -118,6 +118,7 @@ export const RESOURCE_LAYOUTS = {
   /** Names are paths at any depth (`Resources.walk`): `rules/fe/style.md` and `rules/fe/style/RULE.md` are `fe/style`. */
   rules: { dir: 'rules', marker: FOLDER_MARKERS.rules.marker, fileName: (file: string) => (file.endsWith('.md') ? file.slice(0, -'.md'.length) : null) },
   drivers: { dir: 'drivers', marker: null, fileName: (file: string) => (file.endsWith('.yaml') ? file.slice(0, -'.yaml'.length) : null) },
+  runtimes: { dir: 'runtimes', marker: FOLDER_MARKERS.runtimes.marker, fileName: (file: string) => (file.endsWith('.yaml') ? file.slice(0, -'.yaml'.length) : null) },
   tools: { dir: 'tools', marker: null, fileName: (file: string) => (file.endsWith('.yaml') ? file.slice(0, -'.yaml'.length) : null) },
 } as const satisfies Readonly<Record<string, ResourceLayout<unknown>>>;
 

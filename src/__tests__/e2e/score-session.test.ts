@@ -11,7 +11,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { z } from 'zod';
 import { encodeCwdClaude } from '@teamai/tool-core/sessions/fs';
 import { executableOf, LAUNCH_ORDER } from '../../launch-registry.js';
-import { TOY_RUNTIME } from '../helpers/toy-runtime.js';
+import { installToyRuntime } from '../helpers/toy-runtime.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
 const CLI = path.join(ROOT, 'dist', 'index.js');
@@ -400,8 +400,7 @@ console.log(JSON.stringify({ type: 'result', structured_output: given?.propertie
     const state = path.join(root, 'toy-state-share');
     // The member's own toy, which runs without acceptance, and answers the judge itself.
     fs.mkdirSync(path.join(home, '.teamai', 'runtimes', 'toy'), { recursive: true });
-    fs.copyFileSync(TOY_RUNTIME, path.join(home, '.teamai', 'runtimes', 'toy', 'runtime'));
-    fs.chmodSync(path.join(home, '.teamai', 'runtimes', 'toy', 'runtime'), 0o755);
+    installToyRuntime(path.join(home, '.teamai', 'runtimes', 'toy'));
     fs.mkdirSync(path.join(home, '.teamai', 'drivers'), { recursive: true });
     fs.writeFileSync(path.join(home, '.teamai', 'drivers', 'toyshare.yaml'), [
       'schemaVersion: v1alpha1', 'name: toyshare', 'tool: claude', 'runtimes:', '  - use: toy', '    options:',
@@ -455,8 +454,7 @@ console.log(JSON.stringify({ type: 'result', structured_output: given?.propertie
     const learning = path.join(root, 'learning-retries.md');
     fs.writeFileSync(learning, '# Retry flaky fetches\n\nWrap network calls in the retry helper.\n');
     fs.mkdirSync(path.join(home, '.teamai', 'runtimes', 'toy'), { recursive: true });
-    fs.copyFileSync(TOY_RUNTIME, path.join(home, '.teamai', 'runtimes', 'toy', 'runtime'));
-    fs.chmodSync(path.join(home, '.teamai', 'runtimes', 'toy', 'runtime'), 0o755);
+    installToyRuntime(path.join(home, '.teamai', 'runtimes', 'toy'));
     fs.mkdirSync(path.join(home, '.teamai', 'drivers'), { recursive: true });
     // A toy that runs commands, takes the interactive learning prompt, and answers the judge.
     const agent = { output: { learnings: [{ title: 'Retry flaky fetches', file: learning, namespace: '' }] } };

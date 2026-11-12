@@ -52,7 +52,7 @@ async function driverHere(config: LocalConfig, name: DriverName): Promise<Driver
   const resolved = await resolveDriver(config, name, { personal: true });
 
   if (!resolved.ok) return absent;
-  const { acceptRuntime, locateRuntime } = await import('./workflow/runtimes/sources.js');
+  const { acceptRuntime, locateRuntime } = await import('./workflow/runtimes/locate.js');
   let here: DriverHere = 'drives';
 
   for (const { use } of resolved.driver.definition.runtimes) {

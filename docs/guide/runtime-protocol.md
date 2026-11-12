@@ -17,9 +17,9 @@ You write it in the teamai repository, since the modules it uses are not publish
 
 The runtimes teamai ships are built on `@teamai/runtime-kit` instead: its request loop (`serve`) runs only when teamai started it (`TEAMAI_RUNTIME_PROTOCOL=1`), keeps that variable from the processes it starts, and ends each operation once. Use it rather than the toy's own loop, and drop the toy's test options, such as `die_at`, which kills the process that started it.
 
-Put the bundled file where teamai finds a runtime, such as `runtimes/<name>/runtime` in the team repo ([where teamai looks](workflow-advanced.md#driver-definitions-and-step-runtimes)), and name it in a driver definition with `use: <name>`.
+Put the bundled file in a runtime folder, such as `runtimes/<name>/runtime` in the team repo, beside a `RUNTIME.yaml` with `protocol: 1` and `entry: ./runtime` ([where teamai looks](workflow-advanced.md#driver-definitions-and-step-runtimes)), and name it in a driver definition with `use: <name>`.
 
-A runtime that runs no command, as T3 and Paseo run only prompts, says so in a `package.json` beside that file: `{ "teamai": { "exec": false } }`, matching the `can.exec: false` of its `init`. A run that needs no AI tool then never starts it, and its commands run on the host. A runtime that says nothing there is started, and so is a team runtime at a revision you have not accepted. A runtime that says `exec: false` while its `init` offers commands fails when it starts, naming the file.
+A runtime that runs no command, as T3 and Paseo run only prompts, says so in its `RUNTIME.yaml` with `exec: false`, matching the `can.exec: false` of its `init`. A run that needs no AI tool then never starts it, and its commands run on the host. A runtime that says nothing there is started, and so is a team runtime at a revision you have not accepted. A runtime that says `exec: false` while its `init` offers commands fails when it starts, naming the file.
 
 ## Test it against the scenario suite
 

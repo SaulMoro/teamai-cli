@@ -6,7 +6,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { resolveProjectDataHome } from '../../config.js';
 import type { RunState } from '../../workflow/types.js';
 import { hasPython, TYPED_TERMINAL } from '../helpers/in-terminal.js';
-import { TOY_RUNTIME } from '../helpers/toy-runtime.js';
+import { installToyRuntime, TOY_RUNTIME, TOY_RUNTIME_MARKER } from '../helpers/toy-runtime.js';
 import { attemptOf, CLAUDE_SESSIONS, CLI, CODEBUDDY_SESSIONS, envelope, fakeTool, runCLI, type Ran } from '../helpers/step-runtime-e2e.js';
 
 /** Whether `record`, an attempt's runtime.json, says the attempt ran in teamai's process. */
@@ -34,6 +34,7 @@ describe('workflow steps on a step runtime a driver definition chooses', () => {
     const dir = path.join(repo, '.teamai', 'runtimes', relative);
     fs.mkdirSync(dir, { recursive: true });
     fs.writeFileSync(path.join(dir, 'runtime'), `#!/bin/sh\necho spawned >> "${spawns}"\nexec "${process.execPath}" "${TOY_RUNTIME}" "$@"\n`, { mode: 0o755 });
+    fs.writeFileSync(path.join(dir, 'RUNTIME.yaml'), TOY_RUNTIME_MARKER);
     return dir;
   };
 
@@ -89,8 +90,7 @@ describe('workflow steps on a step runtime a driver definition chooses', () => {
     // The toy is the member's own runtime here, which runs without acceptance.
     const runtimeDir = path.join(os.homedir(), '.teamai', 'runtimes', 'toy');
     fs.mkdirSync(runtimeDir, { recursive: true });
-    fs.copyFileSync(TOY_RUNTIME, path.join(runtimeDir, 'runtime'));
-    fs.chmodSync(path.join(runtimeDir, 'runtime'), 0o755);
+    installToyRuntime(runtimeDir);
     const workflows = path.join(repo, '.teamai', 'workflows');
     fs.mkdirSync(workflows, { recursive: true });
     fs.writeFileSync(path.join(workflows, 'toyflow.yaml'), `schemaVersion: v1alpha1
