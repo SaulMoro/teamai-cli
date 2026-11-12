@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { judgeRemote, parseReapArgs, vercelSignIn } from './reap.js';
+import { judgeRemote, parseReapArgs, reportRemote, vercelSignIn } from './reap.js';
 import type { WorldTies } from './leftovers.js';
 
 const SELF: WorldTies = { runId: '20261112T120000-aaaaaa', paths: [], journals: ['0123456789abcdef'], runs: ['r00000000000000aa'] };
@@ -30,6 +30,20 @@ describe('reap', () => {
       ['teamai-1111111111111111-warm-42-abc', 'ambiguous', true, true],
       ['teamai-2222222222222222-r00000000000000aa-a00000002', 'own', true, true],
     ]);
+  });
+
+  it('exits 1 while any teamai sandbox it lists is alive, whoever it may belong to, and names whose each one is', () => {
+    expect(reportRemote(judgeRemote({ listed: LISTED, self: undefined, others: [OTHER], named: [] }))).toEqual({
+      lines: [
+        "ALIVE vercel:teamai-0123456789abcdef-r00000000000000aa-a00000001 (teamai's, tied to no world here)",
+        "ended vercel:teamai-fedcba9876543210-r00000000000000bb-a00000001 (world 20261112T110000-bbbbbb's)",
+        "ALIVE vercel:teamai-1111111111111111-warm-42-abc (teamai's, tied to no world here)",
+        "ALIVE vercel:teamai-2222222222222222-r00000000000000aa-a00000002 (teamai's, tied to no world here)",
+      ],
+      exitCode: 1,
+    });
+    expect(reportRemote(judgeRemote({ listed: LISTED, self: SELF, others: [], named: ['someone-else'] })).lines.at(-1)).toBe('ALIVE vercel:someone-else (named here)');
+    expect(reportRemote(judgeRemote({ listed: LISTED.slice(1, 2), self: undefined, others: [OTHER], named: [] })).exitCode).toBe(0);
   });
 
   it('reads a Vercel sign-in from a token with its team and project, or an OIDC token, and names the variables when there is none', () => {

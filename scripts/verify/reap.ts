@@ -3,7 +3,7 @@
  * ledger judges a leftover, and deleted on `--delete` when they are a world's own or named on the command line. The
  * ledger never asks a remote service; this does.
  */
-import { VERCEL_AUTH_KEYS } from '../../packages/runtime-sandbox/src/options.js';
+import { VERCEL_AUTH } from '../../packages/runtime-sandbox/src/providers/vercel.js';
 import { z } from 'zod';
 import { attributeLeftover, tiesOnThisMachine, type Attribution, type WorldTies } from './leftovers.js';
 import { journalOfSbxName } from './leftovers/sbx.js';
@@ -27,14 +27,15 @@ export function parseReapArgs(args: readonly string[]): { ok: true; run: string 
 
 /** The Vercel sign-in `env` holds, as the sandbox runtime reads it, or the variables to set. */
 export function vercelSignIn(env: NodeJS.ProcessEnv): { ok: true; credentials: { token?: string; teamId?: string; projectId?: string } } | { ok: false; missing: string } {
-  const [token, teamId, projectId, oidc] = VERCEL_AUTH_KEYS.map((name) => env[name]);
+  const signIn: Partial<Record<(typeof VERCEL_AUTH)[number], string>> = env;
+  const { VERCEL_TOKEN: token, VERCEL_TEAM_ID: teamId, VERCEL_PROJECT_ID: projectId, VERCEL_OIDC_TOKEN: oidc } = signIn;
 
   if (token && teamId && projectId) return { ok: true, credentials: { token, teamId, projectId } };
 
   // The SDK reads an OIDC token from this process's environment itself.
   if (oidc) return { ok: true, credentials: {} };
 
-  return { ok: false, missing: `${VERCEL_AUTH_KEYS.slice(0, 2).join(', ')} and ${VERCEL_AUTH_KEYS[2] ?? ''}, or ${VERCEL_AUTH_KEYS[3] ?? ''}` };
+  return { ok: false, missing: 'VERCEL_TOKEN, VERCEL_TEAM_ID and VERCEL_PROJECT_ID, or VERCEL_OIDC_TOKEN' };
 }
 
 const ListedSchema = z.array(z.looseObject({ name: z.string(), status: z.string().optional(), tags: z.record(z.string(), z.string()).optional() }));
@@ -58,7 +59,7 @@ export function judgeRemote({ listed, self, others, named }: { listed: unknown; 
   });
 }
 
-/** Runs reap; answers its exit code: 1 while a sandbox of the world, or named, is alive. */
+/** Runs reap; answers its exit code: 1 while any sandbox it lists is alive. */
 export async function reap(args: readonly string[], loadWorld: (run: string) => World): Promise<number> {
   const parsed = parseReapArgs(args);
 
@@ -94,10 +95,37 @@ export async function reap(args: readonly string[], loadWorld: (run: string) => 
     found = await list();
   }
 
-  for (const sandbox of found) {
-    const whose = sandbox.attribution.kind === 'own' ? "this world's" : sandbox.attribution.kind === 'other_world' ? `world ${sandbox.attribution.runId}'s` : sandbox.attribution.kind === 'ambiguous' ? 'teamai\'s, tied to no world here' : 'named here';
-    console.log(`${sandbox.isAlive ? 'ALIVE' : 'ended'} vercel:${sandbox.name} (${whose})`);
-  }
+  const report = reportRemote(found);
 
-  return found.some((one) => one.isAlive && one.isDeletable) ? 1 : 0;
+  for (const line of report.lines) console.log(line);
+
+  return report.exitCode;
+}
+
+/** A line for each sandbox reap found, and reap's exit code. */
+export function reportRemote(found: ReturnType<typeof judgeRemote>) {
+  const lines = found.map((sandbox) => `${sandbox.isAlive ? 'ALIVE' : 'ended'} vercel:${sandbox.name} (${whose(sandbox.attribution)})`);
+
+  const exitCode: 0 | 1 = found.some((one) => one.isAlive) ? 1 : 0;
+
+  return { lines, exitCode };
+}
+
+function whose(attribution: Attribution): string {
+  switch (attribution.kind) {
+    case 'own':
+      return "this world's";
+    case 'other_world':
+      return `world ${attribution.runId}'s`;
+    case 'ambiguous':
+      return "teamai's, tied to no world here";
+    // Only a sandbox named on the command line can be tied to nothing teamai names.
+    case 'unrelated':
+      return 'named here';
+    default: {
+      const unhandled: never = attribution;
+
+      return unhandled;
+    }
+  }
 }

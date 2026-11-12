@@ -8,7 +8,8 @@ import os from 'node:os';
 import { z } from 'zod';
 import { collectEnvSecrets } from '@teamai/shared/redact';
 import { PASEO_COMMAND } from '../../packages/runtime-paseo/src/daemon/client.js';
-import { PROVIDER_COMMANDS, VERCEL_AUTH_KEYS } from '../../packages/runtime-sandbox/src/options.js';
+import { PROVIDER_COMMANDS } from '../../packages/runtime-sandbox/src/options.js';
+import { VERCEL_AUTH } from '../../packages/runtime-sandbox/src/providers/vercel.js';
 import { T3_COMMAND } from '../../packages/runtime-t3/src/t3-command.js';
 import { priceTokens } from '../../src/token-usage/pricing.js';
 import { TOOL_COMMANDS } from './world.js';
@@ -33,9 +34,9 @@ const PROVIDER_READINESS = {
   bwrap: () => (process.platform === 'linux' ? probe([PROVIDER_COMMANDS.bwrap, '--version']) : { ok: false, why: 'Linux only' }),
   seatbelt: () => (process.platform === 'darwin' && fs.existsSync(PROVIDER_COMMANDS.seatbelt) ? { ok: true, first: PROVIDER_COMMANDS.seatbelt, stdout: '' } : { ok: false, why: 'macOS only' }),
   vercel: () => {
-    const present = VERCEL_AUTH_KEYS.filter((name) => process.env[name]);
+    const present = VERCEL_AUTH.filter((name) => process.env[name]);
 
-    return present.length > 0 ? { ok: true, first: `key present: ${present.join(', ')}`, stdout: '' } : { ok: false, why: `no key: none of ${VERCEL_AUTH_KEYS.join(', ')} is set, and reap says UNVERIFIABLE` };
+    return present.length > 0 ? { ok: true, first: `key present: ${present.join(', ')}`, stdout: '' } : { ok: false, why: `no key: none of ${VERCEL_AUTH.join(', ')} is set, and reap says UNVERIFIABLE` };
   },
 } satisfies Record<keyof typeof PROVIDER_COMMANDS, () => ReturnType<typeof probe>>;
 
