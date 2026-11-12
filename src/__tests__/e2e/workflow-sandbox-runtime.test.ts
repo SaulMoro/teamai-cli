@@ -336,6 +336,7 @@ describe('sandbox profiles', () => {
     const [review] = state.steps;
     const attempt = review !== undefined && 'attempt' in review ? String(review.attempt) : '';
     const record = JSON.parse(fs.readFileSync(path.join(dataHome, 'workflows', 'runs', state.id, 'attempts', attempt, 'runtime.json'), 'utf8')) as unknown;
-    expect(record).toMatchObject({ sources: [{ runtime: 'teamai-sandbox', layer: 'teamai', sandbox: { profile: 'warmed', layer: 'team', location: 'sandboxes/warmed/', revision: await folderRevision(folder), provider: 'docker', enforces: { isolation: 'sandbox', tokens: true, max_turns: true } } }] });
+    // The image has no node, so no network filter keeps its steps from this machine: they are at worktree.
+    expect(record).toMatchObject({ sources: [{ runtime: 'teamai-sandbox', layer: 'teamai', sandbox: { profile: 'warmed', layer: 'team', location: 'sandboxes/warmed/', revision: await folderRevision(folder), provider: 'docker', enforces: { isolation: 'worktree', tokens: true, max_turns: true } } }] });
   });
 });
