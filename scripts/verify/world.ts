@@ -515,15 +515,15 @@ export function loadWorld(runId: string | undefined): World {
 
   if (!fs.existsSync(file)) throw new Error(`No world ${runId} under ${WORLDS_ROOT}. Make one with \`npm run verify:world\`.`);
 
-  let text: unknown;
+  let json: unknown;
 
   try {
-    text = JSON.parse(fs.readFileSync(file, 'utf8'));
+    json = JSON.parse(fs.readFileSync(file, 'utf8'));
   } catch (error) {
     throw new Error(`${file} cannot be read as JSON (${error instanceof Error ? error.message : String(error)}).`, { cause: error });
   }
 
-  const parsed = WorldSchema.safeParse(text);
+  const parsed = WorldSchema.safeParse(json);
 
   if (!parsed.success) {
     throw new Error(`${file} is not a world.json this harness reads (${z.prettifyError(parsed.error).replaceAll('\n', ' ')}), such as one an older harness wrote. Clean it up with the harness that made it, or remove ${path.dirname(file)}; make a new world with \`npm run verify:world\`.`);

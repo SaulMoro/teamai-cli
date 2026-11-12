@@ -1,8 +1,9 @@
 /**
  * The attempt places teamai's own records say an external step runtime still keeps open, under every HOME of the world,
- * and each sandboxed attempt whose environment no observer line read (observer.ts `attemptsObserved`). The record is the product's (`readAttemptPlacementAt`), read the way a cancel
- * reads it, and judged open by the predicate `teamai uninstall` refuses with (`isPlaceLeftOpen`): cleanup refuses while
- * one is open or unreadable, since the record it would remove is what closes the place.
+ * and each sandboxed attempt whose environment no observer line read (observer.ts `attemptsObserved`). The record is
+ * the product's (`readAttemptPlacementAt`), read the way a cancel reads it, and judged open by the predicate `teamai
+ * uninstall` refuses with (`isPlaceLeftOpen`): cleanup refuses while one is open or unreadable, since the record it
+ * would remove is what closes the place.
  */
 import path from 'node:path';
 import { isPlaceLeftOpen, readAttemptPlacementAt, type AttemptPlacement } from '../../../src/workflow/runtimes/attempt.js';
@@ -49,7 +50,7 @@ export const places: LeftoverKind = {
   title: 'open attempt place',
   onCleanup: {
     kind: 'refuse',
-    found: 'an attempt place of the world is still open, and its record, which cleanup would remove, is what closes it. Close each one as its line says, then run cleanup again',
+    found: 'an attempt place of the world is still open, or its record cannot be read, and that record, which cleanup would remove, is what closes it. Close each one as its line says, then run cleanup again',
     unseen: 'cleanup could not read every attempt record of the world, so a place may still be open. Fix what failed, then run cleanup again',
   },
   async observe({ world, records }) {

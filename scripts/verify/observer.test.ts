@@ -52,7 +52,7 @@ describe('the sandbox observer', () => {
     const world = worldIn();
     const observer = startObserver(world, { pass: new Map(), label: 'teamai workflow start', listed: dockerFailingExec(world) });
 
-    expect(await observer.stop()).toContain("[verify] observed docker:teamai-r1-a1: NOT OBSERVED, no step's environment could be read");
+    expect(await observer.stop()).toContain("[verify] observed docker:teamai-r1-a1: NOT OBSERVED, no step's environment could be read (exit 1)");
   });
 
   it.runIf(process.platform !== 'linux')("says a container member's bwrap steps go unread off Linux, where it reads no /proc", async () => {

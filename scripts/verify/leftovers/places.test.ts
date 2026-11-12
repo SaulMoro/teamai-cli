@@ -95,7 +95,7 @@ describe('cleanup while an attempt place is still open', () => {
     expect(cleanupPlan([{ onCleanup: places.onCleanup, observed: await places.observe(context([mine, bobs])) }])).toEqual({
       kind: 'refuse',
       refusals: [{
-        why: 'an attempt place of the world is still open, and its record, which cleanup would remove, is what closes it. Close each one as its line says, then run cleanup again',
+        why: 'an attempt place of the world is still open, or its record cannot be read, and that record, which cleanup would remove, is what closes it. Close each one as its line says, then run cleanup again',
         items: [
           `run r1 attempt a1's place on teamai-t3/t3 (thread-1), running: close it with \`npm run -s verify -- teamai ${RUN} workflow cancel r1\``,
           `run r1 attempt a1's place on teamai-t3/t3 (thread-1), running: close it with \`npm run -s verify -- teamai ${RUN}@bob workflow cancel r1\``,

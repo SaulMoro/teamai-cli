@@ -43,7 +43,10 @@ function attemptNamed(name: string): string | undefined {
   return parts[0] === 'teamai' && parts.length >= 3 && RUN_ID.test(runId) && ATTEMPT_ID.test(attempt) ? `${runId}/${attempt}` : undefined;
 }
 
-/** Whether the observer reads a provider's sandboxes: seatbelt has none to list, and vercel runs on another machine. A new provider fails the type check until it has a row. */
+/**
+ * Whether the observer reads a provider's sandboxes: seatbelt has none to list, and vercel runs on another machine. A
+ * new provider fails the type check until it has a row.
+ */
 const OBSERVER_READS = { docker: true, podman: true, sbx: true, bwrap: true, seatbelt: false, vercel: false } satisfies Record<keyof typeof PROVIDER_COMMANDS, boolean>;
 
 /** Whether the observer reads sandboxes of `provider`, as a record names it; one this harness does not know, it may. */
@@ -101,6 +104,8 @@ interface Seen {
   readonly what: string;
   read: number;
   names: Set<string>;
+  /** Why the last read of its environments failed, when one did. */
+  failed?: string;
 }
 
 /**
@@ -221,9 +226,10 @@ export function startObserver(world: World, { pass, label, listed = listedHere }
   // An engine down at one look is asked again at the next; one not installed, or whose `info` ran out of time, never again.
   const engines = new Map<(typeof CONTAINER_ENGINES)[number], 'up' | 'missing' | 'hung'>();
 
-  const judge = (key: string, what: string, environs: ReadonlyArray<ReadonlyMap<string, string>>): void => {
-    const entry = seen.get(key) ?? { what, read: 0, names: new Set<string>() };
-    seen.set(key, entry);
+  /** Judges `environs`, read from sandbox `what`, into what it showed over the command. */
+  const judgeEnvirons = (what: string, environs: ReadonlyArray<ReadonlyMap<string, string>>): Seen => {
+    const entry: Seen = seen.get(what) ?? { what, read: 0, names: new Set<string>() };
+    seen.set(what, entry);
 
     for (const env of environs) {
       entry.read += 1;
@@ -231,6 +237,15 @@ export function startObserver(world: World, { pass, label, listed = listedHere }
 
       if (verdict.kind === 'leak') for (const name of verdict.names) entry.names.add(name);
     }
+
+    return entry;
+  };
+
+  /** Judges what `ENVIRONS` answered in sandbox `what`, keeping why it failed when it did. */
+  const judge = (what: string, read: Listed): void => {
+    const entry = judgeEnvirons(what, read.kind === 'ran' ? environsOf(read.stdout) : []);
+
+    if (read.kind !== 'ran') entry.failed = read.kind === 'failed' ? read.why : 'its command is not installed here';
   };
 
   const containers = (): Promise<void[]> => Promise.all(CONTAINER_ENGINES.map(async (engine) => {
@@ -266,7 +281,7 @@ export function startObserver(world: World, { pass, label, listed = listedHere }
       if (id === '' || !owners.has(owner)) continue;
       const environs = await listed([command, 'exec', id, 'sh', '-c', ENVIRONS]);
 
-      judge(`${engine}:${name}`, `${engine}:${name}`, environs.kind === 'ran' ? environsOf(environs.stdout) : []);
+      judge(`${engine}:${name}`, environs);
     }
   }));
 
@@ -310,7 +325,7 @@ export function startObserver(world: World, { pass, label, listed = listedHere }
 
       const environs = await listed([PROVIDER_COMMANDS.sbx, 'exec', sandbox.name, 'sh', '-c', ENVIRONS]);
 
-      judge(`sbx:${sandbox.name}`, `sbx:${sandbox.name}`, environs.kind === 'ran' ? environsOf(environs.stdout) : []);
+      judge(`sbx:${sandbox.name}`, environs);
     }
   };
 
@@ -336,7 +351,7 @@ export function startObserver(world: World, { pass, label, listed = listedHere }
     for (const { bwrap, steps } of bwrapSteps(procs, [world.dir, world.tmp])) {
       for (const step of steps) {
         try {
-          judge(`bwrap:${bwrap}`, `bwrap:${bwrap}`, [parseEnviron(fs.readFileSync(`/proc/${step}/environ`, 'utf8'))]);
+          judgeEnvirons(`bwrap:${bwrap}`, [parseEnviron(fs.readFileSync(`/proc/${step}/environ`, 'utf8'))]);
         } catch {
           unobserved.add(`bwrap:${bwrap}'s environment, /proc/${step}/environ could not be read`);
         }
@@ -369,14 +384,14 @@ export function startObserver(world: World, { pass, label, listed = listedHere }
       await polling;
       await poll();
       const at = new Date().toISOString();
-      const records = [...seen.values()].map((entry) => ({ at, command: label, what: entry.what, read: entry.read, verdict: entry.names.size === 0 ? 'env ok' : 'ENV LEAK', names: [...entry.names].toSorted() }));
+      const records = [...seen.values()].map((entry) => ({ at, command: label, what: entry.what, read: entry.read, verdict: entry.names.size === 0 ? 'env ok' : 'ENV LEAK', names: [...entry.names].toSorted(), failed: entry.failed }));
 
       for (const [name, status] of notRunning) if (!seen.has(`sbx:${name}`)) unobserved.add(`sbx:${name}'s environment, sbx listed it as ${status}, and only a running one is asked`);
 
       if (records.length > 0) fs.appendFileSync(path.join(world.dir, OBSERVED_FILE), records.map((record) => `${JSON.stringify(record)}\n`).join(''));
 
       return [
-        ...records.map((record) => `[verify] observed ${record.what}: ${record.read === 0 ? "NOT OBSERVED, no step's environment could be read" : record.names.length === 0 ? 'env ok' : `ENV LEAK ${record.names.join(', ')}`}`),
+        ...records.map((record) => `[verify] observed ${record.what}: ${record.read === 0 ? `NOT OBSERVED, no step's environment could be read${record.failed === undefined ? '' : ` (${record.failed})`}` : record.names.length === 0 ? 'env ok' : `ENV LEAK ${record.names.join(', ')}`}`),
         ...[...unobserved].map((what) => `[verify] NOT OBSERVED: ${what}`),
         ...(sawSeatbelt ? ['[verify] seatbelt has no observer: the env check proves nothing for a seatbelt step'] : []),
         ...unreadable.map((file) => `[verify] ${file} is not YAML: a credential only it declares counts as undeclared`),
