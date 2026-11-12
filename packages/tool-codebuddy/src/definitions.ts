@@ -9,7 +9,7 @@ export const tools = {
   // `use_skill` (#1516). A manual slash command lands as `@command://name`
   // rather than `/name`, so the prompt form is that.
   codebuddy: {
-    home: { dir: '.codebuddy', moves: { by: [{ kind: 'env', name: 'CODEBUDDY_CONFIG_DIR', evidence: 'verified' }], defaultHomeLeftovers: true } },
+    home: { dir: '.codebuddy', stateFiles: ['.codebuddy.json'], moves: { by: [{ kind: 'env', name: 'CODEBUDDY_CONFIG_DIR', evidence: 'verified' }], defaultHomeLeftovers: true } },
     skillLoad: {
       calls: [{ name: 'Skill', evidence: 'verified' }, { name: 'skill', evidence: 'assumed' }, { name: 'use_skill', evidence: 'source' }],
       // The plugin lands a manual slash command as `@command://name` (#1516);

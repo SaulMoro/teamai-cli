@@ -14,6 +14,7 @@ import { defaultToolHome, envToolHome, toolHome } from '../../src/tool-home.js';
 import { detectToolRoot, RELOCATABLE_TOOLS, TeamaiConfigBaseSchema } from '../../src/types.js';
 import { MCP_SERVER_KEY } from '../../src/resources/mcp-format.js';
 import type { Home, ToolDescriptor } from '@teamai/tool-core/definition';
+import { isJsonObject, parseJson, type JsonValue } from '@teamai/shared/json';
 import { PERSONAL_DIRS } from '../../src/workflow/runtimes/layers.js';
 import { leftoversSection } from './leftovers.js';
 import { runOn, type Target } from './target.js';
@@ -253,28 +254,31 @@ const TOOL_STATE_FILES = new Map(TOOL_ORDER.flatMap((tool) => {
   return (home.stateFiles ?? []).map((file): [string, string | undefined] => [`home/${file}`, servers]);
 }));
 
-type Json = z.infer<ReturnType<typeof z.json>>;
+/**
+ * Whether `text`, the file at `entry`, is a tool's own state file (`home.stateFiles`) holding nothing of teamai's: no
+ * name of teamai, and no non-empty object under the key the tool's MCP servers sit under, at any depth, where a server
+ * teamai wrote would be. Text that is not JSON holds something of teamai's, as far as the ledger can tell.
+ */
+export function isToolOwnState(entry: string, text: string): boolean {
+  if (!TOOL_STATE_FILES.has(entry) || /teamai/i.test(text)) return false;
+  const servers = TOOL_STATE_FILES.get(entry);
 
-const JsonObject = z.record(z.string(), z.json());
-
-/** Whether the JSON `text` holds a non-empty `key` object anywhere, as a server teamai wrote would leave; text that is not JSON counts as holding one. */
-function holdsUnder(text: string, key: string): boolean {
-  let parsed: Json;
+  if (servers === undefined) return true;
+  let parsed: JsonValue;
 
   try {
-    parsed = z.json().parse(JSON.parse(text));
+    parsed = parseJson(text);
   } catch {
-    return true;
+    return false;
   }
 
-  const holds = (value: Json): boolean => {
+  const holds = (value: JsonValue): boolean => {
     if (Array.isArray(value)) return value.some(holds);
-    const object = JsonObject.safeParse(value);
 
-    return object.success && Object.entries(object.data).some(([name, inner]) => (name === key && Object.keys(JsonObject.safeParse(inner).data ?? {}).length > 0) || holds(inner));
+    return isJsonObject(value) && Object.entries(value).some(([name, inner]) => (name === servers && isJsonObject(inner) && Object.keys(inner).length > 0) || holds(inner));
   };
 
-  return holds(parsed);
+  return !holds(parsed);
 }
 
 /** A run's branch, which a run that succeeded keeps as its result (docs/guide/workflow.md, The branches a run leaves). */
@@ -430,10 +434,7 @@ async function reverseOf(world: World, place: LedgerPlace): Promise<{ leaks: str
     }
 
     // A tool writes its own state there whether teamai launched it or the member did: what teamai adds is its servers.
-    const servers = TOOL_STATE_FILES.get(entry);
-
-    if (change === 'left behind' && TOOL_STATE_FILES.has(entry) && /^[0-9a-f]{64}$/.test(after[entry] ?? '') && !namesTeamai(entry)
-      && (servers === undefined || !holdsUnder(fs.readFileSync(entryPath(place, entry), 'utf8'), servers))) {
+    if (change === 'left behind' && /^[0-9a-f]{64}$/.test(after[entry] ?? '') && isToolOwnState(entry, fs.readFileSync(entryPath(place, entry), 'utf8'))) {
       excuse("the tool's own state file, with no MCP server and nothing else of teamai's in it", entry);
       continue;
     }

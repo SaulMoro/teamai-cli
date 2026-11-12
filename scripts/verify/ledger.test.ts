@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { environmentNotes } from './ledger.js';
+import { environmentNotes, isToolOwnState } from './ledger.js';
 
 const roots: string[] = [];
 
@@ -21,5 +21,21 @@ describe("a ledger's section (d)", () => {
 
     expect(notes).toEqual(['commands got only: HOME, PATH', "@carol's commands got only: HOME, PATH, SECRET_VALUE_NAME"]);
     expect(notes.join('\n')).not.toContain('v4lue');
+  });
+});
+
+describe("a tool's own state file in a ledger's section (e)", () => {
+  it.each([
+    ['home/.claude.json', '{"numStartups":1,"projects":{"/w/project":{"allowedTools":[]}}}', true],
+    ['home/.claude.json', '{"mcpServers":{}}', true],
+    ['home/.claude.json', '{"mcpServers":{"docs":{"command":"node"}}}', false],
+    ['home/.claude.json', '{"projects":{"/w/project":{"mcpServers":{"docs":{"command":"node"}}}}}', false],
+    ['home/.claude.json', '{"hooks":"teamai hook"}', false],
+    ['home/.claude.json', 'not json', false],
+    ['home/.codebuddy.json', '{"numStartups":1}', true],
+    ['home/.codebuddy.json', '{"projects":{"/w/project":{"mcpServers":{"docs":{"command":"node"}}}}}', false],
+    ['home/.other.json', '{}', false],
+  ])('judges %s holding %s as the tool\'s own: %s', (entry, text, own) => {
+    expect(isToolOwnState(entry, text)).toBe(own);
   });
 });
