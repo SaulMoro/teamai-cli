@@ -643,6 +643,28 @@ describe('a member taking an attempt', () => {
     expect(record).toMatchObject({ state: 'finished', result: { exitCode: 0, to: expect.any(String) } });
   });
 
+  it('keeps the last lines a command printed on stdout that are not its outputs in its attempt\'s stdout.log on the member\'s machine, as the local driver does, and never in the record', async () => {
+    const command = 'echo built 3 files; echo done; echo written > "$MARK"';
+    const workflow = MARK.replace('command: echo written > "$MARK"', `command: ${command}`);
+    const info = vi.spyOn(log, 'info').mockImplementation(() => {});
+
+    try {
+      const { taken, record, bob } = await takeForged((forged) => {
+        forged.lease = { ...forged.lease, command } as typeof forged.lease;
+      }, undefined, workflow);
+      const run = RunIdSchema.parse(record?.run);
+      const kept = path.join(attemptDir(bob.config, run, ATTEMPT), 'stdout.log');
+
+      expect(taken).toMatchObject({ data: { ran: { step: 'write', exit_code: 0 } } });
+      expect({ text: fs.readFileSync(kept, 'utf8'), mode: fs.statSync(kept).mode & 0o777 }).toEqual({ text: 'built 3 files\ndone\n', mode: 0o600 });
+      expect(info).toHaveBeenCalledWith(`Step "write" printed text on stdout, which is not its outputs: its last lines are in ${kept}.`);
+      expect(record).toMatchObject({ state: 'finished', result: { exitCode: 0, stderr: '' } });
+      expect(record?.state === 'finished' && 'outputs' in record.result).toBe(false);
+    } finally {
+      info.mockRestore();
+    }
+  });
+
   it('gives the command a run folder of its own, the attempt\'s marker and the member\'s run mode, and leaves the run\'s folder an owner on the same home keeps', async () => {
     vi.stubEnv('TEAMAI_MODE', 'unattended');
     const seen = 'printf "%s\\n" "$TEAMAI_WORKFLOW_ATTEMPT" "$TEAMAI_MODE" "$TEAMAI_RUN_DIR" > seen.txt; test -d "$TEAMAI_RUN_DIR" && echo made > "$TEAMAI_RUN_DIR/handed.txt"';

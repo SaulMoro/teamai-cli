@@ -10,7 +10,6 @@ import { resolveRunMode, type RunMode } from '../../../launch-context.js';
 import type { LocalConfig, TeamaiConfig } from '../../../types.js';
 import { log, PROGRESS_STREAMS_ENV, streamOfLine, withoutStreamMarks } from '@teamai/shared/log';
 import { redact } from '@teamai/shared/redact';
-import { writeRegularFile } from '@teamai/shared/regular-file';
 import { openSessionArchive } from '../../../session-flow/archive.js';
 import { agentEvidence, attemptEnv } from '../../attempt-marker.js';
 import { continuedConversations, leaseNext, promptTool, type PersonHandoff, type ReportInput, type ToolFor } from '../../engine.js';
@@ -32,7 +31,7 @@ import { toolsLaunchDeps, type EngineOptions, type OpenedDriver } from '../../ru
 import { newOpId, type ExecAnswer, type ExecQuestion, type StepRuntime } from '@teamai/runtime-protocol/step-runtime';
 import { resumeOrPublish, retryCommand } from '../../runtimes/retry-command.js';
 import type { RuntimeOffer, SoleDriver } from '../../engine.js';
-import { attemptDir, AttemptIdSchema, attemptResultPath, attemptStdoutPath, readRun, RunIdSchema, runScratchDir, updateRun, withRunLock, type AttemptId, type RunId, type RunLock } from '../../store.js';
+import { attemptDir, AttemptIdSchema, attemptResultPath, keepAttemptStdout, readRun, RunIdSchema, runScratchDir, updateRun, withRunLock, type AttemptId, type RunId, type RunLock } from '../../store.js';
 import { abandonPlace, isSetupCutShort, placeLeaseOf, placeOf, placeRoot, preparePlace, refuseDirtyAdoptedCommand, releaseUnlaunchedPlace, runPlaceSetup, sweepClones } from '../../place/place.js';
 import { commandEnd, commandOutputs, managedReport, StartedRunSchema, unreadablePlace, type StartedRun } from '../../protocol.js';
 import { WholeEndSchema } from '../../whole-workflow.js';
@@ -370,22 +369,15 @@ async function stopLeftElsewhere({ config, run, attempt, runsOn, checkout }: { c
   return undefined;
 }
 
-/** How many of the last lines a command wrote to stdout, besides its outputs, its attempt keeps. */
-const STDOUT_LINES = 200;
-
 async function commandReport(config: LocalConfig, lock: RunLock, driver: DriverIdentity, lease: StagedLease, exited: GroupedCommandExit, secrets: Record<string, string>, onStdoutKept?: (file: string) => void): Promise<ReportBody> {
   const result = { ...exited, stderr: withoutStreamMarks(exited.stderr) };
   const end = lease.workflow ? wholeReport(result) : commandEnd(result);
   await AttemptResult.write(attemptResultPath(config, lock.run, lease.attempt), end.outputs !== undefined ? { output: end.outputs } : {}, secrets);
-  // A whole workflow answers on stdout, which is never text it printed. Masked whole, so a secret over lines is too.
-  const printed = !lease.workflow && end.outputs === undefined ? masked(result.stdout, secrets).split(/\r?\n/).filter((line) => line.trim() !== '').slice(-STDOUT_LINES) : [];
+  // A whole workflow answers on stdout, which is never text it printed.
   const attempt = AttemptIdSchema.safeParse(lease.attempt);
+  const kept = !lease.workflow && end.outputs === undefined && attempt.success ? await keepAttemptStdout(config, { run: lock.run, attempt: attempt.data, stdout: result.stdout, secrets }) : undefined;
 
-  if (printed.length > 0 && attempt.success) {
-    const file = attemptStdoutPath(config, lock.run, attempt.data);
-    await writeRegularFile(file, `${printed.join('\n')}\n`, { mode: 0o600 });
-    onStdoutKept?.(file);
-  }
+  if (kept !== undefined) onStdoutKept?.(kept);
 
   // What a command says as it runs goes to its stderr, so its stdout stays the step's outputs.
   const progress = result.stderr.split(/\r?\n/).filter((line) => line.trim() !== '').map((line) => masked(line, secrets));

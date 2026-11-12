@@ -5,7 +5,7 @@ import { z } from 'zod';
 import { DriverSchema } from '../driver-identity.js';
 import { writeFileAtomic, writeJsonAtomic } from '../utils/fs.js';
 import { resolveReal } from '../utils/path-safety.js';
-import { redactJson } from '@teamai/shared/redact';
+import { redact, redactJson } from '@teamai/shared/redact';
 import { getDataHome, type LocalConfig } from '../types.js';
 import type { JsonValue } from '@teamai/shared/json';
 import { acquireLock, releaseLock } from '../update.js';
@@ -13,7 +13,7 @@ import { ArchivedPassSchema, FailureSchema, ReleasedTokensSchema, SessionContinu
 import type { HandoffOwner } from './snapshot.js';
 import { uniqueOutcomes, WorkOutcomeSchema, type WorkOutcome } from '../outcomes.js';
 import type { DriveOptions, RunState } from './types.js';
-import { appendRegularFile, readRegularFile } from '@teamai/shared/regular-file';
+import { appendRegularFile, readRegularFile, writeRegularFile } from '@teamai/shared/regular-file';
 
 /**
  * Run ids: `r` + 16 hex digits. Records are a team-wide key on the reports
@@ -125,6 +125,24 @@ export function attemptOutDir(config: LocalConfig, run: RunId, attempt: AttemptI
  */
 export function attemptStdoutPath(config: LocalConfig, run: RunId, attempt: AttemptId): string {
   return path.join(attemptDir(config, run, attempt), 'stdout.log');
+}
+
+/** How many of the last lines a command wrote to stdout, besides its outputs, its attempt keeps. */
+const STDOUT_LINES = 200;
+
+/**
+ * Keeps the last non-empty lines of `stdout`, which a command step printed and which are not its outputs, in the
+ * attempt's `stdout.log` (mode 0600), masked whole with `secrets` so a secret over lines is too. Answers the file, or
+ * undefined when the command printed nothing.
+ */
+export async function keepAttemptStdout(config: LocalConfig, { run, attempt, stdout, secrets }: { run: RunId; attempt: AttemptId; stdout: string; secrets: Record<string, string> }): Promise<string | undefined> {
+  const printed = redact(stdout, { envSecrets: secrets, patterns: false }).split(/\r?\n/).filter((line) => line.trim() !== '').slice(-STDOUT_LINES);
+
+  if (printed.length === 0) return undefined;
+  const file = attemptStdoutPath(config, run, attempt);
+  await writeRegularFile(file, `${printed.join('\n')}\n`, { mode: 0o600 });
+
+  return file;
 }
 
 /** The name of an attempt's result file in its `out/` directory. */

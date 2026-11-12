@@ -41,7 +41,7 @@ import { z } from 'zod';
 import { commandOutputs } from '../protocol.js';
 import { parseStepPath } from '../step-path.js';
 import { attemptEnv } from '../attempt-marker.js';
-import { attemptDir, attemptOutDir, attemptResultPath, readRun, RunIdSchema, takeRunLock, type AttemptId, type RunId, type RunLock } from '../store.js';
+import { attemptDir, attemptOutDir, attemptResultPath, keepAttemptStdout, readRun, RunIdSchema, takeRunLock, type AttemptId, type RunId, type RunLock } from '../store.js';
 import { isWorkflowFile, stepWorkflow, workflowRunBy, type RunState, type WorkflowDefinition, type WorkflowEnvelope, type WorkflowFailure, type WorkflowStep } from '../types.js';
 import { envAdvice, envScopeOf, lackedLabels, lacksTool, mergeRequirements, requiredEnvKeys, type EnvScope, type InEffect, type TurnLimits } from '../requirements.js';
 import { launchToolFor, promptOfferOf, promptRuntimeOn, runPromptStep, type PromptOffer, type StagedLease } from '../steps/prompt.js';
@@ -578,7 +578,7 @@ async function runClaim(config: LocalConfig, { lock, claim, root, secrets, membe
       ? workflowRun(config, { claim, trusted: ready, place: place.workflow ?? { kind: 'here' }, work, from, secrets, ask: askOwner, ...(spent && { spent }) })
       : ready.kind === 'prompt'
       ? promptRun(config, { lock, claim, trusted: ready, place: place.prompt ?? { kind: 'here' }, work, root, secrets })
-      : commandRun(place.command?.kind === 'runtime'
+      : commandRun(config, { run, attempt, step: lease.step, secrets }, place.command?.kind === 'runtime'
         ? runtimeCommand(config, { run, attempt, place: place.command, work, runDir, command: ready.command, env: { ...providedEnv(ready.scoped), ...ready.env, ...marked }, unset: ready.scoped.scope?.withhold ?? [] })
         : startGroupedCommand({ command: ready.command, cwd: work, env: { ...ready.scoped.env, ...ready.env, ...marked }, detached: process.platform !== 'win32', group: dir }));
 
@@ -629,10 +629,17 @@ async function runClaim(config: LocalConfig, { lock, claim, root, secrets, membe
 /** A step the member runs: how it ended, as the record writes it, and how to stop it. */
 type StepRun = { exit: Promise<FleetResult>; stop: () => Promise<void> };
 
-/** A command the member runs, ending as the local loop reports a command: its exit code, the JSON its stdout held, and the start of its stderr. */
-function commandRun(command: GroupedCommand): StepRun {
-  const exit = command.exit.then((exited): FleetResult => {
+/**
+ * A command the member runs, ending as the local loop reports a command: its exit code, the JSON its stdout held, and
+ * the start of its stderr. What else it printed on stdout stays on this machine, in the attempt's stdout.log, as the
+ * local driver keeps it.
+ */
+function commandRun(config: LocalConfig, { run, attempt, step, secrets }: { run: RunId; attempt: AttemptId; step: string; secrets: Record<string, string> }, command: GroupedCommand): StepRun {
+  const exit = command.exit.then(async (exited): Promise<FleetResult> => {
     const outputs = commandOutputs(exited.stdout);
+    const kept = outputs === undefined ? await keepAttemptStdout(config, { run, attempt, stdout: exited.stdout, secrets }) : undefined;
+
+    if (kept !== undefined) log.info(`Step "${step}" printed text on stdout, which is not its outputs: its last lines are in ${kept}.`);
 
     return { exitCode: exited.exitCode, stderr: exited.stderr.trim().slice(0, 400), ...(outputs !== undefined && { outputs }) };
   });
