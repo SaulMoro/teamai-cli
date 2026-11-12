@@ -1172,6 +1172,24 @@ describe('a restarted member', () => {
     }
   }, 60_000);
 
+  it('keeps the claim and runs nothing of the step again when it cannot confirm the command its killed run left ended', async () => {
+    const { alice, bob, run, offered } = await offerSlow(60_000, { definition: AGAIN.replace('test -f left.txt && echo again > again.txt', 'echo again > again.txt'), command: 'echo again > again.txt' });
+    const claimed = await claimAttempt(bob.config, offered, await installOwner(bob.config));
+    if (!claimed.ok) throw new Error(claimed.error.message);
+    // A group another pid namespace started, as a member in a container restarted over the same data home leaves: no stop
+    // here can reach it or tell it ended.
+    fs.mkdirSync(attemptDir(bob.config, run, ATTEMPT), { recursive: true });
+    fs.writeFileSync(path.join(attemptDir(bob.config, run, ATTEMPT), 'group-424242.json'), JSON.stringify({ pid: 424242, spawnedAt: Date.now(), pidNamespace: 'pid:[1]' }));
+    const warn = vi.spyOn(log, 'warn').mockImplementation(() => undefined);
+    await readableReportsWorktree(bob.config);
+
+    const taken = await takeFleetAttempt(bob.config, { pool: 'default', repository: 'github.com/acme/business', root: bob.checkout, member: await installOwner(bob.config), secrets: {}, place: HERE });
+
+    expect(taken).toEqual({ data: { idle: { offered: 0 } } });
+    expect(warn).toHaveBeenCalledWith(expect.stringMatching(new RegExp(`Left attempt ${ATTEMPT} of run ${run}, which this member claimed before: .*process 424242.*teamai workflow resume --next --pool default`)));
+    expect(await recordOf(alice, run)).toMatchObject({ state: 'claimed' });
+  }, 60_000);
+
   it('runs the step again on its step runtime, once the place its killed run left there is closed', async () => {
     const { alice, bob, run, offered } = await offerSlow(60_000, { definition: AGAIN, command: 'test -f left.txt && echo again > again.txt' });
     const claimed = await claimAttempt(bob.config, offered, await installOwner(bob.config));

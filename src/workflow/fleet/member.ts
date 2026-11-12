@@ -349,7 +349,12 @@ async function finishLeftClaims(config: LocalConfig, records: FleetRecord[], { r
       // A member killed mid-step leaves its command's process group running, or its exec on a step runtime: nothing
       // else stops either. One that may still run keeps the claim, so no second copy of the step runs beside it. What ran
       // in its own process, such as a Codex judge, also left its login held: that is written back and released.
-      await stopLeftInProcess(config, record.run, record.attempt);
+      const stopped = await stopLeftInProcess(config, record.run, record.attempt);
+
+      if (stopped.kind !== 'ended' && stopped.left.length > 0) {
+        return { error: { code: 'runtime_lost', message: `teamai could not confirm that process ${stopped.left.join(', ')}, which its killed run of step "${record.lease.step}" started, ended, so the claim is kept and the step does not run again beside it. Once that process has ended, run teamai workflow resume --next --pool ${record.pool} again.` } };
+      }
+
       // A whole workflow's nested run leaves its steps' commands under attempts of its own, and its state running.
       const nestedRun = await endLeftNestedRun(config, record.run, record.attempt);
 
