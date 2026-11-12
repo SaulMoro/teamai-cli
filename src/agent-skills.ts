@@ -90,32 +90,16 @@ export async function buildClassifyContext(localConfig: LocalConfig): Promise<Cl
 }
 
 /**
- * Walk the team repo `skills/` directory, returning a map of
- * skill name → namespace. Flat skills get an empty namespace.
+ * The team repo's skills by name (`readTeamSkills`), each with its namespace;
+ * a root skill has none and wins over a namespace skill of its name.
  */
 export async function collectTeamRepoSkills(repoPath: string): Promise<Map<string, { namespace?: string }>> {
-  const teamSkillsDir = path.join(repoPath, 'skills');
   const result = new Map<string, { namespace?: string }>();
 
-  if (!await pathExists(teamSkillsDir)) return result;
+  const { readTeamSkills } = await import('./resources/skills.js');
 
-  const topDirs = await listDirs(teamSkillsDir);
-
-  for (const dir of topDirs) {
-    const dirPath = path.join(teamSkillsDir, dir);
-    const hasSkillMd = await pathExists(path.join(dirPath, 'SKILL.md'));
-
-    if (hasSkillMd) {
-      result.set(dir, {});
-    } else {
-      const subDirs = await listDirs(dirPath);
-
-      for (const subDir of subDirs) {
-        if (!result.has(subDir)) {
-          result.set(subDir, { namespace: dir });
-        }
-      }
-    }
+  for (const { name, namespace } of (await readTeamSkills(repoPath)).skills) {
+    if (!result.has(name)) result.set(name, namespace === undefined ? {} : { namespace });
   }
 
   return result;

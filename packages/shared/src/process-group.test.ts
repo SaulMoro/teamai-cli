@@ -12,9 +12,18 @@ const READS_PS = process.platform !== 'win32' && process.platform !== 'linux';
 
 afterEach(() => { vi.restoreAllMocks(); vi.unstubAllEnvs(); vi.useRealTimers(); });
 
+/**
+ * A child handle with pid `pid` that no process backs and no native handle holds. `new ChildProcess()` holds one that
+ * never spawned, whose real kill, once a test's spy is restored, signals pid 0: the whole process group of the test run.
+ */
+function unspawnedChild(pid: number): ChildProcess {
+  const child: ChildProcess = Object.create(ChildProcess.prototype);
+  Object.defineProperty(child, 'pid', { value: pid });
+  return child;
+}
+
 it('stops an attached child through child.kill without probing other PIDs', async () => {
-  const child = new ChildProcess();
-  Object.defineProperty(child, 'pid', { value: 2147483647 });
+  const child = unspawnedChild(2147483647);
   const kill = vi.spyOn(child, 'kill').mockReturnValue(false);
   const processKill = vi.spyOn(process, 'kill').mockReturnValue(true);
   expect(await stopProcess(child, Promise.resolve('closed'), false)()).toBe('closed');
@@ -22,12 +31,24 @@ it('stops an attached child through child.kill without probing other PIDs', asyn
   expect(processKill).not.toHaveBeenCalled();
 });
 
+it.each([false, true])('signals nothing for a child whose spawn failed, whose handle would signal pid 0, this process\'s whole group (detached: %s)', async (detached) => {
+  const child = spawn(path.join(os.tmpdir(), 'teamai-no-such-command'), [], { detached, stdio: 'ignore' });
+  const failed = new Promise<string>((resolve) => { child.once('error', (error) => resolve(z.object({ code: z.string() }).parse(error).code)); });
+  // Spied before the stop, so a regression reaches no process: Node's kill of this handle would send SIGTERM to pid 0.
+  const kill = vi.spyOn(child, 'kill').mockReturnValue(true);
+  const processKill = vi.spyOn(process, 'kill').mockReturnValue(true);
+
+  expect(await stopProcess(child, failed, detached)()).toBe('ENOENT');
+  expect(kill).not.toHaveBeenCalled();
+  expect(processKill).not.toHaveBeenCalled();
+});
+
 it('gives an attached child five seconds before SIGKILL and waits for its exit', async () => {
-  // No ps to list its descendants: the grace period counts on the faked clock, which a real ps answering would not.
+  // The read of its descendants (ps, which finds none on an empty PATH, or /proc on Linux) runs in real time before the
+  // SIGTERM; only the grace period after it counts on the faked clock.
   vi.stubEnv('PATH', '');
-  vi.useFakeTimers();
-  const child = new ChildProcess();
-  Object.defineProperty(child, 'pid', { value: 2147483647 });
+  vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+  const child = unspawnedChild(2147483647);
   const kill = vi.spyOn(child, 'kill').mockReturnValue(true);
   vi.spyOn(process, 'kill').mockReturnValue(true);
   let finish = (): void => {};
@@ -35,6 +56,7 @@ it('gives an attached child five seconds before SIGKILL and waits for its exit',
   const stop = stopProcess(child, exit, false);
   const stopping = stop();
   expect(stop()).toBe(stopping);
+  while (kill.mock.calls.length === 0) await new Promise((resolve) => { setImmediate(resolve); });
   await vi.advanceTimersByTimeAsync(4999);
   expect(kill.mock.calls).toEqual([['SIGTERM']]);
   await vi.advanceTimersByTimeAsync(1);
@@ -45,8 +67,7 @@ it('gives an attached child five seconds before SIGKILL and waits for its exit',
 
 it('finishes promptly when a signalled group disappears shortly after the shell exits', async () => {
   vi.useFakeTimers();
-  const child = new ChildProcess();
-  Object.defineProperty(child, 'pid', { value: 2147483647 });
+  const child = unspawnedChild(2147483647);
   let probes = 0;
   vi.spyOn(process, 'kill').mockImplementation((_pid, signal) => {
     if (signal === 0 && ++probes > 1) throw Object.assign(new Error('gone'), { code: 'ESRCH' });
@@ -62,8 +83,7 @@ it('finishes promptly when a signalled group disappears shortly after the shell 
 
 it('stops a detached group that outlives its child', async () => {
   vi.useFakeTimers();
-  const child = new ChildProcess();
-  Object.defineProperty(child, 'pid', { value: 2147483647 });
+  const child = unspawnedChild(2147483647);
   const kill = vi.spyOn(process, 'kill').mockReturnValue(true);
   const stopping = stopProcess(child, Promise.resolve('closed'), true)();
   await vi.advanceTimersByTimeAsync(5000);
@@ -94,8 +114,7 @@ it.runIf(READS_PS)('only escalates captured descendants with the same start time
   // On the real clock: the grace period runs out while ps, which runs off the event loop, answers in real time.
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-stop-'));
   const snapshot = path.join(directory, 'snapshot');
-  const child = new ChildProcess();
-  Object.defineProperty(child, 'pid', { value: 424242 });
+  const child = unspawnedChild(424242);
   const kill = vi.spyOn(child, 'kill').mockReturnValue(false);
   const processKill = vi.spyOn(process, 'kill').mockImplementation((_pid, signal) => {
     if (signal === 'SIGTERM') {
@@ -130,8 +149,7 @@ esac
 it.runIf(READS_PS)('escalates only the shell when the current process snapshot fails', async () => {
   // On the real clock: the grace period runs out while ps, which runs off the event loop, answers in real time.
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-stop-'));
-  const child = new ChildProcess();
-  Object.defineProperty(child, 'pid', { value: 424242 });
+  const child = unspawnedChild(424242);
   const kill = vi.spyOn(child, 'kill').mockReturnValue(true);
   const processKill = vi.spyOn(process, 'kill').mockReturnValue(true);
   try {
@@ -461,6 +479,12 @@ it.skipIf(process.platform === 'win32')('tells the process a record names from a
     expect(await isSameProcess({ pid, startedAt: spawnedAt - 3_600_000 })).toBe('other');
     expect(await isSameProcess({ pid })).toBe('unknown');
     expect(await isSameProcess({ pid: 2147483646 })).toBe('other');
+
+    // kill(0) reads this process's own group and kill(1) init, so neither is probed, and neither is a process teamai started.
+    const probe = vi.spyOn(process, 'kill');
+    expect(await isSameProcess({ pid: 0, spawnedAt })).toBe('other');
+    expect(await isSameProcess({ pid: 1, spawnedAt })).toBe('other');
+    expect(probe).not.toHaveBeenCalled();
   } finally {
     child.kill('SIGKILL');
   }

@@ -61,7 +61,7 @@ Loading a **resource** in stages. Its **context pointer** is always in context; 
 _Avoid_: lazy loading, on-demand context
 
 **Marker file**:
-The file whose presence makes a directory a **resource folder**: `SKILL.md`, `WORKFLOW.yaml`, `HOOK.yaml`, `RULE.md`, `MCP.yaml`, `SUITE.yaml`, `DRIVER.yaml`, `RUNTIME.yaml`, `SANDBOX.yaml`, `TOOL.yaml`.
+The file whose presence makes a directory a **resource folder**: `SKILL.md`, `WORKFLOW.yaml`, `HOOK.yaml`, `RULE.md`, `MCP.yaml`, `SUITE.yaml`, `AGENT.md`, `SCORER.md`, `DRIVER.yaml`, `RUNTIME.yaml`, `SANDBOX.yaml`, `TOOL.yaml`.
 _Avoid_: manifest, index file
 
 **Resource folder**:
@@ -81,7 +81,7 @@ Where a definition comes from. Resolution order: `teamai` (**teamai default**), 
 _Avoid_: level, source, scope (that is a **scope**)
 
 **teamai default**:
-A **resource** teamai ships, named `teamai-<name>`. A team replaces it with the same name at the **team root**. A **driver definition**, **step runtime** or **sandbox profile** looked up by name is taken by the exact name in every **layer** first, then as `teamai-<name>`, so a team's `t3` replaces `teamai-t3`. Short form: default, as in default workflow or default scorer.
+A **resource** teamai ships, named `teamai-<name>`. A team replaces it, or some of its files, with a folder of the same name at the **team root**. A **driver definition**, **step runtime** or **sandbox profile** looked up by name is taken by the exact name in every **layer** first, then as `teamai-<name>`, so a team's `t3` replaces `teamai-t3` whole. Short form: default, as in default workflow or default scorer.
 _Avoid_: built-in, shipped, preset
 
 **Team root**:
@@ -254,7 +254,7 @@ The time an **agent** is blocked on teamai: the foreground pass of a hook, or a 
 _Avoid_: latency, performance, overhead
 
 **Agent wait budget**:
-What a hook or a pull costs in **agent wait**, counted as the processes it starts and the files it writes, on its first run and on its second. The budget is those counts, never elapsed time; the time of each run is recorded beside them for reference only.
+What a hook or a pull costs in **agent wait**, counted as the processes it starts and the files it writes, on its first run and on its second. The budget is those counts, never elapsed time; the time of each run and the file system calls each Node process made are recorded beside them for reference only.
 _Avoid_: benchmark (that is `teamai benchmark`), perf test
 
 **Hook form**:

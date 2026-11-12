@@ -47,6 +47,7 @@ setInterval(() => {}, 1000);`], { stdio: ['ignore', 'pipe', 'ignore'] });
 
     await exited;
     await vi.waitFor(() => expect(tree.filter(alive)).toEqual([]), { timeout: 5_000, interval: 50 });
-    expect(reads).toHaveLength(1);
+    // The channel tells process-identity reads, not kills: taskkill /T ends the tree on Windows without listing it.
+    expect(reads).toHaveLength(process.platform === 'win32' ? 0 : 1);
   }, 15_000);
 });

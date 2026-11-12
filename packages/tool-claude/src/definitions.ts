@@ -12,7 +12,7 @@ export const tools = {
     },
     // Claude Code 2.1.319: `claude -p` reads a file outside the project with no permission denial once its directory
     // is in `permissions.additionalDirectories` of ~/.claude/settings.json, and is denied the read without it.
-    ruleFolders: { reach: 'grant', setting: 'permissions.additionalDirectories', evidence: 'verified' },
+    folderReach: { reach: 'grant', setting: 'permissions.additionalDirectories', evidence: 'verified' },
     blocks: {
       user: { channel: 'file', file: { in: 'claudemd' }, reads: [{ base: 'home', path: '.claude/CLAUDE.md', evidence: 'verified' }] },
       // CLAUDE.local.md would stop Claude's native AGENTS.md load (#945).
