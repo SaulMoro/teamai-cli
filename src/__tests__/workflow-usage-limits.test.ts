@@ -1,5 +1,9 @@
+import { execFileSync } from 'node:child_process';
 import { describe, expect, it } from 'vitest';
 import { UsageLimits } from '../workflow/usage-limits.js';
+import { runtimeStepEnv } from '../workflow/steps/runtime-steps.js';
+import { AttemptIdSchema, RunIdSchema } from '../workflow/store.js';
+import type { LocalConfig } from '../types.js';
 
 // 13:30 in Madrid, which is UTC+1 in November.
 const now = Date.parse('2026-11-08T12:30:00Z');
@@ -107,5 +111,29 @@ describe('usage limits of one drive', () => {
     limits.hit({ tool: 'claude', message, now: now + hour });
 
     expect(limits.whenIdle(now + hour, ['claude'])).toMatchObject({ kind: 'wait', until: now + hour + 60_000 });
+  });
+});
+
+describe('a reset time without a zone, printed on a step runtime', () => {
+  it('reads as the instant the limit resets when the runtime\'s own zone is not the member\'s', () => {
+    const member = Intl.DateTimeFormat().resolvedOptions().timeZone;
+    const wallOf = (zoned: string, at: number): string => new Intl.DateTimeFormat('en-US', { timeZone: zoned, hour: 'numeric', minute: 'numeric' }).format(at);
+    const at = Math.floor(Date.now() / 60_000) * 60_000;
+    // A container runs in a zone of its own, UTC unless told otherwise: here one whose clock is not the member's.
+    const runtimeZone = ['Asia/Tokyo', 'America/New_York'].find((each) => wallOf(each, at) !== wallOf(member, at))!;
+    const resetsAt = at + 2 * 3_600_000;
+    const config: LocalConfig = { repo: { localPath: '/team', remote: 'local', kind: 'self' }, username: 'tester', scope: 'project', additionalRoles: [], projectRoot: '/work', dataHome: '/data' };
+    const step = runtimeStepEnv({ attempt: AttemptIdSchema.parse('a0c1d2e3f') }, {}, { config, run: RunIdSchema.parse('r0c1d2e3f'), mode: 'unattended' });
+
+    // The tool prints its reset as Codex does, in the zone of the process the runtime starts with the step's env.
+    const printed = execFileSync(process.execPath, ['-e', [
+      'const at = new Date(Number(process.argv[1]));',
+      'const hour = at.getHours();',
+      "console.log(`try again at ${hour % 12 || 12}:${String(at.getMinutes()).padStart(2, '0')} ${hour < 12 ? 'AM' : 'PM'}`);",
+    ].join(' '), String(resetsAt)], { env: { PATH: process.env.PATH, TZ: runtimeZone, ...step.env }, encoding: 'utf8' }).trim();
+    const limits = UsageLimits.open();
+    limits.hit({ tool: 'codex', message: `You've hit your usage limit. Upgrade to Pro (https://chatgpt.com/explore/pro), or ${printed}.`, now: at });
+
+    expect(limits.whenIdle(at, ['codex'])).toMatchObject({ kind: 'wait', until: resetsAt });
   });
 });

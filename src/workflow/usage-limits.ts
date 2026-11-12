@@ -108,7 +108,7 @@ function resetOf(text: string, { now, zone }: { now: number; zone: string }): nu
   return nextWall({ now, zone: named ?? zone, hour: hourOf({ hour, meridiem }), minute: minute === undefined ? 0 : Number(minute), ...(date && { date }) });
 }
 
-/** The member's own time zone, which a tool's times without one are in. */
+/** The member's own time zone, which a tool's times without one are in: a step on a step runtime runs with it as `TZ`. */
 function memberZone(): string {
   return Intl.DateTimeFormat().resolvedOptions().timeZone;
 }
@@ -263,4 +263,6 @@ export const UsageLimits = {
   resetOf,
   /** The usage limits of one drive, empty, or as a driver kept them (`kept`). */
   open,
+  /** The zone a tool's time without one is read in. */
+  memberZone,
 } as const;
