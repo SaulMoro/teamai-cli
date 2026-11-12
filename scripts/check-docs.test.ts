@@ -4,6 +4,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
 import { afterEach, expect, it, vi } from 'vitest';
+import { z } from 'zod';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const command = path.join(ROOT, 'scripts/check-docs.mjs');
@@ -25,13 +26,17 @@ const DRIVER_CAN = 'src/workflow/requirements.ts';
 const LINT_RULES = 'oxlint-plugin-teamai/index.js';
 const LINT_README = 'oxlint-plugin-teamai/README.md';
 
+/** The folders of resources teamai ships, as its package.json `files` lists them, such as drivers/ and sandboxes/. */
+const SHIPPED_FOLDERS = z.object({ files: z.array(z.string()) }).parse(JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8'))).files
+  .filter((entry) => /^[\w-]+$/.test(entry) && fs.statSync(path.join(ROOT, entry), { throwIfNoEntry: false })?.isDirectory() === true);
+
 function checkout(): string {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-docs-command-'));
   dirs.push(root);
-  // The shipped driver definitions and sandbox profiles are checked against the guide blocks that show them.
+  // The shipped resources, such as driver definitions and sandbox profiles, are checked against the guide blocks that show them.
   // package.json's `bin` lists the runtimes teamai ships, whose options the guide examples are checked against.
   // workflow-engine.md names the keys DriverCan declares in requirements.ts, and the lint README each rule index.js registers.
-  for (const name of ['docs', 'skill-data', 'skills', 'drivers', 'sandboxes', 'package.json', 'AGENTS.md', '.github', TOOL_IDS, DRIVER_CAN, LINT_RULES, LINT_README, ...fs.readdirSync(ROOT).filter((file) => /^README.*\.md$/.test(file))]) {
+  for (const name of ['docs', ...SHIPPED_FOLDERS, 'package.json', 'AGENTS.md', '.github', TOOL_IDS, DRIVER_CAN, LINT_RULES, LINT_README, ...fs.readdirSync(ROOT).filter((file) => /^README.*\.md$/.test(file))]) {
     fs.cpSync(path.join(ROOT, name), path.join(root, name), { recursive: true });
   }
   return root;
