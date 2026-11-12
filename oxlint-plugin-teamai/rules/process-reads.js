@@ -22,11 +22,14 @@ function namesProcPath(text, node) {
 }
 
 /**
- * Whether a path is built or opened from `node`: it is an argument, or the start of a sum.
+ * Whether a path is built or opened from `node`: it is an argument, the start of a sum, or the head of a template
+ * that goes on with a path below it.
  * @param {ESTree.Node} node
  */
 function opensFrom(node) {
   const { parent } = node;
+
+  if (parent?.type === 'TemplateLiteral') return parent.expressions[0] === node && parent.quasis[0]?.value.cooked === '' && (parent.quasis[1]?.value.cooked ?? '').startsWith('/');
 
   return ((parent?.type === 'CallExpression' || parent?.type === 'NewExpression') && parent.arguments.some((argument) => argument === node)) || (parent?.type === 'BinaryExpression' && parent.operator === '+' && parent.left === node);
 }

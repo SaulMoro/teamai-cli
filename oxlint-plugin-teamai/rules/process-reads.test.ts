@@ -22,12 +22,12 @@ export const all = (pid: number) => [fs.readdirSync('/proc'), fs.readFileSync(pa
   expect(output.match(/Linux answers from \/proc where macOS runs ps/g)).toHaveLength(3);
 });
 
-rule.invalid('rejects /proc first held in a variable, then listed or joined', `import fs from 'node:fs';
+rule.invalid('rejects /proc first held in a variable, then listed, joined or put at the head of a template', `import fs from 'node:fs';
 import path from 'node:path';
-export const all = (pid: number) => [fs.readdirSync(PROC), fs.readFileSync(path.join(PROC, String(pid), 'stat'))];
+export const all = (pid: number) => [fs.readdirSync(PROC), fs.readFileSync(path.join(PROC, String(pid), 'stat')), fs.readFileSync(\`\${PROC}/\${pid}/stat\`)];
 const PROC = '/proc';
-export const mounts = ['--proc', PROC];`, (output) => {
-  expect(output.match(/Linux answers from \/proc where macOS runs ps/g)).toHaveLength(2);
+export const mounts = ['--proc', PROC, \`--bind=\${PROC}\`];`, (output) => {
+  expect(output.match(/Linux answers from \/proc where macOS runs ps/g)).toHaveLength(3);
 });
 
 rule.invalid('rejects a /proc read in a module that only imports the way to tell it', `import fs from 'node:fs';
