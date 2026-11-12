@@ -2,6 +2,7 @@ import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { socketPathOf } from '../../packages/runtime-sandbox/src/attempt-socket.js';
 import { REPO_ROOT, worldCommandNames, worldEnv, worldTmpDir } from './world.js';
@@ -57,9 +58,14 @@ describe('the basic world', () => {
   });
 
   it("loads no step runtime's modules beyond the command names it puts on PATH", () => {
-    const hook = `import { registerHooks } from 'node:module'; import fs from 'node:fs';
-      registerHooks({ resolve(specifier, context, next) { const resolved = next(specifier, context); fs.writeSync(2, 'LOADED ' + resolved.url + '\\n'); return resolved; } });`;
-    const ran = spawnSync(process.execPath, ['--import', `data:text/javascript,${encodeURIComponent(hook)}`, 'scripts/verify.mjs', 'help'], { cwd: REPO_ROOT, encoding: 'utf8' });
+    // module.register, not registerHooks, which Node 20 lacks. Hooks registered later run first, so this one goes after
+    // the TypeScript loader verify.mjs registers, which settles a relative import without asking the hooks before it.
+    const loader = `import fs from 'node:fs';
+      export async function resolve(specifier, context, next) { const resolved = await next(specifier, context); fs.writeSync(2, 'LOADED ' + resolved.url + '\\n'); return resolved; }`;
+    const hook = `import { register } from 'node:module';
+      register(${JSON.stringify(pathToFileURL(path.join(REPO_ROOT, 'scripts', 'typescript-loader.mjs')).href)});
+      register(${JSON.stringify(`data:text/javascript,${encodeURIComponent(loader)}`)});`;
+    const ran = spawnSync(process.execPath, ['--import', `data:text/javascript,${encodeURIComponent(hook)}`, 'scripts/verify/verify.ts', 'help'], { cwd: REPO_ROOT, encoding: 'utf8' });
     const runtimes = [...new Set(ran.stderr.split('\n').flatMap((line) => /^LOADED file:\/\/.*\/packages\/(runtime-(?!protocol\/)[^/]+\/src\/.+)$/.exec(line)?.[1] ?? []))];
 
     expect(ran.status).toBe(0);
