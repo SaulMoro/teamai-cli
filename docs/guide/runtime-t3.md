@@ -78,7 +78,7 @@ af508185-8908-4575-a1d0-f3c6f67cddec
   expires: 2026-12-05T18:57:31.647Z
 ```
 
-teamai keeps the credential in `~/.teamai/runtime-state/t3/credentials.json` (mode 0600). Later runs reuse it. When T3 expires it after 30 days, the next run signs in again the same way. To revoke it, run `t3 auth session revoke <id>`.
+teamai keeps the credential in `~/.teamai/runtime-state/t3/credentials.json` (mode 0600). Later runs reuse it. When T3 expires it after 30 days, the next run signs in again the same way. To revoke it, run `t3 auth session revoke <id>`. `teamai uninstall` removes the file but not the session in T3, so revoke it there too.
 
 teamai runs the first `t3` it finds: `$T3CODE_CLI_PATH` (T3 sets it in its own threads), then `t3` on your PATH, then `bin/t3` in T3's data directory (`~/.t3/bin/t3`, or under `$T3CODE_HOME`). If it finds none, or T3 refuses the code, the run opens T3's sign-in page instead, and prints its link in case no browser opens. Create a pairing code in T3 Code, pick **Auto** access (**Full access** when `runtime_mode` is `full-access`), enter the code and approve. The access you pick is the broadest mode a step thread can run in.
 

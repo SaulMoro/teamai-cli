@@ -78,7 +78,7 @@ af508185-8908-4575-a1d0-f3c6f67cddec
   expires: 2026-12-05T18:57:31.647Z
 ```
 
-teamai 把凭据保存在 `~/.teamai/runtime-state/t3/credentials.json`（权限 0600），之后的运行复用它。T3 在 30 天后让它过期，下一次运行会用同样的方式重新登录。要撤销它，运行 `t3 auth session revoke <id>`。
+teamai 把凭据保存在 `~/.teamai/runtime-state/t3/credentials.json`（权限 0600），之后的运行复用它。T3 在 30 天后让它过期，下一次运行会用同样的方式重新登录。要撤销它，运行 `t3 auth session revoke <id>`。`teamai uninstall` 会删除这个文件，但不会撤销 T3 中的会话，所以也要在 T3 中撤销它。
 
 teamai 运行它找到的第一个 `t3`：`$T3CODE_CLI_PATH`（T3 在自己的线程里设置它），然后是 PATH 上的 `t3`，然后是 T3 数据目录里的 `bin/t3`（`~/.t3/bin/t3`，或 `$T3CODE_HOME` 下的）。如果一个都找不到，或者 T3 拒绝了配对码，运行会改为打开 T3 的登录页面，并打印页面链接，以防浏览器没有打开。在 T3 Code 里创建一个配对码，选 **Auto** 权限（`runtime_mode` 为 `full-access` 时选 **Full access**），输入配对码并批准。你选的权限是步骤线程能运行的最宽模式。
 
