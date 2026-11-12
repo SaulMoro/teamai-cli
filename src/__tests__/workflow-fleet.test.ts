@@ -1042,6 +1042,24 @@ describe('cancelling an attempt through its record', () => {
     expect(await recordOf(alice, run)).toMatchObject({ state: 'finished', result: { exitCode: 0 } });
   }, 60_000);
 
+  it('stops its step when its record on teamai-reports is one a newer teamai wrote, which no later read of it parses', async () => {
+    const { alice, bob, run, startCommit } = await offerSlow(3_000, { definition: SLOW.replace('sleep 60', 'sleep 20'), command: 'echo begun > begun.txt; sleep 20' });
+    const taking = takeFleetAttempt(bob.config, { pool: 'default', repository: 'github.com/acme/business', root: bob.checkout, member: await installOwner(bob.config), secrets: {}, place: HERE });
+    const running = await eventually(async () => {
+      const record = await recordOf(alice, run);
+
+      return record?.state === 'claimed' && record.pushed !== startCommit ? record : undefined;
+    });
+    const rel = `workflows/attempts/${run}/${ATTEMPT}`;
+    await updateReports(alice.config, async (worktree) => {
+      fs.writeFileSync(path.join(worktree, `${rel}.json`), JSON.stringify({ ...running, write: 'newer', teamai: '9.1.0', critical: ['lease.command', 'lease.fresh'], lease: { ...running.lease, fresh: true } }));
+
+      return { value: undefined, write: { files: [`${rel}.json`], message: 'a record a newer teamai wrote' } };
+    });
+
+    expect(await taking).toMatchObject({ error: { code: 'state_moved', message: expect.stringContaining('teamai 9.1.0') } });
+  }, 60_000);
+
   it('runs nothing on the member\'s step runtime when the cancel comes while its place there opens', async () => {
     const { alice, bob, run } = await offerSlow(3_000);
     let execs = 0;

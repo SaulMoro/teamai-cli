@@ -558,8 +558,9 @@ async function runClaim(config: LocalConfig, { lock, claim, root, secrets, membe
     if (gone !== undefined || cancelling !== undefined) return;
     const now = await readAttemptRecord(config, run, attempt);
 
-    // A read that failed shows nothing of what landed: the next beat reads again.
-    if (!now.ok) return;
+    // A read that could not reach teamai-reports shows nothing of what landed: the next beat reads again. A record this
+    // teamai cannot parse, such as a newer teamai's, no later read parses either, so the step stops.
+    if (!now.ok && now.error.code === 'reports_unreachable') return;
     const record = now.ok && now.value !== 'absent' && 'member' in now.value && now.value.member.id === member.id ? now.value : undefined;
 
     if (record?.state === 'claimed' || record?.state === 'asking') {
@@ -595,7 +596,8 @@ async function runClaim(config: LocalConfig, { lock, claim, root, secrets, membe
     const progressed = await recordProgress(config, latest, pushed, question && { question, secrets });
 
     if (progressed.ok) latest = progressed.value;
-    else if (progressed.error.code === 'state_moved') await moved(progressed.error);
+    // A record it cannot parse is one another teamai wrote over its own, as a moved one is.
+    else if (progressed.error.code === 'state_moved' || progressed.error.code === 'fleet_record_newer' || progressed.error.code === 'fleet_record_unreadable') await moved(progressed.error);
     // A question the record cannot carry reaches nobody: the gate fails with why, and progress goes on without it.
     else if (progressed.error.code === 'fleet_unpublishable' && question !== undefined) gates.refuse(progressed.error.message);
   };
