@@ -61,11 +61,11 @@ describe("what a sandbox's environment may hold", () => {
     expect(JSON.stringify(judged)).not.toContain('tok-');
   });
 
-  it('takes a short host value for a leak only as a whole word, as the masking of logs does', () => {
-    const short = new Map([['FEATURE_FLAG', 'on']]);
+  it('takes a short value for a leak only under its own name: under another, a variable holds it by chance', () => {
+    const short = new Map([['FEATURE_FLAG', 'on'], ['DISABLE_TELEMETRY', '1']]);
 
-    expect(judgeSandboxEnv({ env: new Map([['HOSTNAME', 'container'], ['LANG', 'C.UTF-8']]), canary, secrets: short, declared: new Set() })).toEqual({ kind: 'ok' });
-    expect(judgeSandboxEnv({ env: new Map([['COPIED', 'on'], ['ARGS', '--mode on']]), canary, secrets: short, declared: new Set() })).toEqual({ kind: 'leak', names: ['ARGS', 'COPIED'] });
+    expect(judgeSandboxEnv({ env: new Map([['COPIED', 'on'], ['ARGS', '--mode on'], ['SHLVL', '1']]), canary, secrets: short, declared: new Set() })).toEqual({ kind: 'ok' });
+    expect(judgeSandboxEnv({ env: new Map([['FEATURE_FLAG', 'on'], ['DISABLE_TELEMETRY', '1']]), canary, secrets: short, declared: new Set(['FEATURE_FLAG']) })).toEqual({ kind: 'leak', names: ['DISABLE_TELEMETRY'] });
   });
 
   it("takes the credential names a driver definition's runtime options or a member's driver settings declare", () => {
