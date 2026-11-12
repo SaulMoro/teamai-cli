@@ -146,7 +146,7 @@ describe('a pull and the homes the env moves', () => {
 
   it('removes a staging folder a copy cut short left beside a skill, at once when its copy\'s process is gone, else an hour on, and keeps one its copy is still writing', async () => {
     const skills = path.join(home, '.config', 'opencode', 'skills');
-    const [stale, fresh, orphaned, writing, own] = ['.deploy.1a2b3c4d.staging', '.deploy.5e6f7a8b.staging', '.review.9c0d1e2f.staging', '.review.3a4b5c6d.staging', '.review.7e8f9a0b.staging']
+    const [stale, fresh, orphaned, writing, own, contained] = ['.deploy.1a2b3c4d.staging', '.deploy.5e6f7a8b.staging', '.review.9c0d1e2f.staging', '.review.3a4b5c6d.staging', '.review.7e8f9a0b.staging', '.review.1f2e3d4c.staging']
       .map((name) => path.join(skills, name));
     for (const left of [stale, fresh]) await fse.outputFile(path.join(left, 'SKILL.md'), 'Half copied.\n');
     const twoHoursAgo = new Date(Date.now() - 2 * 3_600_000);
@@ -166,6 +166,9 @@ describe('a pull and the homes the env moves', () => {
     // One this process copied into and could not remove, as on a Windows EBUSY: no copy of it writes there any more.
     await fse.outputJson(path.join(own, 'owner.json'), { ...await identityOf(process.pid), host: os.hostname() });
     await fse.outputFile(path.join(own, 'copy', 'SKILL.md'), 'Half copied.\n');
+    // This process's pid in another pid namespace, as a container on the host's network with this home writes it: another copy.
+    await fse.outputJson(path.join(contained, 'owner.json'), { pid: process.pid, pidNamespace: 'pid:[4026532999]', startedAt: new Date().toISOString(), host: os.hostname() });
+    await fse.outputFile(path.join(contained, 'copy', 'SKILL.md'), 'Half copied.\n');
 
     await pull({});
 
@@ -174,6 +177,7 @@ describe('a pull and the homes the env moves', () => {
     expect(await fse.pathExists(orphaned)).toBe(false);
     expect(await fse.pathExists(writing)).toBe(true);
     expect(await fse.pathExists(own)).toBe(false);
+    expect(await fse.pathExists(contained)).toBe(true);
     expect(await fse.readFile(path.join(skills, 'deploy', 'SKILL.md'), 'utf8')).toContain('Deploy.');
   });
 

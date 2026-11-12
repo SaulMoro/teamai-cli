@@ -528,7 +528,11 @@ async function copierOf(staging: string): Promise<'copying' | 'gone' | 'unknown'
   // A pid another host recorded, as a container sharing the home does, names nothing here.
   if (!owner.success || owner.data.host !== os.hostname()) return 'untold';
 
-  if (owner.data.pid === process.pid) return copyingNow.has(path.basename(staging)) ? 'copying' : 'gone';
+  // This process's pid in another pid namespace, as a container on the host's network writes it, is another process.
+  if (owner.data.pid === process.pid && owner.data.pidNamespace === (await identityOf(process.pid)).pidNamespace) {
+    return copyingNow.has(path.basename(staging)) ? 'copying' : 'gone';
+  }
+
   const verdict = await isSameProcess(owner.data);
 
   return verdict === 'same' ? 'copying' : verdict === 'other' ? 'gone' : 'unknown';
