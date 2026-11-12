@@ -75,8 +75,9 @@ The observer: a teamai or sh command during which a sandbox opens or closes ends
 it saw, \`[verify] observed <sandbox>: env ok\`, \`ENV LEAK <names>\` or NOT OBSERVED when it could not read one, kept in
 observed.jsonl. A sandbox can close before the observer's first look, and then has no line: (f) says NOT OBSERVED for
 each sandboxed attempt whose environment no line of observed.jsonl read, whatever its provider. A leak is the world's
-canary (${CANARY_NAME}, which no step may receive) or a host secret no driver definition declares. Names only, ever. An entry that declares no credential gets the tool's sign-in variables from the
-command's environment by name, as docs/guide/workflow-advanced.md says, so env ok also holds when a step carried one.
+canary (${CANARY_NAME}, which no step may receive) or a host secret no driver definition declares. Names only, ever.
+An entry that declares no credential gets the tool's sign-in variables from the command's environment by name, as
+docs/guide/workflow-advanced.md says, so env ok also holds when a step carried one.
 
 A claim teamai decides by hostname or pid (a driver's identity, the owner of a staging folder, the import lock, a warm
 image's maker, the fleet's stop of a step whose starter is gone) needs \`member <run> <name> --machine container\`: two
