@@ -853,10 +853,13 @@ steps:
     git(bob.config.repo.localPath, 'update-ref', '-d', 'refs/remotes/origin/main');
     git(bob.config.repo.localPath, 'update-ref', 'refs/remotes/origin/main/stuck', 'HEAD');
 
-    expect(await claimRun(bob.config, runId, { checkout: bob.checkout })).toMatchObject({
-      ok: false,
-      error: { code: 'definition_mismatch', teamRevision: changed, message: expect.stringMatching(new RegExp(`the team repo at ${bob.config.repo.localPath} does not have it, and fetching origin failed \\(error: some local refs could not be updated; `)) },
-    });
+    const claimed = await claimRun(bob.config, runId, { checkout: bob.checkout });
+
+    expect(claimed).toMatchObject({ ok: false, error: { code: 'definition_mismatch', teamRevision: changed } });
+    if (claimed.ok) throw new Error('the claim was expected to be refused');
+    expect(claimed.error.message).toContain(`the team repo at ${bob.config.repo.localPath} does not have it, and fetching origin failed (`);
+    // Git versions order the lines of this error differently; every one prints this line.
+    expect(claimed.error.message).toMatch(/fetching origin failed \([^)]*\bsome local refs could not be updated\b[^)]*\)\. Fetch that commit into the team repo, then try again\.$/);
     expect(await readRun(bob.config, runId)).toBe('missing');
   });
 
