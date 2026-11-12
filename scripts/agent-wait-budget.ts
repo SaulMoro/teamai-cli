@@ -94,7 +94,8 @@ const NodeRecordSchema = z.discriminatedUnion('ev', [
   z.object({ ev: z.literal('spawn'), pid: z.number().int(), child: z.number().int().nullable(), command: z.array(z.string()), detached: z.boolean() }),
 ]);
 
-const readLines = (file: string): string[] => (fs.existsSync(file) ? fs.readFileSync(file, 'utf8').split('\n').filter(Boolean) : []);
+/** The finished lines of a log another process may still append to: a last line with no newline is not written whole yet. */
+export const readLines = (file: string): string[] => (fs.existsSync(file) ? fs.readFileSync(file, 'utf8').split('\n').slice(0, -1).filter(Boolean) : []);
 
 const nodeRecords = (file: string) => readLines(file).map((line) => NodeRecordSchema.parse(JSON.parse(line)));
 

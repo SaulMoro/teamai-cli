@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { PROCESS_READ_CHANNEL } from '@teamai/shared/process-group';
 
-import { type AgentWaitBudget, compareAgentWait, otherProcesses } from './agent-wait-budget.js';
+import { type AgentWaitBudget, compareAgentWait, otherProcesses, readLines } from './agent-wait-budget.js';
 
 type Row = AgentWaitBudget['rows'][number];
 
@@ -121,6 +121,21 @@ describe('otherProcesses', () => {
       spawn(1, ['/opt/node/bin/node', 'index.js'], 6),
       spawn(1, ['/home/m/.teamai/bin/teamai', 'hook-dispatch'], 5, true),
     ])).toEqual({ waited: 0, after: 0, byCommand: {} });
+  });
+});
+
+describe('readLines', () => {
+  it('leaves out a last line a writer still appends to, and keeps every finished one', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-wait-lines-'));
+    const file = path.join(dir, 'trace2.json');
+
+    try {
+      fs.writeFileSync(file, '{"event":"start","sid":"a"}\n{"event":"exit","sid":"a"}\n{"event":"region_enter","sid":"b","time":"2026-11-12T03:20:12.024204Z"');
+
+      expect(readLines(file)).toEqual(['{"event":"start","sid":"a"}', '{"event":"exit","sid":"a"}']);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
 
