@@ -164,6 +164,28 @@ describe("a world's world.json", () => {
     expect(JSON.parse(fs.readFileSync(path.join(loaded.dir, 'world.json'), 'utf8'))).toMatchObject({ driverSeen: true });
   });
 
+  it("keeps every writer two commands of the world record at once", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'world-writers-'));
+    roots.push(dir);
+    const file = path.join(dir, 'writers.json');
+    const go = path.join(dir, 'go');
+    const writer = `import fs from 'node:fs';
+      const { recordWriters } = await import(${JSON.stringify(pathToFileURL(path.join(REPO_ROOT, 'scripts', 'verify', 'world.ts')).href)});
+      const [file, go, tag] = process.argv.slice(1);
+      while (!fs.existsSync(go)) await new Promise((resolve) => setTimeout(resolve, 5));
+      for (let i = 0; i < 400; i += 1) recordWriters(file, ['cp'], {}, { [tag + '/' + i]: 'v' });`;
+    const loader = pathToFileURL(path.join(REPO_ROOT, 'scripts', 'typescript-loader.mjs')).href;
+    const { spawn } = await import('node:child_process');
+    const done = ['a', 'b'].map((tag) => new Promise<number | null>((resolve) => {
+      spawn(process.execPath, ['--import', `data:text/javascript,${encodeURIComponent(`import { register } from 'node:module'; register(${JSON.stringify(loader)});`)}`, '--input-type=module', '-e', writer, file, go, tag], { cwd: REPO_ROOT, stdio: 'ignore' }).on('exit', resolve);
+    }));
+    await new Promise((resolve) => setTimeout(resolve, 1500));
+    fs.writeFileSync(go, '');
+
+    expect(await Promise.all(done)).toEqual([0, 0]);
+    expect(Object.keys(JSON.parse(fs.readFileSync(file, 'utf8'))).length).toBe(800);
+  }, 30_000);
+
   it("keeps each command's log when another command of the world took the next number first", () => {
     const { logs } = writtenWorld();
     fs.mkdirSync(logs);

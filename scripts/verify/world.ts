@@ -404,7 +404,18 @@ function pause(ms: number): void {
  * wrote since this one loaded it is kept; answers the world written. Every write after `createWorld` goes through it.
  */
 export function updateWorld(world: Pick<World, 'dir'>, change: (fresh: World) => World): World {
-  const file = path.join(world.dir, 'world.json');
+  return rewriteLocked(path.join(world.dir, 'world.json'), (text) => {
+    const next = change(WorldSchema.parse(JSON.parse(text ?? '')));
+
+    return { value: next, text: `${JSON.stringify(next, null, 2)}\n` };
+  });
+}
+
+/**
+ * Rewrites `file` from its text as it is on disk now (undefined when there is none) under `<file>.lock`, through a
+ * rename, so two commands of the world never lose each other's change or read a half-written file; answers `value`.
+ */
+function rewriteLocked<T>(file: string, rewrite: (text: string | undefined) => { value: T; text: string }): T {
   const lock = `${file}.lock`;
 
   for (let waited = 0; ; waited += 20) {
@@ -417,20 +428,21 @@ export function updateWorld(world: Pick<World, 'dir'>, change: (fresh: World) =>
 
       if (holder === undefined) continue;
 
+      if (waited >= 30_000) throw new Error(`${lock} is held by process ${holder} for 30 s. If no command of the world runs, remove that file and ${lock}.break if it is there.`, { cause: error });
+
       // A holder that died leaves its lock: no write of it can still come.
       if (Number.isInteger(holder) && signalPid(holder, 0) === 'gone') breakDeadLock(lock, holder);
-      else if (waited >= 30_000) throw new Error(`${lock} is held by process ${holder} for 30 s. If no command of the world runs, remove that file and ${lock}.break if it is there.`, { cause: error });
       else pause(20);
     }
   }
 
   try {
-    const next = change(WorldSchema.parse(JSON.parse(fs.readFileSync(file, 'utf8'))));
+    const { value, text } = rewrite(fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : undefined);
     const written = `${file}.${process.pid}.tmp`;
-    fs.writeFileSync(written, `${JSON.stringify(next, null, 2)}\n`);
+    fs.writeFileSync(written, text);
     fs.renameSync(written, file);
 
-    return next;
+    return value;
   } finally {
     fs.rmSync(lock, { force: true });
   }
@@ -529,9 +541,9 @@ function memberProgramOf(args: readonly string[]): string | undefined {
   return sub === undefined || HOOKED_GIT.has(sub) || (sub === 'commit' && words.includes('--amend')) ? undefined : program;
 }
 
-const Writer = z.object({ program: z.string(), value: z.string().nullable() });
+const WritersSchema = z.record(z.string(), z.object({ program: z.string(), value: z.string().nullable() }));
 
-export type Writers = Record<string, z.infer<typeof Writer>>;
+export type Writers = z.infer<typeof WritersSchema>;
 
 /** Where the world's own HOME and project keep their writers; a member keeps its own (`Member.writers`). */
 export function worldWritersFile(world: Pick<World, 'dir'>): string {
@@ -540,7 +552,7 @@ export function worldWritersFile(world: Pick<World, 'dir'>): string {
 
 /** For each entry of a HOME and project a member's program changed, the last such program and what it left there. */
 export function loadWriters(file: string): Writers {
-  return fs.existsSync(file) ? z.record(z.string(), Writer).parse(JSON.parse(fs.readFileSync(file, 'utf8'))) : {};
+  return fs.existsSync(file) ? WritersSchema.parse(JSON.parse(fs.readFileSync(file, 'utf8'))) : {};
 }
 
 /** Records, for each entry a member's program run as `args` changed, that program and what it left there. */
@@ -548,13 +560,16 @@ export function recordWriters(file: string, args: readonly string[], before: Rec
   const program = memberProgramOf(args);
 
   if (program === undefined) return;
-  const writers = loadWriters(file);
 
-  for (const entry of new Set([...Object.keys(before), ...Object.keys(after)])) {
-    if (before[entry] !== after[entry]) writers[entry] = { program, value: after[entry] ?? null };
-  }
+  rewriteLocked(file, (text) => {
+    const writers = text === undefined ? {} : WritersSchema.parse(JSON.parse(text));
 
-  fs.writeFileSync(file, `${JSON.stringify(writers, null, 2)}\n`);
+    for (const entry of new Set([...Object.keys(before), ...Object.keys(after)])) {
+      if (before[entry] !== after[entry]) writers[entry] = { program, value: after[entry] ?? null };
+    }
+
+    return { value: undefined, text: `${JSON.stringify(writers, null, 2)}\n` };
+  });
 }
 
 /** Writes the next logs/<n>-<name>.log of a command and returns its path. */
