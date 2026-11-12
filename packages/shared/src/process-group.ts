@@ -727,10 +727,10 @@ export function stopProcess<T>(child: ChildProcess, exit: Promise<T>, detached: 
   let stopping: Promise<T> | undefined;
   let descendants: FoundProcess[] = [];
 
-  /** Whether the signal reached any process in the group or tree. */
-  const signal = async (name: NodeJS.Signals | 0): Promise<boolean> => {
+  /** Whether the signal reached any process in the group or tree of `pid`, the child's. */
+  const signal = async (pid: number, name: NodeJS.Signals | 0): Promise<boolean> => {
     try {
-      if (detached && child.pid !== undefined) return signalGroup(child.pid, name) === 'sent';
+      if (detached) return signalGroup(pid, name) === 'sent';
       let targets = descendants;
 
       if ((name === 0 || name === 'SIGKILL') && descendants.length > 0) {
@@ -740,7 +740,7 @@ export function stopProcess<T>(child: ChildProcess, exit: Promise<T>, detached: 
         targets = descendants.filter((found) => isStillRunning(now, found));
       }
 
-      const reached = targets.reduce((any, { pid }) => signalPid(pid, name) === 'sent' || any, false);
+      const reached = targets.reduce((any, found) => signalPid(found.pid, name) === 'sent' || any, false);
 
       return child.kill(name) || reached;
     } catch {
@@ -749,23 +749,25 @@ export function stopProcess<T>(child: ChildProcess, exit: Promise<T>, detached: 
   };
 
   const stop = async (initial: NodeJS.Signals): Promise<T> => {
+    const { pid } = child;
+
     // A child whose spawn failed has no pid, and Node's kill of its handle signals pid 0: this process's whole group.
-    if (child.pid === undefined) return exit;
+    if (pid === undefined) return exit;
 
     if (process.platform === 'win32') {
-      execFile('taskkill', ['/pid', String(child.pid), '/T', '/F'], () => {});
+      execFile('taskkill', ['/pid', String(pid), '/T', '/F'], () => {});
 
       return exit;
     }
 
-    if (!detached && child.pid !== undefined) descendants = await descendantsOf(child.pid);
+    if (!detached) descendants = await descendantsOf(pid);
 
-    await signal(initial);
+    await signal(pid, initial);
     let timer: NodeJS.Timeout | undefined;
     let escalated = false;
 
     const killed = new Promise<void>((resolve) => {
-      timer = setTimeout(() => { escalated = true; void signal('SIGKILL').then(() => { resolve(); }); }, 5000);
+      timer = setTimeout(() => { escalated = true; void signal(pid, 'SIGKILL').then(() => { resolve(); }); }, 5000);
     });
 
     const result = await exit;
@@ -776,7 +778,7 @@ export function stopProcess<T>(child: ChildProcess, exit: Promise<T>, detached: 
     // of waiting the whole grace period after that first successful probe.
     // `escalated` flips inside the setTimeout closure registered above, which the linter can't see.
     // oxlint-disable-next-line no-unmodified-loop-condition
-    while (!escalated && await signal(0)) {
+    while (!escalated && await signal(pid, 0)) {
       await Promise.race([killed, new Promise<void>((resolve) => setTimeout(resolve, 50))]);
     }
 

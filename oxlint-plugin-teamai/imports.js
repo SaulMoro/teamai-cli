@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { parse } from '@babel/parser';
 import { isIdentifier, traverseFast } from '@babel/types';
-import { stringLiteralValue } from './utils.js';
+import { stringLiteralValue, variableOf } from './utils.js';
 
 /**
  * The name `specifier` imports: `default` for a default import, `*` for a namespace import.
@@ -15,6 +15,25 @@ export function importedName(specifier) {
   if (specifier.type === 'ImportNamespaceSpecifier') return '*';
 
   return specifier.imported.type === 'Identifier' ? specifier.imported.name : String(specifier.imported.value);
+}
+
+/**
+ * Whether `node` names export `name` of one of `modules`: read off any object as `.name`, or a name imported from one
+ * of them as `name`. Undefined for a name no import binds, which each rule judges by its own policy.
+ * @param {import('@oxlint/plugins').Context['sourceCode']} sourceCode
+ * @param {ESTree.Node} node
+ * @param {{ modules: ReadonlySet<string>; name: string }} exported
+ * @returns {boolean | undefined}
+ */
+export function namesExport(sourceCode, node, { modules, name }) {
+  if (node.type === 'MemberExpression') return !node.computed && node.property.type === 'Identifier' && node.property.name === name;
+
+  if (node.type !== 'Identifier') return false;
+  const def = variableOf(sourceCode, node, node.name)?.defs[0];
+
+  if (def?.type !== 'ImportBinding') return undefined;
+
+  return def.node.type === 'ImportSpecifier' && def.parent?.type === 'ImportDeclaration' && modules.has(String(def.parent.source.value)) && importedName(def.node) === name;
 }
 
 /** @param {ESTree.ExportNamedDeclaration['specifiers'][number]} specifier */
