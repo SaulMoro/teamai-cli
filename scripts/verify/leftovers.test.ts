@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { attributeLeftover, worldTier, type WorldTies } from './leftovers.js';
+import { attributeLeftover, cleanupPlan, worldTier, type WorldTies } from './leftovers.js';
 
 const SELF: WorldTies = { runId: '20261112T120000-aaaaaa', paths: ['/w/20261112T120000-aaaaaa', '/private/tmp/teamai-verify-20261112T120000-aaaaaa'], journals: ['0123456789abcdef'], runs: ['r00000000000000aa'] };
 const OTHER: WorldTies = { runId: '20261112T110000-bbbbbb', paths: ['/w/20261112T110000-bbbbbb'], journals: ['fedcba9876543210'], runs: ['r00000000000000bb'] };
@@ -58,5 +58,32 @@ describe('what each row reads from what an engine or the process table printed',
     expect(journalOfSbxName('teamai-0123456789abcdef-r1-a1')).toBe('0123456789abcdef');
     expect(journalOfSbxName('teamai-0123456789abcdef-warm-42-x')).toBe('0123456789abcdef');
     expect(journalOfSbxName('my-sandbox')).toBeUndefined();
+  });
+});
+
+describe('what cleanup does with what the rows found', () => {
+  const own = { kind: 'own', why: 'names the world' } as const;
+  const theirs = { kind: 'other_world', runId: OTHER.runId } as const;
+
+  it('refuses while a process of the world lives, naming each, and removes nothing', () => {
+    const plan = cleanupPlan([
+      { onCleanup: 'refuse', observed: [{ kind: 'observed', findings: [{ what: 'process 42 on this machine (sleep 900)', attribution: own }, { what: 'process 43 on this machine (x)', attribution: theirs }], notes: [] }] },
+      { onCleanup: 'remove', observed: [{ kind: 'observed', findings: [{ what: 'docker container c', attribution: own, remove: ['docker', 'rm', '-f', 'c'] }], notes: [] }] },
+    ]);
+
+    expect(plan).toEqual({ kind: 'refuse', processes: ['process 42 on this machine (sleep 900)'] });
+  });
+
+  it("removes only the world's own removable leftovers, keeps what a row keeps, and says what it could not look at", () => {
+    const plan = cleanupPlan([
+      { onCleanup: 'refuse', observed: [{ kind: 'observed', findings: [], notes: [] }] },
+      { onCleanup: 'keep', observed: [{ kind: 'observed', findings: [{ what: 'run r attempt a place', attribution: own }], notes: [] }] },
+      { onCleanup: 'remove', observed: [
+        { kind: 'observed', findings: [{ what: 'docker container mine', attribution: own, remove: ['docker', 'rm', '-f', 'mine'] }, { what: 'docker container theirs', attribution: theirs, remove: ['docker', 'rm', '-f', 'theirs'] }], notes: [] },
+        { kind: 'not_observed', what: 'podman containers', why: 'podman info failed' },
+      ] },
+    ]);
+
+    expect(plan).toEqual({ kind: 'remove', removals: [{ what: 'docker container mine', command: ['docker', 'rm', '-f', 'mine'] }], unobserved: ['podman containers, podman info failed'] });
   });
 });

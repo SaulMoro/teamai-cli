@@ -11,7 +11,6 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { z } from 'zod';
-import { journal, sandboxJournalRoot } from '../../packages/runtime-sandbox/src/journal.js';
 import { worldRedactor } from './secrets.js';
 import { WORLDS_ROOT, type World } from './world.js';
 
@@ -168,8 +167,9 @@ function scanRecords(world: World): RecordScan {
     }
   }
 
+  // Each runtime outside teamai's process (sandbox, T3, Paseo) keeps its state in a folder of its own under this one.
   const runtimeJournals = homesOf(world).flatMap((home) => {
-    const state = path.dirname(sandboxJournalRoot(home));
+    const state = path.join(home, '.teamai', 'runtime-state');
 
     return fs.existsSync(state) ? fs.readdirSync(state) : [];
   }).length;
@@ -197,29 +197,34 @@ function withRealPath(at: string): string[] {
 }
 
 /** What ties a world, from its world.json: any world's, from any checkout, cleaned or not. */
-function tiesOf(world: z.infer<typeof SpanSchema>, runs: readonly string[]): WorldTies {
+function tiesOf(world: z.infer<typeof SpanSchema>, runs: readonly string[], journalOf: ((home: string) => string) | undefined): WorldTies {
   const homes = [world.home, ...(world.members ?? []).map((member) => member.home)];
 
   return {
     runId: world.runId,
     paths: [world.dir, world.tmp, ...(world.members ?? []).map((member) => member.tmp)].flatMap(withRealPath),
-    journals: homes.map((home) => sandboxJournalId(home)),
+    journals: journalOf === undefined ? [] : homes.map(journalOf),
     runs,
   };
 }
 
-/** The id the sandbox runtime labels what it makes with, for the member whose home is `home` (journal.ts `owner`). */
-function sandboxJournalId(home: string): string {
-  return journal(sandboxJournalRoot(home)).owner;
+/**
+ * The id the sandbox runtime labels what it makes with, for the member whose home is `home` (journal.ts `owner`); loaded
+ * only for a world whose runs used a runtime outside teamai's process, since only what such a runtime makes carries it.
+ */
+async function sandboxJournalIds(): Promise<(home: string) => string> {
+  const { journal, sandboxJournalRoot } = await import('../../packages/runtime-sandbox/src/journal.js');
+
+  return (home) => journal(sandboxJournalRoot(home)).owner;
 }
 
 /** Every other world on this machine, by what ties it; a world.json that cannot be read ties nothing. */
-function otherWorlds(self: World): WorldTies[] {
+function otherWorlds(self: World, journalOf: ((home: string) => string) | undefined): WorldTies[] {
   if (!fs.existsSync(WORLDS_ROOT)) return [];
 
   return fs.readdirSync(WORLDS_ROOT).filter((name) => name !== self.runId).flatMap((name) => {
     try {
-      return [tiesOf(SpanSchema.parse(JSON.parse(fs.readFileSync(path.join(WORLDS_ROOT, name, 'world.json'), 'utf8'))), [])];
+      return [tiesOf(SpanSchema.parse(JSON.parse(fs.readFileSync(path.join(WORLDS_ROOT, name, 'world.json'), 'utf8'))), [], journalOf)];
     } catch {
       return [];
     }
@@ -292,7 +297,9 @@ async function contextOf(world: World): Promise<{ context: LeftoverContext; tier
     containerMembers: (world.members ?? []).filter((member) => member.machine === 'container').length,
   });
 
-  return { context: { world, self: tiesOf(world, records.runs), others: otherWorlds(world), records }, tier };
+  const journalOf = tier === 'driver' ? await sandboxJournalIds() : undefined;
+
+  return { context: { world, self: tiesOf(world, records.runs, journalOf), others: otherWorlds(world, journalOf), records }, tier };
 }
 
 /** Ledger section (f): each row the world's tier asks, its LEAK lines and notes. A world that ran no step runtime gets one line. */
@@ -315,16 +322,19 @@ export async function leftoversSection(world: World): Promise<{ leaks: string[];
   return { leaks, notes };
 }
 
-/** This world's own leftovers cleanup may remove, with the command that removes each; and the world's processes still alive. */
-export async function ownLeftovers(world: World): Promise<{ removable: Finding[]; processes: Finding[]; unobserved: string[] }> {
-  const { context, tier } = await contextOf(world);
-  const rows = await rowsFor(tier === 'basic' ? 'basic' : 'driver');
-  const removable: Finding[] = [];
-  const processes: Finding[] = [];
+/** What cleanup does: refuse while a process of the world lives, naming each; otherwise remove the world's own removable leftovers. */
+export type CleanupPlan =
+  | { kind: 'refuse'; processes: string[] }
+  | { kind: 'remove'; removals: Array<{ what: string; command: readonly string[] }>; unobserved: string[] };
+
+/** The plan for what each row observed, judged by the row's `onCleanup`: only this world's own findings count. */
+export function cleanupPlan(rows: ReadonlyArray<{ onCleanup: LeftoverKind['onCleanup']; observed: readonly Observed[] }>): CleanupPlan {
+  const processes: string[] = [];
+  const removals: Array<{ what: string; command: readonly string[] }> = [];
   const unobserved: string[] = [];
 
-  for (const row of rows) {
-    for (const seen of await row.observe(context)) {
+  for (const { onCleanup, observed } of rows) {
+    for (const seen of observed) {
       if (seen.kind === 'not_observed') {
         unobserved.push(`${seen.what}, ${seen.why}`);
         continue;
@@ -333,11 +343,31 @@ export async function ownLeftovers(world: World): Promise<{ removable: Finding[]
       for (const finding of seen.findings) {
         if (finding.attribution.kind !== 'own') continue;
 
-        if (row.onCleanup === 'remove' && finding.remove !== undefined) removable.push(finding);
-        else if (row.onCleanup === 'refuse') processes.push(finding);
+        switch (onCleanup) {
+          case 'refuse':
+            processes.push(finding.what);
+            break;
+          case 'remove':
+            if (finding.remove !== undefined) removals.push({ what: finding.what, command: finding.remove });
+            break;
+          case 'keep':
+            break;
+          default: {
+            const unknown: never = onCleanup;
+            void unknown;
+          }
+        }
       }
     }
   }
 
-  return { removable, processes, unobserved };
+  return processes.length > 0 ? { kind: 'refuse', processes } : { kind: 'remove', removals, unobserved };
+}
+
+/** Cleanup's plan for `world`, from every row a world of its tier needs. */
+export async function planCleanup(world: World): Promise<CleanupPlan> {
+  const { context, tier } = await contextOf(world);
+  const rows = await rowsFor(tier);
+
+  return cleanupPlan(await Promise.all(rows.map(async (row) => ({ onCleanup: row.onCleanup, observed: await row.observe(context) }))));
 }

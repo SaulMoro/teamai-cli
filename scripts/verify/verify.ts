@@ -1,7 +1,8 @@
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { runLedger } from './ledger.js';
+import { planCleanup } from './leftovers.js';
 import { passedKeys, splitPassOption } from './secrets.js';
 import { addMember, ensureOrigin, memberLayout } from './members.js';
 import { memberOf, parseTarget, runOn } from './target.js';
@@ -14,7 +15,8 @@ const HELP = `Verify a teamai change end to end: the real CLI, packed and instal
   npm run -s verify -- teamai <run> <args>    the world's installed teamai, in its project
   npm run -s verify -- sh <run> <cmd> [args]  any command in the world (git, claude -p, a second checkout)
   npm run -s verify -- ledger <run>           uninstall teamai in the world, then what is left, in LEDGER-<n>.md; exit 1 on any LEAK
-  npm run -s verify -- cleanup <run>|--all    remove the world, keeping world.json, logs/ and every ledger
+  npm run -s verify -- cleanup <run>|--all    remove the world and the containers and sandboxes its runs left, keeping world.json,
+                                              logs/ and every ledger; refuses while a process of the world runs
   npm run -s verify -- dir <run>|--all        the world's directory, or every live world
 
 A world holds a project repo with one commit, a bare team repo at ${TEAM_URL}, the npm pack tarball of
@@ -62,8 +64,35 @@ function doctor(runId: string | undefined): void {
   line(same, `world built from ${world.build.commit.slice(0, 7)}${world.build.dirty ? '+dirty' : ''}; checkout is at ${head.slice(0, 7)}${same ? '' : ': make a new world to test the checkout as it is now'}`);
 }
 
-function cleanup(world: World): void {
-  const keep = new Set(['world.json', 'logs']);
+/**
+ * Removes what the world's runs left that the leftover rows attribute to it, then the world's files, keeping world.json,
+ * logs/, observed.jsonl and every ledger. Never signals a process: while one of the world's lives, refuses and names it.
+ */
+async function cleanup(world: World): Promise<boolean> {
+  const plan = await planCleanup(world);
+
+  if (plan.kind === 'refuse') {
+    console.error(`Not cleaning ${world.runId}: a process of the world still runs. Stop each one, then run cleanup again:\n${plan.processes.map((what) => `  ${what}`).join('\n')}`);
+
+    return false;
+  }
+
+  for (const note of plan.unobserved) console.error(`NOT OBSERVED: ${note}; cleanup removed nothing of it.`);
+
+  for (const removal of plan.removals) {
+    const [command = 'true', ...args] = removal.command;
+    const ran = spawnSync(command, args, { encoding: 'utf8', stdio: ['ignore', 'ignore', 'pipe'], timeout: 60_000 });
+
+    if (ran.status !== 0) {
+      console.error(`Not cleaning ${world.runId}: removing ${removal.what} failed (${ran.error?.message ?? ran.stderr.trim()}). Its files are kept, so a ledger can still find it.`);
+
+      return false;
+    }
+
+    console.log(`Removed ${removal.what}`);
+  }
+
+  const keep = new Set(['world.json', 'logs', 'observed.jsonl']);
 
   for (const name of fs.readdirSync(world.dir)) {
     if (keep.has(name) || /^LEDGER-\d+\.md$/.test(name)) continue;
@@ -77,6 +106,8 @@ function cleanup(world: World): void {
 
   saveWorld({ ...world, cleanedAt: new Date().toISOString() });
   console.log(`Cleaned ${world.runId}. Evidence kept in ${world.dir}`);
+
+  return true;
 }
 
 async function main(): Promise<number> {
@@ -130,10 +161,14 @@ async function main(): Promise<number> {
     // The ledger and cleanup cover the world and every member of it, whichever one names it.
     case 'ledger':
       return await runLedger(loadWorld(parseTarget(rest[0]).runId)) ? 0 : 1;
-    case 'cleanup':
-      for (const world of rest[0] === '--all' ? liveWorlds() : [loadWorld(parseTarget(rest[0]).runId)]) cleanup(world);
+    case 'cleanup': {
+      let isClean = true;
 
-      return 0;
+      for (const world of rest[0] === '--all' ? liveWorlds() : [loadWorld(parseTarget(rest[0]).runId)]) isClean = await cleanup(world) && isClean;
+
+      return isClean ? 0 : 1;
+    }
+
     case 'dir': {
       if (rest[0] === '--all') {
         for (const world of liveWorlds()) console.log(`${world.runId} ${world.dir}`);
