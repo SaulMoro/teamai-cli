@@ -3,6 +3,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { expect, it } from 'vitest';
 import { z } from 'zod';
+import { entriesUnder } from '@teamai/shared/entries-under';
 
 import { reachesSource, sourceModules } from '../imports.js';
 import { lintWithOptions, ruleHarness } from '../test/harness.ts';
@@ -74,7 +75,7 @@ it('takes no option, so no file can be listed as still starting a process', () =
 });
 
 it('matches every family\'s production source in this checkout, and no infrastructure package', () => {
-  const files = fs.readdirSync(path.join(REPO, 'packages'), { recursive: true, encoding: 'utf8' })
+  const files = entriesUnder(path.join(REPO, 'packages')).map(({ relative }) => relative)
     .filter((file) => !file.includes('node_modules'))
     .map((file) => `packages/${file.split(path.sep).join('/')}`);
   const matched = files.filter((file) => familySource(file) !== undefined);
@@ -104,7 +105,7 @@ function workspaceModules(): Array<[string, string]> {
       if (!target.includes('*')) return [[`${name}${subpath.slice(1)}`, path.join(REPO, 'packages', folder, target)]];
       const dir = path.join(REPO, 'packages', folder, path.dirname(target));
 
-      return fs.readdirSync(dir, { recursive: true, encoding: 'utf8' }).filter((entry) => entry.endsWith('.ts') && !entry.endsWith('.test.ts'))
+      return entriesUnder(dir).map(({ relative }) => relative).filter((entry) => entry.endsWith('.ts') && !entry.endsWith('.test.ts'))
         .map((entry): [string, string] => [`${name}${subpath.slice(1).replace('*', entry.replace(/\.ts$/, '').split(path.sep).join('/'))}`, path.join(dir, entry)]);
     });
   });

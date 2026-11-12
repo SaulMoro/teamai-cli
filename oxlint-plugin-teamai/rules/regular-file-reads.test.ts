@@ -1,7 +1,7 @@
-import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { expect, it } from 'vitest';
+import { entriesUnder } from '@teamai/shared/entries-under';
 
 import { lintWithOptions, ruleHarness } from '../test/harness.ts';
 import { isReadChecked } from './regular-file-reads.js';
@@ -150,8 +150,8 @@ valid('allows reads in tests', `import fs from 'node:fs/promises';
 export const read = (file: string) => fs.readFile(file, 'utf8');`, { filename: 'src/workflow/steps/result.test.ts' });
 
 it('matches the production source of src/ and of every package in this checkout', () => {
-  const sources = (dir: string) => fs.readdirSync(path.join(REPO, dir), { recursive: true, encoding: 'utf8' })
-    .map((file) => `${dir}/${file.split(path.sep).join('/')}`)
+  const sources = (dir: string) => entriesUnder(path.join(REPO, dir))
+    .map(({ relative }) => `${dir}/${relative.split(path.sep).join('/')}`)
     .filter((file) => !file.includes('node_modules'));
   const matched = [...sources('src'), ...sources('packages')].filter(isReadChecked);
 

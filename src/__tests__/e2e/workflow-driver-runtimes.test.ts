@@ -13,6 +13,7 @@ import { hasPython, TYPED_TERMINAL } from '../helpers/in-terminal.js';
 import { installToyRuntime, TOY_RUNTIME, TOY_RUNTIME_MARKER } from '../helpers/toy-runtime.js';
 import { t3OnFakeServer } from '../helpers/t3-runtime.js';
 import { signalPid } from '@teamai/shared/process-group';
+import { entriesUnder } from '@teamai/shared/entries-under';
 
 // A driver definition that lists several runtimes: each `next` offers one runtime's `can`, in definition order, and a
 // step goes to the first that can take it. The toy runtime is the member's own here, and `local` runs on the host.
@@ -634,7 +635,7 @@ steps:
     const runId = runOf(ran);
     const [review] = readRunState(runId).steps;
     expect(review, ran.stderr).toMatchObject({ status: 'succeeded', tool: 'codex' });
-    expect(fs.readdirSync(path.join(codexHome, 'sessions'), { recursive: true, encoding: 'utf8' }).some((name) => name.endsWith('.jsonl'))).toBe(true);
+    expect(entriesUnder(path.join(codexHome, 'sessions')).some(({ relative }) => relative.endsWith('.jsonl'))).toBe(true);
 
     const scored = await runCLI(['score', '--run', runId, '--step', 'review', '--scorer', 'byclaude'], repo, env({ CODEX_HOME: codexHome }));
 
@@ -2032,7 +2033,7 @@ steps:
 
     /** Every file under `dir` whose bytes hold `text`. */
     const holding = (dir: string, text: string): string[] => (fs.existsSync(dir)
-      ? fs.readdirSync(dir, { recursive: true, encoding: 'utf8' }).map((name) => path.join(dir, name)).filter((at) => fs.statSync(at).isFile() && fs.readFileSync(at).includes(text))
+      ? entriesUnder(dir).map(({ relative }) => path.join(dir, relative)).filter((at) => fs.statSync(at).isFile() && fs.readFileSync(at).includes(text))
       : []);
 
     it('finds the tool\'s own sign-in variables in the member\'s environment by name when the runtime declares no credential', async () => {

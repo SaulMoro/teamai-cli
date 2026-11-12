@@ -104,6 +104,8 @@
     "teamai/unspawned-child": "error",
     // process.kill(0) signals the caller's own process group, -1 every process it may signal, and so does a failed spawn's kill on Node 20: a signal goes through process-group.
     "teamai/signal-owner": "error",
+    // A recursive readdir enters a link to a folder: out of the folder it lists, or round a loop that never ends.
+    "teamai/recursive-readdir": "error",
     // A step writes the paths the engine reads; a FIFO it leaves there would block a plain read past every deadline.
     "teamai/regular-file-reads": "error",
     // Opening a FIFO for writing blocks until a reader comes, as a read blocks until a writer does.

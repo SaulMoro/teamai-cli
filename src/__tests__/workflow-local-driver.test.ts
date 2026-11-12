@@ -574,6 +574,48 @@ sandbox_mode = "read-only"
     });
   });
 
+  it('removes the git locks a timed-out tool left in its checkout, and none behind a link it made under .git/refs', async () => {
+    const { config, workspace, runId } = await fixture();
+    const outside = path.join(path.dirname(workspace), 'outside');
+    fs.mkdirSync(outside);
+    fs.writeFileSync(path.join(outside, 'kept.lock'), '');
+    const adapter: StepLauncher = {
+      runInteractive: vi.fn(),
+      run: vi.fn(async (_tool, input) => {
+        const refs = path.join(input.cwd, '.git', 'refs');
+        fs.writeFileSync(path.join(input.cwd, '.git', 'index.lock'), '');
+        fs.writeFileSync(path.join(refs, 'heads', 'main.lock'), '');
+        fs.symlinkSync(outside, path.join(refs, 'outside'));
+        return { started: true as const, exitCode: 143, stoppedBy: 'timeout' as const };
+      }),
+    };
+
+    await runLocalDriver(config, runId, workspace, { adapter, toolPaths });
+
+    expect(adapter.run).toHaveBeenCalledTimes(1);
+    expect([fs.existsSync(path.join(workspace, '.git', 'index.lock')), fs.existsSync(path.join(workspace, '.git', 'refs', 'heads', 'main.lock'))]).toEqual([false, false]);
+    expect(fs.readdirSync(outside)).toEqual(['kept.lock']);
+  });
+
+  it('removes the git locks a timed-out tool left beside a folder it named like a lock, and leaves that folder', async () => {
+    const { config, workspace, runId } = await fixture();
+    const adapter: StepLauncher = {
+      runInteractive: vi.fn(),
+      run: vi.fn(async (_tool, input) => {
+        fs.writeFileSync(path.join(input.cwd, '.git', 'index.lock'), '');
+        fs.mkdirSync(path.join(input.cwd, '.git', 'refs', 'heads', 'wip.lock'));
+        fs.mkdirSync(path.join(input.cwd, '.git', 'modules.lock'));
+        return { started: true as const, exitCode: 143, stoppedBy: 'timeout' as const };
+      }),
+    };
+
+    await runLocalDriver(config, runId, workspace, { adapter, toolPaths });
+
+    expect(fs.existsSync(path.join(workspace, '.git', 'index.lock'))).toBe(false);
+    expect([fs.statSync(path.join(workspace, '.git', 'refs', 'heads', 'wip.lock')).isDirectory(), fs.statSync(path.join(workspace, '.git', 'modules.lock')).isDirectory()]).toEqual([true, true]);
+    expect(await readRun(config, runId)).toMatchObject({ steps: [{ status: 'failed' }] });
+  });
+
   it('publishes the failure code it sets when the tool is not on PATH', async () => {
     const { config, workspace, runId } = await fixture();
 
