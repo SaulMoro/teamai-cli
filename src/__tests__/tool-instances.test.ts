@@ -163,7 +163,7 @@ describe('team tool instances', () => {
     }));
 
     expect(errors).toEqual([
-      expect.stringContaining('its name is "acme-claude", and an instance is named after its file, "acme"'),
+      expect.stringContaining('its name is "acme-claude", and an instance is named after its file or its folder, "acme"'),
       expect.stringContaining('"codex" is a tool teamai ships, and an instance named like one adjusts it, so it extends codex'),
     ]);
     expect(registry.toolOf('codex')).toEqual({ name: 'codex', base: 'codex' });
@@ -243,6 +243,55 @@ describe('team instances of two scopes', () => {
 
     expect(registry.toolOf('acme-claude')?.instance?.command).toBe('acme-claude-workspace');
     expect(errors).toEqual([]);
+  });
+});
+
+describe('a tool instance kept as a folder', () => {
+  it('reads tools/<name>/TOOL.yaml as the instance named after its folder, in the user scope\'s team repo and a workspace\'s', async () => {
+    const userRepo = teamRepo({ 'tools/acme-claude/TOOL.yaml': ACME_CLAUDE });
+    const workspaceRepo = path.join(root, 'workspace-repo');
+    fs.mkdirSync(path.join(workspaceRepo, 'tools', 'ws-claude'), { recursive: true });
+    fs.writeFileSync(path.join(workspaceRepo, 'teamai.yaml'), 'team: acme\nrepo: acme/workspace\n');
+    fs.writeFileSync(path.join(workspaceRepo, 'tools', 'ws-claude', 'TOOL.yaml'), ACME_CLAUDE.replaceAll('acme-claude', 'ws-claude'));
+    const { registry, errors } = await load(userRepo);
+    await load(workspaceRepo);
+
+    expect(registry.toolOf('acme-claude')?.instance).toMatchObject({ command: 'acme-claude', source: 'team', location: 'tools/acme-claude/TOOL.yaml' });
+    expect(registry.toolOf('ws-claude')?.instance).toMatchObject({ command: 'ws-claude', source: 'team' });
+    expect(registry.toolOf('TOOL')).toBeUndefined();
+    expect(errors).toEqual([]);
+  });
+
+  it('runs an instance moved from tools/<name>.yaml into its folder with the acceptance its unchanged content had', async () => {
+    const repo = teamRepo({ 'tools/acme-claude.yaml': ACME_CLAUDE });
+    const first = await load(repo);
+    const { acceptToolCommand } = await import('../tool-instances.js');
+    const instance = first.registry.toolOf('acme-claude')?.instance;
+    expect(instance && await acceptToolCommand(instance, { ask: async () => 'y' })).toEqual({ ok: true });
+    fs.mkdirSync(path.join(repo, 'tools', 'acme-claude'));
+    fs.renameSync(path.join(repo, 'tools', 'acme-claude.yaml'), path.join(repo, 'tools', 'acme-claude', 'TOOL.yaml'));
+    vi.resetModules();
+    const moved = await load(repo);
+    const { acceptToolCommand: acceptMoved } = await import('../tool-instances.js');
+    const movedInstance = moved.registry.toolOf('acme-claude')?.instance;
+
+    expect(movedInstance?.location).toBe('tools/acme-claude/TOOL.yaml');
+    expect(movedInstance && await acceptMoved(movedInstance, { ask: undefined })).toEqual({ ok: true });
+  });
+
+  it('uses neither of one name kept as a file and a folder in one place, and names both', async () => {
+    const { registry, errors } = await load(teamRepo({ 'tools/acme-claude.yaml': ACME_CLAUDE, 'tools/acme-claude/TOOL.yaml': ACME_CLAUDE }));
+
+    expect(registry.toolOf('acme-claude')).toBeUndefined();
+    expect(errors).toEqual([expect.stringContaining('"acme-claude" is defined twice in the team repo (tools/acme-claude.yaml and tools/acme-claude/)')]);
+  });
+
+  it('reads the member\'s own ~/.teamai/tools/<name>/TOOL.yaml', async () => {
+    fs.mkdirSync(path.join(home, '.teamai', 'tools', 'mine'), { recursive: true });
+    fs.writeFileSync(path.join(home, '.teamai', 'tools', 'mine', 'TOOL.yaml'), 'schemaVersion: v1alpha1\nname: mine\nextends: codex\n');
+    const { registry } = await load(teamRepo({}));
+
+    expect(registry.toolOf('mine')?.instance).toMatchObject({ source: 'personal', extends: 'codex' });
   });
 });
 

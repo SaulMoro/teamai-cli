@@ -4,6 +4,7 @@ import path from 'node:path';
 import { z } from 'zod';
 import { isBareCommandName } from '@teamai/shared/cli-path';
 import { INSTANCE_KEYS, type ToolInstance, type ToolInstanceHome } from '@teamai/tool-core/instance';
+import { FOLDER_MARKERS } from './folder-markers.js';
 import { isSymlink, RESOURCE_LAYOUTS, Resources, type TeamTree } from './resources/resolver.js';
 import { isSessionPlatform } from './session-flow/adapters/platform-facts.js';
 import { homeEnvOf } from './tool-home.js';
@@ -20,7 +21,8 @@ import { readRegularFile } from '@teamai/shared/regular-file';
 // ─── Tool instances ──────────────────────────────────────
 //
 //  A team adds a tool as an instance of a shipped one, in tools/<name>.yaml of the team repo (or tools/<namespace>/),
-//  and a member in ~/.teamai/tools/<name>.yaml, which teamai reads and never writes. An instance sets another command,
+//  and a member in ~/.teamai/tools/<name>.yaml, which teamai reads and never writes. Either may keep it as a folder
+//  tools/<name>/TOOL.yaml instead, read the same way. An instance sets another command,
 //  home and paths, and no code: it keeps the formats of the tool it extends. A member's own instance replaces the
 //  team's of the same name. An instance named like a shipped tool adjusts it.
 //
@@ -40,6 +42,9 @@ export interface ResolvedToolInstance extends ToolInstance<ToolId> {
   /** The sha256 of that file: a person accepts a team instance's command at this content. */
   readonly revision: string;
 }
+
+/** The marker of an instance kept as a folder, `tools/<name>/TOOL.yaml`, which takes the folder's name. */
+const TOOL_MARKER = FOLDER_MARKERS.tools.marker;
 
 const NAME = /^[a-z0-9][a-z0-9._-]*$/;
 const ENV_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
@@ -101,9 +106,9 @@ function parseToolInstance({ file, text, source, location }: { file: string; tex
   const { schemaVersion: _version, extends: base, ...fields } = parsed.data;
 
   if (!isToolId(base)) return refused(file, `${base} is not a tool teamai ships`);
-  const stem = path.basename(file, '.yaml');
+  const stem = path.basename(file) === TOOL_MARKER ? path.basename(path.dirname(file)) : path.basename(file, '.yaml');
 
-  if (fields.name !== stem) return refused(file, `its name is "${fields.name}", and an instance is named after its file, "${stem}"`);
+  if (fields.name !== stem) return refused(file, `its name is "${fields.name}", and an instance is named after its file or its folder, "${stem}"`);
 
   if (isToolId(fields.name) && fields.name !== base) {
     return refused(file, `"${fields.name}" is a tool teamai ships, and an instance named like one adjusts it, so it extends ${fields.name}`);
@@ -124,10 +129,30 @@ async function readText(file: string): Promise<string | undefined> {
   }
 }
 
-async function yamlFiles(dir: string): Promise<string[]> {
+/**
+ * The instance files in `dir`: each `<name>.yaml`, and each `<name>/TOOL.yaml`. A name kept both ways is logged and
+ * neither is read.
+ */
+async function instanceFiles(dir: string): Promise<string[]> {
   const entries = await fs.readdir(dir, { withFileTypes: true }).catch(() => []);
+  const files = new Map(entries.filter((entry) => entry.isFile() && entry.name.endsWith('.yaml')).map((entry) => [entry.name.slice(0, -'.yaml'.length), path.join(dir, entry.name)]));
+  const folders = entries.filter((entry) => entry.isDirectory()).map((entry) => [entry.name, path.join(dir, entry.name, TOOL_MARKER)] as const);
+  const marked = await Promise.all(folders.map(async ([, marker]) => (await fs.lstat(marker).catch(() => undefined))?.isFile() === true));
 
-  return entries.filter((entry) => entry.isFile() && entry.name.endsWith('.yaml')).map((entry) => entry.name).sort();
+  for (const [index, [name, marker]] of folders.entries()) {
+    if (!marked[index]) continue;
+    const file = files.get(name);
+
+    if (file === undefined) {
+      files.set(name, marker);
+      continue;
+    }
+
+    errorOnce(`Tool instance "${name}" is defined twice in your own tools (${file} and ${marker}), so teamai uses neither. Keep one.`);
+    files.delete(name);
+  }
+
+  return [...files.values()].sort();
 }
 
 /** Each instance in `files`, parsed; one that does not parse is logged and left out. */
@@ -184,9 +209,10 @@ export async function teamToolInstances(team: TeamTree): Promise<ResolvedToolIns
     }
 
     const { source } = resolution.item;
-    const text = await readText(source.full);
+    const [file, location] = source.kind === 'folder' ? [path.join(source.full, TOOL_MARKER), `${source.path}${TOOL_MARKER}`] : [source.full, source.path];
+    const text = await readText(file);
 
-    return text === undefined ? undefined : parseToolInstance({ file: source.full, text, source: 'team', location: source.path });
+    return text === undefined ? undefined : parseToolInstance({ file, text, source: 'team', location });
   }));
 
   return read.flatMap(usable);
@@ -219,7 +245,7 @@ export function personalToolsDir(): string {
 export async function personalToolInstances(): Promise<ResolvedToolInstance[]> {
   const dir = personalToolsDir();
 
-  return readInstances((await yamlFiles(dir)).map((name) => path.join(dir, name)), 'personal');
+  return readInstances(await instanceFiles(dir), 'personal');
 }
 
 // ─── The instances this process sees ─────────────────────
