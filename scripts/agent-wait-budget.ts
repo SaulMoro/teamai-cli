@@ -506,7 +506,7 @@ const EXPECTED_REMOTE = new Map([
 
 /** Measures one Claude Code session, workspace scope, team repo mode git, from the main checkout and linked worktrees. */
 export async function measureAgentWait(options: { keep: boolean }) {
-  const world = createWorld();
+  const world = await createWorld();
   const failures: string[] = [];
   const scratch = path.join(world.dir, 'scratch');
   const seed = path.join(scratch, 'seed');

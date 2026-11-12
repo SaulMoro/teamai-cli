@@ -1,17 +1,44 @@
 import { spawnSync } from 'node:child_process';
+import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { socketPathOf } from '../../packages/runtime-sandbox/src/attempt-socket.js';
 import { REPO_ROOT, worldCommandNames, worldEnv, worldTmpDir } from './world.js';
 
+const roots: string[] = [];
+
 afterEach(() => {
   vi.unstubAllEnvs();
+
+  for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true });
 });
 
 describe('the commands a world puts on PATH', () => {
-  it('are git, every tool, every sandbox provider teamai runs on this machine, and the T3 and Paseo commands', () => {
+  it('are git, every tool, every sandbox provider teamai runs on this machine, and the T3 and Paseo commands', async () => {
     // docs/dev/glossary.md, Sandbox provider: docker, podman, sbx, seatbelt (macOS's /usr/bin/sandbox-exec), bwrap; vercel runs elsewhere.
-    expect(worldCommandNames()).toEqual(expect.arrayContaining(['git', 'claude', 'codex', 'codebuddy', 'opencode', 'docker', 'podman', 'sbx', '/usr/bin/sandbox-exec', 'bwrap', 't3', 'paseo']));
+    expect(await worldCommandNames()).toEqual(expect.arrayContaining(['git', 'claude', 'codex', 'codebuddy', 'opencode', 'docker', 'podman', 'sbx', '/usr/bin/sandbox-exec', 'bwrap', 't3', 'paseo']));
+  });
+
+  /** A checkout whose teamai ships `runtime-fake` as an executable, and whose package declares `exports` in its package.json. */
+  function checkoutWithRuntime(exports: Record<string, string> | undefined): string {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'world-runtimes-'));
+    roots.push(root);
+    const pkg = path.join(root, 'packages', 'runtime-fake');
+    fs.mkdirSync(path.join(pkg, 'src'), { recursive: true });
+    fs.writeFileSync(path.join(root, 'package.json'), JSON.stringify({ bin: { teamai: 'dist/index.js', 'teamai-runtime-fake': 'dist/runtime-fake.js' } }));
+    fs.writeFileSync(path.join(pkg, 'package.json'), JSON.stringify({ name: '@teamai/runtime-fake', ...(exports && { exports }) }));
+    fs.writeFileSync(path.join(pkg, 'src', 'host-commands.ts'), "export const HOST_COMMANDS = ['fakeapp'];\n");
+
+    return root;
+  }
+
+  it('include the command a new runtime package declares, with no edit to the harness', async () => {
+    expect(await worldCommandNames({ root: checkoutWithRuntime({ './host-commands': './src/host-commands.ts' }) })).toEqual(['git', 'claude', 'codex', 'codebuddy', 'opencode', 'fakeapp']);
+  });
+
+  it('refuse a runtime teamai ships as an executable whose package declares no host commands', async () => {
+    await expect(worldCommandNames({ root: checkoutWithRuntime(undefined) })).rejects.toThrow(/packages\/runtime-fake ships dist\/runtime-fake\.js but declares no host commands/);
   });
 
   it("reach Node through the world's own tools folder, never Node's folder, which holds every global npm command", () => {
@@ -22,8 +49,12 @@ describe('the commands a world puts on PATH', () => {
 });
 
 describe('the basic world', () => {
-  // Every module of a step runtime's package the harness loads for its basic verbs, each a name or a path and nothing else.
-  const COMMAND_NAMES = new Set(['runtime-sandbox/src/provider-commands.ts', 'runtime-sandbox/src/this-machine.ts', 'runtime-sandbox/src/journal-root.ts', 'runtime-paseo/src/daemon/command.ts', 'runtime-t3/src/t3-command.ts']);
+  // Every module of a step runtime's package the harness loads for its basic verbs, each a path and nothing else.
+  const COMMAND_NAMES = new Set(['runtime-sandbox/src/journal-root.ts']);
+
+  it('allows only modules that exist', () => {
+    for (const module of COMMAND_NAMES) expect(fs.existsSync(path.join(REPO_ROOT, 'packages', module)), module).toBe(true);
+  });
 
   it("loads no step runtime's modules beyond the command names it puts on PATH", () => {
     const hook = `import { registerHooks } from 'node:module'; import fs from 'node:fs';

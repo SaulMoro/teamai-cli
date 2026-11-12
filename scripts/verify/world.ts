@@ -9,10 +9,8 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { pathToFileURL } from 'node:url';
 import { z } from 'zod';
-import { PROVIDER_COMMANDS } from '../../packages/runtime-sandbox/src/provider-commands.js';
-import { T3_COMMAND } from '../../packages/runtime-t3/src/t3-command.js';
-import { PASEO_COMMAND } from '../../packages/runtime-paseo/src/daemon/command.js';
 
 export const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 export const WORLDS_ROOT = path.join(os.tmpdir(), 'teamai-verify');
@@ -156,9 +154,34 @@ const quote = (value: string): string => `'${value.replace(/'/g, `'\\''`)}'`;
 
 export const TOOL_COMMANDS = ['claude', 'codex', 'codebuddy', 'opencode'] as const;
 
-/** Every command a world's PATH reaches on this machine: git, the tools, each sandbox provider's own and the driver apps'. */
-export function worldCommandNames(): string[] {
-  return ['git', ...TOOL_COMMANDS, ...Object.values(PROVIDER_COMMANDS).flatMap((command) => command ?? []), T3_COMMAND, PASEO_COMMAND];
+const PackageJsonSchema = z.looseObject({ bin: z.record(z.string(), z.string()).optional(), exports: z.record(z.string(), z.string()).optional() });
+
+/** An executable teamai ships for a step runtime: `dist/runtime-<name>.js`, built from `packages/runtime-<name>`. */
+const RUNTIME_EXECUTABLE = /^(?:\.\/)?dist\/(runtime-[\w-]+)\.js$/;
+
+/**
+ * The commands each step runtime teamai ships as an executable runs on the member's machine, by its package: what the
+ * module its package.json exports as `./host-commands` says. A runtime that declares none fails here, so a new one is
+ * never left off a world's PATH unnoticed.
+ */
+export async function runtimeHostCommands({ root = REPO_ROOT }: { root?: string } = {}): Promise<Array<{ runtime: string; commands: readonly string[] }>> {
+  const read = (dir: string) => PackageJsonSchema.parse(JSON.parse(fs.readFileSync(path.join(dir, 'package.json'), 'utf8')));
+  const runtimes = [...new Set(Object.values(read(root).bin ?? {}).flatMap((file) => RUNTIME_EXECUTABLE.exec(file)?.[1] ?? []))].toSorted();
+
+  return Promise.all(runtimes.map(async (runtime) => {
+    const dir = path.join(root, 'packages', runtime);
+    const module = read(dir).exports?.['./host-commands'];
+
+    if (module === undefined) throw new Error(`packages/${runtime} ships dist/${runtime}.js but declares no host commands: add "./host-commands" to the "exports" of its package.json, a module exporting HOST_COMMANDS (empty when it runs none).`);
+    const { HOST_COMMANDS } = z.object({ HOST_COMMANDS: z.array(z.string()) }).parse(await import(pathToFileURL(path.join(dir, module)).href));
+
+    return { runtime, commands: HOST_COMMANDS };
+  }));
+}
+
+/** Every command a world's PATH reaches on this machine: git, the tools, and the host commands of each step runtime teamai ships. */
+export async function worldCommandNames({ root }: { root?: string } = {}): Promise<string[]> {
+  return ['git', ...TOOL_COMMANDS, ...(await runtimeHostCommands({ root })).flatMap(({ commands }) => commands)];
 }
 
 /**
@@ -189,7 +212,7 @@ function hostCommand(name: string): string | undefined {
  * Links each host command a world may run into `tools`, alone. Its folder would bring every other command there, such
  * as a launcher that tells itself from the real program by `$HOME`, which in a world names another folder.
  */
-function linkHostCommands(tools: string): void {
+async function linkHostCommands(tools: string): Promise<void> {
   fs.mkdirSync(tools, { recursive: true });
 
   // The Node the harness runs on, and its npm and npx, which teamai's update check runs: never Node's folder, where every global npm command sits.
@@ -197,7 +220,7 @@ function linkHostCommands(tools: string): void {
     if (fs.existsSync(found)) fs.symlinkSync(found, path.join(tools, name));
   }
 
-  for (const name of worldCommandNames()) {
+  for (const name of await worldCommandNames()) {
     const found = hostCommand(name);
 
     if (found !== undefined) fs.symlinkSync(found, path.join(tools, path.basename(name)));
@@ -260,7 +283,7 @@ exit 1
   fs.chmodSync(gh, 0o755);
 }
 
-export function createWorld(): World {
+export async function createWorld(): Promise<World> {
   if (process.platform === 'win32') throw new Error('A world needs a POSIX shell; Windows is not supported. Say so in the PR instead.');
   const runId = `${new Date().toISOString().replace(/[-:]/g, '').slice(0, 15)}-${crypto.randomBytes(3).toString('hex')}`;
   fs.mkdirSync(WORLDS_ROOT, { recursive: true });
@@ -269,7 +292,7 @@ export function createWorld(): World {
 
   // Before world.json exists neither cleanup route can find the directory.
   try {
-    return buildWorld(runId, dir, tmp);
+    return await buildWorld(runId, dir, tmp);
   } catch (error) {
     fs.rmSync(dir, { recursive: true, force: true });
     fs.rmSync(tmp, { recursive: true, force: true });
@@ -277,7 +300,7 @@ export function createWorld(): World {
   }
 }
 
-function buildWorld(runId: string, dir: string, tmp: string): World {
+async function buildWorld(runId: string, dir: string, tmp: string): Promise<World> {
   const at = (name: string): string => path.join(dir, name);
 
   for (const name of ['home', 'pkg', 'install', 'project', 'logs']) fs.mkdirSync(at(name), { recursive: true });
@@ -302,7 +325,7 @@ function buildWorld(runId: string, dir: string, tmp: string): World {
   const bin = at('bin');
   fs.mkdirSync(bin);
   writeFakeGh(at('fakes'));
-  linkHostCommands(at('tools'));
+  await linkHostCommands(at('tools'));
   const env = worldEnv({ home: at('home'), tmp, bin: path.join(at('install'), 'node_modules', '.bin'), fakes: at('fakes'), tools: at('tools'), npmCache: at('npm-cache') });
   const run = path.join(bin, 'run');
   fs.writeFileSync(

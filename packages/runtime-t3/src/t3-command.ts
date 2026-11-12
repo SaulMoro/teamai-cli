@@ -1,6 +1,7 @@
 import { execFile } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
+import { T3_COMMAND } from './host-commands.js';
 
 // ─── T3 Code on this machine: its data directory and its `t3` command ───
 //
@@ -42,9 +43,6 @@ export interface T3Command {
   /** The first `t3` command `run` would try that exists and may be run, without running it; none when there is none. */
   locate(): string | undefined;
 }
-
-/** The name of T3 Code's command, on PATH or in `<T3 home>/bin`. */
-export const T3_COMMAND = 't3';
 
 /** The `t3` command: `$T3CODE_CLI_PATH`, then `t3` on PATH, then `<T3 home>/bin/t3`, the first one there is. */
 export function t3Command(env: NodeJS.ProcessEnv, t3Home: string): T3Command {

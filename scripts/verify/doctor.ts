@@ -1,18 +1,16 @@
 /**
  * `doctor --drivers`: what a driver claim needs on this machine, read-only. Each sandbox provider's readiness, the driver
- * apps on PATH, each tool's cheapest model, and the keys present, by name. Loaded only for `--drivers`.
+ * host command each step runtime declares, each tool's cheapest model, and the keys present, by name. Loaded only for `--drivers`.
  */
 import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import { z } from 'zod';
 import { collectEnvSecrets } from '@teamai/shared/redact';
-import { PASEO_COMMAND } from '../../packages/runtime-paseo/src/daemon/command.js';
 import { PROVIDER_COMMANDS } from '../../packages/runtime-sandbox/src/provider-commands.js';
 import { VERCEL_AUTH } from '../../packages/runtime-sandbox/src/providers/vercel.js';
-import { T3_COMMAND } from '../../packages/runtime-t3/src/t3-command.js';
 import { priceTokens } from '../../src/token-usage/pricing.js';
-import { TOOL_COMMANDS } from './world.js';
+import { runtimeHostCommands, TOOL_COMMANDS } from './world.js';
 
 /** What `argv` printed, or why it could not say: run in the harness's own environment, never a world's. */
 function probe(argv: readonly string[]): { ok: true; first: string; stdout: string } | { ok: false; why: string } {
@@ -79,15 +77,17 @@ const CHEAPEST_MODEL = {
 } satisfies Record<(typeof TOOL_COMMANDS)[number], () => string | undefined>;
 
 /** Prints the drivers section of doctor. */
-export function doctorDrivers(line: (good: boolean, text: string) => void): void {
+export async function doctorDrivers(line: (good: boolean, text: string) => void): Promise<void> {
   for (const [provider, ready] of Object.entries(PROVIDER_READINESS)) {
     const answer = ready();
     line(answer.ok, answer.ok ? `sandbox ${provider}: ${answer.first}` : `sandbox ${provider}: ${answer.why}: claims on it are UNVERIFIABLE here`);
   }
 
-  for (const app of [T3_COMMAND, PASEO_COMMAND]) {
-    const found = probe(['/bin/sh', '-c', `command -v ${app}`]);
-    line(found.ok, found.ok ? `driver app ${app}: ${found.first}` : `driver app ${app} not on PATH: claims on its runtime are UNVERIFIABLE here`);
+  for (const { runtime, commands } of await runtimeHostCommands()) {
+    for (const command of commands) {
+      const found = probe(['/bin/sh', '-c', `command -v '${command}'`]);
+      line(found.ok, found.ok ? `${runtime} runs ${command}: ${found.first}` : `${runtime} runs ${command}, not on PATH: claims on it are UNVERIFIABLE here`);
+    }
   }
 
   for (const [tool, cheapest] of Object.entries(CHEAPEST_MODEL)) {

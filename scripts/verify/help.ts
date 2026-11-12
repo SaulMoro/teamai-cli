@@ -42,7 +42,7 @@ More:
 
 const DRIVERS = `Where a step runs. A driver claim names the driver and proves its end state below, with the ledger CLEAN.
 A ledger section or an observer line that says NOT OBSERVED proves nothing for that part: the claim is UNVERIFIABLE there.
-\`doctor --drivers\` says which providers and driver apps this machine has.
+\`doctor --drivers\` says which providers this machine has, and which host commands each step runtime runs.
 
   local     teamai <run> workflow start <wf> --driver local
             ends: the run's outcome; (f) no world process left, no open attempt place left

@@ -11,7 +11,7 @@ import type { RuntimeFailure } from '@teamai/runtime-protocol';
 import type WebSocket from 'ws';
 import { z } from 'zod';
 import { clientInApp } from './app-client.js';
-import { PASEO_COMMAND } from './command.js';
+import { PASEO_COMMAND } from '../host-commands.js';
 import { readRegularFileSync } from '@teamai/shared/regular-file';
 
 // ─── The Paseo client ────────────────────────────────────

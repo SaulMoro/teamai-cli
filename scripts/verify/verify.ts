@@ -95,7 +95,7 @@ async function cleanup(world: World): Promise<boolean> {
 async function main(): Promise<number> {
   switch (verb) {
     case 'world': {
-      const world = createWorld();
+      const world = await createWorld();
       console.error(`World ${world.dir}\nBuild ${world.build.commit.slice(0, 12)}${world.build.dirty ? '+dirty' : ''}, teamai ${world.build.version}, sha256 ${world.build.sha256.slice(0, 12)}`);
       console.log(world.runId);
 
@@ -108,7 +108,7 @@ async function main(): Promise<number> {
 
       if (rest.includes('--drivers')) {
         const { doctorDrivers } = await import('./doctor.js');
-        doctorDrivers((good, text) => console.log(`${good ? 'ok  ' : 'warn'} ${text}`));
+        await doctorDrivers((good, text) => console.log(`${good ? 'ok  ' : 'warn'} ${text}`));
       }
 
       return 0;
