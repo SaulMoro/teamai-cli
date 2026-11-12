@@ -17,6 +17,7 @@ export const PROCESS_STARTERS = new Set([
   'child_process',
   'node:child_process',
   'cross-spawn',
+  '@teamai/runtime-kit/journal',
   '@teamai/runtime-testing/connect',
   '@teamai/runtime-testing/leaks',
   '@teamai/runtime-tools',
