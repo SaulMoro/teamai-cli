@@ -3880,7 +3880,7 @@ describe('uninstall', () => {
     expect(await fse.pathExists(path.join(homeDir, '.claude'))).toBe(true);
   });
 
-  it('keeps a staging folder a copy on this host still writes, or may, and the skills directory with it', async () => {
+  it('keeps a staging folder a copy on this host or another sharing the home still writes, or may, and the skills directory with it', async () => {
     const { homeDir, repoPath } = await setupFixture(tmpDir);
     vi.stubEnv('HOME', homeDir);
     vi.stubEnv('SHELL', '/bin/zsh');
@@ -3893,6 +3893,14 @@ describe('uninstall', () => {
     // An owner whose pid runs but whose start nothing records: whether it still copies cannot be told.
     const untold = path.join(homeDir, '.claude', 'skills', '.review.0c1d2e3f.staging');
     await fse.outputJson(path.join(untold, 'owner.json'), { pid: copier.pid, host: os.hostname() });
+    // A container sharing this home copies a skill now: its pid names nothing here, and its folder is fresh.
+    const elsewhere = path.join(homeDir, '.claude', 'skills', '.review.7d8e9f0a.staging');
+    await fse.outputJson(path.join(elsewhere, 'owner.json'), { pid: 4242, startedAt: new Date().toISOString(), host: 'teamai-container' });
+    // One another host left two hours ago is a copy that died there.
+    const leftElsewhere = path.join(homeDir, '.claude', 'skills', '.review.9a0b1c2d.staging');
+    await fse.outputJson(path.join(leftElsewhere, 'owner.json'), { pid: 4242, startedAt: new Date().toISOString(), host: 'teamai-container' });
+    const twoHoursAgo = new Date(Date.now() - 2 * 3_600_000);
+    await fse.utimes(leftElsewhere, twoHoursAgo, twoHoursAgo);
     mockAutoDetectInit.mockResolvedValue({ localConfig: makeLocalConfig(homeDir, repoPath), teamConfig: makeTeamConfig() });
     commitTeamRepo(repoPath);
     vi.mocked(log.warn).mockClear();
@@ -3902,9 +3910,11 @@ describe('uninstall', () => {
     expect(await fse.pathExists(path.join(homeDir, '.claude', 'skills', 'team-skill'))).toBe(false);
     expect(await fse.pathExists(writing)).toBe(true);
     expect(await fse.pathExists(untold)).toBe(true);
+    expect(await fse.pathExists(elsewhere)).toBe(true);
+    expect(await fse.pathExists(leftElsewhere)).toBe(false);
     // Each is named, so the member knows why the skills directory stays.
     const warnings = vi.mocked(log.warn).mock.calls.map(([message]) => String(message));
-    expect(warnings).toEqual(expect.arrayContaining([expect.stringContaining(`Kept ${writing}:`), expect.stringContaining(`Kept ${untold}:`)]));
+    expect(warnings).toEqual(expect.arrayContaining([expect.stringContaining(`Kept ${writing}:`), expect.stringContaining(`Kept ${untold}:`), expect.stringContaining(`Kept ${elsewhere}:`)]));
   });
 
   it('keeps an empty folder of the member\'s in the skills directory, and the directory with it', async () => {
