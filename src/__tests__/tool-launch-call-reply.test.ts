@@ -11,8 +11,8 @@ import { createToolCaller } from '../workflow/runtimes/tool-caller.js';
 const made: string[] = [];
 const agents: FakeAgent[] = [];
 
-afterEach(() => {
-  const left = agents.splice(0).flatMap((agent) => agent.stopLeft());
+afterEach(async () => {
+  const left = (await Promise.all(agents.splice(0).map((agent) => agent.stopLeft()))).flat();
 
   vi.unstubAllEnvs();
   for (const dir of made.splice(0)) fs.rmSync(dir, { recursive: true, force: true });

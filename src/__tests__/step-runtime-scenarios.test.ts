@@ -2682,7 +2682,7 @@ describe('StepRuntime scenarios: fleet with two installs', () => {
       expect(fs.readFileSync(seen, 'utf8')).toBe('https://deploy.example|');
     } finally {
       vi.unstubAllEnvs();
-      expect(claude.stopLeft(), 'fake agents left running').toEqual([]);
+      expect(await claude.stopLeft(), 'fake agents left running').toEqual([]);
     }
   }, 60_000);
 
@@ -3072,7 +3072,7 @@ done`);
       expect(claude.calls()).toEqual([expect.objectContaining({ args: expect.arrayContaining([expect.stringContaining('Review the work first.')]) })]);
     } finally {
       vi.unstubAllEnvs();
-      expect(claude.stopLeft(), 'fake agents left running').toEqual([]);
+      expect(await claude.stopLeft(), 'fake agents left running').toEqual([]);
     }
   }, 90_000);
 
@@ -3110,7 +3110,7 @@ done`);
       expect(await restarted.reattach(handle)).toMatchObject({ kind: 'alive', ops: [{ op, state: 'cancelled', stdout: end.kind === 'cancelled' ? end.stdout : '' }] });
     } finally {
       vi.unstubAllEnvs();
-      expect(claude.stopLeft(), 'fake agents left running').toEqual([]);
+      expect(await claude.stopLeft(), 'fake agents left running').toEqual([]);
     }
   }, 120_000);
 
@@ -3140,7 +3140,7 @@ done`);
       expect(claude.calls()).toEqual([expect.objectContaining({ args: expect.arrayContaining([expect.stringContaining('Review the work first.')]) })]);
     } finally {
       vi.unstubAllEnvs();
-      expect(claude.stopLeft(), 'fake agents left running').toEqual([]);
+      expect(await claude.stopLeft(), 'fake agents left running').toEqual([]);
     }
   }, 90_000);
 
@@ -3169,7 +3169,7 @@ done`);
       expect(JSON.stringify(claude.calls())).not.toContain('A prompt this host rendered.');
     } finally {
       vi.unstubAllEnvs();
-      expect(claude.stopLeft(), 'fake agents left running').toEqual([]);
+      expect(await claude.stopLeft(), 'fake agents left running').toEqual([]);
     }
   }, 60_000);
 
@@ -3194,7 +3194,7 @@ done`);
       expect(await ended).toMatchObject({ kind: 'finished', session: { tool: 'claude' }, result: { failure: { code: 'usage_limited', message: expect.stringContaining('claude hit its usage limit: You\'ve hit your limit · resets 3pm (Europe/Madrid)') } } });
     } finally {
       vi.unstubAllEnvs();
-      expect(claude.stopLeft(), 'fake agents left running').toEqual([]);
+      expect(await claude.stopLeft(), 'fake agents left running').toEqual([]);
     }
   }, 60_000);
 

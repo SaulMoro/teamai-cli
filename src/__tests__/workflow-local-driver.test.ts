@@ -37,8 +37,8 @@ _setDriverPollMs(20);
 
 const fakeAgents: FakeAgent[] = [];
 
-afterEach(() => {
-  const left = fakeAgents.splice(0).flatMap((agent) => agent.stopLeft());
+afterEach(async () => {
+  const left = (await Promise.all(fakeAgents.splice(0).map((agent) => agent.stopLeft()))).flat();
 
   vi.restoreAllMocks();
   vi.unstubAllEnvs();

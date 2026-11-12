@@ -1,4 +1,4 @@
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawn } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -21,8 +21,8 @@ const RECORDING: FakeAgentRecording = {
 
 const made: string[] = [];
 
-afterEach(() => {
-  const left = leftFakeAgents();
+afterEach(async () => {
+  const left = await leftFakeAgents();
 
   for (const dir of made.splice(0)) fs.rmSync(dir, { recursive: true, force: true });
   expect(left, 'fake agents left running').toEqual([]);
@@ -39,18 +39,47 @@ function scratch(): string {
 const GIT_ENV = { GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@example.com', GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@example.com' };
 
 describe('fakeAgent', () => {
-  it('signals no pid below 2 that its pid list names, as a line read while a fake still wrote it can', () => {
+  it('signals no pid below 2 that its pid list names, as a line read while a fake still wrote it can', async () => {
     const cwd = scratch();
     const agent = fakeAgent(RECORDING, { bin: path.join(cwd, 'b') });
     fs.writeFileSync(path.join(cwd, 'b', 'tool.pids'), '0\n1\n');
     // Spied, so a regression reaches no process: pid 0 is this test run's own group, and 1 is init.
     const kill = vi.spyOn(process, 'kill').mockReturnValue(true);
     try {
-      expect(agent.stopLeft()).toEqual([]);
+      expect(await agent.stopLeft()).toEqual([]);
       expect(kill).not.toHaveBeenCalled();
     } finally {
       kill.mockRestore();
     }
+  });
+
+  it.skipIf(process.platform === 'win32')('kills no process whose pid a fake that ended recorded, once the system gave that pid to another process', async () => {
+    const cwd = scratch();
+    const agent = fakeAgent(RECORDING, { bin: path.join(cwd, 'b') });
+    // The record a fake that ended left, whose pid the system then gave to a process this fake never started.
+    const ended = Date.now() - 60_000;
+    const other = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000);'], { stdio: 'ignore' });
+    const exited = new Promise((resolve) => { other.on('exit', resolve); });
+    fs.writeFileSync(path.join(cwd, 'b', 'tool.pids'), `${JSON.stringify({ pid: other.pid, spawnedAt: ended })}\n`);
+
+    try {
+      expect(await agent.stopLeft()).toEqual([]);
+      expect(other.exitCode === null && other.signalCode === null, 'the other process still runs').toBe(true);
+    } finally {
+      other.kill('SIGKILL');
+      await exited;
+    }
+  });
+
+  it.skipIf(process.platform === 'win32')('kills a fake it left running, whoever started it', async () => {
+    const cwd = scratch();
+    const agent = fakeAgent(RECORDING, { bin: path.join(cwd, 'b') });
+    const left = spawn(agent.executable, [], { cwd, stdio: ['pipe', 'pipe', 'ignore'] });
+    const ended = new Promise<NodeJS.Signals | null>((resolve) => { left.on('exit', (_code, signal) => resolve(signal)); });
+    await new Promise((resolve) => { left.stdout.once('data', resolve); left.stdin.end(FAKE_AGENT_MARKERS.hang); });
+
+    expect(await agent.stopLeft()).toEqual([left.pid]);
+    expect(await ended).toBe('SIGKILL');
   });
 
   it('answers --version, records each call, and prints the recording', async () => {
