@@ -316,7 +316,7 @@ export async function loadTeamConfig(repoPath: string, member?: LocalConfig): Pr
   try {
     const raw = parseYaml(content);
 
-    return await withToolInstances({ root: repoPath, scope: member?.scope, namespaces: () => memberNamespaces(repoPath, member) }, TeamaiConfigSchema.parse(raw));
+    return await withToolInstances({ root: repoPath, scope: member?.scope, isForMember: member !== undefined, namespaces: () => memberNamespaces(repoPath, member) }, TeamaiConfigSchema.parse(raw));
   } catch (e) {
     log.error(`Invalid teamai.yaml: ${describeConfigError(e)}`);
 

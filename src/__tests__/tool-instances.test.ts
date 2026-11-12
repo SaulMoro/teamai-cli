@@ -183,7 +183,7 @@ describe('team tool instances', () => {
     expect(registry.toolOf('acme-claude')?.instance?.command).toBe('acme-claude-web');
   });
 
-  it('reads an instance in a namespace only for the member it is given, whose project or role selects it, as drivers and workflows are', async () => {
+  it('reads an instance in a namespace only for the member it is given, whose project or role selects it, as drivers and workflows are, until another member is given', async () => {
     const repo = teamRepo({
       'manifest/projects.yaml': 'version: 1\nprojects:\n  - id: checkout\n    resources: { workflows: [web] }\n  - id: billing\n    resources: { workflows: [mobile] }\n',
       'tools/web/web-claude.yaml': ACME_CLAUDE.replaceAll('acme-claude', 'web-claude'),
@@ -199,6 +199,9 @@ describe('team tool instances', () => {
     expect(registry.toolOf('mobile-claude')?.instance?.command).toBe('mobile-claude');
     expect(registry.toolOf('web-claude')).toBeUndefined();
     expect(config?.toolPaths['web-claude']).toBeUndefined();
+    // A later load that reads only a field of teamai.yaml, given no member, leaves the member's instances in place.
+    await load(repo);
+    expect(registry.toolOf('mobile-claude')?.instance?.command).toBe('mobile-claude');
   });
 
   it('reads only the root instances of a team repo whose manifest selects namespaces, when given no member', async () => {

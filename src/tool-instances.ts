@@ -182,6 +182,8 @@ function usable(parsed: ReturnType<typeof parseToolInstance> | undefined): Resol
 /** The team's layers a scope reads its instances from, and which scope that is: a workspace's instance replaces the user scope's. */
 export interface TeamToolTree extends TeamTree {
   readonly scope: Scope | undefined;
+  /** Whether it is read for a member, whose namespaces and scope it has, rather than for a field of teamai.yaml alone. */
+  readonly isForMember: boolean;
 }
 
 /**
@@ -251,7 +253,7 @@ export async function personalToolInstances(): Promise<ResolvedToolInstance[]> {
 // ─── The instances this process sees ─────────────────────
 
 /** The instances read from each team repo this process loaded, by repo path, with the scope that repo serves. */
-const teamByRepo = new Map<string, { readonly scope: Scope | undefined; readonly instances: readonly ResolvedToolInstance[] }>();
+const teamByRepo = new Map<string, { readonly scope: Scope | undefined; readonly instances: readonly ResolvedToolInstance[]; readonly isForMember: boolean }>();
 let personal: readonly ResolvedToolInstance[] = [];
 let readsPersonal = true;
 
@@ -324,7 +326,10 @@ export function defaultPathsOf(instance: ResolvedToolInstance): z.infer<typeof T
  */
 export async function withToolInstances(tree: TeamToolTree, config: TeamaiConfig): Promise<TeamaiConfig> {
   const [team, own] = await Promise.all([teamToolInstances(tree), readsPersonal ? personalToolInstances() : []]);
-  teamByRepo.set(tree.root, { scope: tree.scope, instances: team });
+
+  // A read for no member never replaces the member's instances, which another loader of this process published.
+  if (tree.isForMember || teamByRepo.get(tree.root)?.isForMember !== true) teamByRepo.set(tree.root, { scope: tree.scope, instances: team, isForMember: tree.isForMember });
+
   personal = own;
   publish();
 
