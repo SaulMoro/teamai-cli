@@ -250,7 +250,7 @@ For each step, the runtime registers the step's tool on that socket, and T3 star
 The step's session is read in the attempt's tool home, where the sandbox runs the tool. With a provider that serves no socket (`seatbelt`, `vercel`), the step fails before any thread starts, and teamai adds no instance:
 
 ```text
-✖ Step "count" failed with runtime_failed: Step runtime "t3 through sandbox" could not open attempt abf6c98bd (open_failed): Runtime t3 runs a tool through another runtime only on that runtime's attempt socket, and teamai could not register this step's tool on it (its handle names no attempt socket), so the sandbox would refuse the tool. Run T3 through a sandbox provider that serves one: docker, podman, sbx or bwrap.
+✖ Step "count" failed with runtime_failed: Step runtime "t3 through sandbox" could not open attempt abf6c98bd (open_failed): Runtime t3 runs a tool through another runtime only on that runtime's attempt socket, and teamai could not register this step's tool on it (its handle names no attempt socket), so the sandbox would refuse the tool. Run T3 through a sandbox provider that serves one: docker, on an image that holds node, or sbx.
 ```
 
 ## Project scripts

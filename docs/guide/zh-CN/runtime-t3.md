@@ -250,7 +250,7 @@ T3 不提供这个工具时（命令不在你的 PATH 上、有两个实例都�
 步骤的会话从这次尝试的工具主目录读取，沙箱就在那里运行工具。如果提供方不提供套接字（`seatbelt`、`vercel`），步骤会在任何线程启动之前失败，teamai 也不会添加实例：
 
 ```text
-✖ Step "count" failed with runtime_failed: Step runtime "t3 through sandbox" could not open attempt abf6c98bd (open_failed): Runtime t3 runs a tool through another runtime only on that runtime's attempt socket, and teamai could not register this step's tool on it (its handle names no attempt socket), so the sandbox would refuse the tool. Run T3 through a sandbox provider that serves one: docker, podman, sbx or bwrap.
+✖ Step "count" failed with runtime_failed: Step runtime "t3 through sandbox" could not open attempt abf6c98bd (open_failed): Runtime t3 runs a tool through another runtime only on that runtime's attempt socket, and teamai could not register this step's tool on it (its handle names no attempt socket), so the sandbox would refuse the tool. Run T3 through a sandbox provider that serves one: docker, on an image that holds node, or sbx.
 ```
 
 ## 项目脚本

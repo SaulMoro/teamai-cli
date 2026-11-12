@@ -40,9 +40,9 @@ export async function openThrough(state: ProcessState, live: Daemon, request: Ex
   const { op, outer, view } = request;
   const cannot = (why: string): RuntimeFailure => ({ code: 'tool_unavailable', message: `teamai-runtime-paseo cannot run ${target.name} through the sandbox on the Paseo daemon at ${live.url}: ${why}. Then run the step again.` });
 
-  // Seatbelt and vercel answer a plain handle: they serve no attempt socket, so no wrapper could be granted there.
+  // A provider at isolation worktree, and vercel, answer a plain handle: no wrapper could be granted there.
   if (socketOf(outer) === undefined) {
-    return { code: 'open_failed', message: 'Runtime paseo runs a tool through another runtime only on that runtime\'s attempt socket, and teamai could not register this step\'s tool on it (its handle names no attempt socket), so the sandbox would refuse the tool. Run Paseo through a sandbox provider that serves one: docker, podman, sbx or bwrap.' };
+    return { code: 'open_failed', message: 'Runtime paseo runs a tool through another runtime only on that runtime\'s attempt socket, and teamai could not register this step\'s tool on it (its handle names no attempt socket), so the sandbox would refuse the tool. Run Paseo through a sandbox provider that serves one: docker, on an image that holds node, or sbx.' };
   }
 
   if (target.tool === 'opencode') return cannot('Paseo may serve several agents from one OpenCode server, so the sandbox cannot tell the step\'s agent from another; run OpenCode steps through the sandbox on another runtime');

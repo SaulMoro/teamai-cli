@@ -167,7 +167,7 @@ describe('teamai-runtime-paseo', () => {
 
     expect(await runtime.next((line) => isOp('op-0000000a', 'ready')(line) || isOp('op-0000000a', 'failed')(line))).toMatchObject({
       event: 'failed',
-      failure: { code: 'open_failed', message: 'Runtime paseo runs a tool through another runtime only on that runtime\'s attempt socket, and teamai could not register this step\'s tool on it (its handle names no attempt socket), so the sandbox would refuse the tool. Run Paseo through a sandbox provider that serves one: docker, podman, sbx or bwrap.' },
+      failure: { code: 'open_failed', message: 'Runtime paseo runs a tool through another runtime only on that runtime\'s attempt socket, and teamai could not register this step\'s tool on it (its handle names no attempt socket), so the sandbox would refuse the tool. Run Paseo through a sandbox provider that serves one: docker, on an image that holds node, or sbx.' },
     });
     expect(received().map((crossed) => crossed.type)).not.toContain('set_daemon_config_request');
   });
