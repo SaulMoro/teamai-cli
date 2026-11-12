@@ -2,6 +2,7 @@ import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { runLedger } from './ledger.js';
+import { passedKeys, splitPassOption } from './secrets.js';
 import { parseTarget, runOn } from './target.js';
 import { checkoutStatus, createWorld, git, liveWorlds, loadWorld, REPO_ROOT, saveWorld, TEAM_URL, TOOL_COMMANDS, type World } from './world.js';
 
@@ -91,11 +92,15 @@ async function main(): Promise<number> {
       return 0;
     case 'teamai':
     case 'sh': {
-      if (verb === 'sh' && rest.length < 2) throw new Error('sh needs a run id and a command.');
       const { runId, target } = parseTarget(rest[0]);
-      const argv = verb === 'teamai' ? ['teamai', ...rest.slice(1)] : rest.slice(1);
+      const { names, argv: command } = splitPassOption(rest.slice(1));
+      const passed = passedKeys(names, process.env);
 
-      return (await runOn(loadWorld(runId), target, argv)).exit;
+      if (!passed.ok) throw new Error(`--pass names ${passed.missing.join(', ')}, which this shell does not set to a value. Export each one first, or leave it out.`);
+      if (verb === 'sh' && command.length === 0) throw new Error('sh needs a run id and a command.');
+      const argv = verb === 'teamai' ? ['teamai', ...command] : command;
+
+      return (await runOn(loadWorld(runId), target, argv, { pass: passed.keys })).exit;
     }
 
     case 'ledger':

@@ -291,7 +291,7 @@ async function reverseState(world: World): Promise<Section> {
     ),
   );
 
-  const { exit: status } = await runOn(world, { kind: 'world' }, ['teamai', 'uninstall', '--force']);
+  const { exit: status } = await runOn(world, { kind: 'world' }, ['teamai', 'uninstall', '--force'], { pass: new Map() });
   const after = worldFiles(world);
   const leaks = status === 0 ? [] : [`teamai uninstall exited ${status}`];
 
