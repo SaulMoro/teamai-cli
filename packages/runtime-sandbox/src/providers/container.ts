@@ -422,7 +422,11 @@ export function containerProvider({ engine, image, owner, host, warm, profile }:
     },
 
     name: handleOf,
-    display: (key) => ({ label: `${handleOf(key)} (${engine})`, fields: { container: handleOf(key), image } }),
+    display: (key, warmed) => {
+      const ran = warm === undefined ? image : warmed?.image;
+
+      return { label: `${handleOf(key)} (${engine})`, fields: { container: handleOf(key), ...(ran !== undefined && { image: ran }), ...(warm !== undefined && { base: image }) } };
+    },
 
     removal: (place) => (place.confined
       ? `remove it with \`${engine} rm --force ${handleOf(place)} ${filterOf(place)}\` and \`${engine} network rm ${networkOf(place)}\``

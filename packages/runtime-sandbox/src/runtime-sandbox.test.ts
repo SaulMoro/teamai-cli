@@ -3025,7 +3025,12 @@ describe('a warm image', () => {
       return openAttempt(connection, checkout(), attempt);
     };
 
-    expect(await opened('./Containerfile', 'rev-1', 'a0123abc1')).toMatchObject({ event: 'ready' });
+    const first = await opened('./Containerfile', 'rev-1', 'a0123abc1');
+    const tag = builds().saves[0]?.find((argument) => argument.startsWith('teamai-warm:'));
+
+    // The container ran the warm image, not the base the profile names, and says which profile at which revision.
+    expect(tag).toMatch(/^teamai-warm:[0-9a-f]{16}$/);
+    expect(first).toMatchObject({ event: 'ready', display: { fields: { container: expect.stringContaining('a0123abc1'), image: tag, profile: 'gpu, revision rev-1' } } });
     expect(await opened('./Containerfile', 'rev-1', 'a0123abc2')).toMatchObject({ event: 'ready' });
     expect(await opened('./Containerfile', 'rev-2', 'a0123abc3')).toMatchObject({ event: 'ready' });
     expect(builds().saves).toHaveLength(2);

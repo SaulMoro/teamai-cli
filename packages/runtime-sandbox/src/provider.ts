@@ -157,7 +157,11 @@ interface Sandboxing {
   stop(id: string): Promise<{ ok: true } | { ok: false; failure: RuntimeFailure }>;
   /** Removes the sandbox and every process in it; ok once it is gone. It answers within COMMAND_MS. */
   destroy(id: string): Promise<{ ok: true } | { ok: false; failure: RuntimeFailure }>;
-  display(key: PlaceKey): RuntimeDisplay;
+  /**
+   * What a person sees of the attempt's sandbox. `warmed`, what `warm` answered for this open, names the image it ran
+   * from; a sandbox found again knows none, and shows none rather than one it may not have run.
+   */
+  display(key: PlaceKey, warmed?: WarmedImage): RuntimeDisplay;
   /** What the engine names the attempt's sandbox by: a close that leaves it names that in `kept`. */
   name(key: PlaceKey): string;
   /** How a person removes the place by hand, as the end of a sentence: "remove it with `…`". */

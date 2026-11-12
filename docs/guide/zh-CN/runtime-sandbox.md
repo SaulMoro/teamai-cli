@@ -128,7 +128,7 @@ runtimes:
         CLAUDE_CODE_OAUTH_TOKEN: env:CLAUDE_CODE_OAUTH_TOKEN
 ```
 
-第一个打开的步骤会制作它：teamai 把 `cache` 里的文件复制到检出目录之外的临时目录，在一个不带任何凭据的 `image` 容器里于该目录运行 `prepare`，再把结果保存为 `teamai-warm:<key>`。key 由镜像在本机的状态（它的 id，所以拉取了同一标签的新推送也算变化）、配方和 `cache` 文件的内容算出，所以 lockfile 一变就会做新镜像，不变就复用，本次运行和以后的运行都是如此。指向检出目录之外文件的 `cache` 链接会被拒绝。同时打开的步骤只等一次构建。镜像只保留 `prepare` 在该目录之外留下的东西，比如主目录里的缓存（`~/.npm`）或它安装的工具：该目录本身，连同在其中生成的 `node_modules`，都不在镜像里，检出目录的任何文件也不在。setup 照常安装（`npm ci --prefer-offline`），会从缓存取包。用 `docker image ls teamai-warm` 列出，用 `docker image rm` 删除。
+第一个打开的步骤会制作它：teamai 把 `cache` 里的文件复制到检出目录之外的临时目录，在一个不带任何凭据的 `image` 容器里于该目录运行 `prepare`，再把结果保存为 `teamai-warm:<key>`。key 由镜像在本机的状态（它的 id，所以拉取了同一标签的新推送也算变化）、配方和 `cache` 文件的内容算出，所以 lockfile 一变就会做新镜像，不变就复用，本次运行和以后的运行都是如此。指向检出目录之外文件的 `cache` 链接会被拒绝。同时打开的步骤只等一次构建。镜像只保留 `prepare` 在该目录之外留下的东西，比如主目录里的缓存（`~/.npm`）或它安装的工具：该目录本身，连同在其中生成的 `node_modules`，都不在镜像里，检出目录的任何文件也不在。setup 照常安装（`npm ci --prefer-offline`），会从缓存取包。用 `docker image ls teamai-warm` 列出，用 `docker image rm` 删除。步骤的运行详情会显示它的容器实际运行的镜像 `teamai-warm:<key>`、基础镜像，以及 sandbox 档案和它的修订。
 
 在 `docker` 和 `podman` 上，`containerfile: ci/deps.Containerfile` 会构建这个文件而不是运行 `prepare`，构建上下文里只有 `cache` 文件；镜像里会有该文件复制进去的内容。档案放成文件夹时，`containerfile: ./Containerfile` 指的是文件夹自己里面的文件，不能是链接，也不能指到文件夹外面；key 还包含文件夹的修订，所以推送到文件夹的任何改动都会做出新镜像：
 

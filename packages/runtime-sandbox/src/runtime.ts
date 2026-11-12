@@ -2,7 +2,7 @@ import type { Readable } from 'node:stream';
 import { opLedger } from '@teamai/runtime-kit/ledger';
 import type { OuterHandle } from '@teamai/runtime-kit/outer';
 import { serveRuntime } from '@teamai/runtime-kit/serve';
-import type { Can, InitInstance, OpenRequestSchema, OpId, RuntimeFailure, RuntimeMessage, RuntimeRequest } from '@teamai/runtime-protocol';
+import type { Can, InitInstance, OpenRequestSchema, OpId, RuntimeDisplay, RuntimeFailure, RuntimeMessage, RuntimeRequest } from '@teamai/runtime-protocol';
 import type { z } from 'zod';
 import { placeOf, socketPathOf } from './attempt-socket.js';
 import { BOUND_MS, by } from './deadline.js';
@@ -10,10 +10,10 @@ import { execOperations } from './exec.js';
 import type { Journal, PlaceRecord } from './journal.js';
 import { noJudgeCredential, offersSignedIn } from './judge.js';
 import { onThisMachine } from './loopback.js';
-import { parseOptions, type ParsedOptions } from './options.js';
+import { parseOptions, type ParsedOptions, type ProfileOption } from './options.js';
 import { attemptSockets } from './outer.js';
 import { prompts } from './prompt.js';
-import { ATTEMPT_ID, handleOf, RUN_ID, sandboxOf, unreachable, type HostRoute, type Provider } from './provider.js';
+import { ATTEMPT_ID, handleOf, RUN_ID, sandboxOf, unreachable, type HostRoute, type PlaceKey, type Provider, type WarmedImage } from './provider.js';
 import type { UnusedGateways } from './sign-in.js';
 import { sweep } from './sweep.js';
 
@@ -41,10 +41,19 @@ type OpenRequest = z.infer<typeof OpenRequestSchema>;
  */
 export interface Ready {
   provider: Provider;
+  /** The sandbox profile the options came from, shown with every sandbox. */
+  profile?: ProfileOption;
   can: Can;
   host: HostRoute;
   unusedGateways: UnusedGateways;
   instances: ReadonlyMap<string, InitInstance>;
+}
+
+/** What a person sees of the sandbox of `key`: the provider's display, with the profile it was built from and its revision. */
+function shown({ provider, profile }: Ready, key: PlaceKey, warmed?: WarmedImage): RuntimeDisplay {
+  const display = provider.display(key, warmed);
+
+  return profile === undefined ? display : { ...display, fields: { ...display.fields, profile: `${profile.name}, revision ${profile.revision.slice(0, 12)}` } };
 }
 
 /** The host route of a runtime that offered no sandbox: teamai opens no attempt on it. */
@@ -171,7 +180,7 @@ export function serve({ input, write: send, journal, warn, provider: providerFor
 
       journal.savePlace(handle, { ...key, confined: true });
       write({ op, event: 'accepted', handle });
-      write({ op, event: 'ready', display: provider.display(key) });
+      write({ op, event: 'ready', display: shown(current, key) });
 
       return;
     }
@@ -253,7 +262,7 @@ export function serve({ input, write: send, journal, warn, provider: providerFor
       write({ event: 'notice', op, message: unused.notice });
     }
 
-    write({ op, event: 'ready', display: provider.display(key) });
+    write({ op, event: 'ready', display: shown(current, key, warmed.warmed) });
   };
 
   /**
@@ -317,7 +326,7 @@ export function serve({ input, write: send, journal, warn, provider: providerFor
       if (!served.ok) warn(`teamai-runtime-sandbox: warning: ${served.failure.message}. The step's tool cannot start in its sandbox until it can.`);
     }
 
-    write({ event: 'alive', handle, ops: journal.opsOf(placeKey).map(({ op, record }) => execs.reported(op, record)), display: provider.display(place) });
+    write({ event: 'alive', handle, ops: journal.opsOf(placeKey).map(({ op, record }) => execs.reported(op, record)), display: shown(ready, place) });
   };
 
   /** Removes the place's sandbox, and a judge's filter and network: ok once the provider confirmed they are gone. */
@@ -433,7 +442,7 @@ export function serve({ input, write: send, journal, warn, provider: providerFor
     }
 
     if (mode === 'recover') {
-      ready = { provider, can: {}, host: NOT_OFFERED, unusedGateways: {}, instances: new Map() };
+      ready = { provider, ...(parsed.options.profile && { profile: parsed.options.profile }), can: {}, host: NOT_OFFERED, unusedGateways: {}, instances: new Map() };
       write({ type: 'init', ok: true, can: {} });
 
       return;
@@ -451,7 +460,7 @@ export function serve({ input, write: send, journal, warn, provider: providerFor
     const { confined: offers = [], ...rest } = offered.can;
     const judges = credentials === undefined ? offers : offersSignedIn(offers, credentials.env);
     const can: Can = { ...rest, ...(judges.length > 0 && { confined: judges }) };
-    ready = { provider, can, host: offered.host, unusedGateways: offered.unusedGateways, instances: new Map(instances.map((instance) => [instance.name, instance])) };
+    ready = { provider, ...(parsed.options.profile && { profile: parsed.options.profile }), can, host: offered.host, unusedGateways: offered.unusedGateways, instances: new Map(instances.map((instance) => [instance.name, instance])) };
 
     // The wrapper runs a link named after an instance outside any attempt too (`--version`): it reads them here.
     if (instances.length > 0) {

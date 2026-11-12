@@ -78,7 +78,9 @@ export function attemptSockets({ journal, ready }: { journal: Journal; ready: ()
 
     if (!held.split('\n').includes(command)) {
       const { fields = {} } = provider.display(record);
-      const where = fields.image !== undefined ? `image ${fields.image}` : fields.agent !== undefined ? `template ${fields.agent}` : provider.display(record).label;
+      // A warm image is made from the base, so the base is where the command is to be added.
+      const image = fields.base ?? fields.image;
+      const where = image !== undefined ? `image ${image}` : fields.agent !== undefined ? `template ${fields.agent}` : provider.display(record).label;
 
       return { ok: false, failure: { code: 'tool_unsupported', message: `${command} is not installed in this sandbox (${where}). Add it to the image or template the sandbox starts from, or run the step with --driver local.` } };
     }
