@@ -4,6 +4,7 @@ import path from 'node:path';
 import { z } from 'zod';
 import { OpIdSchema, OpStateSchema, RuntimeOptionsSchema, type OpId } from '@teamai/runtime-protocol';
 import { readRegularFileSync } from '@teamai/shared/regular-file';
+import { HostRouteSchema } from './provider.js';
 
 // ─── The journal ─────────────────────────────────────────
 //
@@ -48,6 +49,8 @@ const PlaceRecordSchema = z.object({
   outer: z.object({ socket: z.string(), worktree: z.string(), toolHome: z.record(z.string(), z.string()) }).optional(),
   /** The options teamai opened it with, so a stop reaches its sandbox on that provider after the profile names another. */
   options: RuntimeOptionsSchema.optional(),
+  /** How its sandbox reaches this machine, as the provider it was opened on said, which its execs' credentials keep. */
+  host: HostRouteSchema.optional(),
 });
 
 export type PlaceRecord = z.infer<typeof PlaceRecordSchema>;

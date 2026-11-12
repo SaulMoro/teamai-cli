@@ -68,6 +68,9 @@ function shown({ provider, profile }: Ready, key: PlaceKey, warmed?: WarmedImage
 /** The host route of a runtime that offered no sandbox: teamai opens no attempt on it. */
 const NOT_OFFERED: HostRoute = { ok: false, refusal: 'This sandbox runtime offered no sandbox, so it opens none.' };
 
+/** The host route of a place an earlier runtime opened on other options and kept none of: its URLs on this machine stay as given. */
+const OPENED_ELSEWHERE: HostRoute = { ok: false, refusal: 'This sandbox was opened by an earlier runtime that kept no route to this machine.' };
+
 /** The answer to a `check` init, which asks only whether a run could start now, signing in, writing and launching nothing. */
 const CHECK_UNSUPPORTED: RuntimeFailure = {
   code: 'check_unsupported',
@@ -132,7 +135,7 @@ export function serve({ input, write: send, journal, warn, provider: providerFor
   const ledger = opLedger({ name: 'sandbox', write: send });
   const { write } = ledger;
   const execs = execOperations({ journal, ledger });
-  const sockets = attemptSockets({ journal, ready: () => ready });
+  const sockets = attemptSockets({ journal, readyOf: (place) => readyOfPlace(place) });
 
   /**
    * What an answer about `handle` names in `kept` when the runtime leaves its sandbox: the sandbox, by the name its
@@ -187,7 +190,7 @@ export function serve({ input, write: send, journal, warn, provider: providerFor
         return;
       }
 
-      journal.savePlace(handle, { ...key, confined: true, ...(current.options && { options: current.options }) });
+      journal.savePlace(handle, { ...key, confined: true, ...(current.options && { options: current.options }), host: current.host });
       write({ op, event: 'accepted', handle });
       write({ op, event: 'ready', display: shown(current, key) });
 
@@ -208,7 +211,7 @@ export function serve({ input, write: send, journal, warn, provider: providerFor
       }
     }
 
-    journal.savePlace(handle, { ...key, toolHome: view.toolHome, ...(outer && { outer }), ...(current.options && { options: current.options }) });
+    journal.savePlace(handle, { ...key, toolHome: view.toolHome, ...(outer && { outer }), ...(current.options && { options: current.options }), host: current.host });
     write({ op, event: 'accepted', handle: outer === undefined ? handle : JSON.stringify({ place: handle, socket: outer.socket } satisfies OuterHandle) });
     // Its own place is saved first, so the sweep keeps it.
     void sweep({ provider, journal, warn });
@@ -249,7 +252,7 @@ export function serve({ input, write: send, journal, warn, provider: providerFor
         return { ok: false, failure: { code: 'sandbox_failed', message: `Attempt ${attempt} was closed while its sandbox was being made, ${removal}.` } };
       }
 
-      journal.savePlace(handle, { ...key, toolHome: view.toolHome, ...(outer && { outer }), ...(current.options && { options: current.options }), id: created.id });
+      journal.savePlace(handle, { ...key, toolHome: view.toolHome, ...(outer && { outer }), ...(current.options && { options: current.options }), host: current.host, id: created.id });
 
       return created;
     };
@@ -502,24 +505,25 @@ export function serve({ input, write: send, journal, warn, provider: providerFor
   const prompt = prompts({ journal, ledger, env, execs, creation });
 
   /**
-   * The provider that reaches the place of `handle`: the one its sandbox was opened with, when the options teamai gives
-   * now name another, such as after the member's own `default` profile came to replace the team's. A record that
-   * cannot be read leaves it to the request, which says so.
+   * What reaches the place of `handle`: the provider its sandbox was opened with, and the way that one reaches this
+   * machine, when the options teamai gives now name another, such as after the member's own `default` profile came to
+   * replace the team's. Every request about a place goes through it, the ones that run work there as well as the stops.
+   * A record that cannot be read leaves it to the request, which says so.
    */
-  const providerOfPlace = (handle: string | undefined): Provider => {
-    let kept: RuntimeOptions | undefined;
+  const readyOfPlace = (handle: string | undefined): Ready => {
+    let kept: PlaceRecord | undefined;
 
     try {
-      kept = handle === undefined ? undefined : journal.place(placeOf(handle))?.options;
+      kept = handle === undefined ? undefined : journal.place(placeOf(handle));
     } catch {
-      return ready.provider;
+      return ready;
     }
 
     // Until an init succeeds, nothing is reached: `options` is set only by one that did.
-    if (kept === undefined || ready.options === undefined || sameOptions(kept, ready.options)) return ready.provider;
-    const parsed = parseOptions(kept);
+    if (kept?.options === undefined || ready.options === undefined || sameOptions(kept.options, ready.options)) return ready;
+    const parsed = parseOptions(kept.options);
 
-    return parsed.ok ? providerFor(parsed.options) : ready.provider;
+    return parsed.ok ? { ...ready, provider: providerFor(parsed.options), host: kept.host ?? OPENED_ELSEWHERE } : ready;
   };
 
   const handleOfOp = (op: OpId): string | undefined => {
@@ -538,14 +542,14 @@ export function serve({ input, write: send, journal, warn, provider: providerFor
     handlers: {
       init,
       open: (request) => open(request, ready),
-      exec: (request) => execs.exec(request, ready),
-      prompt: (request) => prompt(request, ready),
-      cancel: ({ op }) => execs.cancel(op, providerOfPlace(handleOfOp(op))),
-      collect: ({ handle }) => collect(handle, providerOfPlace(handle)),
-      reattach: ({ handle, credentials, unset }) => reattach(handle, providerOfPlace(handle), credentials, unset),
+      exec: (request) => execs.exec(request, readyOfPlace(request.handle)),
+      prompt: (request) => prompt(request, readyOfPlace(request.handle)),
+      cancel: ({ op }) => execs.cancel(op, readyOfPlace(handleOfOp(op)).provider),
+      collect: ({ handle }) => collect(handle, readyOfPlace(handle).provider),
+      reattach: ({ handle, credentials, unset }) => reattach(handle, readyOfPlace(handle).provider, credentials, unset),
       async close({ handle, release: isReleased }) {
         try {
-          await close(handle, providerOfPlace(handle), isReleased === true);
+          await close(handle, readyOfPlace(handle).provider, isReleased === true);
         } catch (error) {
           // A place the person released is forgotten all the same, however much of its record can be read, and its
           // sandbox is left. One not released stays in the journal for a close once its record can be read.

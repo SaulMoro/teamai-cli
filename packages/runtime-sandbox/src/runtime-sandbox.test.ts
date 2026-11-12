@@ -1129,6 +1129,24 @@ describe('a prompt attempt in a container', () => {
     expect(engine.containers()).toEqual([]);
   });
 
+  it('runs an exec in a place on the provider it was opened with, when a resume after a profile change inits another one', async () => {
+    const first = start();
+    await init(first, { provider: 'docker', image: IMAGE });
+    const at = place();
+    await openPlace(first, at);
+    first.child.kill('SIGKILL');
+    await first.end();
+    const second = start();
+
+    expect(await init(second, { provider: 'podman', image: IMAGE })).toMatchObject({ ok: true });
+    const before = engine.calls().length;
+
+    expect(await exec(second, { argv: ['/bin/sh', '-c', 'echo again'], cwd: at.worktree })).toMatchObject({ end: { event: 'exited', code: 0 }, output: 'again\n' });
+    expect(engine.calls().slice(before).filter(([, command]) => command === 'exec').map(([name]) => name)).toEqual(['docker']);
+    second.send({ type: 'close', handle: HANDLE });
+    expect(await second.next((message) => message.event === 'closed' || message.event === 'close_failed', 30_000)).toEqual({ event: 'closed', handle: HANDLE });
+  });
+
   it('stops a place on the options it was opened with when teamai, whose profile is gone, gives none', async () => {
     const first = start();
     await init(first, { provider: 'docker', image: IMAGE });

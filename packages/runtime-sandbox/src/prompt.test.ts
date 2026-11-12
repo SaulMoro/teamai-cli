@@ -154,6 +154,21 @@ describe('a prompt step in the attempt\'s container', () => {
     expect(launched(at).cwd).toBe(at.worktree);
   });
 
+  it('runs a prompt in a place on the provider it was opened with, when a resume after a profile change inits another one', async () => {
+    const first = start();
+    await init(first);
+    const at = await openPlace(first);
+    first.child.kill('SIGKILL');
+    await first.end();
+    const second = start();
+    second.send({ type: 'init', protocol: 1, mode: 'unattended', options: { provider: 'podman', image: IMAGE }, credentials: { env: ['ANTHROPIC_API_KEY'], logins: [] } });
+    expect(await second.next((message) => message.type === 'init', 30_000)).toMatchObject({ ok: true });
+    const before = engine.calls().length;
+
+    expect(await prompt(second, at)).toMatchObject({ event: 'finished', result: { output: { ok: true, reply: 'Done.' } } });
+    expect(engine.calls().slice(before).filter(([, command]) => command === 'exec').map(([name]) => name)).toEqual(['docker']);
+  });
+
   it('continues the session the lease names, and says it resumed it', async () => {
     const connection = start();
     await init(connection);

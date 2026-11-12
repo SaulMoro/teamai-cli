@@ -15,8 +15,11 @@ import type { Ready } from './runtime.js';
 //  process's memory only.
 //
 
-/** The attempt sockets this runtime process serves, answered with what `ready` gives: what the last `init` settled. */
-export function attemptSockets({ journal, ready }: { journal: Journal; ready: () => Ready }) {
+/**
+ * The attempt sockets this runtime process serves, each answered with what `readyOf` gives for its place: what the last
+ * `init` settled, on the provider the place was opened with.
+ */
+export function attemptSockets({ journal, readyOf }: { journal: Journal; readyOf: (place: string) => Ready }) {
   /**
    * The attempt sockets this process serves, by place, each with the step's credentials its grants carry and the names
    * they go without: those of the place's open, or of teamai's reattach, in memory only; undefined in a runtime that
@@ -29,7 +32,7 @@ export function attemptSockets({ journal, ready }: { journal: Journal; ready: ()
    * the step's credentials and the tool home variable at the attempt's tool home, or why not.
    */
   const answerOn = (place: string): Answering => async ({ tool, cwd }) => {
-    const { provider, can, host, instances } = ready();
+    const { provider, can, host, instances } = readyOf(place);
     const served = sockets.get(place);
     const credentials = served?.credentials;
     const unset = served?.unset ?? [];

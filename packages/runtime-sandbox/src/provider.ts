@@ -1,3 +1,4 @@
+import { z } from 'zod';
 import type { Can, InitCredentials, InitInstance, PlaceView, RuntimeDisplay, RuntimeFailure, RuntimeMessage } from '@teamai/runtime-protocol';
 import type { UnusedGateways } from './sign-in.js';
 
@@ -87,7 +88,9 @@ export interface Judges {
  * How a sandbox reaches this machine itself: the name it has there, to which a URL credential on localhost is pointed
  * (loopback.ts), or, as a whole sentence, why teamai knows none.
  */
-export type HostRoute = { ok: true; alias: string } | { ok: false; refusal: string };
+export const HostRouteSchema = z.discriminatedUnion('ok', [z.object({ ok: z.literal(true), alias: z.string() }), z.object({ ok: z.literal(false), refusal: z.string() })]);
+
+export type HostRoute = z.infer<typeof HostRouteSchema>;
 
 /** What every provider does, whichever way its sandbox sees the place. */
 /** The image `warm` made or found for one open, which that open's `create` starts from rather than working the key out again. */
