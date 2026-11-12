@@ -202,14 +202,18 @@ export function shortTmpRoot(): string {
 }
 
 /**
- * Where the host finds a command, or undefined when it has none. Past the `node_modules/.bin` folders `npm run` puts
- * first on PATH, so a tool this checkout has as a dependency is not taken for the member's own.
+ * Where the host finds a command, or undefined when it has none: what a world links into its `tools`, and what doctor
+ * probes. Past the `node_modules/.bin` folders `npm run` puts first on PATH, so a tool this checkout has as a dependency
+ * is not taken for the member's own. Throws when the shell that looks it up does not answer.
  */
-function hostCommand(name: string): string | undefined {
+export function hostCommand(name: string): string | undefined {
   const PATH = (process.env.PATH ?? '').split(':').filter((dir) => !dir.endsWith(`${path.sep}node_modules${path.sep}.bin`)).join(':');
-  const found = spawnSync('sh', ['-c', `command -v ${quote(name)}`], { encoding: 'utf8', env: { ...process.env, PATH } }).stdout.trim();
+  const found = spawnSync('sh', ['-c', `command -v ${quote(name)}`], { encoding: 'utf8', env: { ...process.env, PATH }, timeout: 10_000, killSignal: 'SIGKILL' });
 
-  return found === '' ? undefined : found;
+  if (found.error !== undefined) throw new Error(`looking ${name} up on PATH failed (${found.error.message})`, { cause: found.error });
+  const at = found.stdout.trim();
+
+  return at === '' ? undefined : at;
 }
 
 /**

@@ -1,4 +1,4 @@
-import { execFileSync, spawnSync } from 'node:child_process';
+import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { helpFor } from './help.js';
@@ -11,18 +11,18 @@ import { checkoutStatus, createWorld, git, liveWorlds, loadWorld, REPO_ROOT, TOO
 
 const [verb, ...rest] = process.argv.slice(2);
 
-function doctor(runId: string | undefined): void {
+async function doctor(runId: string | undefined): Promise<void> {
+  const { probeHostCommand } = await import('./doctor.js');
   const line = (good: boolean, text: string): void => console.log(`${good ? 'ok  ' : 'warn'} ${text}`);
   line(true, `node ${process.version}`);
   line(true, git(REPO_ROOT, '--version'));
 
+  // The tool a world's commands run: the member's own, as the world's `tools` links it.
   for (const tool of TOOL_COMMANDS) {
-    try {
-      const version = execFileSync(tool, ['--version'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 15_000 }).trim().split('\n')[0];
-      line(true, `${tool} ${version}`);
-    } catch {
-      line(false, `${tool} not on PATH: claims about it are UNVERIFIABLE here`);
-    }
+    const version = probeHostCommand([tool, '--version'], { timeoutMs: 15_000 });
+
+    if (version.ok) line(true, `${tool} ${version.first}`);
+    else line(false, version.why === 'not installed' ? `${tool} not on PATH: claims about it are UNVERIFIABLE here` : `${tool}: ${version.why}: claims about it are UNVERIFIABLE here`);
   }
 
   if (runId === undefined) return;
@@ -102,7 +102,7 @@ async function main(): Promise<number> {
 
     case 'doctor': {
       const run = rest.find((arg) => arg !== '--drivers');
-      doctor(run === undefined ? undefined : parseTarget(run).runId);
+      await doctor(run === undefined ? undefined : parseTarget(run).runId);
 
       if (rest.includes('--drivers')) {
         const { doctorDrivers } = await import('./doctor.js');
