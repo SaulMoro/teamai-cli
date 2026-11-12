@@ -1,4 +1,4 @@
-import { ChildProcess, execFileSync, spawn } from 'node:child_process';
+import { ChildProcess, execFile, execFileSync, spawn } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -9,6 +9,12 @@ import { descendantsOf, identityOf, isSameProcess, mayBeRunning, ownGroups, PROC
 
 /** Whether this platform tells start times through ps rather than `/proc`, so a fake ps on PATH is what is read. */
 const READS_PS = process.platform !== 'win32' && process.platform !== 'linux';
+
+// execFile passes through to Node's, so a test can see what the module would start without starting it.
+vi.mock('node:child_process', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:child_process')>();
+  return { ...actual, execFile: vi.fn(actual.execFile) };
+});
 
 afterEach(() => { vi.restoreAllMocks(); vi.unstubAllEnvs(); vi.useRealTimers(); });
 
@@ -95,6 +101,14 @@ it.runIf(process.platform === 'win32')('signals no group on Windows, which has n
 
   expect(signalGroup(4242, 'SIGTERM')).toBe('refused');
   expect(processKill).not.toHaveBeenCalled();
+});
+
+it('stops a child on Windows through taskkill with no console window, as a hook-launched teamai has no console', async () => {
+  vi.spyOn(process, 'platform', 'get').mockReturnValue('win32');
+  const taskkill = vi.mocked(execFile).mockImplementationOnce((() => unspawnedChild(1)) as unknown as typeof execFile);
+
+  expect(await stopProcess(unspawnedChild(2147483647), Promise.resolve('closed'), false)()).toBe('closed');
+  expect(taskkill).toHaveBeenCalledWith('taskkill', ['/pid', '2147483647', '/T', '/F'], expect.objectContaining({ windowsHide: true }), expect.any(Function));
 });
 
 it('stops an attached child through child.kill without probing other PIDs', async () => {

@@ -778,7 +778,8 @@ export function stopProcess<T>(child: ChildProcess, exit: Promise<T>, detached: 
     if (pid === undefined) return exit;
 
     if (process.platform === 'win32') {
-      execFile('taskkill', ['/pid', String(pid), '/T', '/F'], () => {});
+      // Windows opens a console for a child of a process without one, such as a hook's teamai.
+      execFile('taskkill', ['/pid', String(pid), '/T', '/F'], { windowsHide: true }, () => {});
 
       return exit;
     }
