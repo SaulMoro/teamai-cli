@@ -130,14 +130,14 @@ $ teamai workflow start review --driver app --tools default=codex         # --to
 无法结束某个位置的运行时，用原因回答 `close`。teamai 随后把在那里运行的东西视为仍在运行：这次尝试继续持有登录，运行详情在步骤下以 *未关闭* 显示这个失败：
 
 ```text
-→ {"type":"close","handle":"teamai-r7-a1"}
-← {"event":"close_failed","handle":"teamai-r7-a1","failure":{"code":"rm_failed","message":"docker rm teamai-r7-a1 failed: the daemon is not running"}}
+→ {"type":"close","handle":"teamai-r7c41d09e-a1d0e9f42"}
+← {"event":"close_failed","handle":"teamai-r7c41d09e-a1d0e9f42","failure":{"code":"rm_failed","message":"docker rm teamai-r7c41d09e-a1d0e9f42 failed: the daemon is not running"}}
 ```
 
 每次 `teamai workflow cancel <run>` 都会再试一次 close。如果运行时永远无法确认它，例如提供方拒绝了一次创建，请先确认这次尝试已没有任何东西还在那里运行，再用 `teamai workflow cancel <run> --release <attempt>` 放开这次尝试。teamai 会再试一次停止和 close，并把这次 close（即使运行时没有确认停止）作为 `{"type":"close","handle":"…","release":true}` 发出：无论能否结束这个位置，你的运行时都要忘掉它。运行时无法确认的部分不再卡住这次尝试。teamai 把它的登录写回并释放，之后不再尝试 close。无论你的运行时是否已经忘掉这个位置，在那里运行过的东西都可能还在：
 
 ```text
-ℹ Released attempt a1 of run r7 on step runtime "docker" without its confirmation, as asked. What ran in its place may still be there, since the runtime did not confirm its end: Step runtime "docker" could not close the place of attempt a1, so what ran there may still run (rm_failed): docker rm teamai-r7-a1 failed: the daemon is not running
+ℹ Released attempt a1d0e9f42 of run r7c41d09e on step runtime "docker" without its confirmation, as asked. What ran in its place may still be there, since the runtime did not confirm its end: Step runtime "docker" could not close the place of attempt a1d0e9f42, so what ran there may still run (rm_failed): docker rm teamai-r7c41d09e-a1d0e9f42 failed: the daemon is not running
 ```
 
 exec 或提示运行期间退出的运行时，出于同样的原因会让它失败为 `runtime_lost`。
@@ -155,7 +155,7 @@ exec 或提示运行期间退出的运行时，出于同样的原因会让它失
 无法停止某个操作时，让它以 `cancel_failed` 结束为 `failed`，消息里说明怎么处理，并在 `reattach` 时继续报告这个状态。teamai 随后不会取回这个位置，也不会关闭它。之后对同一个操作的 `cancel` 会再试一次停止：从读到它的那一刻起，在 `reattach` 时把这个操作报告为 `running`，直到这次停止被确认或再次失败，因为 teamai 会把接下来拿到的状态当作这次 cancel 的结果。不要为此使用别的代码：任何其他 `failed`，即使紧跟在 `cancel` 之后，teamai 都当作这个操作已经结束，会取回并关闭这个位置：
 
 ```text
-← {"op":"op-83bfffde9ce3","event":"failed","failure":{"code":"cancel_failed","message":"docker could not stop container teamai-r7-a1: the daemon is not running. Start Docker, then run teamai workflow cancel r7 again."}}
+← {"op":"op-83bfffde9ce3","event":"failed","failure":{"code":"cancel_failed","message":"docker could not stop container teamai-r7c41d09e-a1d0e9f42: the daemon is not running. Start Docker, then run teamai workflow cancel r7c41d09e again."}}
 ```
 
 当 teamai 只想知道现在能否启动运行时（例如 describe 在应用会话中所做的），它会以 `check` 模式打开你的运行时，在这个 `init` 之后不再发送任何请求。在这种模式下，不登录任何东西，不写任何东西（无论在本机还是在你的提供方），也不启动任何东西。用 `ok` 回答你能确定自己提供的内容，或者失败并说明为什么不能启动运行。如果不写入或启动某些东西就无法确定，就让 `init` 失败。早于这个模式的运行时同样会拒绝它，teamai 随后不会在你的运行时上提供启动：
@@ -168,14 +168,14 @@ exec 或提示运行期间退出的运行时，出于同样的原因会让它失
 每个请求都要回答，包括你做不到的请求。无法回答的 `reattach`、`collect` 或 `close`（例如读不了自己的日志，或连不上提供方）要给出这个句柄的失败回复。这时不要回答 `gone`：位置可能还在。
 
 ```text
-→ {"type":"reattach","handle":"teamai-r7-a1"}
-← {"event":"failed","handle":"teamai-r7-a1","failure":{"code":"journal_unreadable","message":"/var/lib/acme-runtime/r7.json is not valid JSON. Fix or remove it, then run teamai workflow cancel r7 again."}}
+→ {"type":"reattach","handle":"teamai-r7c41d09e-a1d0e9f42"}
+← {"event":"failed","handle":"teamai-r7c41d09e-a1d0e9f42","failure":{"code":"journal_unreadable","message":"/var/lib/acme-runtime/r7c41d09e.json is not valid JSON. Fix or remove it, then run teamai workflow cancel r7c41d09e again."}}
 ```
 
 `{"event":"error"}` 这一行不指向任何请求，所以 teamai 会让所有仍在等待你的运行时的请求失败为 `runtime_unanswered`：`open` 失败，正在进行的 `exec` 或 `prompt` 以 `runtime_lost` 结束，因为它启动的东西可能还在运行。15 秒内没有收到回复的 `init`（有人值守时为 10 分钟）、`reattach` 或 `close`，以及 15 秒内你没有回答的 `open`、`exec` 或 `prompt` 也一样，所以要在任何耗时的工作（例如拉取镜像或启动代理）之前先发送 `accepted`。`cancel` 本身不需要回复：用操作的结果结束它即可。teamai 在等待某个 `exec` 或 `prompt` 时取消了它，如果 15 秒内你没有给出结果，它也会同样以 `runtime_lost` 结束。驱动退出后的停止通过 `reattach` 读取结果，从发出 `cancel` 起最多等 15 秒。这次尝试保留它的位置、记录和登录：
 
 ```text
-Step runtime "acme" could not close the place of attempt a1, so what ran there may still run (runtime_unanswered): Step runtime "acme" did not answer close of teamai-r7-a1 within 15 s.
+Step runtime "acme" could not close the place of attempt a1d0e9f42, so what ran there may still run (runtime_unanswered): Step runtime "acme" did not answer close of teamai-r7c41d09e-a1d0e9f42 within 15 s.
 ```
 
 `ready`、exec 或 prompt 的 `accepted` 或 `display` 事件，以及 `reattach` 的 `alive` 回复可以带上 `display`，它是可选的：`label` 最多 80 个字符，`url`（`https:`、`http:` 或应用自己的协议，例如 `t3:`），以及最多 8 个字符串 `fields`。仪表盘的运行详情会把它显示在步骤下面。不要在里面放密钥或你主目录下的路径。teamai 无法显示的 display 会被丢弃并记录原因，步骤照常运行。显示的是最近给出的那个，所以只为 prompt 创建智能体的运行时，在 `ready` 时显示位置，立即接受 prompt，等智能体创建好后再发送它的链接，如下面的例子所示。`display` 事件既不接受也不结束它的操作：它不算 teamai 等待 15 秒的那个回答，也不算 `cancel` 的结果。

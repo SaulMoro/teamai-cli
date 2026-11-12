@@ -626,10 +626,10 @@ A runtime killed while `docker run`, `podman run` or `sbx create` creates a sand
 
 ```sh
 docker ps -a --filter label=teamai.owner --format '{{.Names}} {{.Label "teamai.owner"}}'
-# teamai-r7c41d09e2b6a5f13-a3b90c2f 5f0c2a9e1d7b4c38    its attempt closed before it landed: the next step on docker removes it
+# teamai-r7c41d09e2b6a5f13-a3b90c2f0 5f0c2a9e1d7b4c38    its attempt closed before it landed: the next step on docker removes it
 sbx ls -q
-# teamai-5f0c2a9e1d7b4c38-r7c41d09e2b6a5f13-a3b90c2f   the same, on sbx: the next step on sbx removes it
-# teamai-r7c41d09e2b6a5f13-a3b90c2f                    named by an older teamai: kept; remove it with sbx rm --force
+# teamai-5f0c2a9e1d7b4c38-r7c41d09e2b6a5f13-a3b90c2f0   the same, on sbx: the next step on sbx removes it
+# teamai-r7c41d09e2b6a5f13-a3b90c2f0                    named by an older teamai: kept; remove it with sbx rm --force
 ```
 
 ## Errors

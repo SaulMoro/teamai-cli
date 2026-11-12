@@ -130,14 +130,14 @@ In an entry that runs [one runtime through another](workflow-advanced.md#a-runti
 A runtime that cannot end a place answers `close` with why. teamai then treats what ran there as still running: the attempt keeps its login, and the run's details show the failure under the step as *Not closed*:
 
 ```text
-→ {"type":"close","handle":"teamai-r7-a1"}
-← {"event":"close_failed","handle":"teamai-r7-a1","failure":{"code":"rm_failed","message":"docker rm teamai-r7-a1 failed: the daemon is not running"}}
+→ {"type":"close","handle":"teamai-r7c41d09e-a1d0e9f42"}
+← {"event":"close_failed","handle":"teamai-r7c41d09e-a1d0e9f42","failure":{"code":"rm_failed","message":"docker rm teamai-r7c41d09e-a1d0e9f42 failed: the daemon is not running"}}
 ```
 
 Each `teamai workflow cancel <run>` tries the close again. When the runtime can never confirm it, as for a create its provider refused, check that nothing of the attempt still runs there, then let the attempt go with `teamai workflow cancel <run> --release <attempt>`. teamai tries the stop and the close once more, and sends that close, even after a stop the runtime did not confirm, as `{"type":"close","handle":"…","release":true}`: your runtime forgets the place, whether or not it can end it. What the runtime cannot confirm no longer holds the attempt. teamai writes its login back, frees it, and no longer tries the close. What ran in the place may still be there, whether or not your runtime forgot it:
 
 ```text
-ℹ Released attempt a1 of run r7 on step runtime "docker" without its confirmation, as asked. What ran in its place may still be there, since the runtime did not confirm its end: Step runtime "docker" could not close the place of attempt a1, so what ran there may still run (rm_failed): docker rm teamai-r7-a1 failed: the daemon is not running
+ℹ Released attempt a1d0e9f42 of run r7c41d09e on step runtime "docker" without its confirmation, as asked. What ran in its place may still be there, since the runtime did not confirm its end: Step runtime "docker" could not close the place of attempt a1d0e9f42, so what ran there may still run (rm_failed): docker rm teamai-r7c41d09e-a1d0e9f42 failed: the daemon is not running
 ```
 
 A runtime that exits while an exec or prompt runs fails it `runtime_lost`, for the same reason.
@@ -155,7 +155,7 @@ teamai opens your runtime in `recover` mode whenever it must stop an attempt, as
 When you cannot stop an operation, end it `failed` with `cancel_failed` and a message that says what to do, and keep reporting that state on `reattach`. teamai then does not bring the place back or close it. A later `cancel` of the same operation tries the stop again: from the moment you read it, report the operation `running` on `reattach` until that stop is confirmed or fails again, since teamai reads the state it gets next as that cancel's outcome. Use no other code for this: teamai reads any other `failed`, even one that follows a `cancel`, as the operation's end, and brings the place back and closes it:
 
 ```text
-← {"op":"op-83bfffde9ce3","event":"failed","failure":{"code":"cancel_failed","message":"docker could not stop container teamai-r7-a1: the daemon is not running. Start Docker, then run teamai workflow cancel r7 again."}}
+← {"op":"op-83bfffde9ce3","event":"failed","failure":{"code":"cancel_failed","message":"docker could not stop container teamai-r7c41d09e-a1d0e9f42: the daemon is not running. Start Docker, then run teamai workflow cancel r7c41d09e again."}}
 ```
 
 teamai opens your runtime in `check` mode when it only asks whether a run could start now, as describe does in an app's session. It sends nothing after that `init`. In that mode sign in to nothing, write nothing, here or in your provider, and start nothing. Answer `ok` with what you can tell you offer, or fail with why a run could not start. When you cannot tell without writing or starting something, fail the `init`. A runtime older than this mode refuses it too, and teamai then offers no start on your runtime:
@@ -168,14 +168,14 @@ teamai opens your runtime in `check` mode when it only asks whether a run could 
 Answer every request, even one you cannot carry out. A `reattach`, `collect` or `close` you cannot answer, for example because your journal cannot be read or your provider cannot be reached, gets the failure reply for its handle. Never answer `gone` then: the place may still be there.
 
 ```text
-→ {"type":"reattach","handle":"teamai-r7-a1"}
-← {"event":"failed","handle":"teamai-r7-a1","failure":{"code":"journal_unreadable","message":"/var/lib/acme-runtime/r7.json is not valid JSON. Fix or remove it, then run teamai workflow cancel r7 again."}}
+→ {"type":"reattach","handle":"teamai-r7c41d09e-a1d0e9f42"}
+← {"event":"failed","handle":"teamai-r7c41d09e-a1d0e9f42","failure":{"code":"journal_unreadable","message":"/var/lib/acme-runtime/r7c41d09e.json is not valid JSON. Fix or remove it, then run teamai workflow cancel r7c41d09e again."}}
 ```
 
 An `{"event":"error"}` line names no request, so teamai fails every request still waiting on your runtime with `runtime_unanswered`: an `open` fails, and an `exec` or `prompt` in flight ends `runtime_lost`, since what it started may still run. It does the same to an `init` (10 min when attended), a `reattach` or a `close` that gets no reply within 15 s, and to an `open`, `exec` or `prompt` you do not answer within 15 s, so send `accepted` before any slow work, such as pulling an image or starting an agent. A `cancel` needs no reply of its own: end the operation with its outcome. An `exec` or `prompt` teamai cancels while it waits on it ends `runtime_lost` the same way when you give no outcome within 15 s. A stop after the driver died reads the outcome on `reattach`, for at most 15 s after its `cancel`. The attempt keeps its place, its records and its login:
 
 ```text
-Step runtime "acme" could not close the place of attempt a1, so what ran there may still run (runtime_unanswered): Step runtime "acme" did not answer close of teamai-r7-a1 within 15 s.
+Step runtime "acme" could not close the place of attempt a1d0e9f42, so what ran there may still run (runtime_unanswered): Step runtime "acme" did not answer close of teamai-r7c41d09e-a1d0e9f42 within 15 s.
 ```
 
 `display`, on `ready`, on an exec's or prompt's `accepted` or `display` event, and on the `alive` reply to `reattach`, is optional: a `label` of at most 80 characters, a `url` (`https:`, `http:` or an app's own scheme such as `t3:`), and at most 8 string `fields`. The run's details in the dashboard show it under the step. Put no secret and no path in your home in it. teamai drops a display it cannot show, logs why, and runs the step as usual. The latest one given is shown, so a runtime that creates an agent only for the prompt shows the place at `ready`, accepts the prompt at once, and sends the agent's link once the agent exists, as in the example below. A `display` event neither accepts nor ends its operation: it is not the answer teamai waits 15 s for, nor the outcome of a `cancel`.
