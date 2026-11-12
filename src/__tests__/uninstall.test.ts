@@ -3507,7 +3507,7 @@ describe('uninstall', () => {
     expect(await fse.pathExists(path.join(homeDir, '.claude'))).toBe(true);
   });
 
-  it('keeps a staging folder a copy on this host still writes, and the skills directory with it', async () => {
+  it('keeps a staging folder a copy on this host still writes, or may, and the skills directory with it', async () => {
     const { homeDir, repoPath } = await setupFixture(tmpDir);
     vi.stubEnv('HOME', homeDir);
     vi.stubEnv('SHELL', '/bin/zsh');
@@ -3517,6 +3517,9 @@ describe('uninstall', () => {
     await new Promise((resolve) => { copier.once('spawn', resolve); });
     const writing = path.join(homeDir, '.claude', 'skills', '.review.3a4b5c6d.staging');
     await fse.outputJson(path.join(writing, 'owner.json'), { pid: copier.pid, startedAt: new Date().toISOString(), host: os.hostname() });
+    // An owner whose pid runs but whose start nothing records: whether it still copies cannot be told.
+    const untold = path.join(homeDir, '.claude', 'skills', '.review.0c1d2e3f.staging');
+    await fse.outputJson(path.join(untold, 'owner.json'), { pid: copier.pid, host: os.hostname() });
     mockAutoDetectInit.mockResolvedValue({ localConfig: makeLocalConfig(homeDir, repoPath), teamConfig: makeTeamConfig() });
     commitTeamRepo(repoPath);
 
@@ -3524,6 +3527,7 @@ describe('uninstall', () => {
 
     expect(await fse.pathExists(path.join(homeDir, '.claude', 'skills', 'team-skill'))).toBe(false);
     expect(await fse.pathExists(writing)).toBe(true);
+    expect(await fse.pathExists(untold)).toBe(true);
   });
 
   it('keeps an empty folder of the member\'s in the skills directory, and the directory with it', async () => {

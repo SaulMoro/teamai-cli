@@ -500,44 +500,45 @@ async function removeLeftStaging(dest: string): Promise<void> {
 }
 
 /**
- * The staging folders in `parent` no copy on this host still writes into, whatever their age: what an uninstall removes
- * with the copies, since the member asked for all of it to go.
+ * The staging folders in `parent` no copy on this host still writes into, or may, whatever their age: what an
+ * uninstall removes with the copies, since the member asked for all of it to go.
  */
 export async function stagingLeftIn(parent: string): Promise<string[]> {
   const left: string[] = [];
 
   for (const entry of await fse.readdir(parent, { withFileTypes: true }).catch(() => [])) {
-    if (entry.isDirectory() && isStagingName(entry.name) && !await isCopyingInto(path.join(parent, entry.name))) left.push(path.join(parent, entry.name));
+    const staging = path.join(parent, entry.name);
+
+    if (entry.isDirectory() && isStagingName(entry.name) && !['copying', 'unknown'].includes(await copierOf(staging))) left.push(staging);
   }
 
   return left;
 }
 
-/** Whether a copy on this host still writes into `staging`: the process its owner file names runs, or is this one copying there. */
-async function isCopyingInto(staging: string): Promise<boolean> {
+/**
+ * Whether a copy still writes into `staging`, from the owner file it holds: `copying` when the process it names runs on
+ * this host, `gone` when it does not, `unknown` when its pid runs but nothing tells it is that process, and `untold`
+ * when no owner here is named: none written yet, one from a teamai that wrote none, or another host's.
+ */
+async function copierOf(staging: string): Promise<'copying' | 'gone' | 'unknown' | 'untold'> {
   const owner = StagingOwnerSchema.safeParse(await readRegularFile(path.join(staging, STAGING_OWNER), 'utf8').then(parseJson).catch(() => undefined));
 
-  if (!owner.success || owner.data.host !== os.hostname()) return false;
+  // A pid another host recorded, as a container sharing the home does, names nothing here.
+  if (!owner.success || owner.data.host !== os.hostname()) return 'untold';
 
-  return owner.data.pid === process.pid ? copyingNow.has(path.basename(staging)) : await isSameProcess(owner.data) === 'same';
+  if (owner.data.pid === process.pid) return copyingNow.has(path.basename(staging)) ? 'copying' : 'gone';
+  const verdict = await isSameProcess(owner.data);
+
+  return verdict === 'same' ? 'copying' : verdict === 'other' ? 'gone' : 'unknown';
 }
 
 async function isLeftBehind(staging: string): Promise<boolean> {
   const left = await fse.lstat(staging).catch(() => undefined);
 
   if (left === undefined) return false;
-  // None yet, while a copy starts, or none at all, from a teamai that wrote none: the age alone tells then.
-  const owner = StagingOwnerSchema.safeParse(await readRegularFile(path.join(staging, STAGING_OWNER), 'utf8').then(parseJson).catch(() => undefined));
+  const copier = await copierOf(staging);
 
-  // A pid another host recorded, as a container sharing the home does, names nothing here.
-  if (owner.success && owner.data.host === os.hostname()) {
-    if (owner.data.pid === process.pid) return !copyingNow.has(path.basename(staging));
-    const verdict = await isSameProcess(owner.data);
-
-    if (verdict === 'other') return true;
-
-    if (verdict === 'same') return false;
-  }
+  if (copier !== 'unknown' && copier !== 'untold') return copier === 'gone';
 
   return left.mtimeMs + STALE_STAGING_MS < Date.now();
 }
