@@ -131,8 +131,8 @@ function environsOf(stdout: string): Array<Map<string, string>> {
   return stdout.split('\0\0').flatMap((block) => (block === '' ? [] : [parseEnviron(block)]));
 }
 
-/** What a command the observer runs answered: what it printed, that it is not installed here, or that it failed and why. */
-export type Listed = { kind: 'ran'; stdout: string } | { kind: 'missing' } | { kind: 'failed'; why: string };
+/** What a command the observer runs answered: what it printed, that it is not installed here, or that it failed, why, and whether its time ran out. */
+export type Listed = { kind: 'ran'; stdout: string } | { kind: 'missing' } | { kind: 'failed'; why: string; timedOut: boolean };
 
 /** What `argv` answered on this machine: the observer's one effect on a sandbox. */
 async function listedHere(argv: readonly string[]): Promise<Listed> {
@@ -145,7 +145,9 @@ async function listedHere(argv: readonly string[]): Promise<Listed> {
     const failure = ExecFailureSchema.safeParse(error);
     const said = failure.success ? failure.data.stderr?.trim().split('\n').at(-1) : undefined;
 
-    return { kind: 'failed', why: failure.success && failure.data.killed === true ? 'it took over 10 s' : said || (error instanceof Error ? error.message : String(error)) };
+    const timedOut = failure.success && failure.data.killed === true;
+
+    return { kind: 'failed', why: timedOut ? 'it took over 10 s' : said || (error instanceof Error ? error.message : String(error)), timedOut };
   }
 }
 
@@ -205,8 +207,8 @@ export function startObserver(world: World, { pass, label, listed = listedHere }
   const unobserved = new Set<string>();
   const notRunning = new Map<string, string>();
   let sawSeatbelt = false;
-  // An engine down at one look is asked again at the next; one not installed, never again.
-  const engines = new Map<(typeof CONTAINER_ENGINES)[number], 'up' | 'missing'>();
+  // An engine down at one look is asked again at the next; one not installed, or whose `info` ran out of time, never again.
+  const engines = new Map<(typeof CONTAINER_ENGINES)[number], 'up' | 'missing' | 'hung'>();
 
   const judge = (key: string, what: string, environs: ReadonlyArray<ReadonlyMap<string, string>>): void => {
     const entry = seen.get(key) ?? { what, read: 0, names: new Set<string>() };
@@ -223,10 +225,15 @@ export function startObserver(world: World, { pass, label, listed = listedHere }
   const containers = (): Promise<void[]> => Promise.all(CONTAINER_ENGINES.map(async (engine) => {
     const command = PROVIDER_COMMANDS[engine];
 
-    if (engines.get(engine) === 'missing') return;
+    if (engines.get(engine) === 'missing' || engines.get(engine) === 'hung') return;
 
     if (engines.get(engine) !== 'up') {
       const info = await listed([command, 'info', '--format', '{{.ServerVersion}}']);
+
+      if (info.kind === 'failed' && info.timedOut) {
+        engines.set(engine, 'hung');
+        unobserved.add(`${engine} containers, \`${engine} info\` took over 10 s`);
+      }
 
       if (info.kind === 'failed') return;
       engines.set(engine, info.kind === 'missing' ? 'missing' : 'up');

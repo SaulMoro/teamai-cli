@@ -28,7 +28,7 @@ function worldIn(members: World['members'] = []): World {
   };
 }
 
-const failed = { kind: 'failed', why: 'exit 1' } as const;
+const failed = { kind: 'failed', why: 'exit 1', timedOut: false } as const;
 const missing = { kind: 'missing' } as const;
 const printed = (stdout: string) => ({ kind: 'ran', stdout }) as const;
 
@@ -101,11 +101,32 @@ describe('the sandbox observer', () => {
 
   it('says it could not list the sbx sandboxes when `sbx ls` fails, and nothing when sbx is not installed', async () => {
     const world = worldIn();
-    const sbxFails = startObserver(world, { pass: new Map(), label: 'teamai workflow start', listed: ([command]) => Promise.resolve(command === 'sbx' ? { kind: 'failed', why: 'sbx: not signed in' } as const : missing) });
+    const sbxFails = startObserver(world, { pass: new Map(), label: 'teamai workflow start', listed: ([command]) => Promise.resolve(command === 'sbx' ? { kind: 'failed', why: 'sbx: not signed in', timedOut: false } as const : missing) });
     const noSbx = startObserver(world, { pass: new Map(), label: 'teamai workflow start', listed: () => Promise.resolve(missing) });
 
     expect(await sbxFails.stop()).toEqual(['[verify] NOT OBSERVED: sbx sandboxes, `sbx ls` failed (sbx: not signed in)']);
     expect(await noSbx.stop()).toEqual([]);
+  });
+
+  it('asks no more, and says so, an engine whose `info` took past its time', async () => {
+    vi.useFakeTimers();
+    const world = worldIn();
+    let infos = 0;
+    const observer = startObserver(world, {
+      pass: new Map(),
+      label: 'teamai workflow start',
+      listed: ([command = '', verb = '']) => {
+        if (command !== 'docker') return Promise.resolve(missing);
+        infos += verb === 'info' ? 1 : 0;
+
+        return Promise.resolve({ kind: 'failed', why: 'it took over 10 s', timedOut: true } as const);
+      },
+    });
+
+    await vi.advanceTimersByTimeAsync(500);
+
+    expect(await observer.stop()).toEqual(['[verify] NOT OBSERVED: docker containers, `docker info` took over 10 s']);
+    expect(infos).toBe(1);
   });
 
   it('asks again on the next look for an engine that was down at the first, and reads the container it then lists', async () => {
