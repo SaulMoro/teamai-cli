@@ -10,7 +10,7 @@ export function journalOfSbxName(name: string): string | undefined {
 
 export const sbxSandboxes: LeftoverKind = {
   title: 'teamai sbx sandbox',
-  onCleanup: 'remove',
+  onCleanup: { kind: 'remove' },
   observe({ self, others }) {
     const command = PROVIDER_COMMANDS.sbx;
     const listed = probeHere([command, 'ls', '--json']);

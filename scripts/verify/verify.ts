@@ -1,4 +1,4 @@
-import { execFileSync, spawnSync } from 'node:child_process';
+import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { helpFor } from './help.js';
@@ -7,22 +7,22 @@ import { planCleanup } from './leftovers.js';
 import { passedKeys, splitPassOption } from './secrets.js';
 import { addMember, ensureOrigin, memberLayout, parseMachine, removeMachines } from './members.js';
 import { memberOf, parseTarget, runOn } from './target.js';
-import { checkoutStatus, createWorld, git, liveWorlds, loadWorld, REPO_ROOT, TOOL_COMMANDS, updateWorld, type World } from './world.js';
+import { checkoutStatus, createWorld, git, liveWorlds, loadWorld, REPO_ROOT, tmpDirsOutside, TOOL_COMMANDS, updateWorld, type World } from './world.js';
 
 const [verb, ...rest] = process.argv.slice(2);
 
-function doctor(runId: string | undefined): void {
+async function doctor(runId: string | undefined): Promise<void> {
+  const { probeHostCommand } = await import('./doctor.js');
   const line = (good: boolean, text: string): void => console.log(`${good ? 'ok  ' : 'warn'} ${text}`);
   line(true, `node ${process.version}`);
   line(true, git(REPO_ROOT, '--version'));
 
+  // The tool a world's commands run: the member's own, as the world's `tools` links it.
   for (const tool of TOOL_COMMANDS) {
-    try {
-      const version = execFileSync(tool, ['--version'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 15_000 }).trim().split('\n')[0];
-      line(true, `${tool} ${version}`);
-    } catch {
-      line(false, `${tool} not on PATH: claims about it are UNVERIFIABLE here`);
-    }
+    const version = probeHostCommand([tool, '--version'], { timeoutMs: 15_000 });
+
+    if (version.ok) line(true, `${tool} ${version.first}`);
+    else line(false, version.why === 'not installed' ? `${tool} not on PATH: claims about it are UNVERIFIABLE here` : `${tool}: ${version.why}: claims about it are UNVERIFIABLE here`);
   }
 
   if (runId === undefined) return;
@@ -35,16 +35,14 @@ function doctor(runId: string | undefined): void {
 
 /**
  * Removes what the world's runs left that the leftover rows attribute to it, then the world's files, keeping world.json,
- * logs/, observed.jsonl and every ledger. Never signals a process: while one of the world's lives, or the process check
- * could not run, refuses and says why.
+ * logs/, observed.jsonl and every ledger. Never signals a process or closes a place: while one of the world's lives or
+ * stays open, or the check for one could not run, refuses and says why.
  */
 async function cleanup(world: World): Promise<boolean> {
   const plan = await planCleanup(world);
 
   if (plan.kind === 'refuse') {
-    if (plan.processes.length > 0) console.error(`Not cleaning ${world.runId}: a process of the world still runs. Stop each one, then run cleanup again:\n${plan.processes.map((what) => `  ${what}`).join('\n')}`);
-
-    if (plan.unseen.length > 0) console.error(`Not cleaning ${world.runId}: cleanup could not look for a process of the world, so one may still run. Fix what failed, then run cleanup again:\n${plan.unseen.map((what) => `  NOT OBSERVED: ${what}`).join('\n')}`);
+    for (const { why, items } of plan.refusals) console.error(`Not cleaning ${world.runId}: ${why}:\n${items.map((item) => `  ${item}`).join('\n')}`);
 
     return false;
   }
@@ -81,10 +79,8 @@ async function cleanup(world: World): Promise<boolean> {
     fs.rmSync(path.join(world.dir, name), { recursive: true, force: true });
   }
 
-  // A world made since its TMPDIR moved out of its directory, to /tmp; each member's sits beside it.
-  for (const tmp of [world.tmp, ...(world.members ?? []).map((member) => member.tmp)]) {
-    if (path.relative(world.dir, tmp).startsWith('..')) fs.rmSync(tmp, { recursive: true, force: true });
-  }
+  // A world made since its TMPDIR moved out of its directory, to /tmp; each member's sits beside it. loadWorld vouched for each.
+  for (const { tmp } of tmpDirsOutside(world)) fs.rmSync(tmp, { recursive: true, force: true });
 
   updateWorld(world, (fresh) => ({ ...fresh, cleanedAt: new Date().toISOString() }));
   console.log(`Cleaned ${world.runId}. Evidence kept in ${world.dir}`);
@@ -104,7 +100,7 @@ async function main(): Promise<number> {
 
     case 'doctor': {
       const run = rest.find((arg) => arg !== '--drivers');
-      doctor(run === undefined ? undefined : parseTarget(run).runId);
+      await doctor(run === undefined ? undefined : parseTarget(run).runId);
 
       if (rest.includes('--drivers')) {
         const { doctorDrivers } = await import('./doctor.js');
@@ -150,9 +146,12 @@ async function main(): Promise<number> {
     case 'ledger':
       return await runLedger(loadWorld(parseTarget(rest[0]).runId)) ? 0 : 1;
     case 'cleanup': {
-      let isClean = true;
+      const { worlds, skipped } = rest[0] === '--all' ? liveWorlds() : { worlds: [loadWorld(parseTarget(rest[0]).runId)], skipped: [] };
+      let isClean = skipped.length === 0;
 
-      for (const world of rest[0] === '--all' ? liveWorlds() : [loadWorld(parseTarget(rest[0]).runId)]) isClean = await cleanup(world) && isClean;
+      for (const { name, why } of skipped) console.error(`Skipped ${name}: ${why}`);
+
+      for (const world of worlds) isClean = await cleanup(world) && isClean;
 
       return isClean ? 0 : 1;
     }
@@ -165,9 +164,13 @@ async function main(): Promise<number> {
 
     case 'dir': {
       if (rest[0] === '--all') {
-        for (const world of liveWorlds()) console.log(`${world.runId} ${world.dir}`);
+        const { worlds, skipped } = liveWorlds();
 
-        return 0;
+        for (const { name, why } of skipped) console.error(`Skipped ${name}: ${why}`);
+
+        for (const world of worlds) console.log(`${world.runId} ${world.dir}`);
+
+        return skipped.length === 0 ? 0 : 1;
       }
 
       const { runId, target } = parseTarget(rest[0]);

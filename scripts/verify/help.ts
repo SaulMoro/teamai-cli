@@ -10,7 +10,8 @@ const BASIC = `Verify a teamai change end to end: the real CLI, packed and insta
   npm run -s verify -- sh <run> <cmd> [args]  any command in the world (git, claude -p, a second checkout)
   npm run -s verify -- ledger <run>           uninstall teamai in the world, then what is left, in LEDGER-<n>.md; exit 1 on any LEAK
   npm run -s verify -- cleanup <run>|--all    remove the world and the containers and sandboxes it left, keeping world.json,
-                                              logs/ and every ledger; refuses while a process of the world runs, or the check for one fails
+                                              logs/ and every ledger; refuses while a process of the world runs or a place of
+                                              its attempts is still open, or the check for either fails
   npm run -s verify -- dir <run>|--all        the world's directory, or every live world
 
 A world holds a project repo with one commit, a bare team repo at ${TEAM_URL}, the npm pack tarball of
@@ -65,16 +66,18 @@ A ledger section or an observer line that says NOT OBSERVED proves nothing for t
                     then a sbx claim is UNVERIFIABLE
     bwrap           Linux only; the observer reads the first process under bwrap; ends: env ok, no world process left
     seatbelt        macOS; no observer reads a seatbelt step's environment, so the env part proves nothing for it,
-                    and (f) notes each attempt that ran on it
+                    and (f) says NOT OBSERVED for each attempt that ran on it
     vercel          remote; the ledger never asks it: \`reap [run] [--delete] [vercel:<name>...]\` with the key lists
                     each sandbox teamai made there and whose it is, deletes the world's own or a named one on --delete,
                     exits 0 once none is alive, and says UNVERIFIABLE without a key
 
 The observer: a teamai or sh command during which a sandbox opens or closes ends with one line per sandbox of the world
 it saw, \`[verify] observed <sandbox>: env ok\`, \`ENV LEAK <names>\` or NOT OBSERVED when it could not read one, kept in
-observed.jsonl. A leak is the world's canary (${CANARY_NAME}, which no step may receive) or a host secret no driver
-definition declares. Names only, ever. An entry that declares no credential gets the tool's sign-in variables from the
-command's environment by name, as docs/guide/workflow-advanced.md says, so env ok also holds when a step carried one.
+observed.jsonl. A sandbox can close before the observer's first look, and then has no line: (f) says NOT OBSERVED for
+each sandboxed attempt whose environment no line of observed.jsonl read, whatever its provider. A leak is the world's
+canary (${CANARY_NAME}, which no step may receive) or a host secret no driver definition declares. Names only, ever.
+An entry that declares no credential gets the tool's sign-in variables from the command's environment by name, as
+docs/guide/workflow-advanced.md says, so env ok also holds when a step carried one.
 
 A claim teamai decides by hostname or pid (a driver's identity, the owner of a staging folder, the import lock, a warm
 image's maker, the fleet's stop of a step whose starter is gone) needs \`member <run> <name> --machine container\`: two

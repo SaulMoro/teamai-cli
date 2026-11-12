@@ -199,6 +199,68 @@ describe("a world's world.json", () => {
   });
 });
 
+describe('every live world', () => {
+  it('skips a world whose world.json cannot be read, says why, and still lists the others', async () => {
+    const tmp = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'live-worlds-')));
+    roots.push(tmp);
+    vi.stubEnv('TMPDIR', tmp);
+    vi.resetModules();
+    const { liveWorlds, WORLDS_ROOT } = await import('./world.js');
+    const write = (runId: string, text: string): void => {
+      fs.mkdirSync(path.join(WORLDS_ROOT, runId), { recursive: true });
+      fs.writeFileSync(path.join(WORLDS_ROOT, runId, 'world.json'), text);
+    };
+    const good = '20261112T113044-479be0';
+    const dir = path.join(WORLDS_ROOT, good);
+    write(good, JSON.stringify({
+      runId: good, dir, project: `${dir}/project`, team: `${dir}/team.git`, home: `${dir}/home`, tmp: `${dir}/tmp`, logs: `${dir}/logs`, bin: `${dir}/bin`,
+      build: { commit: 'c', dirty: false, version: '0.0.0', tarball: 't.tgz', sha256: 's', node: 'v20' }, createdAt: '2026-11-12T11:30:44.000Z', baseline: { teamRefs: {}, checkoutStatus: [] },
+    }));
+    write('20261112T113045-000000', '{');
+    write('20261112T113046-000000', JSON.stringify({ runId: '20261112T113046-000000' }));
+    // Cleaned up long ago by an older harness, and kept as evidence: not a live world, so nothing to skip.
+    write('20261112T113047-000000', JSON.stringify({ runId: '20261112T113047-000000', cleanedAt: '2026-11-01T00:00:00.000Z' }));
+
+    const live = liveWorlds();
+
+    expect(live.worlds.map((world) => world.runId)).toEqual([good]);
+    expect(live.skipped).toEqual([
+      { name: '20261112T113045-000000', why: expect.stringContaining('cannot be read as JSON') },
+      { name: '20261112T113046-000000', why: expect.stringMatching(/is not a world\.json this harness reads \(.*dir.*\).*npm run verify:world/s) },
+    ]);
+  });
+});
+
+describe("a world's TMPDIRs, which cleanup removes", () => {
+  it("loads a world only while each TMPDIR is its own, beside it in /tmp or inside its directory", async () => {
+    const tmp = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'world-tmps-')));
+    roots.push(tmp);
+    vi.stubEnv('TMPDIR', tmp);
+    vi.resetModules();
+    const { loadWorld, shortTmpRoot, worldTmpDir: tmpOf, WORLDS_ROOT } = await import('./world.js');
+    const runId = '20261112T113044-479be0';
+    const dir = path.join(WORLDS_ROOT, runId);
+    fs.mkdirSync(dir, { recursive: true });
+    const member = (name: string, memberTmp: string) => ({ machine: 'host', name, home: `${dir}/members/${name}/home`, project: `${dir}/members/${name}/project`, writers: `${dir}/members/${name}/writers.json`, tmp: memberTmp, env: {}, baseline: { files: {} } });
+    const load = (worldTmp: string, members: unknown[] = []) => {
+      fs.writeFileSync(path.join(dir, 'world.json'), JSON.stringify({
+        runId, dir, project: `${dir}/project`, team: `${dir}/team.git`, home: `${dir}/home`, tmp: worldTmp, logs: `${dir}/logs`, bin: `${dir}/bin`, members,
+        build: { commit: 'c', dirty: false, version: '0.0.0', tarball: 't.tgz', sha256: 's', node: 'v20' }, createdAt: '2026-11-12T11:30:44.000Z', baseline: { teamRefs: {}, checkoutStatus: [] },
+      }));
+
+      return (): unknown => loadWorld(runId);
+    };
+    const own = tmpOf({ root: shortTmpRoot(), runId });
+
+    expect(load(own, [member('bob', tmpOf({ root: shortTmpRoot(), runId, member: 'bob' }))])).not.toThrow();
+    expect(load(`${dir}/tmp`)).not.toThrow();
+    expect(load(`${dir}/..tmp`)).not.toThrow();
+    expect(load(shortTmpRoot())).toThrow(`names ${shortTmpRoot()} as a TMPDIR, which is not one of world ${runId}'s own`);
+    expect(load(os.homedir())).toThrow(`names ${os.homedir()} as a TMPDIR`);
+    expect(load(own, [member('bob', own)])).toThrow(`names ${own} as a TMPDIR`);
+  });
+});
+
 describe('a rewrite of a file two commands of a world share', () => {
   const lockedFile = () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-verify-lock-'));

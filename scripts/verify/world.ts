@@ -202,14 +202,18 @@ export function shortTmpRoot(): string {
 }
 
 /**
- * Where the host finds a command, or undefined when it has none. Past the `node_modules/.bin` folders `npm run` puts
- * first on PATH, so a tool this checkout has as a dependency is not taken for the member's own.
+ * Where the host finds a command, or undefined when it has none: what a world links into its `tools`, and what doctor
+ * probes. Past the `node_modules/.bin` folders `npm run` puts first on PATH, so a tool this checkout has as a dependency
+ * is not taken for the member's own. Throws when the shell that looks it up does not answer.
  */
-function hostCommand(name: string): string | undefined {
+export function hostCommand(name: string): string | undefined {
   const PATH = (process.env.PATH ?? '').split(':').filter((dir) => !dir.endsWith(`${path.sep}node_modules${path.sep}.bin`)).join(':');
-  const found = spawnSync('sh', ['-c', `command -v ${quote(name)}`], { encoding: 'utf8', env: { ...process.env, PATH } }).stdout.trim();
+  const found = spawnSync('sh', ['-c', `command -v ${quote(name)}`], { encoding: 'utf8', env: { ...process.env, PATH }, timeout: 10_000, killSignal: 'SIGKILL' });
 
-  return found === '' ? undefined : found;
+  if (found.error !== undefined) throw new Error(`looking ${name} up on PATH failed (${found.error.message})`, { cause: found.error });
+  const at = found.stdout.trim();
+
+  return at === '' ? undefined : at;
 }
 
 /**
@@ -494,6 +498,15 @@ export function markDriverSeen(world: Pick<World, 'runId' | 'driverSeen'>): void
   updateWorld(loadWorld(world.runId), (fresh) => ({ ...fresh, driverSeen: true }));
 }
 
+/** Each TMPDIR of `world` outside its directory, its own and each member's, by whose it is: what cleanup removes besides world.dir. */
+export function tmpDirsOutside(world: Pick<World, 'dir' | 'tmp' | 'members'>) {
+  return [{ tmp: world.tmp, member: undefined }, ...(world.members ?? []).map((each) => ({ tmp: each.tmp, member: each.name }))].filter(({ tmp }) => {
+    const relative = path.relative(world.dir, tmp);
+
+    return relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative);
+  });
+}
+
 export function loadWorld(runId: string | undefined): World {
   if (!runId) throw new Error('Name the world: every verb after `world` takes its run id first. List them with `npm run -s verify -- dir --all`.');
 
@@ -502,22 +515,62 @@ export function loadWorld(runId: string | undefined): World {
 
   if (!fs.existsSync(file)) throw new Error(`No world ${runId} under ${WORLDS_ROOT}. Make one with \`npm run verify:world\`.`);
 
-  const world = WorldSchema.parse(JSON.parse(fs.readFileSync(file, 'utf8')));
+  let json: unknown;
+
+  try {
+    json = JSON.parse(fs.readFileSync(file, 'utf8'));
+  } catch (error) {
+    throw new Error(`${file} cannot be read as JSON (${error instanceof Error ? error.message : String(error)}).`, { cause: error });
+  }
+
+  const parsed = WorldSchema.safeParse(json);
+
+  if (!parsed.success) {
+    throw new Error(`${file} is not a world.json this harness reads (${z.prettifyError(parsed.error).replaceAll('\n', ' ')}), such as one an older harness wrote. Clean it up with the harness that made it, or remove ${path.dirname(file)}; make a new world with \`npm run verify:world\`.`);
+  }
+
+  const world = parsed.data;
 
   // cleanup empties world.dir, so it must be this run's directory and nothing else.
   if (world.dir !== path.join(fs.realpathSync.native(WORLDS_ROOT), runId)) throw new Error(`${file} names ${world.dir}, which is not world ${runId}'s directory.`);
 
+  // cleanup removes each TMPDIR outside world.dir too, so one there must be the one made for this run or member.
+  for (const { tmp, member } of tmpDirsOutside(world)) {
+    if (tmp !== worldTmpDir({ root: shortTmpRoot(), runId, member })) throw new Error(`${file} names ${tmp} as a TMPDIR, which is not one of world ${runId}'s own: cleanup would remove it.`);
+  }
+
   return world;
 }
 
-export function liveWorlds(): World[] {
-  if (!fs.existsSync(WORLDS_ROOT)) return [];
+const CleanedUpSchema = z.looseObject({ cleanedAt: z.string() });
 
-  return fs
-    .readdirSync(WORLDS_ROOT)
-    .filter((name) => fs.existsSync(path.join(WORLDS_ROOT, name, 'world.json')))
-    .map((name) => loadWorld(name))
-    .filter((world) => world.cleanedAt === undefined);
+/** Whether world.json `file` says its world was cleaned up, whichever harness wrote it: such a world is evidence only. */
+function isCleanedUp(file: string): boolean {
+  try {
+    return CleanedUpSchema.safeParse(JSON.parse(fs.readFileSync(file, 'utf8'))).success;
+  } catch {
+    return false;
+  }
+}
+
+/** Every world not cleaned up, and each folder whose world.json cannot be loaded, with why: one never hides the others. */
+export function liveWorlds() {
+  const worlds: World[] = [];
+  const skipped: Array<{ name: string; why: string }> = [];
+
+  for (const name of fs.existsSync(WORLDS_ROOT) ? fs.readdirSync(WORLDS_ROOT).toSorted() : []) {
+    if (!fs.existsSync(path.join(WORLDS_ROOT, name, 'world.json')) || isCleanedUp(path.join(WORLDS_ROOT, name, 'world.json'))) continue;
+
+    try {
+      const world = loadWorld(name);
+
+      if (world.cleanedAt === undefined) worlds.push(world);
+    } catch (error) {
+      skipped.push({ name, why: error instanceof Error ? error.message : String(error) });
+    }
+  }
+
+  return { worlds, skipped };
 }
 
 /** Programs a member runs on their own: what one of them writes is theirs, such as a tool's sessions. A shell may run teamai. */

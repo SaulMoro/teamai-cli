@@ -88,7 +88,11 @@ export function lineageOf(pid: number, procs: readonly Proc[]): Set<number> {
 
 export const processes: LeftoverKind = {
   title: 'world process',
-  onCleanup: 'refuse',
+  onCleanup: {
+    kind: 'refuse',
+    found: 'a process of the world still runs. Stop each one, then run cleanup again',
+    unseen: 'cleanup could not look for a process of the world, so one may still run. Fix what failed, then run cleanup again',
+  },
   async observe({ world, self, others }) {
     return machinesOf(world).flatMap((machine): Observed[] => {
       let procs: Proc[];

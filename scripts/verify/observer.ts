@@ -3,7 +3,8 @@
  * `judgeSandboxEnv`: containers and sbx sandboxes tied to the world, and on Linux each bwrap whose arguments name a world
  * path. Values are read and compared in memory only; what is written (observed.jsonl, the `[verify] observed` lines)
  * holds names. Loaded only once a sandbox place opens or closes in a HOME of the world during the command (target.ts).
- * A sandbox of the world it lists but cannot read is NOT OBSERVED, never left out.
+ * A sandbox of the world it lists but cannot read is NOT OBSERVED, never left out; one it never saw, ledger section (f)
+ * says is NOT OBSERVED from these records (`attemptsObserved`).
  */
 import { execFile } from 'node:child_process';
 import fs from 'node:fs';
@@ -18,21 +19,103 @@ import { journal } from '../../packages/runtime-sandbox/src/journal.js';
 import { sandboxJournalRoot } from '../../packages/runtime-sandbox/src/journal-root.js';
 import { CONTAINER_ENGINES } from '../../packages/runtime-sandbox/src/options.js';
 import { PROVIDER_COMMANDS } from '../../packages/runtime-sandbox/src/provider-commands.js';
+import { ATTEMPT_ID, RUN_ID } from '../../packages/runtime-sandbox/src/provider.js';
+import { errnoCode } from '../../src/utils/fs.js';
 import { journalOfSbxName } from './leftovers/sbx.js';
 import { declaredCredentialNames, judgeSandboxEnv, parseEnviron, type EnvVerdict } from './secrets.js';
 import { CANARY_NAME, worldHomes, type World } from './world.js';
 
 const run = promisify(execFile);
-const POLL_MS = 500;
 
-/** Every process's environment inside a sandbox, one block per process, blocks split by an empty entry. Never printed. */
-const ENVIRONS = 'for f in /proc/[0-9]*/environ; do cat "$f" 2>/dev/null && printf "\\0\\0"; done';
+/** What a failed `execFile` adds to its error: the command's stderr, and whether its timeout killed it. */
+const ExecFailureSchema = z.looseObject({ stderr: z.string().optional(), killed: z.boolean().optional() });
+const POLL_MS = 500;
+const OBSERVED_FILE = 'observed.jsonl';
+
+/**
+ * The attempt `name` names as `<run>/<attempt>`: a sandbox's name or a path segment `teamai-<run>-<attempt>`, the
+ * handle of its place (provider.ts `handleOf`), which sbx starts with its journal, `teamai-<journal>-<run>-<attempt>`.
+ */
+function attemptNamed(name: string): string | undefined {
+  const parts = name.split('-');
+  const [runId = '', attempt = ''] = parts.slice(-2);
+
+  return parts[0] === 'teamai' && parts.length >= 3 && RUN_ID.test(runId) && ATTEMPT_ID.test(attempt) ? `${runId}/${attempt}` : undefined;
+}
+
+/**
+ * Whether the observer reads a provider's sandboxes: seatbelt has none to list, and vercel runs on another machine. A
+ * new provider fails the type check until it has a row.
+ */
+const OBSERVER_READS = { docker: true, podman: true, sbx: true, bwrap: true, seatbelt: false, vercel: false } satisfies Record<keyof typeof PROVIDER_COMMANDS, boolean>;
+
+/** Whether the observer reads sandboxes of `provider`, as a record names it; one this harness does not know, it may. */
+export function observerReads(provider: string): boolean {
+  return Object.entries(OBSERVER_READS).find(([name]) => name === provider)?.[1] ?? true;
+}
+
+const ObservedRecordSchema = z.looseObject({ what: z.string(), read: z.number() });
+
+/**
+ * The attempts, as `<run>/<attempt>`, whose sandbox environment an observer line of `world` read: its records in
+ * observed.jsonl with an environment read, or why that file cannot be read. A line this harness cannot parse names none.
+ */
+export function attemptsObserved(world: Pick<World, 'dir'>): { kind: 'read'; attempts: Set<string> } | { kind: 'unreadable'; why: string } {
+  let text: string;
+
+  try {
+    text = fs.readFileSync(path.join(world.dir, OBSERVED_FILE), 'utf8');
+  } catch (error) {
+    if (errnoCode(error) === 'ENOENT') return { kind: 'read', attempts: new Set() };
+
+    return { kind: 'unreadable', why: error instanceof Error ? error.message : String(error) };
+  }
+
+  const attempts = new Set(text.split('\n').flatMap((line) => {
+    let record: z.infer<typeof ObservedRecordSchema>;
+
+    try {
+      record = ObservedRecordSchema.parse(JSON.parse(line));
+    } catch {
+      return [];
+    }
+
+    const attempt = attemptNamed(record.what.slice(record.what.indexOf(':') + 1));
+
+    return attempt === undefined || record.read === 0 ? [] : [attempt];
+  }));
+
+  return { kind: 'read', attempts };
+}
+
+/** What the observer's own shell in a sandbox carries, so that no observer, this command's or another's, reads it as a step's. */
+const OBSERVER_MARK = 'VERIFY_OBSERVER_SHELL=1';
+
+/**
+ * The environment of each process a step runs inside a sandbox, one block per process, blocks split by an empty entry.
+ * Never printed. Not the first process, the loop a container idles in until teamai execs a step, nor a child of it whose
+ * environment is its own but for what a shell adds (its sleep); a step's process it took over carries the step's. Nor
+ * an observer's shell: an environment read is a step's.
+ */
+const ENVIRONS = [
+  `n() { tr '\\0' '\\n' < "$1" 2>/dev/null | grep -v -E '^(PWD|OLDPWD|SHLVL|_)=' | sort; }; idle=$(n /proc/1/environ)`,
+  'for d in /proc/[0-9]*; do p=${d#/proc/}; s=$(cat "$d/stat" 2>/dev/null) || continue; s=${s##*) }; set -- $s',
+  '[ "$p" = 1 ] && continue',
+  '[ "$2" = 1 ] && [ "$(n "$d/environ")" = "$idle" ] && continue',
+  `case "$(cat "$d/environ" 2>/dev/null)" in *${OBSERVER_MARK}*) continue ;; esac`,
+  'cat "$d/environ" 2>/dev/null && printf "\\0\\0"; done',
+].join('; ');
+
+/** The command that prints `ENVIRONS` in a sandbox, after the engine's own `exec <sandbox>`. */
+const READ_ENVIRONS = ['env', OBSERVER_MARK, 'sh', '-c', ENVIRONS];
 
 /** What one sandbox showed over a command: how many environments were read, and every leaking name among them. */
 interface Seen {
   readonly what: string;
   read: number;
   names: Set<string>;
+  /** Why the last look failed to read its environments, while no look has read one. */
+  failed?: string;
 }
 
 /**
@@ -74,14 +157,23 @@ function environsOf(stdout: string): Array<Map<string, string>> {
   return stdout.split('\0\0').flatMap((block) => (block === '' ? [] : [parseEnviron(block)]));
 }
 
-/** What `argv` printed on this machine, or undefined when it could not run or failed: the observer's one effect on a sandbox. */
-async function listedHere(argv: readonly string[]): Promise<string | undefined> {
+/** What a command the observer runs answered: what it printed, that it is not installed here, or that it failed, why, and whether its time ran out. */
+export type Listed = { kind: 'ran'; stdout: string } | { kind: 'missing' } | { kind: 'failed'; why: string; timedOut: boolean };
+
+/** What `argv` answered on this machine: the observer's one effect on a sandbox. */
+async function listedHere(argv: readonly string[]): Promise<Listed> {
   const [command = 'true', ...args] = argv;
 
   try {
-    return (await run(command, args, { encoding: 'utf8', timeout: 10_000, maxBuffer: 16 * 1024 ** 2 })).stdout;
-  } catch {
-    return undefined;
+    return { kind: 'ran', stdout: (await run(command, args, { encoding: 'utf8', timeout: 10_000, maxBuffer: 16 * 1024 ** 2 })).stdout };
+  } catch (error) {
+    if (errnoCode(error) === 'ENOENT') return { kind: 'missing' };
+    const failure = ExecFailureSchema.safeParse(error);
+    const said = failure.success ? failure.data.stderr?.trim().split('\n').at(-1) : undefined;
+
+    const timedOut = failure.success && failure.data.killed === true;
+
+    return { kind: 'failed', why: timedOut ? 'it took over 10 s' : said || (error instanceof Error ? error.message : String(error)), timedOut };
   }
 }
 
@@ -95,7 +187,8 @@ export interface ProcEntry {
 }
 
 /**
- * Each bwrap step in `procs` whose arguments name a path under one of `roots`: its outermost bwrap, and the first of
+ * Each bwrap step in `procs` whose arguments name a path under one of `roots`: its outermost bwrap, by the place its
+ * arguments name (`teamai-<run>-<attempt>`, the step's own home is bound from there) or else its pid, and the first of
  * its descendants that are not bwrap, whose environment is the step's. A bwrap anywhere below another is that step's own.
  */
 export function bwrapSteps(procs: readonly ProcEntry[], roots: readonly string[]): Array<{ bwrap: string; steps: string[] }> {
@@ -122,7 +215,7 @@ export function bwrapSteps(procs: readonly ProcEntry[], roots: readonly string[]
       const children = procs.filter((proc) => frontier.includes(proc.ppid));
       const first = children.filter((proc) => !isBwrap(proc.args));
 
-      if (first.length > 0) return [{ bwrap: outer.pid, steps: first.map((proc) => proc.pid) }];
+      if (first.length > 0) return [{ bwrap: outer.args.flatMap((arg) => arg.split('/')).find((segment) => attemptNamed(segment) !== undefined) ?? outer.pid, steps: first.map((proc) => proc.pid) }];
       frontier = children.map((proc) => proc.pid);
     }
 
@@ -131,7 +224,7 @@ export function bwrapSteps(procs: readonly ProcEntry[], roots: readonly string[]
 }
 
 /** Starts watching; `stop` takes a last look and answers the lines to show, and has written them to observed.jsonl. */
-export function startObserver(world: World, { pass, label, listed = listedHere }: { pass: ReadonlyMap<string, string>; label: string; listed?: (argv: readonly string[]) => Promise<string | undefined> }) {
+export function startObserver(world: World, { pass, label, listed = listedHere }: { pass: ReadonlyMap<string, string>; label: string; listed?: (argv: readonly string[]) => Promise<Listed> }) {
   const canary = world.env?.[CANARY_NAME] ?? '';
   const secrets = new Map([...Object.entries(collectEnvSecrets(process.env)), ...pass]);
   const { declared, unreadable } = declaredCredentials(world);
@@ -140,11 +233,13 @@ export function startObserver(world: World, { pass, label, listed = listedHere }
   const unobserved = new Set<string>();
   const notRunning = new Map<string, string>();
   let sawSeatbelt = false;
-  let enginesUp: Array<(typeof CONTAINER_ENGINES)[number]> | undefined;
+  // An engine down at one look is asked again at the next; one not installed, or whose `info` ran out of time, never again.
+  const engines = new Map<(typeof CONTAINER_ENGINES)[number], 'up' | 'missing' | 'hung'>();
 
-  const judge = (key: string, what: string, environs: ReadonlyArray<ReadonlyMap<string, string>>): void => {
-    const entry = seen.get(key) ?? { what, read: 0, names: new Set<string>() };
-    seen.set(key, entry);
+  /** Judges `environs`, read from sandbox `what`, into what it showed over the command. */
+  const judgeEnvirons = (what: string, environs: ReadonlyArray<ReadonlyMap<string, string>>): Seen => {
+    const entry: Seen = seen.get(what) ?? { what, read: 0, names: new Set<string>() };
+    seen.set(what, entry);
 
     for (const env of environs) {
       entry.read += 1;
@@ -152,36 +247,83 @@ export function startObserver(world: World, { pass, label, listed = listedHere }
 
       if (verdict.kind === 'leak') for (const name of verdict.names) entry.names.add(name);
     }
+
+    return entry;
   };
 
-  const containers = async (): Promise<void> => {
-    enginesUp ??= (await Promise.all(CONTAINER_ENGINES.map(async (engine) => ((await listed([PROVIDER_COMMANDS[engine], 'info', '--format', '{{.ServerVersion}}'])) === undefined ? [] : [engine])))).flat();
+  /** Judges what `ENVIRONS` answered in sandbox `what`, keeping why it failed while no look has read an environment. */
+  const judge = (what: string, read: Listed): void => {
+    const entry = judgeEnvirons(what, read.kind === 'ran' ? environsOf(read.stdout) : []);
 
-    for (const engine of enginesUp) {
-      const command = PROVIDER_COMMANDS[engine];
-      const lines = await listed([command, 'ps', '--filter', 'label=teamai.owner', '--format', '{{.ID}}\t{{.Names}}\t{{.Label "teamai.owner"}}']);
+    if (read.kind === 'ran' || entry.read > 0) delete entry.failed;
+    else entry.failed = read.kind === 'failed' ? read.why : 'its command is not installed here';
+  };
 
-      if (lines === undefined) {
-        unobserved.add(`${engine} containers, \`${engine} ps\` failed`);
-        continue;
+  const containers = (): Promise<void[]> => Promise.all(CONTAINER_ENGINES.map(async (engine) => {
+    const command = PROVIDER_COMMANDS[engine];
+
+    if (engines.get(engine) === 'missing' || engines.get(engine) === 'hung') return;
+
+    if (engines.get(engine) !== 'up') {
+      const info = await listed([command, 'info', '--format', '{{.ServerVersion}}']);
+
+      if (info.kind === 'failed' && info.timedOut) {
+        engines.set(engine, 'hung');
+        unobserved.add(`${engine} containers, \`${engine} info\` took over 10 s`);
       }
 
-      for (const line of lines.split('\n')) {
-        const [id = '', name = '', owner = ''] = line.split('\t');
+      if (info.kind === 'failed') return;
+      engines.set(engine, info.kind === 'missing' ? 'missing' : 'up');
 
-        if (id === '' || !owners.has(owner)) continue;
-        const environs = await listed([command, 'exec', id, 'sh', '-c', ENVIRONS]);
-
-        judge(`${engine}:${name}`, `${engine}:${name}`, environs === undefined ? [] : environsOf(environs));
-      }
+      if (info.kind === 'missing') return;
     }
-  };
+
+    const lines = await listed([command, 'ps', '--filter', 'label=teamai.owner', '--format', '{{.ID}}\t{{.Names}}\t{{.Label "teamai.owner"}}']);
+
+    if (lines.kind !== 'ran') {
+      unobserved.add(`${engine} containers, \`${engine} ps\` failed`);
+
+      return;
+    }
+
+    for (const line of lines.stdout.split('\n')) {
+      const [id = '', name = '', owner = ''] = line.split('\t');
+
+      if (id === '' || !owners.has(owner)) continue;
+      const environs = await listed([command, 'exec', id, ...READ_ENVIRONS]);
+
+      judge(`${engine}:${name}`, environs);
+    }
+  }));
 
   const sbx = async (): Promise<void> => {
     const out = await listed([PROVIDER_COMMANDS.sbx, 'ls', '--json']);
-    const parsed = out === undefined ? undefined : SbxListedSchema.safeParse(JSON.parse(out));
 
-    for (const sandbox of parsed?.success === true ? parsed.data : []) {
+    if (out.kind === 'missing') return;
+
+    if (out.kind === 'failed') {
+      unobserved.add(`sbx sandboxes, \`sbx ls\` failed (${out.why})`);
+
+      return;
+    }
+
+    let json: unknown;
+
+    try {
+      json = JSON.parse(out.stdout);
+    } catch {
+      json = undefined;
+    }
+
+    const parsed = SbxListedSchema.safeParse(json);
+
+    if (!parsed.success) {
+      unobserved.add('sbx sandboxes, `sbx ls --json` printed a list this harness cannot read');
+
+      return;
+    }
+
+    for (const sandbox of parsed.data) {
       const owner = journalOfSbxName(sandbox.name);
 
       if (owner === undefined || !owners.has(owner)) continue;
@@ -192,9 +334,9 @@ export function startObserver(world: World, { pass, label, listed = listedHere }
         continue;
       }
 
-      const environs = await listed([PROVIDER_COMMANDS.sbx, 'exec', sandbox.name, 'sh', '-c', ENVIRONS]);
+      const environs = await listed([PROVIDER_COMMANDS.sbx, 'exec', sandbox.name, ...READ_ENVIRONS]);
 
-      judge(`sbx:${sandbox.name}`, `sbx:${sandbox.name}`, environs === undefined ? [] : environsOf(environs));
+      judge(`sbx:${sandbox.name}`, environs);
     }
   };
 
@@ -220,7 +362,7 @@ export function startObserver(world: World, { pass, label, listed = listedHere }
     for (const { bwrap, steps } of bwrapSteps(procs, [world.dir, world.tmp])) {
       for (const step of steps) {
         try {
-          judge(`bwrap:${bwrap}`, `bwrap:${bwrap}`, [parseEnviron(fs.readFileSync(`/proc/${step}/environ`, 'utf8'))]);
+          judgeEnvirons(`bwrap:${bwrap}`, [parseEnviron(fs.readFileSync(`/proc/${step}/environ`, 'utf8'))]);
         } catch {
           unobserved.add(`bwrap:${bwrap}'s environment, /proc/${step}/environ could not be read`);
         }
@@ -253,14 +395,14 @@ export function startObserver(world: World, { pass, label, listed = listedHere }
       await polling;
       await poll();
       const at = new Date().toISOString();
-      const records = [...seen.values()].map((entry) => ({ at, command: label, what: entry.what, read: entry.read, verdict: entry.names.size === 0 ? 'env ok' : 'ENV LEAK', names: [...entry.names].toSorted() }));
+      const records = [...seen.values()].map((entry) => ({ at, command: label, what: entry.what, read: entry.read, verdict: entry.names.size === 0 ? 'env ok' : 'ENV LEAK', names: [...entry.names].toSorted(), failed: entry.failed }));
 
       for (const [name, status] of notRunning) if (!seen.has(`sbx:${name}`)) unobserved.add(`sbx:${name}'s environment, sbx listed it as ${status}, and only a running one is asked`);
 
-      if (records.length > 0) fs.appendFileSync(path.join(world.dir, 'observed.jsonl'), records.map((record) => `${JSON.stringify(record)}\n`).join(''));
+      if (records.length > 0) fs.appendFileSync(path.join(world.dir, OBSERVED_FILE), records.map((record) => `${JSON.stringify(record)}\n`).join(''));
 
       return [
-        ...records.map((record) => `[verify] observed ${record.what}: ${record.read === 0 ? 'NOT OBSERVED, no environment could be read' : record.names.length === 0 ? 'env ok' : `ENV LEAK ${record.names.join(', ')}`}`),
+        ...records.map((record) => `[verify] observed ${record.what}: ${record.read === 0 ? `NOT OBSERVED, no step's environment could be read${record.failed === undefined ? '' : ` (${record.failed})`}` : record.names.length === 0 ? 'env ok' : `ENV LEAK ${record.names.join(', ')}`}`),
         ...[...unobserved].map((what) => `[verify] NOT OBSERVED: ${what}`),
         ...(sawSeatbelt ? ['[verify] seatbelt has no observer: the env check proves nothing for a seatbelt step'] : []),
         ...unreadable.map((file) => `[verify] ${file} is not YAML: a credential only it declares counts as undeclared`),
