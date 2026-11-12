@@ -91,6 +91,15 @@ describe("a row's lines in section (f)", () => {
     expect(linesOf('teamai container', [{ kind: 'observed', findings: [], notes: [] }, { kind: 'not_observed', what: 'podman containers', why: 'podman info failed' }], same)).toEqual({ leaks: [], notes: ['NOT OBSERVED: podman containers, podman info failed'] });
     expect(linesOf('teamai container', [{ kind: 'observed', findings: [{ what: 'docker container c', attribution: { kind: 'ambiguous', why: 'tied to no world' } }], notes: [] }], same)).toEqual({ leaks: [], notes: ['docker container c: tied to no world, so not counted here'] });
   });
+
+  it('masks every line it writes, a NOT OBSERVED one and a note of the row too', () => {
+    const mask = (text: string): string => text.replaceAll('s3cret-value', '<REDACTED:KEY>');
+
+    expect(linesOf('world process', [
+      { kind: 'not_observed', what: 'working directories', why: 'lsof said s3cret-value' },
+      { kind: 'observed', findings: [], notes: ['process 42 ran with s3cret-value'] },
+    ], mask).notes.join('\n')).not.toContain('s3cret-value');
+  });
 });
 
 describe('what cleanup does with what the rows found', () => {

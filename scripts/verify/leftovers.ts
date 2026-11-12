@@ -234,7 +234,7 @@ export function linesOf(title: string, observed: readonly Observed[], mask: (tex
   for (const seen of observed) {
     if (seen.kind === 'not_observed') {
       isWhole = false;
-      notes.push(`NOT OBSERVED: ${seen.what}, ${seen.why}`);
+      notes.push(mask(`NOT OBSERVED: ${seen.what}, ${seen.why}`));
       continue;
     }
 
@@ -260,7 +260,7 @@ export function linesOf(title: string, observed: readonly Observed[], mask: (tex
       }
     }
 
-    rowNotes.push(...seen.notes);
+    rowNotes.push(...seen.notes.map(mask));
   }
 
   if (isWhole && leaks.length === 0 && notes.length === 0) notes.push(`no ${title} left`);
@@ -377,10 +377,14 @@ export function cleanupPlan(rows: ReadonlyArray<{ onCleanup: LeftoverKind['onCle
   return processes.length > 0 || unseen.length > 0 ? { kind: 'refuse', processes, unseen } : { kind: 'remove', removals, unobserved };
 }
 
-/** Cleanup's plan for `world`, from every row a world of its tier needs. */
+/** Cleanup's plan for `world`, from every row a world of its tier needs, each line it prints masked as the ledger's. */
 export async function planCleanup(world: World): Promise<CleanupPlan> {
   const { context, tier } = await contextOf(world);
   const rows = await rowsFor(tier);
+  const plan = cleanupPlan(await Promise.all(rows.map(async (row) => ({ onCleanup: row.onCleanup, observed: await row.observe(context) }))));
+  const { mask } = ledgerRedactor({ passedNames: world.passed ?? [], harnessEnv: process.env });
 
-  return cleanupPlan(await Promise.all(rows.map(async (row) => ({ onCleanup: row.onCleanup, observed: await row.observe(context) }))));
+  return plan.kind === 'refuse'
+    ? { ...plan, processes: plan.processes.map(mask), unseen: plan.unseen.map(mask) }
+    : { ...plan, removals: plan.removals.map((removal) => ({ ...removal, what: mask(removal.what) })), unobserved: plan.unobserved.map(mask) };
 }
