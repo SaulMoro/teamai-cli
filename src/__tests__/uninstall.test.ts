@@ -570,6 +570,69 @@ describe('uninstall', () => {
     expect(await fse.pathExists(path.join(homeDir, '.claude', 'skills', 'team-skill')), 'delivered skill').toBe(true);
   });
 
+  it('refuses when a step runtime opens a place while the person confirms, and removes nothing', async () => {
+    const { homeDir, repoPath, teamaiHome } = await setupFixture(tmpDir);
+    vi.stubEnv('HOME', homeDir);
+    const dataHome = path.join(teamaiHome, 'projects', 'current');
+    const record = path.join(dataHome, 'workflows', 'runs', 'r0123456789abcdef', 'attempts', 'a01234567', 'runtime.json');
+    mockAutoDetectInit.mockResolvedValue({
+      localConfig: makeLocalConfig(homeDir, repoPath, { scope: 'project', projectRoot: homeDir, dataHome }),
+      teamConfig: makeTeamConfig(),
+    });
+    const prompts = await import('../utils/prompt.js');
+    vi.spyOn(prompts, 'askConfirmation').mockImplementation(async () => {
+      await fse.outputJson(record, { runtime: 'box', driver: 'box', phase: 'running', open: { op: newOpId(), handle: 'teamai-r0123456789abcdef-a01234567' } });
+
+      return true;
+    });
+    const previousExitCode = process.exitCode;
+
+    await uninstall({});
+
+    expect(process.exitCode).toBe(1);
+    process.exitCode = previousExitCode;
+    expect(log.error).toHaveBeenCalledWith(expect.stringContaining('`teamai workflow cancel r0123456789abcdef`'));
+    expect(await fse.pathExists(record), 'run record').toBe(true);
+    expect(await fse.pathExists(path.join(homeDir, '.claude', 'skills', 'team-skill')), 'delivered skill').toBe(true);
+  });
+
+  it('previews what it would remove in a dry run while a step runtime holds a place, warning that the uninstall would refuse', async () => {
+    const { homeDir, repoPath, teamaiHome } = await setupFixture(tmpDir);
+    vi.stubEnv('HOME', homeDir);
+    const dataHome = path.join(teamaiHome, 'projects', 'current');
+    const record = path.join(dataHome, 'workflows', 'runs', 'r0123456789abcdef', 'attempts', 'a01234567', 'runtime.json');
+    await fse.outputJson(record, { runtime: 'box', driver: 'box', phase: 'running', open: { op: newOpId(), handle: 'teamai-r0123456789abcdef-a01234567' } });
+    mockAutoDetectInit.mockResolvedValue({
+      localConfig: makeLocalConfig(homeDir, repoPath, { scope: 'project', projectRoot: homeDir, dataHome }),
+      teamConfig: makeTeamConfig(),
+    });
+    const previousExitCode = process.exitCode;
+    process.exitCode = undefined;
+
+    await uninstall({ dryRun: true });
+
+    const exitCode = process.exitCode;
+    process.exitCode = previousExitCode;
+    expect(exitCode).toBeUndefined();
+    expect(log.error).not.toHaveBeenCalledWith(expect.stringContaining('Cannot uninstall'));
+    expect(log.warn).toHaveBeenCalledWith(expect.stringContaining('`teamai workflow cancel r0123456789abcdef`'));
+    expect(log.info).toHaveBeenCalledWith('Dry run — no changes made');
+    expect(await fse.pathExists(record), 'run record').toBe(true);
+  });
+
+  it('previews the home it would remove in a dry run with no valid configuration, warning of a place a step runtime holds there', async () => {
+    const { homeDir, teamaiHome } = await setupFixture(tmpDir);
+    vi.stubEnv('HOME', homeDir);
+    const record = path.join(teamaiHome, 'projects', 'gone-checkout', 'workflows', 'runs', 'r0123456789abcdef', 'attempts', 'a01234567', 'runtime.json');
+    await fse.outputJson(record, { runtime: 'box', driver: 'box', phase: 'running', open: { op: newOpId(), handle: 'teamai-r0123456789abcdef-a01234567' } });
+    mockAutoDetectInit.mockRejectedValue(new Error('no configuration'));
+
+    await uninstall({ dryRun: true });
+
+    expect(log.warn).toHaveBeenCalledWith(expect.stringContaining('`teamai workflow cancel r0123456789abcdef`'));
+    expect(log.info).toHaveBeenCalledWith('Dry run — no changes made');
+  });
+
   it('refuses with no valid configuration too, while a step runtime holds a place of a run in the home it removes', async () => {
     const { homeDir, teamaiHome } = await setupFixture(tmpDir);
     vi.stubEnv('HOME', homeDir);
