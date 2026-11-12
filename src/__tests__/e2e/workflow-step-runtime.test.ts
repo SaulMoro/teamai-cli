@@ -6,6 +6,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { resolveProjectDataHome } from '../../config.js';
 import type { RunState } from '../../workflow/types.js';
 import { hasPython, TYPED_TERMINAL } from '../helpers/in-terminal.js';
+import { runtimeRevision } from '../../workflow/runtimes/locate.js';
 import { installToyRuntime, TOY_RUNTIME, TOY_RUNTIME_MARKER } from '../helpers/toy-runtime.js';
 import { attemptOf, CLAUDE_SESSIONS, CLI, CODEBUDDY_SESSIONS, envelope, fakeTool, runCLI, type Ran } from '../helpers/step-runtime-e2e.js';
 
@@ -608,6 +609,22 @@ Judge the review.
     const changed = await runCLI(['workflow', 'start', 'onecommand', '--driver', 'teamd'], repo, { ...env(), RUNS_FILE: runs });
     expect(envelope(changed)).toMatchObject({ error: { code: 'runtime_not_accepted' } });
     expect(fs.readFileSync(spawns, 'utf8')).toBe('spawned\n');
+  });
+
+  it('says once that a team runtime replaces teamai\'s, and records in each attempt where its runtime came from, at which revision', async () => {
+    const runtimeDir = writeTeamRuntime('t3', path.join(sandbox, 'team-t3-spawns'));
+    writeDefinition('teamt3', { state: path.join(sandbox, 'toy-state-team-t3') }, { use: 't3' });
+    const revision = await runtimeRevision(runtimeDir);
+    const trust = path.join(os.homedir(), '.teamai', 'trust', 'runtimes.json');
+    const accepted = fs.existsSync(trust) ? (JSON.parse(fs.readFileSync(trust, 'utf8')) as { accepted: unknown[] }).accepted : [];
+    fs.mkdirSync(path.dirname(trust), { recursive: true });
+    fs.writeFileSync(trust, JSON.stringify({ accepted: [...accepted, { dir: runtimeDir, revision, acceptedAt: new Date().toISOString() }] }));
+
+    const ran = await runCLI(['workflow', 'start', 'onecommand', '--driver', 'teamt3'], repo, { ...env(), RUNS_FILE: path.join(sandbox, 'runs-team-t3') });
+
+    const runId = succeededRun(ran);
+    expect(ran.stderr.split(`Runtime "t3" of the team (runtimes/t3/, revision ${revision.slice(0, 12)}) replaces teamai's.`)).toHaveLength(2);
+    expect(runtimeRecords(runId)).toEqual([expect.objectContaining({ runtime: 't3', sources: [{ runtime: 't3', layer: 'team', location: 'runtimes/t3/', revision }] })]);
   });
 
   it.skipIf(!hasPython)('stops as interrupted at Ctrl-C to accept a team runtime, spawning nothing and accepting nothing, and asks again next time', async () => {

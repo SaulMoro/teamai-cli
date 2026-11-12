@@ -63,11 +63,21 @@ const PHASES = ['opening', 'ready', 'running', 'collected', 'closed'] as const;
 /** A tool's home: the tool, and the directory its sessions are kept under. */
 const ToolHomeSchema = z.object({ tool: z.string(), dir: z.string() });
 
+/**
+ * Where one runtime an attempt runs on came from: the resource found for it (`t3`, or teamai's `teamai-t3`), its layer,
+ * where a person finds it, and its revision, a folder's (`runtimeRevision`) or the sha256 of a file's content.
+ */
+const RuntimeOriginSchema = z.object({ runtime: z.string(), layer: z.enum(['personal', 'team', 'teamai']), location: z.string(), revision: z.string() });
+
+export type RuntimeOrigin = z.infer<typeof RuntimeOriginSchema>;
+
 const AttemptRuntimeRecordSchema = z.object({
   /** The runtime the attempt runs on, as the definition's `use` names it. */
   runtime: z.string(),
   /** The driver definition that chose it. */
   driver: z.string(),
+  /** Where each runtime it runs on came from, the inner one first for one through another; none for one teamai builds in. */
+  sources: z.array(RuntimeOriginSchema).optional(),
   phase: z.enum(PHASES),
   open: z.object({ op: OpIdSchema, handle: z.string().optional() }),
   exec: z.object({ op: OpIdSchema }).optional(),
@@ -563,7 +573,7 @@ function isStopRefused(failure: RuntimeFailure): boolean {
  * which bounds what runs in the place; undefined when the attempt has no such limit, or only stops what a teamai before
  * it left.
  */
-export function attemptRun({ runtime, ...input }: { config: LocalConfig; run: RunId; attempt: AttemptId; runtime: StepRuntime<DriverCan>; driver: string; deadline?: string }): AttemptRun {
+export function attemptRun({ runtime, ...input }: { config: LocalConfig; run: RunId; attempt: AttemptId; runtime: StepRuntime<DriverCan>; driver: string; sources?: readonly RuntimeOrigin[]; deadline?: string }): AttemptRun {
   return attemptThrough({ ...input, sends: attemptSends(runtime) });
 }
 
@@ -652,7 +662,7 @@ function attemptSends(full: StepRuntime<DriverCan>) {
   };
 }
 
-function attemptThrough({ config, run, attempt, sends, driver, deadline }: { config: LocalConfig; run: RunId; attempt: AttemptId; sends: AttemptSends; driver: string; deadline?: string }): AttemptRun {
+function attemptThrough({ config, run, attempt, sends, driver, sources, deadline }: { config: LocalConfig; run: RunId; attempt: AttemptId; sends: AttemptSends; driver: string; sources?: readonly RuntimeOrigin[]; deadline?: string }): AttemptRun {
   const { runtime } = sends;
   const file = attemptRuntimePath(config, run, attempt);
   let record: AttemptRuntimeRecord | undefined;
@@ -794,6 +804,9 @@ function attemptThrough({ config, run, attempt, sends, driver, deadline }: { con
       const op = before?.open.op ?? newOpId();
       const toolHome = home ?? before?.toolHome;
       const opening: AttemptRuntimeRecord = { runtime: runtime.name, driver, phase: before?.phase ?? 'opening', open: { op } };
+      const from = sources ?? before?.sources;
+
+      if (from) opening.sources = [...from];
 
       if (before?.open.handle) opening.open.handle = before.open.handle;
 

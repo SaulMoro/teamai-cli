@@ -71,6 +71,8 @@ export interface ExternalRuntime {
   /** The sha256 of the file form's content, or the folder's revision (`runtimeRevision`). */
   readonly revision: string;
   readonly trust: RuntimeTrust;
+  /** The runtime of teamai's own this one of the member or the team stands in for, by the name `use` would find it. */
+  readonly replaces?: string;
 }
 
 /** Where a runtime was found: the built-in `tools`, or an external one. */
@@ -320,8 +322,12 @@ export async function locateRuntime(driver: ResolvedDriver, use: string): Promis
       const found = await layer(driver, use, name);
 
       switch (found.kind) {
-        case 'found':
-          return { ok: true, source: found.source };
+        case 'found': {
+          const replaced = found.source.layer === 'teamai' ? undefined : await shippedRuntime(names);
+
+          return { ok: true, source: replaced === undefined ? found.source : { ...found.source, replaces: replaced } };
+        }
+
         // A definition that cannot run fails the run: another layer's never stands in for the one the member was given.
         case 'refused':
         case 'unusable':
@@ -348,6 +354,19 @@ export async function locateRuntime(driver: ResolvedDriver, use: string): Promis
       message: `Driver "${driver.name}" uses runtime "${use}", and none is installed: no ~/.teamai/runtimes/${use}.yaml or ${use}/${RUNTIME_MARKER}, none in the team repo's runtimes/, none that teamai ships, and no teamai-runtime-${use} on PATH.`,
     },
   };
+}
+
+/** The first of `names` teamai ships a runtime by, or none. */
+async function shippedRuntime(names: readonly string[]): Promise<string | undefined> {
+  const teamai = { root: teamaiPackageDir(), read: (file: ShippedFile) => file };
+
+  for (const name of names) {
+    const resolution = await Resources.resolve(RESOURCE_LAYOUTS.runtimes, name, { teamai });
+
+    if (resolution.kind === 'resolved' && resolution.item.layer === 'teamai') return name;
+  }
+
+  return undefined;
 }
 
 /** The prefix of every runtime teamai ships, as of every default. */

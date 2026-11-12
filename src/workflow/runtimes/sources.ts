@@ -9,13 +9,14 @@ import { acceptRuntime, isRuntimeAccepted, locateRuntime } from './locate.js';
 import { LOCAL_DRIVER } from '../driver-name.js';
 import { fleetStepRuntime, shadowedFleetEntries, type OpenWake } from '../fleet/owner.js';
 import { log } from '@teamai/shared/log';
+import { warnOnce } from '../../utils/warn-once.js';
 import { stdioStepRuntime } from './stdio.js';
 import { type InitInstance, type RuntimeFailure, type RuntimeOptions } from '@teamai/runtime-protocol';
 import { acceptToolCommand, instanceHomeDir } from '../../tool-instances.js';
 import { baseToolOf, instanceNames, toolOf } from '../../tool-registry.js';
 import { type StepRuntime } from '@teamai/runtime-protocol/step-runtime';
 import { composedName, composedOffer, composedStepRuntime, nestedOptions } from './composed.js';
-import { credentialSecrets, isExecRuntimeTool, type ExecRuntimeTool } from './attempt.js';
+import { credentialSecrets, isExecRuntimeTool, type ExecRuntimeTool, type RuntimeOrigin } from './attempt.js';
 import { LOGIN_TOOLS, type LoginTool } from './login.js';
 import type { SignInVariables } from '@teamai/tool-core/launch';
 import { executableOf, isLaunchTool, launchAdapterIdOf, launchAdapterOf } from '../../launch-registry.js';
@@ -185,8 +186,9 @@ export type OpenedRuntime =
    * `wakes`: its init offered to wake fleet members, which a fleet entry's `wake` names it for.
    * `keepsConversations`: its init said a prompt's conversation outlives the prompt in its place, so teamai may hold the place for a later step.
    * `runsOnToolHome`: its init said it runs each prompt's tool in the attempt's tool home, which teamai seeds, copies a login into and reads sessions in.
+   * `sources`: where the runtimes it runs on came from, which each attempt on it records; none for the built-in `fleet`.
    */
-  | { kind: 'external'; use: string; runtime: StepRuntime<DriverCan>; can: DriverCan; launchesAgents: boolean; engine: EngineOptions; credentials: Record<string, string>; found: string[]; masks: Record<string, string>; optionsFrom: string; unavailable?: Record<string, string>; isThrough?: true; wakes?: true; keepsConversations?: true; runsOnToolHome?: true }
+  | { kind: 'external'; use: string; runtime: StepRuntime<DriverCan>; can: DriverCan; launchesAgents: boolean; engine: EngineOptions; credentials: Record<string, string>; found: string[]; masks: Record<string, string>; optionsFrom: string; unavailable?: Record<string, string>; isThrough?: true; wakes?: true; keepsConversations?: true; runsOnToolHome?: true; sources?: RuntimeOrigin[] }
 ;
 
 /**
@@ -311,6 +313,14 @@ async function openRuntime(driver: ResolvedDriver, use: string, options: Runtime
   const accepted = await acceptRuntime(source, purpose === 'check' ? { mode: 'unattended', canAsk: false } : { mode, canAsk });
 
   if (!accepted.ok) return accepted;
+  const sources: RuntimeOrigin[] = [{ runtime: source.resource, layer: source.layer, location: source.location, revision: source.revision }];
+
+  // A runtime of the member or the team in place of teamai's own is never taken silently.
+  if (purpose === 'run' && source.replaces !== undefined) {
+    const whose = source.layer === 'team' ? `Runtime "${use}" of the team` : `Your runtime "${use}"`;
+    warnOnce(`${whose} (${source.location}, revision ${source.revision.slice(0, 12)}) replaces teamai's.`);
+  }
+
   const isDeclaring = split.credentials.length > 0 || split.engine.logins.length > 0;
   const found = purpose === 'run' && !isDeclaring ? signInsFound(process.env) : {};
 
@@ -330,7 +340,7 @@ async function openRuntime(driver: ResolvedDriver, use: string, options: Runtime
     const recovered = await recovering.init({ options: split.runtime, mode: 'recover', checkout });
 
     // It offers nothing in this mode: it is asked only to stop, collect and close what it ran.
-    if (recovered.ok) return { ok: true, opened: { kind: 'external', use, runtime: recovering, can: recovered.can, launchesAgents: recovered.launchesAgents, ...(recovered.keepsConversations && { keepsConversations: true }), ...(recovered.runsOnToolHome && { runsOnToolHome: true }), engine: split.engine, credentials: {}, found: [], masks, optionsFrom: optionsSource(driver, use) } };
+    if (recovered.ok) return { ok: true, opened: { kind: 'external', use, runtime: recovering, can: recovered.can, launchesAgents: recovered.launchesAgents, ...(recovered.keepsConversations && { keepsConversations: true }), ...(recovered.runsOnToolHome && { runsOnToolHome: true }), engine: split.engine, credentials: {}, found: [], masks, optionsFrom: optionsSource(driver, use), sources } };
     await recovering.dispose();
     notRecovered = recovered.failure;
   }
@@ -394,7 +404,7 @@ async function openRuntime(driver: ResolvedDriver, use: string, options: Runtime
     const declared = isMemberRoute ? notOwnLogin(values.values) : values.values;
     const given = isKeepingFound ? { ...declared, ...foundHere } : declared;
 
-    return { ok: true, opened: { kind: 'external', use, runtime, can: ready.can, launchesAgents: ready.launchesAgents, engine, credentials: given, found: isKeepingFound ? Object.keys(foundHere) : [], masks, optionsFrom: optionsSource(driver, use), ...(ready.unavailable && { unavailable: ready.unavailable }), ...(ready.wakes && { wakes: true }), ...(ready.keepsConversations && { keepsConversations: true }), ...(ready.runsOnToolHome && { runsOnToolHome: true }) } };
+    return { ok: true, opened: { kind: 'external', use, runtime, can: ready.can, launchesAgents: ready.launchesAgents, engine, credentials: given, found: isKeepingFound ? Object.keys(foundHere) : [], masks, optionsFrom: optionsSource(driver, use), sources, ...(ready.unavailable && { unavailable: ready.unavailable }), ...(ready.wakes && { wakes: true }), ...(ready.keepsConversations && { keepsConversations: true }), ...(ready.runsOnToolHome && { runsOnToolHome: true }) } };
   }
 
   await runtime.dispose();
@@ -466,7 +476,7 @@ async function openComposed(driver: ResolvedDriver, names: { inner: string; oute
     opened: {
       kind: 'external', use: name, runtime: composedStepRuntime({ outer: outerOpened.runtime, inner: innerOpened.runtime, innerCredentials: innerOpened.credentials }),
       can: offer.can, launchesAgents: offer.launchesAgents, engine, credentials: outerOpened.credentials, found: outerOpened.found, masks: { ...outerOpened.masks, ...innerOpened.masks }, optionsFrom: innerOpened.optionsFrom,
-      isThrough: true, ...(offer.unavailable && { unavailable: offer.unavailable }),
+      isThrough: true, sources: [...innerOpened.sources ?? [], ...outerOpened.sources ?? []], ...(offer.unavailable && { unavailable: offer.unavailable }),
     },
   };
 }

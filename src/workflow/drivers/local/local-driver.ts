@@ -22,7 +22,7 @@ import { isRecord } from '../../expression.js';
 import { toolsStepRuntime, type StepLauncher } from '@teamai/runtime-tools';
 import { failureReport, launchToolFor, promptOfferOf, promptRuntimeOn, runPromptStep, type AskPerson, type StagedLease } from '../../steps/prompt.js';
 import { failedCommand, placeView, runtimeCommand, runtimeSetup, runtimeStepEnv, type StartedCommand } from '../../steps/runtime-steps.js';
-import { attemptRun, credentialSecrets, HeldPlace, isExecRuntimeTool, readAttemptPlacement, recordInProcessAttempt, attemptRuntimePath, maskAttemptResults, type AttemptRun } from '../../runtimes/attempt.js';
+import { attemptRun, credentialSecrets, HeldPlace, isExecRuntimeTool, readAttemptPlacement, recordInProcessAttempt, attemptRuntimePath, maskAttemptResults, type AttemptRun, type RuntimeOrigin } from '../../runtimes/attempt.js';
 import { answerCallTool, hostStepRuntime } from '../../runtimes/host.js';
 import { writeHeldSteps, type HeldSteps } from '../../runtimes/held.js';
 import { closeAfterSweep, endLeftLogins, stopLeftInProcess, stopOnRecordedDriver } from '../../runtimes/cancelled.js';
@@ -257,6 +257,8 @@ interface SlotBase {
   isThrough?: true;
   /** It runs each prompt's tool in the attempt's tool home, as a runtime that execs the tool does. */
   runsOnToolHome?: true;
+  /** Where the runtimes it runs on came from, which each attempt on it records. */
+  sources?: readonly RuntimeOrigin[];
 }
 
 type ReportBody = ReportInput;
@@ -661,7 +663,7 @@ async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, given: 
       case 'external':
         return {
           kind: 'external', use: entry.use, runtime: entry.runtime, launchesAgents: entry.launchesAgents, engine: entry.engine, credentials: entry.credentials, found: entry.found,
-          ...(entry.unavailable && { unavailable: entry.unavailable }), ...(entry.isThrough && { isThrough: true }), ...(entry.keepsConversations && { keepsConversations: true }), ...(entry.runsOnToolHome && { runsOnToolHome: true }),
+          ...(entry.unavailable && { unavailable: entry.unavailable }), ...(entry.isThrough && { isThrough: true }), ...(entry.keepsConversations && { keepsConversations: true }), ...(entry.runsOnToolHome && { runsOnToolHome: true }), ...(entry.sources && { sources: entry.sources }),
           can: {
             // One that runs its tool on the attempt's tool home, as one that execs it does, runs only the tools a tool home holds.
             ...entry.can, tools: entry.launchesAgents && entry.runsOnToolHome !== true ? entry.can.tools : (entry.can.tools ?? []).filter((tool) => isExecRuntimeTool(baseToolOf(tool))), remote: true,
@@ -723,7 +725,7 @@ async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, given: 
     if (known) return known;
     // The lease's expiry is the latest the attempt may run on its runtime. A turn limit ends the turn instead, and the
     // driver keeps it itself, so it gives no deadline.
-    const created = attemptRun({ config, run: runId, attempt: lease.attempt, runtime: slot.runtime, driver: defined.driver, ...(lease.expiresAt !== undefined && { deadline: lease.expiresAt }) });
+    const created = attemptRun({ config, run: runId, attempt: lease.attempt, runtime: slot.runtime, driver: defined.driver, ...(slot.sources && { sources: slot.sources }), ...(lease.expiresAt !== undefined && { deadline: lease.expiresAt }) });
     attemptRuns.set(lease.attempt, created);
 
     return created;
