@@ -257,6 +257,9 @@ function repositoryView(project: string) {
 /** git's copy of what a remote holds, which a fetch or a push writes whoever asked for it. */
 const REMOTE_REF = /^project\/\.git\/refs\/remotes(\/|$)/;
 
+/** git's note of the last fetch, which every fetch rewrites whoever asked for it, as it does the remote's refs. */
+const FETCH_HEAD = 'project/.git/FETCH_HEAD';
+
 /** teamai's own directories: whatever wrote last there, it is teamai's to remove. */
 const TEAMAI_ROOTS = ['home/.teamai', 'project/.teamai'];
 
@@ -391,6 +394,11 @@ async function reverseOf(world: World, place: LedgerPlace): Promise<{ leaks: str
 
     if (REMOTE_REF.test(entry)) {
       excuse("git's copy of what the remote holds", entry);
+      continue;
+    }
+
+    if (entry === FETCH_HEAD) {
+      excuse("git's note of the last fetch", entry);
       continue;
     }
 
