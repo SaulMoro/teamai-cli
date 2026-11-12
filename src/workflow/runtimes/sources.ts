@@ -316,6 +316,14 @@ async function openRuntime(driver: ResolvedDriver, { use, options, sandbox }: { 
   if (!split.ok) return { ok: false, failure: badOption(driver, use, split.key, split.message) };
 
   if (use === 'fleet') return fleetRuntime(driver, split, { mode, canAsk, purpose, checkout });
+  // The sandbox runtime takes its provider's options from the sandbox profile the entry names, checked before its
+  // program is found: a misplaced option is the member's to fix wherever the program is. A stop of what an attempt
+  // started on options given inline, by a teamai that took them, reaches its sandbox on those options. A stop needs no
+  // profile: the runtime keeps the options each place was opened with, so one gone or broken since stops nothing.
+  const isStoppingInline = purpose === 'stop' && Object.keys(split.runtime).length > 0;
+  const profiled = use === SANDBOX_RUNTIME && !isStoppingInline ? await sandboxOptions({ driver, named: sandbox, given: split.runtime, from: optionsSource(driver, use), isEntryEditable: isEntryEditable(driver, use) }) : undefined;
+
+  if (profiled?.ok === false && purpose !== 'stop') return profiled;
   const located = await locateRuntime(driver, use);
 
   if (!located.ok) return located;
@@ -340,13 +348,6 @@ async function openRuntime(driver: ResolvedDriver, { use, options, sandbox }: { 
   const accepted = await acceptRuntime(source, purpose === 'check' ? { mode: 'unattended', canAsk: false } : { mode, canAsk });
 
   if (!accepted.ok) return accepted;
-  // The sandbox runtime takes its provider's options from the sandbox profile the entry names. A stop of what an attempt
-  // started on options given inline, by a teamai that took them, reaches its sandbox on those options. A stop needs no
-  // profile: the runtime keeps the options each place was opened with, so one gone or broken since stops nothing.
-  const isStoppingInline = purpose === 'stop' && Object.keys(split.runtime).length > 0;
-  const profiled = use === SANDBOX_RUNTIME && !isStoppingInline ? await sandboxOptions({ driver, named: sandbox, given: split.runtime, from: optionsSource(driver, use), isEntryEditable: isEntryEditable(driver, use) }) : undefined;
-
-  if (profiled?.ok === false && purpose !== 'stop') return profiled;
   const initOptions = profiled?.ok === true ? profiled.options : split.runtime;
   const profile = profiled?.ok === true ? profiled.profile : undefined;
   const origin: RuntimeOrigin = { runtime: source.resource, layer: source.layer, location: source.location, revision: source.revision };
