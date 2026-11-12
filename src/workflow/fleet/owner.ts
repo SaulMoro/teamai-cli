@@ -589,7 +589,8 @@ async function waitOnOffer(input: WaitInput, { cancel, leave }: { cancel: AbortS
   // Staleness counts on this machine's clock, from when it last saw the record change: a member's clock may be off. A
   // cancel goes through the record, and waits for the member's answer as long as for its progress.
   let lastSeen: { write: string; at: number } | undefined;
-  let isCancelWritten = false;
+  // The cancel this wait wrote over a member's claim, once it landed: the member answers it.
+  let cancelling: Extract<FleetRecord, { state: 'cancelling' }> | undefined;
   // When this wait first saw the cancel, on this machine's clock.
   let cancelledAt: number | undefined;
   // When the first cancel write began: until CANCEL_WRITE_MS after it, a cancel that did not land is written again.
@@ -601,6 +602,7 @@ async function waitOnOffer(input: WaitInput, { cancel, leave }: { cancel: AbortS
   // A record that does not change is read less often, down to a third of stale_after, so a staleness is seen in time.
   const slowestPollMs = Math.min(RECORD_POLL_MAX_MS, Math.max(RECORD_POLL_MS, Math.floor(staleAfterMs / 3)));
   let pollMs = RECORD_POLL_MS;
+  const withdrawn: Waited = { kind: 'cancelled', message: `Step "${step}" was cancelled before a member of fleet pool ${pool} took it.` };
 
   for (;;) {
     if (leave.aborted) return { kind: 'left' };
@@ -622,7 +624,7 @@ async function waitOnOffer(input: WaitInput, { cancel, leave }: { cancel: AbortS
 
     if (record?.state === 'expired') return failed(await gone(record, { config, run, root, dir, ref, staleAfterMs }));
 
-    if (record?.state === 'withdrawn') return { kind: 'cancelled', message: `Step "${step}" was cancelled before a member of fleet pool ${pool} took it.` };
+    if (record?.state === 'withdrawn') return withdrawn;
 
     if (record?.state === 'cancelled') {
       const taken = record.pushed === record.start ? undefined : await takeWork({ config, run, root, dir, ref, to: record.pushed, step });
@@ -703,7 +705,13 @@ async function waitOnOffer(input: WaitInput, { cancel, leave }: { cancel: AbortS
       continue;
     }
 
-    if (cancel.aborted && !isCancelWritten) {
+    // A cancel that landed waits for its member's answer as long as for its progress: past stale_after with no read of
+    // the record, whether the member stopped is not known, so the wait ends and keeps the place for `workflow cancel`.
+    if (cancelling !== undefined && !read.ok && lastSeen !== undefined && Date.now() - lastSeen.at > staleAfterMs) {
+      return failed({ code: CANCEL_FAILED, message: `Step "${step}" was cancelled: its member ${safeText(cancelling.member.user)} was asked to stop it, and the record of attempt ${attempt} on teamai-reports could not be read for ${staleAfterMs / 1_000} s since, so whether the member stopped is not known. ${cancelWriteCause(read.error)} The attempt's place and records are kept. Once origin can be read, run teamai workflow cancel ${run} again.` });
+    }
+
+    if (cancel.aborted && cancelling === undefined) {
       cancelledAt ??= Date.now();
 
       // A read that failed shows nothing: the cancel is written once a read shows the record again, for as long as a
@@ -725,7 +733,10 @@ async function waitOnOffer(input: WaitInput, { cancel, leave }: { cancel: AbortS
         const written = await cancelAttempt(config, record, { until, signal: leave });
 
         if (written.ok) {
-          isCancelWritten = true;
+          // A withdraw is final: no member takes an offer once it landed, so the cancel ends at the write.
+          if (written.value.state === 'withdrawn') return withdrawn;
+          cancelling = written.value;
+          lastSeen = { write: written.value.write, at: Date.now() };
           continue;
         }
 
@@ -758,7 +769,7 @@ async function waitOnOffer(input: WaitInput, { cancel, leave }: { cancel: AbortS
     const woken = AbortSignal.any([cancel, leave, ...(asked !== undefined && asked.answer === undefined ? [asked.answered.signal] : [])]);
 
     // A cancel write that is due is tried again at the shortest poll, so its deadline is kept.
-    if (cancel.aborted && !isCancelWritten && cancelTriedAt !== undefined && record?.state !== 'cancelling') pollMs = RECORD_POLL_MS;
+    if (cancel.aborted && cancelling === undefined && cancelTriedAt !== undefined && record?.state !== 'cancelling') pollMs = RECORD_POLL_MS;
     await sleep(pollMs, undefined, cancel.aborted ? { signal: leave } : { signal: woken }).catch(() => undefined);
     pollMs = Math.min(pollMs * 2, slowestPollMs);
   }

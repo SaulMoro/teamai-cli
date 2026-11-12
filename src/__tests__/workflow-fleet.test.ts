@@ -1571,6 +1571,50 @@ describe('a cancel the owner cannot write into the attempt\'s record at once', (
     await cancelled;
   }, 60_000);
 
+  /** Moves `origin` away once a push of a cancel landed on it, so every read after that write fails. */
+  const goneAfterCancel = (origin: string) => {
+    const away = `${origin}.away`;
+    fs.writeFileSync(path.join(origin, 'hooks', 'post-receive'), `#!/bin/sh\nwhile read old new ref; do subjects=$(git log --format=%s "$old..$new") || exit 0; echo "$subjects" | grep -q "^\\[teamai\\] Cancel attempt" && mv '${origin}' '${away}'; done; exit 0\n`, { mode: 0o755 });
+    releases.push(async () => {
+      if (fs.existsSync(away)) fs.renameSync(away, origin);
+    });
+  };
+
+  it('ends the owner\'s cancel cancelled at the withdraw it wrote, when origin cannot be read after it', async () => {
+    const { bob, run, attempt, open, origin } = await ownerOffering(opened, undefined, { staleAfter: '20s' });
+    const { runtime, exec } = await open();
+    const op = newOpId();
+    const ended = exec(op);
+    await recordIn(bob, run, attempt, 'offered');
+    goneAfterCancel(origin);
+    const cancelled = runtime.cancel(op);
+
+    expect(await within(ended, 15_000)).toMatchObject({ kind: 'cancelled' });
+    await cancelled;
+    expect(fs.existsSync(origin)).toBe(false);
+  }, 60_000);
+
+  it('ends the owner\'s cancel cancel_failed past stale_after, naming the record, when origin cannot be read after the cancel of a claim landed', async () => {
+    const { bob, run, attempt, open, origin } = await ownerOffering(opened, undefined, { staleAfter: '20s' });
+    const { runtime, exec } = await open();
+    const op = newOpId();
+    const ended = exec(op);
+    const offered = await recordIn(bob, run, attempt, 'offered');
+    if (offered.state !== 'offered') throw new Error(`no offer: ${offered.state}`);
+    const claimed = await claimAttempt(bob.config, offered, await installOwner(bob.config));
+    if (!claimed.ok) throw new Error(claimed.error.message);
+    await recordIn(bob, run, attempt, 'claimed');
+    goneAfterCancel(origin);
+    vi.useFakeTimers({ toFake: ['Date'], shouldAdvanceTime: true });
+    const cancelled = runtime.cancel(op);
+    await eventually(async () => (fs.existsSync(origin) ? undefined : true));
+
+    expect(await within(ended, 3_000)).toBe('waiting');
+    vi.setSystemTime(Date.now() + 21_000);
+    expect(await within(ended, 15_000)).toMatchObject({ kind: 'failed', failure: { code: 'cancel_failed', message: expect.stringMatching(new RegExp(`its member bob was asked to stop it, and the record of attempt ${attempt} on teamai-reports could not be read for 20 s since, so whether the member stopped is not known\\. .* The attempt's place and records are kept\\. Once origin can be read, run teamai workflow cancel ${run} again\\.$`)) } });
+    await cancelled;
+  }, 60_000);
+
   it('ends the owner\'s cancel cancel_failed past stale_after, keeping the place, when origin cannot be read before any cancel write', async () => {
     const { bob, run, attempt, open, origin } = await ownerOffering(opened, undefined, { staleAfter: '20s' });
     const { runtime, exec } = await open();
