@@ -1,7 +1,8 @@
+import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, onTestFinished, vi } from 'vitest';
 import { leaseNext, startRun } from '../workflow/engine.js';
 import { answerCancel, answerQuestion, cancelAttempt, claimAttempt, expireClaim, finishAttempt, lastGoneWork, leaveOffer, leaseEnv, leaseValues, listOpenAttempts, listRecords, markOffered, offerAttempt, offersAmong, readAttemptRecord, readOfferedMarker, recordProgress, woken, type FleetRecord, type HeldAttempt } from '../workflow/fleet/record.js';
 import { startGroupedCommand } from '../workflow/shell-command.js';
@@ -35,6 +36,7 @@ import { getRepoIdentity, SyncManager } from '../session-flow/sync.js';
 import { getDataHome } from '../types.js';
 import { sweepLeftovers } from '../workflow/leftovers.js';
 import { entriesUnder } from '@teamai/shared/entries-under';
+import { scratchHostRuntime } from './helpers/host-runtime.js';
 
 /** A member that runs every step here, as `--driver local` does. */
 const HERE: MemberPlace = { command: { kind: 'here' }, prompt: { kind: 'here' } };
@@ -725,7 +727,7 @@ steps:
   });
 
   it('runs the step on the step runtime of the member\'s own driver, with the step\'s env and the attempt\'s marker alone, and pushes what it wrote there', async () => {
-    const local = hostStepRuntime();
+    const local = scratchHostRuntime();
     const execs: Array<{ argv: string[]; env: Record<string, string>; cwd: string }> = [];
     const runtime: StepRuntime<DriverCan> = { ...local, exec: (request, events, kind) => {
       execs.push({ argv: request.argv, env: request.env, cwd: request.cwd });
@@ -743,7 +745,7 @@ steps:
   });
 
   it('ends the claim with the step, the cause and the retry command when the step runtime fails the command instead of answering', async () => {
-    const local = hostStepRuntime();
+    const local = scratchHostRuntime();
     const runtime: StepRuntime<DriverCan> = { ...local, exec: () => Promise.reject(new Error('the box went away')) };
 
     let forgedRun: RunId | undefined;
@@ -860,7 +862,7 @@ steps:
 
   // A runtime that runs the step elsewhere, such as a sandbox, makes only what the place names reachable there.
   it('names the workflow folder among the read-only paths of the place it opens on its own step runtime', async () => {
-    const local = hostStepRuntime();
+    const local = scratchHostRuntime();
     const views: PlaceView[] = [];
     const runtime: StepRuntime<DriverCan> = { ...local, open: (request, events) => {
       if (request.view) views.push(request.view);
@@ -1013,12 +1015,58 @@ describe('cancelling an attempt through its record', () => {
     expect(await lastGoneWork(alice.config, { run, step: 'work' })).toEqual({ attempt: ATTEMPT, pushed: cancelled.pushed });
   }, 60_000);
 
+  it('goes on with its step when teamai-reports cannot be read for a moment after another write landed over its own', async () => {
+    const { alice, bob, run, startCommit } = await offerSlow(3_000, { definition: SLOW.replace('sleep 60', 'sleep 6'), command: 'echo begun > begun.txt; sleep 6' });
+    // A git on PATH that, while `cut` exists, fails each read of teamai-reports from the team clone, as a moment
+    // origin cannot be reached does; the member's writes go through its reports checkout and still land.
+    const bin = fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-fleet-git-'));
+    onTestFinished(() => { fs.rmSync(bin, { recursive: true, force: true }); });
+    const cut = path.join(bin, 'cut');
+    const real = execFileSync('sh', ['-c', 'command -v git'], { encoding: 'utf8' }).trim();
+    fs.writeFileSync(path.join(bin, 'git'), `#!/bin/sh\nif [ -f '${cut}' ] && [ "$(pwd -P)" = '${fs.realpathSync(bob.config.repo.localPath)}' ]; then case " $* " in *" ls-remote "*) echo 'fatal: unable to access origin' >&2; exit 128;; esac; fi\nexec '${real}' "$@"\n`, { mode: 0o755 });
+    vi.stubEnv('PATH', `${bin}${path.delimiter}${process.env.PATH ?? ''}`);
+    onTestFinished(() => { vi.unstubAllEnvs(); });
+    const taking = takeFleetAttempt(bob.config, { pool: 'default', repository: 'github.com/acme/business', root: bob.checkout, member: await installOwner(bob.config), secrets: {}, place: HERE });
+    const running = await eventually(async () => {
+      const record = await recordOf(alice, run);
+
+      return record?.state === 'claimed' && record.pushed !== startCommit ? record : undefined;
+    });
+
+    fs.writeFileSync(cut, '');
+    // Another write over the member's own, so its next beat is refused and it reads the record again.
+    expect(await recordProgress(bob.config, running, running.pushed)).toMatchObject({ ok: true });
+    await new Promise((resolve) => setTimeout(resolve, 2_500));
+    fs.rmSync(cut);
+
+    expect(await taking).toEqual({ data: { ran: { run, attempt: ATTEMPT, step: 'work', exit_code: 0 } } });
+    expect(await recordOf(alice, run)).toMatchObject({ state: 'finished', result: { exitCode: 0 } });
+  }, 60_000);
+
+  it('stops its step when its record on teamai-reports is one a newer teamai wrote, which no later read of it parses', async () => {
+    const { alice, bob, run, startCommit } = await offerSlow(3_000, { definition: SLOW.replace('sleep 60', 'sleep 20'), command: 'echo begun > begun.txt; sleep 20' });
+    const taking = takeFleetAttempt(bob.config, { pool: 'default', repository: 'github.com/acme/business', root: bob.checkout, member: await installOwner(bob.config), secrets: {}, place: HERE });
+    const running = await eventually(async () => {
+      const record = await recordOf(alice, run);
+
+      return record?.state === 'claimed' && record.pushed !== startCommit ? record : undefined;
+    });
+    const rel = `workflows/attempts/${run}/${ATTEMPT}`;
+    await updateReports(alice.config, async (worktree) => {
+      fs.writeFileSync(path.join(worktree, `${rel}.json`), JSON.stringify({ ...running, write: 'newer', teamai: '9.1.0', critical: ['lease.command', 'lease.fresh'], lease: { ...running.lease, fresh: true } }));
+
+      return { value: undefined, write: { files: [`${rel}.json`], message: 'a record a newer teamai wrote' } };
+    });
+
+    expect(await taking).toMatchObject({ error: { code: 'state_moved', message: expect.stringContaining('teamai 9.1.0') } });
+  }, 60_000);
+
   it('runs nothing on the member\'s step runtime when the cancel comes while its place there opens', async () => {
     const { alice, bob, run } = await offerSlow(3_000);
     let execs = 0;
     let open = (): void => {};
     const opening = new Promise<void>((resolve) => { open = resolve; });
-    const local = hostStepRuntime();
+    const local = scratchHostRuntime();
     const runtime: StepRuntime<DriverCan> = {
       ...local,
       open: async (request, onAccepted) => {
@@ -1172,6 +1220,53 @@ describe('a restarted member', () => {
     }
   }, 60_000);
 
+  it('removes what it kept of an attempt once its record ended, at its next take', async () => {
+    const { alice, bob, run, offered } = await offerSlow(60_000, { definition: AGAIN.replace('test -f left.txt && echo again > again.txt', 'echo again > again.txt'), command: 'echo again > again.txt' });
+    await readableReportsWorktree(bob.config);
+    const take = async () => takeFleetAttempt(bob.config, { pool: 'default', repository: 'github.com/acme/business', root: bob.checkout, member: await installOwner(bob.config), secrets: {}, place: HERE });
+
+    expect(await take()).toMatchObject({ data: { ran: { run, attempt: offered.attempt } } });
+    expect(await recordOf(alice, run)).toMatchObject({ state: 'finished' });
+    expect(fs.existsSync(attemptDir(bob.config, run, offered.attempt))).toBe(true);
+    // A group no stop here can tell ended, as a pid namespace that changed since leaves: an ended attempt runs nothing
+    // again, so it refuses nothing, but keeps the record of what may still run.
+    const unconfirmed = path.join(attemptDir(bob.config, run, offered.attempt), 'group-424242.json');
+    fs.writeFileSync(unconfirmed, JSON.stringify({ pid: 424242, spawnedAt: Date.now(), pidNamespace: 'pid:[1]' }));
+    const warn = vi.spyOn(log, 'warn').mockImplementation(() => undefined);
+
+    expect(await take()).toEqual({ data: { idle: { offered: 0 } } });
+    expect(warn).not.toHaveBeenCalledWith(expect.stringContaining('the claim is kept'));
+    expect(fs.existsSync(unconfirmed)).toBe(true);
+
+    // What the member kept, such as the log a failure pointed the person to, stays as the run's own leftovers do.
+    fs.rmSync(unconfirmed);
+    expect(await take()).toEqual({ data: { idle: { offered: 0 } } });
+    expect(fs.existsSync(attemptDir(bob.config, run, offered.attempt))).toBe(true);
+
+    bob.config.workflows = { tools: {}, ...bob.config.workflows, retention: '1s' };
+    await new Promise((resolve) => setTimeout(resolve, 1_100));
+    expect(await take()).toEqual({ data: { idle: { offered: 0 } } });
+    expect(fs.existsSync(attemptDir(bob.config, run, offered.attempt))).toBe(false);
+  }, 60_000);
+
+  it('keeps the claim and runs nothing of the step again when it cannot confirm the command its killed run left ended', async () => {
+    const { alice, bob, run, offered } = await offerSlow(60_000, { definition: AGAIN.replace('test -f left.txt && echo again > again.txt', 'echo again > again.txt'), command: 'echo again > again.txt' });
+    const claimed = await claimAttempt(bob.config, offered, await installOwner(bob.config));
+    if (!claimed.ok) throw new Error(claimed.error.message);
+    // A group another pid namespace started, as a member in a container restarted over the same data home leaves: no stop
+    // here can reach it or tell it ended.
+    fs.mkdirSync(attemptDir(bob.config, run, ATTEMPT), { recursive: true });
+    fs.writeFileSync(path.join(attemptDir(bob.config, run, ATTEMPT), 'group-424242.json'), JSON.stringify({ pid: 424242, spawnedAt: Date.now(), pidNamespace: 'pid:[1]' }));
+    const warn = vi.spyOn(log, 'warn').mockImplementation(() => undefined);
+    await readableReportsWorktree(bob.config);
+
+    const taken = await takeFleetAttempt(bob.config, { pool: 'default', repository: 'github.com/acme/business', root: bob.checkout, member: await installOwner(bob.config), secrets: {}, place: HERE });
+
+    expect(taken).toEqual({ data: { idle: { offered: 0 } } });
+    expect(warn).toHaveBeenCalledWith(expect.stringMatching(new RegExp(`Left attempt ${ATTEMPT} of run ${run}, which this member claimed before: .*process 424242.*teamai workflow resume --next --pool default`)));
+    expect(await recordOf(alice, run)).toMatchObject({ state: 'claimed' });
+  }, 60_000);
+
   it('runs the step again on its step runtime, once the place its killed run left there is closed', async () => {
     const { alice, bob, run, offered } = await offerSlow(60_000, { definition: AGAIN, command: 'test -f left.txt && echo again > again.txt' });
     const claimed = await claimAttempt(bob.config, offered, await installOwner(bob.config));
@@ -1188,7 +1283,7 @@ describe('a restarted member', () => {
     // What the killed run left on the runtime, once stopped: a closed place, and the exec it had sent there, whose id the
     // runtime answers with how that exec ended, as an id sent again reconnects to its exec.
     const stoppedExec = newOpId();
-    const local = hostStepRuntime();
+    const local = scratchHostRuntime();
     const runtime: StepRuntime<DriverCan> = { ...local, exec: async (request, events, kind) => (request.op === stoppedExec ? { kind: 'cancelled' } : local.exec(request, events, kind)) };
     fs.mkdirSync(attemptDir(bob.config, run, ATTEMPT), { recursive: true });
     fs.writeFileSync(attemptRuntimePath(bob.config, run, ATTEMPT), JSON.stringify({ runtime: runtime.name, driver: 'bobs', phase: 'closed', open: { op: newOpId(), handle: 'h-left' }, exec: { op: stoppedExec } }));
@@ -1460,7 +1555,7 @@ describe('where a member runs an attempt', () => {
   async function driverOf(cans: Array<'local' | { use: string; can: Record<string, boolean> }>): Promise<OpenedDriver> {
     const acme = team();
     const { config } = await acme.member('bob');
-    const runtime = hostStepRuntime();
+    const runtime = hostStepRuntime({ config });
     const runtimes = cans.map((entry): OpenedRuntime => (entry === 'local'
       ? { kind: 'tools', use: 'tools', engine: { logins: [] } }
       : { kind: 'external', use: entry.use, runtime, can: entry.can, launchesAgents: false, engine: { logins: [] }, credentials: {}, found: [], masks: {}, optionsFrom: 'test' }));
@@ -1962,7 +2057,7 @@ describe('waking a fleet member for an offer no member claimed', () => {
 
   it('warns once with the runtime\'s message when it has no machine to wake on, and the offer still waits for a member', async () => {
     const warned = vi.spyOn(log, 'warn');
-    const local = hostStepRuntime();
+    const local = scratchHostRuntime();
     const unavailable: StepRuntime<DriverCan> = { ...local, name: 'nowhere', wake: async () => ({ kind: 'failed', failure: { code: 'wake_unavailable', message: 'Link a machine in T3 Code, and add the repository there as a project.' } }) };
     const { alice, bob, run, attempt, open } = await owner(async () => ({ runtime: unavailable, wakes: true }));
     const { runtime, exec } = await open();
@@ -1983,7 +2078,7 @@ describe('waking a fleet member for an offer no member claimed', () => {
 
   it('says nothing of a wake it stopped waiting for when the runtime never confirms the cancel', async () => {
     const warned = vi.spyOn(log, 'warn');
-    const local = hostStepRuntime();
+    const local = scratchHostRuntime();
     let unconfirmed: (() => void) | undefined;
     const silent: StepRuntime<DriverCan> = {
       ...local,
@@ -2005,7 +2100,7 @@ describe('waking a fleet member for an offer no member claimed', () => {
   });
 
   it('keeps what the runtime shows of the member it woke, for the attempt listing', async () => {
-    const local = hostStepRuntime();
+    const local = scratchHostRuntime();
     const display = { label: 'T3 thread on studio-mac', url: 't3code://thread/abc' };
     const showing: StepRuntime<DriverCan> = { ...local, name: 'shows', wake: async (_request, events) => { events.onDisplay?.(display); return { kind: 'woken', where: 'studio-mac', display }; } };
     const { alice, run, attempt, open } = await owner(async () => ({ runtime: showing, wakes: true }));

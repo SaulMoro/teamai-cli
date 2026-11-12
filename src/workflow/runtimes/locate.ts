@@ -5,18 +5,19 @@ import { createInterface } from 'node:readline/promises';
 import { z } from 'zod';
 import { RUNTIME_PROTOCOL } from '@teamai/runtime-protocol';
 import { resolvePathCommand } from '@teamai/shared/cli-path';
-import { readRegularFile, readRegularFileNoLink } from '@teamai/shared/regular-file';
+import { copyRegularTree, readRegularFile, readRegularFileNoLink } from '@teamai/shared/regular-file';
+import { signalPid } from '@teamai/shared/process-group';
 import { parseYaml } from '@teamai/shared/yaml';
 import { teamaiBin } from '../../default-drivers.js';
 import type { RunMode } from '../../launch-context.js';
 import { isSymlink, RESOURCE_LAYOUTS } from '../../resources/resolver.js';
 import { acceptTeamCommand } from '../../tool-instances.js';
-import { getTeamaiHomeDir } from '../../types.js';
+import { getDataHome, getTeamaiHomeDir, type LocalConfig } from '../../types.js';
 import { writeJsonAtomic } from '../../utils/fs.js';
 import type { WorkflowFailure } from '../types.js';
 import type { ResolvedDriver } from './definitions.js';
 import { findInLayers, namesOf, type Layer, type LayerFind, type LayerItem } from './layers.js';
-import { folderEntries, folderRevision } from './resource-folder.js';
+import { firstLink, folderEntries, folderRevision } from './resource-folder.js';
 
 // ─── Where a step runtime comes from ─────────────────────
 //
@@ -51,9 +52,10 @@ export type RuntimeLaunch = { readonly kind: 'node'; readonly file: string } | {
 
 /**
  * What a person accepts before a team runtime first runs here: its folder at its revision, or its file's command at the
- * file's content. A member's own runtime and teamai's need nothing.
+ * file's content. A member's own runtime and teamai's need nothing. `copy`: the copy of the folder it runs from, once
+ * pinned (`pinRuntime`), which the person reviews; `dir` stays what an acceptance is kept for.
  */
-export type RuntimeTrust = { readonly kind: 'none' } | { readonly kind: 'folder'; readonly dir: string } | { readonly kind: 'command'; readonly command: string };
+export type RuntimeTrust = { readonly kind: 'none' } | { readonly kind: 'folder'; readonly dir: string; readonly copy?: string } | { readonly kind: 'command'; readonly command: string };
 
 /** A runtime that is an external program, as its marker declares it. */
 export interface ExternalRuntime {
@@ -334,6 +336,62 @@ function unanswered(source: ExternalRuntime): Acceptance {
   return { ok: false, failure: { code: 'interrupted', message: `The question to accept step runtime "${source.name}" closed without an answer, so it did not run and nothing was accepted. Run the same command again to answer it.` } };
 }
 
+/** The runtime a source runs as, and what removes the copy it runs from once nothing runs it. */
+export type PinnedRuntime = { ok: true; source: ExternalRuntime; remove: () => Promise<void> };
+
+/** Where each teamai process keeps the copies of team runtime folders it runs: `<pid>-<random>`, one per open. */
+function runtimeCopies(config: LocalConfig): string {
+  return path.join(getDataHome(config), 'workflows', 'runtime-copies');
+}
+
+/** Removes the copies in `dir` whose teamai process is gone, as a killed one leaves them. */
+async function removeOrphanCopies(dir: string): Promise<void> {
+  for (const entry of await fs.readdir(dir).catch(() => [])) {
+    const pid = Number(entry.split('-')[0]);
+
+    if (Number.isSafeInteger(pid) && signalPid(pid, 0) === 'gone') await fs.rm(path.join(dir, entry), { recursive: true, force: true });
+  }
+}
+
+/**
+ * `source` as it runs: a team runtime folder copied where no pull reaches it, with the revision of that copy, so the
+ * revision a person accepts is all that runs, for as long as it runs. The copy sits in the data home, where programs
+ * run as from the team repo, not in the temp folder, which may forbid it; a copy whose teamai was killed goes at the
+ * next one. Any other runtime runs where it was found, with nothing to remove.
+ */
+export async function pinRuntime(source: ExternalRuntime, { config }: { config: LocalConfig }): Promise<PinnedRuntime | { ok: false; failure: WorkflowFailure }> {
+  const { trust, launch } = source;
+
+  if (trust.kind !== 'folder' || launch.kind !== 'executable') return { ok: true, source, remove: async () => undefined };
+
+  const copies = runtimeCopies(config);
+  await removeOrphanCopies(copies);
+  await fs.mkdir(copies, { recursive: true });
+  const copy = await fs.mkdtemp(path.join(copies, `${process.pid}-`));
+  const remove = async (): Promise<void> => fs.rm(copy, { recursive: true, force: true });
+
+  const refused = async (reason: string): Promise<{ ok: false; failure: WorkflowFailure }> => {
+    await remove();
+
+    return { ok: false, failure: { code: 'runtime_not_found', message: `Step runtime "${source.name}" from the team repo (${source.location}) did not run: ${reason}. ${fixOf(source.layer)}` } };
+  };
+
+  try {
+    await copyRegularTree(trust.dir, copy);
+  } catch (error) {
+    return refused(`its folder could not be copied to run from (${error instanceof Error ? error.message : String(error)})`);
+  }
+
+  // A link a pull added since the folder was found: the revision accepted would not be all it runs.
+  const link = await firstLink(copy);
+
+  if (!link.ok) return refused(link.reason);
+
+  if (link.link !== undefined) return refused(`its folder now holds the link ${link.link}, and teamai runs a team runtime only when its folder holds no link`);
+
+  return { ok: true, source: { ...source, revision: await folderRevision(copy), trust: { ...trust, copy }, launch: { kind: 'executable', executable: path.join(copy, path.relative(trust.dir, launch.executable)) } }, remove };
+}
+
 /** Whether `source` was accepted here, asking no one: for a decision that must not wait on a person. */
 export async function isRuntimeAccepted(source: ExternalRuntime): Promise<boolean> {
   return (await acceptRuntime(source, { mode: 'unattended', canAsk: false })).ok;
@@ -371,7 +429,7 @@ export async function acceptRuntime(source: RuntimeSource, { mode, canAsk, ask =
     }
 
     case 'folder':
-      return acceptFolder(source, trust.dir, { isAsking, ask });
+      return acceptFolder(source, { dir: trust.dir, review: trust.copy ?? trust.dir }, { isAsking, ask });
     default: {
       const unhandled: never = trust;
 
@@ -380,9 +438,9 @@ export async function acceptRuntime(source: RuntimeSource, { mode, canAsk, ask =
   }
 }
 
-/** Whether the runtime folder `dir` of `source` was accepted here at its revision, asking when `isAsking`. */
-async function acceptFolder(source: ExternalRuntime, dir: string, { isAsking, ask }: { isAsking: boolean; ask: (question: string) => Promise<boolean | undefined> }): Promise<Acceptance> {
-  const revision = await folderRevision(dir);
+/** Whether the runtime folder `dir` of `source` was accepted here at `source`'s revision, asking when `isAsking` to review `review`. */
+async function acceptFolder(source: ExternalRuntime, { dir, review }: { dir: string; review: string }, { isAsking, ask }: { isAsking: boolean; ask: (question: string) => Promise<boolean | undefined> }): Promise<Acceptance> {
+  const { revision } = source;
   const trust = await readTrust();
 
   if (trust.accepted.some((entry) => entry.dir === dir && entry.revision === revision)) return { ok: true };
@@ -391,7 +449,7 @@ async function acceptFolder(source: ExternalRuntime, dir: string, { isAsking, as
 
   if (isAsking) {
     const question = `Step runtime "${source.name}" comes from the team repo (${relative}) at revision ${short}, which you have not accepted on this machine. `
-      + `It runs as you, with your files. Review ${dir} (${(await folderEntries(dir)).join(', ')}) before you accept it.\nRun it? [y/N] `;
+      + `It runs as you, with your files. Review ${review} (${(await folderEntries(review)).join(', ')}) before you accept it.\nRun it? [y/N] `;
 
     const accepted = await ask(question);
 

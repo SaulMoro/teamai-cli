@@ -662,7 +662,7 @@ async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, given: 
   const defined: DriverRuntimes = options.runtimes ?? { driver: 'local', asked: 'local', runtimes: [{ kind: 'tools', use: 'tools', engine: { logins: [] } }] };
   const lookup = options.resolveTool ? { resolveTool: options.resolveTool } : {};
   const confined = isStarted && mayConfine(started) ? await confinedOffers(lookup) : [];
-  const hostRuntime = hostStepRuntime(localCan({ strict: localStrictCan(config, options), hitl: canHitl, tools, confined }));
+  const hostRuntime = hostStepRuntime({ config, can: localCan({ strict: localStrictCan(config, options), hitl: canHitl, tools, confined }) });
   const hostReady = await hostRuntime.init({ options: {}, mode });
 
   if (!hostReady.ok) return { error: { code: 'runtime_failed', message: hostReady.failure.message } };

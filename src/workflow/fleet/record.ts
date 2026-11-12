@@ -284,9 +284,14 @@ export type FleetError =
 
 type Written<T> = { ok: true; value: T } | { ok: false; error: FleetError };
 
+/** The prefix of the branches of run `runId`'s fleet attempts, which go with the run's own (`runBranchPrefix`). */
+export function attemptBranchPrefix(runId: string): string {
+  return `teamai/attempts/${runId}/`;
+}
+
 /** The ref a member pushes an attempt's work to, and the owner fetches it from. */
 export function attemptRef(run: RunId, attempt: AttemptId): string {
-  return `refs/heads/teamai/attempts/${run}/${attempt}`;
+  return `refs/heads/${attemptBranchPrefix(run)}${attempt}`;
 }
 
 function recordPath(run: RunId, attempt: AttemptId): string {

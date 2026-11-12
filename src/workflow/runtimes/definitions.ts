@@ -64,6 +64,8 @@ const RuntimeEntrySchema = z.object({
   options: z.record(z.string(), JsonValueSchema).optional(),
 }).strict()
   .refine((entry) => entry.through !== entry.use, { path: ['through'], message: 'A runtime runs through another runtime, not through itself' })
+  // A member runs each step it takes on its own driver, so no place another runtime makes holds what the fleet runs.
+  .refine((entry) => entry.through === undefined || (entry.use !== 'fleet' && entry.through !== 'fleet'), { path: ['through'], message: 'fleet runs no step through another runtime, and no runtime runs through fleet: a fleet entry composes without through, since each member runs the step on its own driver' })
   .refine((entry) => entry.sandbox === undefined || entry.use === SANDBOX_RUNTIME || entry.through === SANDBOX_RUNTIME, { path: ['sandbox'], message: 'sandbox names a sandbox profile, which only an entry with use: sandbox or through: sandbox runs' });
 
 export const DriverDefinitionSchema = z.object({

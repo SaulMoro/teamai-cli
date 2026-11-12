@@ -1,5 +1,6 @@
 /**
- * The git a settled run leaves behind (#1689): its `teamai/<run>/…` branches, in the checkout and on `origin`, the
+ * The git a settled run leaves behind (#1689): its `teamai/<run>/…` branches, and its fleet attempts'
+ * `teamai/attempts/<run>/…` ones, in the checkout and on `origin`, the
  * worktrees teamai made for them, and what readers' copies kept under `refs/teamai/kept/<attempt>`. A run that
  * succeeds deletes, as it settles, every branch whose tip a branch that stays holds: a branch a pull request uses, or
  * the run's final copy. `teamai doctor --fix` tries again a deletion that did not go through, and removes everything
@@ -16,7 +17,7 @@ import { log } from '@teamai/shared/log';
 import { sanitizeGitUrl } from '@teamai/shared/redact';
 import { listCachedWorkflows } from './cache.js';
 import { WorkflowFolder } from './folder.js';
-import { heldFolders } from './fleet/record.js';
+import { attemptBranchPrefix, heldFolders } from './fleet/record.js';
 import { publishRunEnd, type HandoffError } from './handoff.js';
 import { pullRequestBranches, RECORDS_DIR, RunRecordFieldsSchema } from './records.js';
 import { ownRunSweptAt, resolveRetention, type ResolvedRetention } from './retention.js';
@@ -46,19 +47,23 @@ function refsUnder(listed: string, prefix: string): Map<string, string> {
   }));
 }
 
-/** The `teamai/<run>/…` branches of `checkout` and of its `origin`, or why they could not be listed. */
-async function runBranches({ checkout, runId }: { checkout: string; runId: string }): Promise<Tips | { error: string }> {
-  const prefix = `refs/heads/${runBranchPrefix(runId)}`;
-  const local = await git(checkout, ['for-each-ref', '--format=%(objectname) %(refname)', prefix]);
+/**
+ * The `teamai/<run>/…` branches of `checkout` and of its `origin`, with `isWithAttempts` its fleet attempts' too, or why
+ * they could not be listed.
+ */
+async function runBranches({ checkout, runId, isWithAttempts = false }: { checkout: string; runId: string; isWithAttempts?: boolean }): Promise<Tips | { error: string }> {
+  const prefixes = [runBranchPrefix(runId), ...isWithAttempts ? [attemptBranchPrefix(runId)] : []].map((prefix) => `refs/heads/${prefix}`);
+  const local = await git(checkout, ['for-each-ref', '--format=%(objectname) %(refname)', ...prefixes]);
 
   if (local.code !== 0) return { error: local.stderr.trim() || 'git for-each-ref failed' };
+  const under = (listed: string): Map<string, string> => new Map(prefixes.flatMap((prefix) => [...refsUnder(listed, prefix)]));
 
-  if ((await git(checkout, ['remote', 'get-url', 'origin'])).code !== 0) return { local: refsUnder(local.stdout, prefix) };
-  const remote = await git(checkout, ['ls-remote', '--heads', 'origin', `${prefix}*`]);
+  if ((await git(checkout, ['remote', 'get-url', 'origin'])).code !== 0) return { local: under(local.stdout) };
+  const remote = await git(checkout, ['ls-remote', '--heads', 'origin', ...prefixes.map((prefix) => `${prefix}*`)]);
 
   if (remote.code !== 0) return { error: `origin could not be read (${sanitizeGitUrl(remote.stderr.trim()) || 'git ls-remote failed'})` };
 
-  return { local: refsUnder(local.stdout, prefix), origin: refsUnder(remote.stdout, prefix) };
+  return { local: under(local.stdout), origin: under(remote.stdout) };
 }
 
 /** The branches checked out in a worktree of `checkout`'s repository, with the worktree's path, or why they could not be listed. */
@@ -125,7 +130,7 @@ async function deleteBranches(
     const pushed = await git(checkout, ['push', '--quiet', ...leases, 'origin', '--delete', ...onOrigin.map(({ branch }) => `refs/heads/${branch}`)]);
 
     if (pushed.code !== 0) {
-      const left = await runBranches({ checkout, runId });
+      const left = await runBranches({ checkout, runId, isWithAttempts: true });
       const reason = sanitizeGitUrl(pushed.stderr.trim()) || 'git push failed';
 
       for (const { branch } of onOrigin) {
@@ -595,14 +600,14 @@ async function removeEmptyRefsDir(checkout: string): Promise<void> {
 
 /**
  * Removes what run `runId` left in `checkout` and on its origin: the worktrees teamai made on its branches, the refs of
- * `attempts`, and every branch but `keep`. A worktree that stays is named on the deletion of its branch, or, on a branch
+ * `attempts`, and every branch but `keep`, its fleet attempts' included. A worktree that stays is named on the deletion of its branch, or, on a branch
  * of `keep`, is a warning, as a kept ref that stays is; `complete` is false then. Undefined, with a warning, when its
  * branches, worktrees or kept refs could not be listed.
  */
 async function removeRun(
   { checkout, runId, keep, attempts }: { checkout: string; runId: string; keep: ReadonlySet<string>; attempts: string[] },
 ): Promise<Omit<SweptRun, 'run' | 'from' | 'settledAt'> & { kept: RunLeftovers['kept']; complete: boolean } | undefined> {
-  const tips = await runBranches({ checkout, runId });
+  const tips = await runBranches({ checkout, runId, isWithAttempts: true });
 
   if ('error' in tips) return warnNotRemoved(runId, tips.error);
   const listed = await checkedOut(checkout);

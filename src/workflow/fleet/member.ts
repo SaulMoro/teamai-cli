@@ -21,6 +21,8 @@ import type { StepRuntime } from '@teamai/runtime-protocol/step-runtime';
 import type { DriverCan } from '../requirements.js';
 import { teamCommitReach, type PinnedFolder } from '../cache.js';
 import { WorkflowFolder } from '../folder.js';
+import { loadTeamConfig } from '../../config.js';
+import { resolveRetention, retentionEnds, type Retention } from '../retention.js';
 import { retryCommand } from '../runtimes/retry-command.js';
 import { answerCancel, attemptRef, claimAttempt, finishAttempt, fleetFailure, leaveOffer, leaseEnv, leaseInputs, leasePrompt, listRecords, memberRecordsAmong, noteHeldFolders, offersAmong, readAttemptRecord, recordProgress, isHeld, type Cancelling, type FleetRecord, type HeldAttempt, type Offered, type FleetError, type FleetLease, type FleetResult } from './record.js';
 import type { ExecAnswer, ExecQuestion } from '@teamai/runtime-protocol/step-runtime';
@@ -344,12 +346,23 @@ export async function takeFleetAttempt(config: LocalConfig, input: { pool: strin
  * this install that is still live holds the run's lock, so what it runs is left alone. Undefined when it held no claim.
  */
 async function finishLeftClaims(config: LocalConfig, records: FleetRecord[], { repository, root, member, secrets, place }: { repository: string; root: string; member: HandoffOwner; secrets: Record<string, string>; place: MemberPlace }): Promise<WorkflowEnvelope | undefined> {
+  let resolved: Promise<Retention> | undefined;
+  const retention = (): Promise<Retention> => (resolved ??= loadTeamConfig(config.repo.localPath, config).then((team) => resolveRetention(config, team)));
+
   for (const record of await memberRecordsAmong(config, records, { member, repository })) {
     const held = await takeRunLock(config, record.run, async (lock): Promise<WorkflowEnvelope | undefined> => {
       // A member killed mid-step leaves its command's process group running, or its exec on a step runtime: nothing
       // else stops either. One that may still run keeps the claim, so no second copy of the step runs beside it. What ran
       // in its own process, such as a Codex judge, also left its login held: that is written back and released.
-      await stopLeftInProcess(config, record.run, record.attempt);
+      const stopped = await stopLeftInProcess(config, record.run, record.attempt);
+      const isEnded = !isHeld(record) && record.state !== 'cancelling';
+      const isLeftRunning = stopped.kind !== 'ended' && stopped.left.length > 0;
+
+      // An attempt whose record ended runs nothing of its step again, so only a claim still held waits on what it left.
+      if (!isEnded && isLeftRunning) {
+        return { error: { code: 'runtime_lost', message: `teamai could not confirm that process ${stopped.left.join(', ')}, which its killed run of step "${record.lease.step}" started, ended, so the claim is kept and the step does not run again beside it. Once that process has ended, run teamai workflow resume --next --pool ${record.pool} again.` } };
+      }
+
       // A whole workflow's nested run leaves its steps' commands under attempts of its own, and its state running.
       const nestedRun = await endLeftNestedRun(config, record.run, record.attempt);
 
@@ -360,7 +373,16 @@ async function finishLeftClaims(config: LocalConfig, records: FleetRecord[], { r
       // Its place there is closed: a run of the attempt starts again with a place and an exec of its own.
       await fs.rm(attemptRuntimePath(config, record.run, record.attempt), { force: true });
 
-      if (!isHeld(record) && record.state !== 'cancelling') return undefined;
+      // What the member kept of an ended attempt, such as the log a failure named, goes with its claim marker once nothing
+      // it left may still run and `workflows.retention` passed since it ended, as what a run leaves does.
+      if (isEnded) {
+        const removedAt = retentionEnds(endedAt(record), await retention());
+
+        if (!isLeftRunning && removedAt !== undefined && removedAt <= Date.now()) await removeEndedAttempt(config, record.run, record.attempt);
+
+        return undefined;
+      }
+
       const ref = attemptRef(record.run, record.attempt);
       // Only this member pushes to the attempt's ref, so its tip is the last work it saved. Another member process in this
       // checkout may fetch meanwhile, so the tip comes from origin's listing, never from FETCH_HEAD.
@@ -390,6 +412,41 @@ async function finishLeftClaims(config: LocalConfig, records: FleetRecord[], { r
   }
 
   return undefined;
+}
+
+/** When the record of an attempt that ended says it ended. */
+function endedAt(record: Extract<FleetRecord, { state: 'finished' | 'expired' | 'cancelled' }>): string {
+  switch (record.state) {
+    case 'finished':
+      return record.finishedAt;
+    case 'expired':
+      return record.expiredAt;
+    case 'cancelled':
+      return record.cancelledAt;
+    default: {
+      const unhandled: never = record;
+
+      return unhandled;
+    }
+  }
+}
+
+/**
+ * Removes the directory a member kept attempt `attempt` of run `run` in, with the run's own folders once they hold
+ * nothing else: a member holds no record of the run, so nothing else ends them.
+ */
+async function removeEndedAttempt(config: LocalConfig, run: RunId, attempt: AttemptId): Promise<void> {
+  const dir = attemptDir(config, run, attempt);
+  await fs.rm(dir, { recursive: true, force: true });
+
+  for (const parent of [path.dirname(dir), path.dirname(path.dirname(dir))]) {
+    try {
+      await fs.rmdir(parent);
+    } catch {
+      // Not empty, or already gone: another attempt of the run, or the run's own record, is still there.
+      return;
+    }
+  }
 }
 
 /** Answers the cancel of claim `cancelling` with the work up to `pushed`: the step stopped. */
@@ -500,6 +557,10 @@ async function runClaim(config: LocalConfig, { lock, claim, root, secrets, membe
   const moved = async (error: FleetError): Promise<void> => {
     if (gone !== undefined || cancelling !== undefined) return;
     const now = await readAttemptRecord(config, run, attempt);
+
+    // A read that could not reach teamai-reports shows nothing of what landed: the next beat reads again. A record this
+    // teamai cannot parse, such as a newer teamai's, no later read parses either, so the step stops.
+    if (!now.ok && now.error.code === 'reports_unreachable') return;
     const record = now.ok && now.value !== 'absent' && 'member' in now.value && now.value.member.id === member.id ? now.value : undefined;
 
     if (record?.state === 'claimed' || record?.state === 'asking') {
@@ -535,7 +596,8 @@ async function runClaim(config: LocalConfig, { lock, claim, root, secrets, membe
     const progressed = await recordProgress(config, latest, pushed, question && { question, secrets });
 
     if (progressed.ok) latest = progressed.value;
-    else if (progressed.error.code === 'state_moved') await moved(progressed.error);
+    // A record it cannot parse is one another teamai wrote over its own, as a moved one is.
+    else if (progressed.error.code === 'state_moved' || progressed.error.code === 'fleet_record_newer' || progressed.error.code === 'fleet_record_unreadable') await moved(progressed.error);
     // A question the record cannot carry reaches nobody: the gate fails with why, and progress goes on without it.
     else if (progressed.error.code === 'fleet_unpublishable' && question !== undefined) gates.refuse(progressed.error.message);
   };

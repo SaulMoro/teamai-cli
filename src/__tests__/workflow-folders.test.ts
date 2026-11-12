@@ -336,7 +336,7 @@ describe('running a workflow folder', () => {
       'workflows/release/WORKFLOW.yaml': `schemaVersion: v1alpha1\nname: release\ndescription: Release.\nsteps:\n  - id: plan\n    command: ${printsFolder('plan.txt')}\n    output: { dir: string, text: string }\n`,
       'workflows/release/plan.txt': 'version 1.2.0\n',
     });
-    const host = hostStepRuntime();
+    const host = hostStepRuntime({ config });
     const views: PlaceView[] = [];
     const runtime: typeof host = { ...host, open: (request, events) => {
       if (request.view) views.push(request.view);
@@ -355,7 +355,7 @@ describe('running a workflow folder', () => {
     const { config, workspace } = await runScope({
       'workflows/plain.yaml': `schemaVersion: v1alpha1\nname: plain\ndescription: Plain.\nsteps:\n  - id: alone\n    env: { TEAMAI_WORKFLOW_DIR: ${JSON.stringify(os.homedir())} }\n    command: echo '{}'\n    output: json\n`,
     });
-    const host = hostStepRuntime();
+    const host = hostStepRuntime({ config });
     const views: PlaceView[] = [];
     const runtime: typeof host = { ...host, open: (request, events) => {
       if (request.view) views.push(request.view);

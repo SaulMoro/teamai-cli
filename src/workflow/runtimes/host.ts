@@ -1,11 +1,13 @@
 import { spawn } from 'node:child_process';
+import fs from 'node:fs';
 import { z } from 'zod';
-import { stopProcess } from '@teamai/shared/process-group';
+import { recordGroup, stopProcess } from '@teamai/shared/process-group';
 import type { DriverCan } from '../requirements.js';
-import { boundedStdout, type OpId, type OpState } from '@teamai/runtime-protocol';
+import { boundedStdout, type OpId, type OpState, type RuntimeOptions } from '@teamai/runtime-protocol';
 import type { ExecEnd, Lost, StepRuntime } from '@teamai/runtime-protocol/step-runtime';
 import { CallError, type CallErrorKind } from '../member-tools.js';
 import { type LocalConfig } from '../../types.js';
+import { attemptDir, AttemptIdSchema, RunIdSchema } from '../store.js';
 import { JsonValueSchema, type JsonValue } from '@teamai/shared/json';
 import type { ReportInput } from '../engine.js';
 import { idleLimit } from '../limits.js';
@@ -137,14 +139,25 @@ function endedState(op: OpId, end: LocalEnd): OpState {
   }
 }
 
+/** Checks a definition's options for the host runtime, and for `tools`, as `init` does: neither takes any. */
+export function checkHostOptions(options: RuntimeOptions): { ok: true } | { ok: false; failure: { code: 'bad_option'; key: string; message: string } } {
+  const [key] = Object.keys(options);
+
+  return key === undefined ? { ok: true } : { ok: false, failure: { code: 'bad_option', key, message: `The host runtime takes no options, and was given "${key}".` } };
+}
+
 /**
  * The `host` step runtime, in teamai's process: the place is the worktree as it is on the host, and each `exec` runs
- * there in a process group of its own. It retains outcomes for as long as this process lives, so a teamai started
- * again finds every handle `gone`. It takes no options; `can` is what the caller decided this machine offers. An answer
- * step's lease it answers in teamai's process with `answer`, which the wire's prompt lease cannot carry: the step's output.
+ * there in a process group of its own, recorded in the attempt's directory of `config`, so the stop of what a killed
+ * teamai left (`stopRecordedGroup`) reaches it. It retains outcomes for as long as this process lives, so a teamai
+ * started again finds every handle `gone`. It takes no options; `can` is what the caller decided this machine offers.
+ * An answer step's lease it answers in teamai's process with `answer`, which the wire's prompt lease cannot carry: the
+ * step's output.
  */
-export function hostStepRuntime(can: DriverCan = {}): HostStepRuntime {
+export function hostStepRuntime({ config, can = {} }: { config: LocalConfig; can?: DriverCan }): HostStepRuntime {
   const handles = new Map<string, string>();
+  // The attempt directory each open place records its execs' process groups in, by handle.
+  const groups = new Map<string, string>();
   const ended = new Map<OpId, { handle: string; end: LocalEnd }>();
   const running = new Map<OpId, { handle: string; end: Promise<ExecEnd>; stop: () => Promise<void>; cancelled: boolean }>();
   const detached = process.platform !== 'win32';
@@ -166,11 +179,17 @@ export function hostStepRuntime(can: DriverCan = {}): HostStepRuntime {
       return live.end;
     }
 
+    const group = groups.get(request.handle);
+
+    // An exec in no place this runtime opened would leave a process group no stop finds after a crash.
+    if (group === undefined) return { kind: 'failed', failure: { code: 'runtime_protocol', message: `The host runtime has no place ${request.handle} to exec in.` } };
     const env: NodeJS.ProcessEnv = { ...process.env, ...request.env, ...request.credentials };
 
     for (const name of request.unset) delete env[name];
     const [command = '', ...args] = request.argv;
+    fs.mkdirSync(group, { recursive: true });
     const child = spawn(command, args, { cwd: request.cwd, env, detached, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
+    recordGroup(child, group, { isAttached: !detached });
     let stdout = '';
 
     const closed = new Promise<{ code: number; error?: Error }>((resolve) => {
@@ -216,15 +235,20 @@ export function hostStepRuntime(can: DriverCan = {}): HostStepRuntime {
     name: 'host',
 
     async init({ options }) {
-      const [key] = Object.keys(options);
+      const checked = checkHostOptions(options);
 
-      return key === undefined ? { ok: true, can, launchesAgents: false } : { ok: false, failure: { code: 'bad_option', key, message: `The host runtime takes no options, and was given "${key}".` } };
+      return checked.ok ? { ok: true, can, launchesAgents: false } : checked;
     },
 
     async open(request, onAccepted) {
-      const key = `${request.run}/${request.attempt}`;
-      const handle = handles.get(key) ?? `host-${request.run}-${request.attempt}`;
+      const run = RunIdSchema.safeParse(request.run);
+      const attempt = AttemptIdSchema.safeParse(request.attempt);
+
+      if (!run.success || !attempt.success) return { kind: 'failed', failure: { code: 'runtime_protocol', message: `The host runtime opens no place for run ${request.run}, attempt ${request.attempt}: not a run and attempt id.` } };
+      const key = `${run.data}/${attempt.data}`;
+      const handle = handles.get(key) ?? `host-${run.data}-${attempt.data}`;
       handles.set(key, handle);
+      groups.set(handle, attemptDir(config, run.data, attempt.data));
       await onAccepted(handle);
 
       return { kind: 'ready', handle };
@@ -255,6 +279,7 @@ export function hostStepRuntime(can: DriverCan = {}): HostStepRuntime {
 
     async close(handle) {
       for (const [key, open] of handles) if (open === handle) handles.delete(key);
+      groups.delete(handle);
 
       for (const [op, done] of ended) if (done.handle === handle) ended.delete(op);
 

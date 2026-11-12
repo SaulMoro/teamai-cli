@@ -1568,7 +1568,7 @@ steps:
           workspace: continue
           command: echo reviewed
 `);
-    const local = hostStepRuntime();
+    const local = hostStepRuntime({ config });
     let stopWhole: (() => void) | undefined;
     // The whole workflow runs until the run stops it, then answers what its steps spent, as a fleet member's does.
     const runtime: StepRuntime<DriverCan> = {
@@ -1605,7 +1605,7 @@ steps:
           workspace: continue
           command: echo reviewed
 `);
-    const local = hostStepRuntime();
+    const local = hostStepRuntime({ config });
     const runtime: StepRuntime<DriverCan> = {
       ...local,
       exec: async (request, events, kind) => (kind !== 'workflow' ? local.exec(request, events, kind) : { kind: 'exited', code: 0, stdout: JSON.stringify({ outcome: 'succeeded', tokens: { input: 4, output: 2 } }) }),
