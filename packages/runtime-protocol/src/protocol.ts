@@ -76,6 +76,12 @@ import { z } from 'zod';
 //  attempt, and on each `exec` and `prompt` that gets them, so a runtime that restarted holds none and needs none.
 //
 
+/**
+ * The protocol this teamai speaks. A runtime may come from the member or the team, apart from teamai's release, and its
+ * marker's `protocol` is checked against this before it is spawned. So within one version a message only gains optional
+ * fields and values a runtime may ignore; any other change, such as a field that changes meaning, becomes required, or
+ * is removed, bumps it.
+ */
 export const RUNTIME_PROTOCOL = 1;
 
 /**
@@ -388,9 +394,8 @@ export type InitCredentials = z.infer<typeof InitCredentialsSchema>;
  * the variable that moves it, as teamai resolves it once for every runtime (the member's value of `home.env` when their
  * environment sets it and it moves neither the extended tool's own home nor an XDG base directory, else
  * `~/<its directory>`); `paths`, the tool paths it sets. A runtime lists in `can.tools` the instances it can serve: on one that execs its
- * tool, teamai then launches `command` with `home.env` set to the attempt's tool home. `home.dir` is absolute from the
- * first release of protocol 1, which needs no new version for it: teamai ships its runtimes with the engine, so no
- * runtime reads a relative one.
+ * tool, teamai then launches `command` with `home.env` set to the attempt's tool home. `home.dir` is absolute in every
+ * release that speaks protocol 1, the first included, so no runtime reads a relative one.
  */
 export const InitInstanceSchema = z.object({
   name: z.string().min(1),
