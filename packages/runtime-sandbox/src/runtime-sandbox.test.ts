@@ -2930,6 +2930,24 @@ describe('a warm image', () => {
     engine.delay('ps', 0);
   }, 40_000);
 
+  it('makes the sandbox on docker from the warm image made for the attempt, though its base was pulled again before the sandbox was made', async () => {
+    // The sandbox's lookup outlasts the new pull, which lands between the warm image and the sandbox's creation.
+    engine.delay('ps', 3_000);
+    const connection = start();
+    await init(connection, { provider: 'docker', image: IMAGE, warm: WARM });
+    const at = checkout();
+    const op = newOp();
+    connection.send({ type: 'open', op, run: RUN, attempt: ATTEMPT, credentials: { CLAUDE_CODE_OAUTH_TOKEN: 'oauth-secret-1' }, view: { worktree: at.worktree, readonly: [at.git], result: path.join(dir, 'attempts', ATTEMPT, 'out'), runDir: at.runDir, toolHome: { CLAUDE_CONFIG_DIR: path.join(dir, 'attempts', ATTEMPT, 'tool-home', 'claude') } } });
+    await connection.next((message) => message.op === op && message.event === 'accepted', 5_000);
+    await vi.waitFor(() => { expect(engine.savedImages()).toHaveLength(1); }, { timeout: 10_000 });
+    // The tag pushed again with other tools and pulled, by another teamai or the member: its id moves.
+    engine.image(IMAGE, { claude: CLAUDE, 'git-lfs': 'process.exit(0)' });
+
+    expect(await connection.next((message) => message.op === op && (message.event === 'ready' || message.event === 'failed'), 20_000)).toMatchObject({ event: 'ready' });
+    expect(builds().prepares).toHaveLength(1);
+    engine.delay('ps', 0);
+  }, 40_000);
+
   it.each(PROVIDERS)('removes, at the next open on $options.provider, the scratch sandbox and directory of a warm image whose runtime was killed, and keeps those of one that runs', async ({ options }) => {
     const tmp = path.join(dir, 'tmp');
     fs.mkdirSync(tmp);

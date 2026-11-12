@@ -179,31 +179,44 @@ export function containerProvider({ engine, image, owner, host, warm }: { engine
     return found.kind === 'ran' && found.code === 0 ? `${image}@${found.stdout.trim()}` : image;
   };
 
+  const isPresent = async (tag: string): Promise<boolean> => {
+    const present = await cli(['image', 'inspect', '--format', '{{.Id}}', tag]);
+
+    return present.kind === 'ran' && present.code === 0;
+  };
+
   /**
-   * The image an attempt in `checkout` starts from: the warm image, else `image`. `warm` makes it first when it is not
-   * there yet; the creation of attempt `creating`'s sandbox, which a close waits for, only finds the one `warm` made, so a
-   * close never waits on a build.
+   * The warm image `warm` made or found for each attempt's checkout: its sandbox's creation starts from that one, not
+   * from the key worked out again, which a base pulled again meanwhile would move.
    */
-  const imageFor = async (checkout: string, creating?: { attempt: string }): Promise<{ ok: true; image: string } | { ok: false; failure: RuntimeFailure }> => {
+  const warmedFor = new Map<string, string>();
+
+  /** The image an attempt in `checkout` starts from: the warm image, made first when it is not there yet, else `image`. */
+  const warmImageFor = async (checkout: string): Promise<{ ok: true; image: string } | { ok: false; failure: RuntimeFailure }> => {
     if (warm === undefined) return { ok: true, image };
     const planned = planWarm({ base: await baseOf(), recipe: warm, checkout });
 
     if (!planned.ok) return planned;
     const { plan } = planned;
+    const made = await once(plan.key, async () => (await isPresent(plan.tag) ? { ok: true } : makeWarm(plan)));
 
-    const isPresent = async (): Promise<boolean> => {
-      const present = await cli(['image', 'inspect', '--format', '{{.Id}}', plan.tag]);
+    if (!made.ok) return made;
+    warmedFor.set(checkout, plan.tag);
 
-      return present.kind === 'ran' && present.code === 0;
-    };
+    return { ok: true, image: plan.tag };
+  };
 
-    if (creating !== undefined) {
-      return await isPresent() ? { ok: true, image: plan.tag } : sandboxFailed(`The warm image ${plan.tag} was removed after it was made for attempt ${creating.attempt}, so no sandbox was made for it. Start the step again, and teamai makes the image again.`);
-    }
+  /**
+   * The image attempt `attempt`'s sandbox in `checkout` starts from: the warm image `warm` made for it, still there, else
+   * `image`. Its creation, which a close waits for, neither builds nor pulls.
+   */
+  const createdFrom = async (checkout: string, attempt: string): Promise<{ ok: true; image: string } | { ok: false; failure: RuntimeFailure }> => {
+    if (warm === undefined) return { ok: true, image };
+    const tag = warmedFor.get(checkout);
 
-    const made = await once(plan.key, async () => (await isPresent() ? { ok: true } : makeWarm(plan)));
+    if (tag === undefined) return sandboxFailed(`No warm image was made for attempt ${attempt} in this runtime, so no sandbox was made for it. Start the step again.`);
 
-    return made.ok ? { ok: true, image: plan.tag } : made;
+    return await isPresent(tag) ? { ok: true, image: tag } : sandboxFailed(`The warm image ${tag} was removed after it was made for attempt ${attempt}, so no sandbox was made for it. Start the step again, and teamai makes the image again.`);
   };
 
   const find: Provider['find'] = async (key) => {
@@ -294,7 +307,7 @@ export function containerProvider({ engine, image, owner, host, warm }: { engine
     },
 
     async warm(view) {
-      const from = await imageFor(view.worktree);
+      const from = await warmImageFor(view.worktree);
 
       return from.ok ? { ok: true } : from;
     },
@@ -303,7 +316,7 @@ export function containerProvider({ engine, image, owner, host, warm }: { engine
       const mounted = mountsOf(engine, view);
 
       if (!mounted.ok) return mounted;
-      const from = await imageFor(view.worktree, { attempt: key.attempt });
+      const from = await createdFrom(view.worktree, key.attempt);
 
       if (!from.ok) return from;
       const label = host.selinux ? ',z' : '';
