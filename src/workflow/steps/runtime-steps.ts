@@ -64,8 +64,9 @@ export interface StepEnv {
 /**
  * The names a step's process gets over the runtime's own environment: each key the lease provides, with its value
  * here, the lease's `env`, and the attempt's marker. Never this process's environment: `unset` lists the names the
- * lease withholds, which the runtime removes from its own. `TZ` is the member's zone unless the step sets one, so a
- * tool that prints a usage limit's reset without a zone prints it in the zone teamai reads it in.
+ * lease withholds, which the runtime removes from its own. `TZ` is the member's zone unless the step sets one, so on a
+ * runtime that passes a step's env to its tool, a usage limit's reset printed without a zone is in the zone teamai
+ * reads it in; a runtime that offers no `can.env` runs its tool in its own zone.
  */
 export function runtimeStepEnv(lease: Pick<LeaseWire, 'envScope' | 'env' | 'attempt'>, scoped: NodeJS.ProcessEnv, { config, run, mode }: { config: LocalConfig; run: RunId; mode: RunMode }): StepEnv {
   const env: Record<string, string> = {};
