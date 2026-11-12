@@ -42,7 +42,7 @@ export async function openThrough(state: ProcessState, live: Daemon, request: Ex
 
   // A provider at isolation worktree, and vercel, answer a plain handle: no wrapper could be granted there.
   if (socketOf(outer) === undefined) {
-    return { code: 'open_failed', message: 'Runtime paseo runs a tool through another runtime only on that runtime\'s attempt socket, and teamai could not register this step\'s tool on it (its handle names no attempt socket), so the sandbox would refuse the tool. Run Paseo through a sandbox provider that serves one: docker, on an image that holds node, or sbx.' };
+    return { code: 'open_failed', message: 'Runtime paseo runs a tool through another runtime only on that runtime\'s attempt socket, and teamai could not register this step\'s tool on it (its handle names no attempt socket), so the sandbox would refuse the tool. Run Paseo through a sandbox provider that serves one: sbx, or docker 26.0.0 or later (25.0.5, 23.0.11) on Docker Desktop or on this Linux machine, on an image that holds node.' };
   }
 
   if (target.tool === 'opencode') return cannot('Paseo may serve several agents from one OpenCode server, so the sandbox cannot tell the step\'s agent from another; run OpenCode steps through the sandbox on another runtime');

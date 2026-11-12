@@ -690,7 +690,7 @@ describe('teamai-runtime-t3', () => {
 
         expect(await openThrough(runtime, SANDBOX)).toMatchObject({
           event: 'failed',
-          failure: { code: 'open_failed', message: `Runtime t3 runs a tool through another runtime only on that runtime's attempt socket, and teamai could not register this step's tool on it (its handle names no attempt socket), so the sandbox would refuse the tool. Run T3 through a sandbox provider that serves one: docker, on an image that holds node, or sbx.` },
+          failure: { code: 'open_failed', message: `Runtime t3 runs a tool through another runtime only on that runtime's attempt socket, and teamai could not register this step's tool on it (its handle names no attempt socket), so the sandbox would refuse the tool. Run T3 through a sandbox provider that serves one: sbx, or docker 26.0.0 or later (25.0.5, 23.0.11) on Docker Desktop or on this Linux machine, on an image that holds node.` },
         });
         expect(settingsNow()).not.toHaveProperty(['providerInstances', SANDBOX_CLAUDE]);
       });
