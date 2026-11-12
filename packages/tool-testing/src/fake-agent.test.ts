@@ -2,7 +2,7 @@ import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { FAKE_AGENT_MARKERS, fakeAgent, leftFakeAgents, runFakeAgent, type FakeAgentRecording } from './fake-agent.js';
 
 /** A tool that printed two lines for real: a start line, then its answer. */
@@ -39,6 +39,20 @@ function scratch(): string {
 const GIT_ENV = { GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@example.com', GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@example.com' };
 
 describe('fakeAgent', () => {
+  it('signals no pid below 2 that its pid list names, as a line read while a fake still wrote it can', () => {
+    const cwd = scratch();
+    const agent = fakeAgent(RECORDING, { bin: path.join(cwd, 'b') });
+    fs.writeFileSync(path.join(cwd, 'b', 'tool.pids'), '0\n1\n');
+    // Spied, so a regression reaches no process: pid 0 is this test run's own group, and 1 is init.
+    const kill = vi.spyOn(process, 'kill').mockReturnValue(true);
+    try {
+      expect(agent.stopLeft()).toEqual([]);
+      expect(kill).not.toHaveBeenCalled();
+    } finally {
+      kill.mockRestore();
+    }
+  });
+
   it('answers --version, records each call, and prints the recording', async () => {
     const cwd = scratch();
     const agent = fakeAgent(RECORDING, { bin: path.join(cwd, 'b') });
