@@ -6,7 +6,7 @@ import type { DriverCan } from '../requirements.js';
 import type { WorkflowFailure } from '../types.js';
 import { resolveDriver, SANDBOX_RUNTIME, type DriverDefinition, type ResolvedDriver } from './definitions.js';
 import { acceptRuntime, fixOf, isRuntimeAccepted, locateRuntime, pinRuntime } from './locate.js';
-import { DEFAULT_PROFILE, locateSandboxProfile, sandboxOptions, type SandboxProfile } from './sandbox-profiles.js';
+import { DEFAULT_PROFILE, locateSandboxProfile, pinSandboxProfile, sandboxOptions, type SandboxProfile } from './sandbox-profiles.js';
 import { LOCAL_DRIVER } from '../driver-name.js';
 import { fleetStepRuntime, shadowedFleetEntries, type OpenWake } from '../fleet/owner.js';
 import { log } from '@teamai/shared/log';
@@ -358,8 +358,18 @@ async function openRuntime(driver: ResolvedDriver, { use, options, sandbox }: { 
     return accepted;
   }
 
-  const initOptions = profiled?.ok === true ? profiled.options : split.runtime;
-  const profile = profiled?.ok === true ? profiled.profile : undefined;
+  // What the sandbox builds from is the copy whose revision the record names, which no pull changes while it runs. A
+  // stop builds nothing.
+  const built = profiled?.ok === true && purpose !== 'stop' ? await pinSandboxProfile(driver, profiled.profile) : undefined;
+
+  if (built?.ok === false) {
+    await pinned.remove();
+
+    return built;
+  }
+
+  const initOptions = built?.options ?? (profiled?.ok === true ? profiled.options : split.runtime);
+  const profile = built?.profile ?? (profiled?.ok === true ? profiled.profile : undefined);
   const origin: RuntimeOrigin = { runtime: source.resource, layer: source.layer, location: source.location, revision: runs.revision };
 
   // A runtime of the member or the team in place of teamai's own is never taken silently.
@@ -392,7 +402,7 @@ async function openRuntime(driver: ResolvedDriver, { use, options, sandbox }: { 
       try {
         await runtime.dispose();
       } finally {
-        await pinned.remove();
+        await Promise.all([pinned.remove(), built?.remove()]);
       }
     },
   });

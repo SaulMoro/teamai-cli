@@ -187,6 +187,35 @@ describe('what doctor says of the sandbox profiles of the drivers in use', () =>
   });
 });
 
+describe('a sandbox profile kept as a folder', () => {
+  it('builds from a copy of the folder at the revision it records, which a pull while the runtime runs does not change, and removes the copy with the runtime', async () => {
+    const { config, at } = await teamWith({
+      'drivers/boxed.yaml': 'schemaVersion: v1alpha1\nname: boxed\nruntimes:\n  - use: sandbox\n    sandbox: gpu\n',
+      'sandboxes/gpu/SANDBOX.yaml': `${DOCKER}warm: { containerfile: ./Containerfile }\n`,
+      'sandboxes/gpu/Containerfile': 'FROM ghcr.io/acme/agent:1\n',
+    });
+    const runtime = path.join(getTeamaiHomeDir(), 'runtimes', 'sandbox');
+    const told = path.join(path.dirname(config.repo.localPath), `${path.basename(config.repo.localPath)}-init.json`);
+    dirs.push(told);
+    fs.mkdirSync(runtime, { recursive: true });
+    fs.writeFileSync(path.join(runtime, 'RUNTIME.yaml'), 'protocol: 1\nentry: ./runtime\n');
+    // Stands in for the sandbox runtime: it keeps the init it was sent, and builds nothing.
+    fs.writeFileSync(path.join(runtime, 'runtime'), `#!/bin/sh\nread -r line\nprintf '%s\\n' "$line" > '${told}'\necho '{"type":"init","ok":true,"can":{}}'\ncat > /dev/null\n`, { mode: 0o755 });
+
+    const opened = await openDriver(config, 'boxed', { personal: true, mode: 'unattended', canAsk: false, purpose: 'run', checkout: config.repo.localPath });
+    // A pull lands while the runtime runs.
+    fs.writeFileSync(at('sandboxes/gpu/Containerfile'), 'FROM ghcr.io/acme/other:2\n');
+    const { profile } = JSON.parse(fs.readFileSync(told, 'utf8')).options as { profile: { folder: string; revision: string } };
+
+    expect(opened).toMatchObject({ ok: true });
+    expect(profile.folder).not.toBe(at('sandboxes/gpu'));
+    expect(fs.readFileSync(path.join(profile.folder, 'Containerfile'), 'utf8')).toBe('FROM ghcr.io/acme/agent:1\n');
+    expect(await folderRevision(profile.folder)).toBe(profile.revision);
+    if (opened.ok) await disposeDriver(opened.opened);
+    expect(fs.existsSync(profile.folder)).toBe(false);
+  });
+});
+
 describe('a sandbox entry that gives its provider inline', () => {
   it('fails a start naming the profile to move it to, and still stops what an attempt it started left running', async () => {
     const { config } = await teamWith({ 'drivers/boxed.yaml': `schemaVersion: v1alpha1\nname: boxed\nruntimes:\n  - use: sandbox\n    options: { provider: docker, image: ghcr.io/acme/agent:1 }\n` });

@@ -9,7 +9,7 @@ import { isSymlink, RESOURCE_LAYOUTS } from '../../resources/resolver.js';
 import type { WorkflowFailure } from '../types.js';
 import type { ResolvedDriver } from './definitions.js';
 import { findInLayers, namesOf, type LayerFind, type LayerItem } from './layers.js';
-import { fixOf, type RuntimeLayer } from './locate.js';
+import { fixOf, pinFolder, type PinProblem, type RuntimeLayer } from './locate.js';
 import { folderRevision } from './resource-folder.js';
 
 // ─── Sandbox profiles ────────────────────────────────────
@@ -208,8 +208,55 @@ export async function sandboxOptions({ driver, named, given, from, isEntryEditab
   const located = await locateSandboxProfile(driver, named);
 
   if (!located.ok) return located;
-  const { profile } = located;
+
+  return { ok: true, options: optionsOf(located.profile), profile: located.profile };
+}
+
+/** What the sandbox runtime starts with for `profile`: its options, and the `profile` option naming it. */
+function optionsOf(profile: SandboxProfile): RuntimeOptions {
   const profileOption = { name: profile.resource, revision: profile.revision, ...(profile.folder !== undefined && { folder: profile.folder }) };
 
-  return { ok: true, options: { ...profile.options, [PROFILE_OPTION]: profileOption }, profile };
+  return { ...profile.options, [PROFILE_OPTION]: profileOption };
+}
+
+/**
+ * `profile` of `driver` as the sandbox runtime builds from it: a profile kept as a folder is copied where no pull
+ * reaches it, with the revision of that copy, so the revision its record names is what it builds, for as long as the
+ * runtime runs. `remove` removes the copy.
+ */
+export async function pinSandboxProfile(driver: ResolvedDriver, profile: SandboxProfile): Promise<{ ok: true; options: RuntimeOptions; profile: SandboxProfile; remove: () => Promise<void> } | { ok: false; failure: WorkflowFailure }> {
+  if (profile.folder === undefined) return { ok: true, options: optionsOf(profile), profile, remove: async () => undefined };
+  const pinned = await pinFolder(profile.folder, { config: driver.config });
+
+  if (!pinned.ok) return { ok: false, failure: invalid({ driver, asked: profile.asked, location: profile.location, layer: profile.layer }, profilePinReason(pinned.problem)).failure };
+  let revision: string;
+
+  try {
+    revision = await folderRevision(pinned.copy);
+  } catch (error) {
+    await pinned.remove();
+
+    return { ok: false, failure: invalid({ driver, asked: profile.asked, location: profile.location, layer: profile.layer }, `its copy cannot be read (${error instanceof Error ? error.message : String(error)})`).failure };
+  }
+
+  const built = { ...profile, folder: pinned.copy, revision };
+
+  return { ok: true, options: optionsOf(built), profile: built, remove: pinned.remove };
+}
+
+/** Why a profile's folder has no copy to build from, as its failure says it. */
+function profilePinReason(problem: PinProblem): string {
+  switch (problem.kind) {
+    case 'uncopied':
+      return `its folder could not be copied to build from (${problem.why})`;
+    case 'link':
+      return `it now holds the link ${problem.link}, and teamai builds a sandbox only from what the folder itself holds`;
+    case 'unreadable':
+      return problem.why;
+    default: {
+      const unhandled: never = problem;
+
+      return unhandled;
+    }
+  }
 }

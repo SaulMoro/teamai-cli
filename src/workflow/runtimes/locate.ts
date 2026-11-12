@@ -364,32 +364,68 @@ export async function pinRuntime(source: ExternalRuntime, { config }: { config: 
 
   if (trust.kind !== 'folder' || launch.kind !== 'executable') return { ok: true, source, remove: async () => undefined };
 
+  const pinned = await pinFolder(trust.dir, { config });
+
+  if (!pinned.ok) {
+    return { ok: false, failure: { code: 'runtime_not_found', message: `Step runtime "${source.name}" from the team repo (${source.location}) did not run: ${runtimePinReason(pinned.problem)}. ${fixOf(source.layer)}` } };
+  }
+
+  const { copy, remove } = pinned;
+
+  return { ok: true, source: { ...source, revision: await folderRevision(copy), trust: { ...trust, copy }, launch: { kind: 'executable', executable: path.join(copy, path.relative(trust.dir, launch.executable)) } }, remove };
+}
+
+/** Why a team runtime's folder has no copy to run from, as its failure says it. */
+function runtimePinReason(problem: PinProblem): string {
+  switch (problem.kind) {
+    case 'uncopied':
+      return `its folder could not be copied to run from (${problem.why})`;
+    case 'link':
+      return `its folder now holds the link ${problem.link}, and teamai runs a team runtime only when its folder holds no link`;
+    case 'unreadable':
+      return problem.why;
+    default: {
+      const unhandled: never = problem;
+
+      return unhandled;
+    }
+  }
+}
+
+/** Why a team folder has no copy to use: it could not be copied, it now holds a link, or its copy cannot be read. */
+export type PinProblem = { kind: 'uncopied'; why: string } | { kind: 'link'; link: string } | { kind: 'unreadable'; why: string };
+
+/**
+ * A copy of folder `dir` of the team repo to run or build from, which no pull changes while it is used, with what
+ * removes it. It sits in the data home, and a copy whose teamai was killed goes at the next one.
+ */
+export async function pinFolder(dir: string, { config }: { config: LocalConfig }): Promise<{ ok: true; copy: string; remove: () => Promise<void> } | { ok: false; problem: PinProblem }> {
   const copies = runtimeCopies(config);
   await removeOrphanCopies(copies);
   await fs.mkdir(copies, { recursive: true });
   const copy = await fs.mkdtemp(path.join(copies, `${process.pid}-`));
   const remove = async (): Promise<void> => fs.rm(copy, { recursive: true, force: true });
 
-  const refused = async (reason: string): Promise<{ ok: false; failure: WorkflowFailure }> => {
+  const refused = async (problem: PinProblem): Promise<{ ok: false; problem: PinProblem }> => {
     await remove();
 
-    return { ok: false, failure: { code: 'runtime_not_found', message: `Step runtime "${source.name}" from the team repo (${source.location}) did not run: ${reason}. ${fixOf(source.layer)}` } };
+    return { ok: false, problem };
   };
 
   try {
-    await copyRegularTree(trust.dir, copy);
+    await copyRegularTree(dir, copy);
   } catch (error) {
-    return refused(`its folder could not be copied to run from (${error instanceof Error ? error.message : String(error)})`);
+    return refused({ kind: 'uncopied', why: error instanceof Error ? error.message : String(error) });
   }
 
-  // A link a pull added since the folder was found: the revision accepted would not be all it runs.
+  // A link a pull added since the folder was found: the revision taken would not be all of it.
   const link = await firstLink(copy);
 
-  if (!link.ok) return refused(link.reason);
+  if (!link.ok) return refused({ kind: 'unreadable', why: link.reason });
 
-  if (link.link !== undefined) return refused(`its folder now holds the link ${link.link}, and teamai runs a team runtime only when its folder holds no link`);
+  if (link.link !== undefined) return refused({ kind: 'link', link: link.link });
 
-  return { ok: true, source: { ...source, revision: await folderRevision(copy), trust: { ...trust, copy }, launch: { kind: 'executable', executable: path.join(copy, path.relative(trust.dir, launch.executable)) } }, remove };
+  return { ok: true, copy, remove };
 }
 
 /** Whether `source` was accepted here, asking no one: for a decision that must not wait on a person. */
