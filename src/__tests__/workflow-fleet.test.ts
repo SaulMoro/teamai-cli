@@ -1552,7 +1552,8 @@ describe('a cancel the owner cannot write into the attempt\'s record at once', (
     const op = newOpId();
     const ended = exec(op);
     await recordIn(bob, run, attempt, 'offered');
-    receiveHook(origin, 'while read old new ref; do git log --format=%s "$old..$new" | grep -q "^\\[teamai\\] Cancel attempt" && exit 1; done; exit 0');
+    // A push the move below catches mid-way finds no repository for its log: it is refused, not let through.
+    receiveHook(origin, 'while read old new ref; do subjects=$(git log --format=%s "$old..$new") || exit 1; echo "$subjects" | grep -q "^\\[teamai\\] Cancel attempt" && exit 1; done; exit 0');
     vi.useFakeTimers({ toFake: ['Date'], shouldAdvanceTime: true });
     const cancelled = runtime.cancel(op);
     await sleep(3_000);
