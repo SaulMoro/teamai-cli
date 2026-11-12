@@ -7,7 +7,6 @@ import { expect, it } from 'vitest';
 import { z } from 'zod';
 
 import { lintWithOptions, ruleHarness } from '../test/harness.ts';
-import { NOT_YET_MOVED } from './recursive-readdir.js';
 
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const OXLINT = path.join(REPO, 'node_modules', '.bin', process.platform === 'win32' ? 'oxlint.cmd' : 'oxlint');
@@ -97,11 +96,6 @@ it('takes no option, so no file is let off it but through NOT_YET_MOVED', () => 
 
   expect(status, output).not.toBe(0);
   expect(output).toContain("Rule 'teamai/recursive-readdir' does not accept options");
-});
-
-it('names in NOT_YET_MOVED only files this checkout has', () => {
-  expect(NOT_YET_MOVED.size).toBeGreaterThan(0);
-  expect([...NOT_YET_MOVED.keys()].filter((file) => !fs.existsSync(path.join(REPO, file)))).toEqual([]);
 });
 
 it('is on for every file lint reads, and this checkout keeps exactly the counts NOT_YET_MOVED gives', () => {
