@@ -1675,7 +1675,11 @@ const argv = process.argv.slice(2);
 const retried = argv.at(-1).includes('flaky network') ? [{ type: 'error', message: 'Reconnecting... 1/5' }] : [];
 const answer = JSON.stringify({ answer: { label: 'bad', reasoning: JSON.stringify({ sees, names, given, schema, argv }) } });
 const text = argv.at(-1).includes('explain yourself') ? 'I read the evidence.\\n\\n\`\`\`json\\n' + answer + '\\n\`\`\`\\n\\nThe work misses a test.' : answer;
-for (const line of [{ type: 'thread.started', thread_id: 'codex-thread-1' }, ...retried, { type: 'item.completed', item: { type: 'agent_message', text } }, { type: 'turn.completed', usage: { input_tokens: 30, cached_input_tokens: 10, output_tokens: 7 } }]) console.log(JSON.stringify(line));`;
+const lines = [{ type: 'thread.started', thread_id: 'codex-thread-1' }, ...retried, { type: 'item.completed', item: { type: 'agent_message', text } }, { type: 'turn.completed', usage: { input_tokens: 30, cached_input_tokens: 10, output_tokens: 7 } }].map((line) => JSON.stringify(line) + '\\n');
+// \`chatty\` prints 640 MiB of progress between its first line and the rest, more than one string of V8's can hold.
+const noise = argv.at(-1).includes('chatty') ? Array.from({ length: 640 }, () => 'p'.repeat(1024 * 1024 - 1) + '\\n') : [];
+const out = [lines[0], ...noise, ...lines.slice(1)];
+(function next() { while (out.length > 0) { if (!process.stdout.write(out.shift())) { process.stdout.once('drain', next); return; } } })();`;
 
 describe('a judge (a confined prompt) in a container of its own', () => {
   const SCHEMA = { type: 'object', properties: { answer: { type: 'object' } }, required: ['answer'] };
@@ -1752,6 +1756,15 @@ describe('a judge (a confined prompt) in a container of its own', () => {
     expect(JSON.stringify(engine.calls())).not.toContain('llm.acme.internal:8443/v1');
     expect(JSON.stringify(engine.calls())).not.toContain('judge-key-2');
   });
+
+  it('reads a codex judge that prints more than one string holds before its reply, keeping only the start and the end of its stdout', async () => {
+    const connection = start();
+    await init(connection, { provider: 'docker', image: IMAGE });
+    const credentials = { OPENAI_API_KEY: 'judge-key-4' };
+    await openJudge(connection, credentials);
+
+    expect(await judge(connection, { tool: 'codex', credentials, lease: { prompt: 'Judge it, chatty as you like.' }, ms: 170_000 })).toMatchObject({ event: 'finished', session: { tool: 'codex', id: 'codex-thread-1' }, result: { output: { answer: { label: 'bad' } } } });
+  }, 180_000);
 
   it('signs a codex judge in with a CODEX_API_KEY as it is given', async () => {
     const connection = start();

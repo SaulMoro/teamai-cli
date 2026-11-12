@@ -50,3 +50,28 @@ export function boundedTail(max = TAIL_CHARS): BoundedTail {
     },
   };
 }
+
+/**
+ * The start and the end of a stream: its first `head` code units, and the last `tail` once it outgrew both, a newline
+ * between them so the line the cut runs through cannot join another. A reader of JSON lines then finds a tool's first
+ * lines (Codex's thread) and its last (the reply), whatever it printed between.
+ */
+export function boundedEnds({ head, tail }: { head: number; tail: number }): BoundedTail {
+  let start = '';
+  let pushed = 0;
+  const end = boundedTail(tail);
+
+  return {
+    push(chunk) {
+      pushed += chunk.length;
+      const room = head - start.length;
+
+      if (room > 0) start += chunk.slice(0, room);
+
+      if (chunk.length > room) end.push(chunk.slice(Math.max(room, 0)));
+    },
+    text() {
+      return pushed > head + tail ? `${start}\n${end.text()}` : `${start}${end.text()}`;
+    },
+  };
+}
