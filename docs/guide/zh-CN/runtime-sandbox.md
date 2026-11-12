@@ -83,7 +83,7 @@ teamai-r7c41d09e2b6a5f13-a3e9b0c51  ghcr.io/acme/agent:1  Up 41 seconds
 
 ## Sandbox 档案
 
-sandbox 档案写明沙箱从什么构建：它的 provider 和该 provider 的选项。团队把它放成 `sandboxes/<name>.yaml`，或者放成文件夹 `sandboxes/<name>/`，里面有 `SANDBOX.yaml` 和它构建时用的文件，比如 `Containerfile`。`use: sandbox`（或 `through: sandbox`）的条目用 `sandbox: <name>` 指定它，不写时运行档案 `default`。teamai 先在你的 `~/.teamai/sandboxes/` 里找这个名字，再到团队仓库里找，最后在它自带的档案里找，那里 `<name>` 也会按 `teamai-<name>` 找到：`default` 是 teamai 的 `teamai-default`，一个 sbx microVM；`sbx`、`docker`、`podman`、`seatbelt`、`bwrap` 和 `vercel` 各有一个，可以直接指定或复制（`teamai-docker` 和 `teamai-podman` 没写镜像，复制后要设上）。你或团队的档案和 teamai 的某个档案同名时，运行开始时会提示一次。每次尝试的记录都写明它运行的档案、来自哪里、它的修订、它的 provider，以及 sandbox 运行时说它在那里强制执行的内容：隔离级别，以及是否守住网络、token 和轮次限制。
+sandbox 档案写明沙箱从什么构建：它的 provider 和该 provider 的选项。团队把它放成 `sandboxes/<name>.yaml`，或者放成文件夹 `sandboxes/<name>/`，里面有 `SANDBOX.yaml` 和它构建时用的文件，比如 `Containerfile`。`use: sandbox`（或 `through: sandbox`）的条目用 `sandbox: <name>` 指定它，不写时运行档案 `default`。teamai 先在你的 `~/.teamai/sandboxes/` 里找这个名字，再到团队仓库里找，最后在它自带的档案里找，那里 `<name>` 也会按 `teamai-<name>` 找到：`default` 是 teamai 的 `teamai-default`，一个 sbx microVM；`sbx`、`docker`、`podman`、`seatbelt`、`bwrap` 和 `vercel` 各有一个，可以直接指定或复制（`teamai-docker` 和 `teamai-podman` 没写镜像，复制后要设上）。你的 `~/.teamai/sandboxes/` 或团队仓库里有这个名字的文件夹却没有 `SANDBOX.yaml`（缺失或拼错）时，运行失败并指出该文件夹，不会转到下一个位置。你或团队的档案和 teamai 的某个档案同名时，运行开始时会提示一次。每次尝试的记录都写明它运行的档案、来自哪里、它的修订、它的 provider，以及 sandbox 运行时说它在那里强制执行的内容：隔离级别，以及是否守住网络、token 和轮次限制。
 
 条目的 `options` 只保留 teamai 自己读取的 `credentials` 和 `max_parallel`；写在那里的其他键会在任何步骤运行之前失败，并说明要把它移到哪个档案文件。读不了的档案、写了未知 provider 的档案，或者含有链接的档案文件夹，同样会失败并指出它的文件。
 

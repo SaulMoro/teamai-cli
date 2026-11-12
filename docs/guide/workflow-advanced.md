@@ -1545,7 +1545,7 @@ teamai workflow resume r1a2b3c4d                 # resumes on toy, the definitio
 teamai workflow resume r1a2b3c4d --driver local  # back to plain local; the run remembers that too
 ```
 
-teamai looks for `<name>.yaml`, or a folder `<name>/` holding `DRIVER.yaml` with the same content, in this order and uses the first it finds. A name kept both ways in one place fails `driver_namespace_conflict`:
+teamai looks for `<name>.yaml`, or a folder `<name>/` holding `DRIVER.yaml` with the same content, in this order and uses the first it finds. A name kept both ways in one place fails `driver_namespace_conflict`. A place that holds the name but cannot give it fails `driver_invalid` instead of passing to the next place: a folder `<name>/` with no `DRIVER.yaml` (missing or misspelt), a folder that is a link or holds one, or a definition that cannot be read:
 
 | Where | Notes |
 | --- | --- |
@@ -1629,7 +1629,7 @@ protocol: 1
 entry: { command: acme-runtime }     # an executable on PATH, by its bare name
 ```
 
-A team folder runs once you accept its revision, and a team file once you accept the file's content, as a tool instance's command. Yours and teamai's need no acceptance. A team runtime's folder must be a folder in the team repo that holds no link, so the revision you accept is all it runs: a folder that is a link, or holds one, or a `runtimes` folder that is a link, fails `runtime_not_found`. So does the runtime a name finds when it cannot run: a marker that does not parse, a `protocol` other than `1`, or an entry that is not there. The message names its file, and teamai never runs another layer's runtime in its place. A runtime of yours or the team's that a name finds before teamai's own, such as a team `runtimes/t3/`, runs with a warning that it replaces teamai's, and each attempt's record names where its runtime came from and at which revision.
+A team folder runs once you accept its revision, and a team file once you accept the file's content, as a tool instance's command. Yours and teamai's need no acceptance. A team runtime's folder must be a folder in the team repo that holds no link, so the revision you accept is all it runs: a folder that is a link, or holds one, or a `runtimes` folder that is a link, fails `runtime_not_found`. So does the runtime a name finds when it cannot run: a folder of the name with no `RUNTIME.yaml` (missing or misspelt), yours or the team's, a marker that does not parse, a `protocol` other than `1`, or an entry that is not there. The message names its file, and teamai never runs another layer's runtime in its place. A runtime of yours or the team's that a name finds before teamai's own, such as a team `runtimes/t3/`, runs with a warning that it replaces teamai's, and each attempt's record names where its runtime came from and at which revision.
 
 teamai ships these definitions:
 

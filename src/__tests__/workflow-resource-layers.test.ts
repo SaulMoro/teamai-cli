@@ -65,4 +65,26 @@ for (const { dir, marker, asked, find } of KINDS) {
     expect(found).toMatchObject({ ok: false, failure: { message: expect.stringContaining(`${path.join(getTeamaiHomeDir(), dir, asked)}${path.sep}`) } });
     expect(found).toMatchObject({ failure: { message: expect.stringContaining(`holds no ${marker}`) } });
   });
+
+  it(`refuses a team folder ${dir}/${asked}/ that is a link, rather than passing over it to teamai's teamai-${asked}`, async () => {
+    const elsewhere = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-resource-layers-elsewhere-')));
+    dirs.push(elsewhere);
+    write(elsewhere, { [marker]: 'provider: docker\n' });
+    const config = teamWith({});
+    fs.mkdirSync(path.join(config.repo.localPath, dir), { recursive: true });
+    fs.symlinkSync(elsewhere, path.join(config.repo.localPath, dir, asked), 'dir');
+
+    const found = await find(config);
+
+    expect(found).toMatchObject({ ok: false, failure: { message: expect.stringContaining(`${dir}/${asked} in the team repo is a link`) } });
+  });
+
+  it(`refuses a team folder ${dir}/${asked}/ that holds a link, rather than passing over it to teamai's teamai-${asked}`, async () => {
+    const config = teamWith({ [`${dir}/${asked}/${marker}`]: 'provider: docker\n' });
+    fs.symlinkSync(path.join(os.tmpdir(), 'anywhere'), path.join(config.repo.localPath, dir, asked, 'extra'));
+
+    const found = await find(config);
+
+    expect(found).toMatchObject({ ok: false, failure: { message: expect.stringContaining('the link extra') } });
+  });
 }
