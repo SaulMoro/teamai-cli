@@ -3393,7 +3393,7 @@ done`);
       expect(fs.readFileSync(path.join(place, 'made.txt'), 'utf8')).toBe('made\n');
     } finally {
       vi.unstubAllEnvs();
-      expect(claude.stopLeft(), 'fake agents left running').toEqual([]);
+      expect(await claude.stopLeft(), 'fake agents left running').toEqual([]);
     }
   }, 90_000);
 
