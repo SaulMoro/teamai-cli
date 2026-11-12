@@ -74,21 +74,33 @@ export function toolLauncherConformance(name: string, adapter: () => Promise<{ s
       await expect(watched.stop()).resolves.toBeUndefined();
     }, 30_000);
 
-    it('settles every stop without rejecting: before its process started, while it runs, twice at once, and once it ended', async () => {
+    it('settles a stop sent before its process started, and one sent once it ended, without rejecting', async () => {
+      const { start, cwd } = await adapter();
+      // A stop this early may keep the process from ever running, so it ends on its own either way.
+      const launched = start({ executable: process.execPath, args: ['-e', 'setTimeout(() => {}, 100);'], cwd, env: { ...process.env }, interactive: false, onStart: () => {}, onStdout: () => {} });
+      const stops = [launched.stop()];
+
+      await launched.closed;
+      stops.push(launched.stop());
+
+      expect((await Promise.allSettled(stops)).map((stop) => stop.status)).toEqual(['fulfilled', 'fulfilled']);
+    }, 30_000);
+
+    it('settles two stops sent at once while its process runs, and one sent once it ended, without rejecting', async () => {
       const { start, cwd } = await adapter();
       const stops: Array<Promise<void>> = [];
 
       const launched = start({
         executable: process.execPath, args: ['-e', 'process.stdout.write("ready\\n"); setInterval(() => {}, 1000);'], cwd, env: { ...process.env }, interactive: false,
         onStart: () => {},
-        onStdout: () => { stops.push(launched.stop(), launched.stop()); },
+        onStdout: () => { if (stops.length === 0) stops.push(launched.stop(), launched.stop()); },
       });
 
-      stops.push(launched.stop());
       await launched.closed;
       stops.push(launched.stop());
 
-      expect((await Promise.allSettled(stops)).map((stop) => stop.status)).toEqual(stops.map(() => 'fulfilled'));
+      expect(stops, 'two stops while it ran, then one after its end').toHaveLength(3);
+      expect((await Promise.allSettled(stops)).map((stop) => stop.status)).toEqual(['fulfilled', 'fulfilled', 'fulfilled']);
     }, 30_000);
   });
 }
