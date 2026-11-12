@@ -10,7 +10,7 @@
 import { isDeepStrictEqual } from 'node:util';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { z } from 'zod';
-import { CANCEL_FAILED, CanSchema, ISOLATION_LEVELS, RuntimeOptionsSchema, WAKE_COMMAND, WORKSPACE_MODES, type OpId, type OpState, type RuntimeOptions } from '@teamai/runtime-protocol';
+import { CANCEL_FAILED, CanSchema, ISOLATION_LEVELS, RuntimeOptionsSchema, WAKE_COMMAND, WORKSPACE_MODES, type OpId, type OpState, type RuntimeFailure, type RuntimeOptions } from '@teamai/runtime-protocol';
 import { sanitizeGitUrl } from '@teamai/shared/redact';
 import { safeText } from '../../session-flow/session-cmd-shared.js';
 import { getRepoIdentity } from '../../session-flow/sync.js';
@@ -165,11 +165,6 @@ function placeOf(handle: string): FleetPlace | undefined {
   return parsedRun.success && parsedAttempt.success ? { run: parsedRun.data, attempt: parsedAttempt.data } : undefined;
 }
 
-/** The handle of the same place on `local`, which runs every exec that is not the step's command. */
-function localHandle({ run, attempt }: FleetPlace): string {
-  return `local-${run}-${attempt}`;
-}
-
 /**
  * Whether the record ended with work its member pushed, which only the owner's wait takes into the place: a teamai that
  * did not see the end has not taken it.
@@ -287,7 +282,16 @@ function promptEnded(result: FleetResult, attempt: AttemptId): Extract<PromptEnd
  * the runtime an entry's `options.wake` names: without it, an entry that sets one fails `init`.
  */
 export function fleetStepRuntime({ config, masks, openWake }: { config: LocalConfig; masks: Record<string, string>; openWake?: OpenWake }): StepRuntime<DriverCan> {
-  const local = hostStepRuntime();
+  const local = hostStepRuntime({ config });
+
+  // The same place on `local`, which runs every exec that is not the step's command: opened there, so the process group
+  // of each exec it runs is recorded in the attempt's directory, where a restarted teamai's stop finds it.
+  const localHandle = async ({ run, attempt }: FleetPlace): Promise<{ handle: string } | { failure: RuntimeFailure }> => {
+    const opened = await local.open({ op: newOpId(), run, attempt, credentials: {} }, async () => undefined);
+
+    return opened.kind === 'ready' ? { handle: opened.handle } : { failure: opened.failure };
+  };
+
   const disposing = new AbortController();
   // The wait of each exec this teamai sent, by its id, so a repeated id reconnects to it and a cancel reaches it.
   const waits = new Map<OpId, { place: FleetPlace; cancel: AbortController; end: Promise<Waited>; isWhole: boolean }>();
@@ -399,7 +403,12 @@ export function fleetStepRuntime({ config, masks, openWake }: { config: LocalCon
       }
 
       // Setup, or any exec besides the step's command or a whole workflow, runs in the place on this host.
-      if (kind !== 'command' && kind !== 'workflow') return local.exec({ ...request, handle: localHandle(place) }, events, kind);
+      if (kind !== 'command' && kind !== 'workflow') {
+        const here = await localHandle(place);
+
+        return 'failure' in here ? { kind: 'failed', failure: here.failure } : local.exec({ ...request, handle: here.handle }, events, kind);
+      }
+
       const leased = await leasedStep(config, place);
 
       if ('error' in leased) return { kind: 'failed', failure: { code: leased.isFatal ? 'run_unreadable' : 'runtime_protocol', message: leased.error } };
@@ -461,10 +470,9 @@ export function fleetStepRuntime({ config, masks, openWake }: { config: LocalCon
       } else log.warn(asked.message);
     },
 
-    async collect(handle) {
-      const place = placeOf(handle);
-
-      return place ? local.collect(localHandle(place)) : { ok: true };
+    // The place is this host's, which the wait already gave the member's work.
+    async collect() {
+      return { ok: true };
     },
 
     async reattach(handle) {
@@ -485,7 +493,9 @@ export function fleetStepRuntime({ config, masks, openWake }: { config: LocalCon
     async close(handle) {
       const place = placeOf(handle);
 
-      return place ? local.close(localHandle(place)) : { ok: true };
+      const here = place && await localHandle(place);
+
+      return here === undefined || 'failure' in here ? { ok: true } : local.close(here.handle);
     },
 
     async dispose() {

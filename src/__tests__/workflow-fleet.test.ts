@@ -34,6 +34,7 @@ import { sessionArchiveRoot } from '../session-flow/session-cmd-shared.js';
 import { getRepoIdentity, SyncManager } from '../session-flow/sync.js';
 import { getDataHome } from '../types.js';
 import { sweepLeftovers } from '../workflow/leftovers.js';
+import { scratchHostRuntime } from './helpers/host-runtime.js';
 
 /** A member that runs every step here, as `--driver local` does. */
 const HERE: MemberPlace = { command: { kind: 'here' }, prompt: { kind: 'here' } };
@@ -724,7 +725,7 @@ steps:
   });
 
   it('runs the step on the step runtime of the member\'s own driver, with the step\'s env and the attempt\'s marker alone, and pushes what it wrote there', async () => {
-    const local = hostStepRuntime();
+    const local = scratchHostRuntime();
     const execs: Array<{ argv: string[]; env: Record<string, string>; cwd: string }> = [];
     const runtime: StepRuntime<DriverCan> = { ...local, exec: (request, events, kind) => {
       execs.push({ argv: request.argv, env: request.env, cwd: request.cwd });
@@ -742,7 +743,7 @@ steps:
   });
 
   it('ends the claim with the step, the cause and the retry command when the step runtime fails the command instead of answering', async () => {
-    const local = hostStepRuntime();
+    const local = scratchHostRuntime();
     const runtime: StepRuntime<DriverCan> = { ...local, exec: () => Promise.reject(new Error('the box went away')) };
 
     let forgedRun: RunId | undefined;
@@ -859,7 +860,7 @@ steps:
 
   // A runtime that runs the step elsewhere, such as a sandbox, makes only what the place names reachable there.
   it('names the workflow folder among the read-only paths of the place it opens on its own step runtime', async () => {
-    const local = hostStepRuntime();
+    const local = scratchHostRuntime();
     const views: PlaceView[] = [];
     const runtime: StepRuntime<DriverCan> = { ...local, open: (request, events) => {
       if (request.view) views.push(request.view);
@@ -1017,7 +1018,7 @@ describe('cancelling an attempt through its record', () => {
     let execs = 0;
     let open = (): void => {};
     const opening = new Promise<void>((resolve) => { open = resolve; });
-    const local = hostStepRuntime();
+    const local = scratchHostRuntime();
     const runtime: StepRuntime<DriverCan> = {
       ...local,
       open: async (request, onAccepted) => {
@@ -1187,7 +1188,7 @@ describe('a restarted member', () => {
     // What the killed run left on the runtime, once stopped: a closed place, and the exec it had sent there, whose id the
     // runtime answers with how that exec ended, as an id sent again reconnects to its exec.
     const stoppedExec = newOpId();
-    const local = hostStepRuntime();
+    const local = scratchHostRuntime();
     const runtime: StepRuntime<DriverCan> = { ...local, exec: async (request, events, kind) => (request.op === stoppedExec ? { kind: 'cancelled' } : local.exec(request, events, kind)) };
     fs.mkdirSync(attemptDir(bob.config, run, ATTEMPT), { recursive: true });
     fs.writeFileSync(attemptRuntimePath(bob.config, run, ATTEMPT), JSON.stringify({ runtime: runtime.name, driver: 'bobs', phase: 'closed', open: { op: newOpId(), handle: 'h-left' }, exec: { op: stoppedExec } }));
@@ -1459,7 +1460,7 @@ describe('where a member runs an attempt', () => {
   async function driverOf(cans: Array<'local' | { use: string; can: Record<string, boolean> }>): Promise<OpenedDriver> {
     const acme = team();
     const { config } = await acme.member('bob');
-    const runtime = hostStepRuntime();
+    const runtime = hostStepRuntime({ config });
     const runtimes = cans.map((entry): OpenedRuntime => (entry === 'local'
       ? { kind: 'tools', use: 'tools', engine: { logins: [] } }
       : { kind: 'external', use: entry.use, runtime, can: entry.can, launchesAgents: false, engine: { logins: [] }, credentials: {}, found: [], masks: {}, optionsFrom: 'test' }));
@@ -1961,7 +1962,7 @@ describe('waking a fleet member for an offer no member claimed', () => {
 
   it('warns once with the runtime\'s message when it has no machine to wake on, and the offer still waits for a member', async () => {
     const warned = vi.spyOn(log, 'warn');
-    const local = hostStepRuntime();
+    const local = scratchHostRuntime();
     const unavailable: StepRuntime<DriverCan> = { ...local, name: 'nowhere', wake: async () => ({ kind: 'failed', failure: { code: 'wake_unavailable', message: 'Link a machine in T3 Code, and add the repository there as a project.' } }) };
     const { alice, bob, run, attempt, open } = await owner(async () => ({ runtime: unavailable, wakes: true }));
     const { runtime, exec } = await open();
@@ -1982,7 +1983,7 @@ describe('waking a fleet member for an offer no member claimed', () => {
 
   it('says nothing of a wake it stopped waiting for when the runtime never confirms the cancel', async () => {
     const warned = vi.spyOn(log, 'warn');
-    const local = hostStepRuntime();
+    const local = scratchHostRuntime();
     let unconfirmed: (() => void) | undefined;
     const silent: StepRuntime<DriverCan> = {
       ...local,
@@ -2004,7 +2005,7 @@ describe('waking a fleet member for an offer no member claimed', () => {
   });
 
   it('keeps what the runtime shows of the member it woke, for the attempt listing', async () => {
-    const local = hostStepRuntime();
+    const local = scratchHostRuntime();
     const display = { label: 'T3 thread on studio-mac', url: 't3code://thread/abc' };
     const showing: StepRuntime<DriverCan> = { ...local, name: 'shows', wake: async (_request, events) => { events.onDisplay?.(display); return { kind: 'woken', where: 'studio-mac', display }; } };
     const { alice, run, attempt, open } = await owner(async () => ({ runtime: showing, wakes: true }));

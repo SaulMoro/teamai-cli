@@ -9,7 +9,6 @@ import { buildSync } from 'esbuild';
 import { z } from 'zod';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { log } from '@teamai/shared/log';
-import { hostStepRuntime } from '../workflow/runtimes/host.js';
 import { toolsLaunchDeps } from '../workflow/runtimes/sources.js';
 import { stepLauncher, toolsStepRuntime } from '@teamai/runtime-tools';
 import { stdioStepRuntime } from '../workflow/runtimes/stdio.js';
@@ -29,6 +28,7 @@ import { claudeFake } from '@teamai/tool-claude/testing';
 import { leaseNext, reportAttempt } from '../workflow/engine.js';
 import { fleetStepRuntime } from '../workflow/fleet/owner.js';
 import { attemptRun } from '../workflow/runtimes/attempt.js';
+import { stopLeftInProcess } from '../workflow/runtimes/cancelled.js';
 import { takeFleetAttempt, type MemberPlace } from '../workflow/fleet/member.js';
 import { claimAttempt, leaveOffer, markOffered, readAttemptRecord } from '../workflow/fleet/record.js';
 import { AttemptIdSchema, installOwner, readRun, RunIdSchema, runsDir } from '../workflow/store.js';
@@ -38,6 +38,7 @@ import { getWorktreeDir, REPORTS_LOCK_FILENAME, REPORTS_WORKTREE_DIRNAME } from 
 import { shellArgv } from '../workflow/shell-command.js';
 import { getRepoIdentity } from '../session-flow/sync.js';
 import { signalPid } from '@teamai/shared/process-group';
+import { hostRuntimeIn } from './helpers/host-runtime.js';
 
 /**
  * One scenario suite every step runtime passes, through the `StepRuntime` interface alone. `retains` says whether the
@@ -82,7 +83,7 @@ const SUBJECTS: Subject[] = [
     retains: true,
     journal: (state) => [path.join(state, 'outer', 'ops'), path.join(state, 'inner', 'ops')],
   },
-  { name: 'host', start: () => hostStepRuntime(), options: () => ({}), retains: false },
+  { name: 'host', start: (state) => hostRuntimeIn(state), options: () => ({}), retains: false },
   {
     name: 'sandbox on a fake docker',
     start: (state) => stdioStepRuntime({ name: 'sandbox', command: docker.command, args: docker.args(state) }),
@@ -3320,6 +3321,23 @@ done`);
       .toEqual({ kind: 'exited', code: 0, stdout: 'set up\n' });
     expect(await readAttemptRecord(owner.alice.config, owner.run, owner.attempt)).toEqual({ ok: true, value: 'absent' });
   });
+
+  it('records the process group of a setup it runs on this host, so the stop of what a killed teamai left reaches it', async () => {
+    const owner = await ownerOf();
+    const { runtime, handle } = await owner.open();
+    const op = newOpId();
+    const ended = runtime.exec({ op, handle, argv: shellArgv('sleep 60'), env: {}, unset: [], credentials: {}, cwd: owner.alice.checkout }, {}, 'setup');
+
+    try {
+      await new Promise((resolve) => setTimeout(resolve, 500));
+      // What a resume and a workflow cancel run for an attempt a killed teamai of this install left.
+      await stopLeftInProcess(owner.alice.config, owner.run, owner.attempt);
+
+      expect(await Promise.race([ended.then(() => 'stopped'), new Promise((resolve) => setTimeout(() => resolve('still running'), 10_000))])).toBe('stopped');
+    } finally {
+      await runtime.cancel(op);
+    }
+  }, 30_000);
 
   it('runs a setup on this host and offers nothing, even when it is the same text as the step\'s command', async () => {
     const owner = await ownerOf({ workflow: SLOW.replace(SLOW_COMMAND, 'echo set up'), command: 'echo set up' });

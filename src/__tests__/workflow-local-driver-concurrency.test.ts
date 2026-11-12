@@ -644,7 +644,7 @@ steps:
     const warn = vi.spyOn(log, 'warn').mockImplementation(() => undefined);
     onTestFinished(() => { fs.rmSync(loginLockFile('codex'), { force: true }); });
 
-    const runtime = hostStepRuntime();
+    const runtime = hostStepRuntime({ config });
     await runLocalDriver(config, runId, workspace, isOnRuntime ? {
       runtimes: { driver: 'step-runtime', asked: 'step-runtime', runtimes: [{ kind: 'external', use: 'step-runtime', runtime, can: { workspace: ['read-only', 'new', 'continue'] }, launchesAgents: false, engine: { logins: [] }, credentials: {}, found: [], masks: {}, optionsFrom: 'test' }] },
     } : {});
