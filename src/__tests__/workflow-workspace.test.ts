@@ -566,6 +566,31 @@ steps:
     expect(git(['status', '--porcelain'], workspace)).toBe('');
   });
 
+  it("removes the upstream a run's push recorded for its branch once no worktree is left, and keeps the member's own", async () => {
+    const { config, workspace, runId } = await fixture(`schemaVersion: v1alpha1
+name: build
+description: One change on its own branch, pushed.
+steps:
+  - id: change
+    workspace: new
+    command: node -e "require('fs').writeFileSync('new.txt','yes')"
+`);
+    const bare = path.join(path.dirname(workspace), 'origin.git');
+    execFileSync('git', ['init', '-q', '--bare', bare]);
+    git(['remote', 'add', 'origin', bare], workspace);
+    const own = git(['rev-parse', '--abbrev-ref', 'HEAD'], workspace).trim();
+    git(['config', `branch.${own}.remote`, 'origin'], workspace);
+    git(['config', `branch.${own}.merge`, `refs/heads/${own}`], workspace);
+    const configBefore = git(['config', '--local', '--list'], workspace);
+
+    expect(await runLocalDriver(config, runId, workspace)).toMatchObject({ data: { done: { outcome: 'succeeded' } } });
+    expect(git(['config', '--local', '--get-regexp', String.raw`^branch\.teamai/`], workspace)).toContain(`branch.teamai/${runId}/change/p1.remote origin`);
+
+    await removeWorktreeSetup(workspace);
+    expect(git(['config', '--local', '--list'], workspace)).toBe(configBefore);
+    expect(git(['for-each-ref', '--format=%(refname)', `refs/heads/teamai/${runId}/`], workspace).trim()).toBe(`refs/heads/teamai/${runId}/change/p1`);
+  });
+
   it('says where a failed push left the commits, so pushing them from there works', async () => {
     const { config, workspace, runId } = await fixture(`schemaVersion: v1alpha1
 name: build

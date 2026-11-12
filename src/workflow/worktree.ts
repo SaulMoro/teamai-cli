@@ -699,6 +699,15 @@ export async function removeWorktreeSetup(checkout: string, { dryRun = false } =
     removed.push(ownConfigs.includes(true) ? `${WORKTREE_CONFIG_OWNED} in the git config` : 'extensions.worktreeConfig in the git config');
   }
 
+  // The upstream each run branch's push recorded, which the branch, the member's to keep, no longer needs teamai for.
+  const upstreams = await git(checkout, ['config', '--local', '--name-only', '--get-regexp', String.raw`^branch\.teamai/.*\.remote$`]);
+
+  for (const key of upstreams.code === 0 ? upstreams.stdout.split('\n').filter(Boolean) : []) {
+    const branch = key.slice('branch.'.length, -'.remote'.length);
+
+    if (await isRunBranch(branch)) removed.push(...(await forgetUpstream(checkout, branch, { dryRun })).map((name) => `${name} in the git config`));
+  }
+
   if (removed.length > 0) await removeEmptyDir(path.join(checkout, '.teamai'), dryRun);
 
   return removed;
@@ -1524,10 +1533,42 @@ export async function pushIfOrigin(dir: string, branch: string, commits: string[
   }
 
   await runGit(dir, ['update-ref', `refs/remotes/origin/${branch}`, commit]);
-  await runGit(dir, ['config', `branch.${branch}.remote`, 'origin']);
-  await runGit(dir, ['config', `branch.${branch}.merge`, `refs/heads/${branch}`]);
+
+  for (const [key, value] of upstreamOf(branch)) await runGit(dir, ['config', key, value]);
 
   return 'pushed';
+}
+
+/** The upstream `pushIfOrigin` records of a branch it pushed, as `git push -u origin` would: each config key and its value. */
+function upstreamOf(branch: string): Array<[key: string, value: string]> {
+  return [[`branch.${branch}.remote`, 'origin'], [`branch.${branch}.merge`, `refs/heads/${branch}`]];
+}
+
+/**
+ * Removes from `checkout`'s git config the upstream `pushIfOrigin` recorded for run branch `branch`, each key only while
+ * it still says what teamai wrote: one the member changed stays. Answers the keys removed, or with `dryRun` those it would.
+ */
+export async function forgetUpstream(checkout: string, branch: string, { dryRun = false } = {}): Promise<string[]> {
+  const removed: string[] = [];
+
+  for (const [key, value] of upstreamOf(branch)) {
+    if ((await git(checkout, ['config', '--local', '--get', key])).stdout.trim() !== value) continue;
+
+    if (!dryRun && (await git(checkout, ['config', '--local', '--unset', key])).code !== 0) continue;
+    removed.push(key);
+  }
+
+  return removed;
+}
+
+/** Whether `branch` is one a run made: `teamai/<run>/…`, or a fleet attempt's `teamai/attempts/<run>/…`. */
+async function isRunBranch(branch: string): Promise<boolean> {
+  // Imported at call time: a static import of store.js here changes the order its importers' modules load in, and one
+  // then reads a schema before it is made.
+  const { isRunId } = await import('./store.js');
+  const [namespace, first = '', second = ''] = branch.split('/');
+
+  return namespace === 'teamai' && isRunId(first === 'attempts' ? second : first);
 }
 
 /**

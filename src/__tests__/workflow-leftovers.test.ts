@@ -165,6 +165,9 @@ describe('the branches of a run that succeeded', () => {
       by: 'success', kept: [{ branch: `teamai/${runId}/change/p1`, why: 'pr' }],
       deleted: [`teamai/${runId}/build-0/p1`, `teamai/${runId}/build-1/p1`], failed: [],
     });
+    // The upstream each push recorded goes with the branch it deleted; the one it kept keeps its own.
+    expect(git(cwd, ['config', '--local', '--get-regexp', String.raw`^branch\.teamai/`]).split('\n').map((line) => line.split(' ')[0]).sort())
+      .toEqual([`branch.teamai/${runId}/change/p1.merge`, `branch.teamai/${runId}/change/p1.remote`]);
   });
 
   it('deletes the branches answers read in worktrees of their own', async () => {

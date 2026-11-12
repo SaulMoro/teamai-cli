@@ -25,7 +25,7 @@ import { parseSnapshot, snapshotPath } from './snapshot.js';
 import { AttemptIdSchema, attemptsDir, installOwner, readRun, readRuns, RunIdSchema, updateRun, withCleanupLock } from './store.js';
 import type { KeptBranchReason, RunLeftovers, RunState } from './types.js';
 import { runBranchPrefix, runCopyToMerge } from './workspace.js';
-import { fetchMissingCommits, git, gitAnswer, gitPath, removeWorktree, saidYes, unansweredGit, worktreeCheckout } from './worktree.js';
+import { fetchMissingCommits, forgetUpstream, git, gitAnswer, gitPath, removeWorktree, saidYes, unansweredGit, worktreeCheckout } from './worktree.js';
 import { readRegularFile } from '@teamai/shared/regular-file';
 
 /** Where each branch of a run points: in the checkout, and on `origin`, which is absent when the checkout has none. */
@@ -171,6 +171,7 @@ async function deleteBranches(
     const removed = await git(checkout, ['update-ref', '-d', `refs/heads/${branch}`, tip]);
 
     if (removed.code !== 0) failed.push({ branch, reason: `in ${checkout}: ${removed.stderr.trim() || 'git update-ref -d failed'}` });
+    else await forgetUpstream(checkout, branch);
   }
 
   return { deleted: branches.filter((branch) => !sessionHostKept.has(branch) && !failed.some((item) => item.branch === branch)), failed, sessionHostKept: [...sessionHostKept] };
