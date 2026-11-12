@@ -1,3 +1,4 @@
+import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -51,7 +52,7 @@ describe('the sandbox observer', () => {
     const world = worldIn();
     const observer = startObserver(world, { pass: new Map(), label: 'teamai workflow start', listed: dockerFailingExec(world) });
 
-    expect(await observer.stop()).toContain('[verify] observed docker:teamai-r1-a1: NOT OBSERVED, no environment could be read');
+    expect(await observer.stop()).toContain("[verify] observed docker:teamai-r1-a1: NOT OBSERVED, no step's environment could be read");
   });
 
   it.runIf(process.platform !== 'linux')("says a container member's bwrap steps go unread off Linux, where it reads no /proc", async () => {
@@ -59,6 +60,43 @@ describe('the sandbox observer', () => {
     const observer = startObserver(world, { pass: new Map(), label: 'teamai workflow start', listed: () => Promise.resolve(missing) });
 
     expect(await observer.stop()).toContain("[verify] NOT OBSERVED: bwrap steps in @carol's container, the observer reads their environment from /proc on Linux only");
+  });
+
+  it("reads a step's environment in a container, never the idle process the container waits in or the observer's own", async () => {
+    const world = worldIn();
+    const owner = journal(sandboxJournalRoot(world.home)).owner;
+    const proc = path.join(world.dir, 'fake-proc');
+    /** A process in the fake /proc: its parent and its environment. */
+    const process_ = (pid: number, ppid: number, env: string): void => {
+      fs.mkdirSync(path.join(proc, String(pid)), { recursive: true });
+      fs.writeFileSync(path.join(proc, String(pid), 'stat'), `${pid} (sh) S ${ppid} ${pid} ${pid} 0 -1\n`);
+      fs.writeFileSync(path.join(proc, String(pid), 'environ'), `${env}\0`);
+    };
+    // The container's idle loop and its sleep, as teamai starts every container.
+    process_(1, 0, 'HOME=/tmp/teamai-home');
+    process_(7, 1, 'HOME=/tmp/teamai-home');
+    const observe = async (): Promise<string[]> => startObserver(world, {
+      pass: new Map(),
+      label: 'teamai workflow start',
+      listed: async ([command = '', verb = '', ...rest]) => {
+        if (command !== 'docker') return missing;
+
+        if (verb === 'info') return printed('29.0.0\n');
+
+        if (verb === 'ps') return printed(`c0ffee\tteamai-r0123abcd-a0123abcd\t${owner}\n`);
+
+        const script = (rest.at(-1) ?? '').replaceAll('/proc/', `${proc}/`);
+
+        return printed(spawnSync('sh', ['-c', script], { encoding: 'utf8' }).stdout);
+      },
+    }).stop();
+
+    expect(await observe()).toEqual(["[verify] observed docker:teamai-r0123abcd-a0123abcd: NOT OBSERVED, no step's environment could be read"]);
+
+    // A step `docker exec` started, which the container's namespace shows with no parent.
+    process_(42, 0, `HOME=/tmp/teamai-home\0VERIFY_WORLD_CANARY=${world.env?.VERIFY_WORLD_CANARY ?? ''}`);
+
+    expect(await observe()).toEqual(['[verify] observed docker:teamai-r0123abcd-a0123abcd: ENV LEAK VERIFY_WORLD_CANARY']);
   });
 
   it('says it could not list the sbx sandboxes when `sbx ls` fails, and nothing when sbx is not installed', async () => {

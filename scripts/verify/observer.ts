@@ -74,8 +74,16 @@ export function attemptsObserved(world: Pick<World, 'dir'>): Set<string> {
   }));
 }
 
-/** Every process's environment inside a sandbox, one block per process, blocks split by an empty entry. Never printed. */
-const ENVIRONS = 'for f in /proc/[0-9]*/environ; do cat "$f" 2>/dev/null && printf "\\0\\0"; done';
+/**
+ * The environment of each process a step runs inside a sandbox, one block per process, blocks split by an empty entry.
+ * Never printed. Not the first process and its children, the loop a container idles in until teamai execs a step,
+ * nor this shell and its children: an environment read is a step's.
+ */
+const ENVIRONS = [
+  'for d in /proc/[0-9]*; do p=${d#/proc/}; s=$(cat "$d/stat" 2>/dev/null) || continue; s=${s##*) }; set -- $s',
+  '{ [ "$p" = 1 ] || [ "$2" = 1 ] || [ "$p" = $$ ] || [ "$2" = $$ ]; } && continue',
+  'cat "$d/environ" 2>/dev/null && printf "\\0\\0"; done',
+].join('; ');
 
 /** What one sandbox showed over a command: how many environments were read, and every leaking name among them. */
 interface Seen {
@@ -342,7 +350,7 @@ export function startObserver(world: World, { pass, label, listed = listedHere }
       if (records.length > 0) fs.appendFileSync(path.join(world.dir, OBSERVED_FILE), records.map((record) => `${JSON.stringify(record)}\n`).join(''));
 
       return [
-        ...records.map((record) => `[verify] observed ${record.what}: ${record.read === 0 ? 'NOT OBSERVED, no environment could be read' : record.names.length === 0 ? 'env ok' : `ENV LEAK ${record.names.join(', ')}`}`),
+        ...records.map((record) => `[verify] observed ${record.what}: ${record.read === 0 ? "NOT OBSERVED, no step's environment could be read" : record.names.length === 0 ? 'env ok' : `ENV LEAK ${record.names.join(', ')}`}`),
         ...[...unobserved].map((what) => `[verify] NOT OBSERVED: ${what}`),
         ...(sawSeatbelt ? ['[verify] seatbelt has no observer: the env check proves nothing for a seatbelt step'] : []),
         ...unreadable.map((file) => `[verify] ${file} is not YAML: a credential only it declares counts as undeclared`),
