@@ -427,7 +427,7 @@ export function vercelProvider({ options, owner, state, env, home }: { options: 
       return from.ok ? { ok: true } : from;
     },
 
-    async create(key, view, _tool, deadline) {
+    async create(key, { view, deadline }) {
       const lifetime = lifetimeOf(options.timeout, deadline, Date.now());
 
       if (!lifetime.ok) return lifetime;

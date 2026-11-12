@@ -8,7 +8,8 @@
 // FAKE_ENGINE_LOG as one JSON line; no environment value is written.
 //
 //   FAKE_ENGINE_STATE   its state directory; a file `down` there makes it answer as a stopped daemon, a file
-//                       `rm-fails` makes `rm` fail as a daemon that cannot remove the container, a file `no-policy`
+//                       `rm-fails` makes `rm` fail as a daemon that cannot remove the container, `filter-fails` makes
+//                       `run` of a network filter (`<name>-proxy`) fail as a daemon that cannot start it, a file `no-policy`
 //                       makes sbx answer as one whose network policy was never initialized, and a file
 //                       `secrets/<service>` is an sbx secret its proxy holds; a file `stop-lag` holding a number of
 //                       milliseconds makes an `exec` whose process was stopped end that much later, as a real exec
@@ -33,6 +34,7 @@
 //   FAKE_ENGINE_LOG     optional: where argv lines go
 //   FAKE_ENGINE_VERSION optional: the server version `info` reports, 27.3.1 when unset
 //   FAKE_ENGINE_OS      optional: the OperatingSystem docker's `info` reports, "Docker Desktop" when unset
+//   FAKE_ENGINE_HOST    optional: the host name docker's `info` reports for its daemon (`Name`), this machine's when unset
 //
 //  A saved image (docker `commit` or `build`, sbx `template save`) keeps the home of the container it was saved from,
 //  under `saved/<tag>/home`, and the base whose tools it holds; a container created from it starts with a copy of that
@@ -47,6 +49,7 @@
 import { spawn } from 'node:child_process';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 
 const state = process.env.FAKE_ENGINE_STATE;
@@ -303,7 +306,7 @@ function docker() {
 
       if (format.includes(engine === 'podman' ? 'ServerVersion' : 'Version.Version')) fail(`Error: template: info:1:2: executing "info" at <${format}>: can't evaluate field`, 125);
       const version = process.env.FAKE_ENGINE_VERSION ?? (engine === 'podman' ? '5.2.3' : '27.3.1');
-      process.stdout.write(`${format.replace('{{.ServerVersion}}', version).replace('{{.Version.Version}}', version).replace('{{.OperatingSystem}}', process.env.FAKE_ENGINE_OS ?? 'Docker Desktop')}\n`);
+      process.stdout.write(`${format.replace('{{.ServerVersion}}', version).replace('{{.Version.Version}}', version).replace('{{.OperatingSystem}}', process.env.FAKE_ENGINE_OS ?? 'Docker Desktop').replace('{{.Name}}', process.env.FAKE_ENGINE_HOST ?? os.hostname())}\n`);
       break;
     }
 
@@ -325,7 +328,7 @@ function docker() {
     }
 
     case 'run': {
-      const { found, rest: positional } = options(rest, ['--name', '--label', '--user', '--userns', '--env', '-v', '--entrypoint', '--network', '--cap-drop', '--security-opt'], ['-d', '--rm']);
+      const { found, rest: positional } = options(rest, ['--name', '--label', '--user', '--userns', '--env', '-v', '--entrypoint', '--network', '--cap-drop', '--security-opt', '--add-host'], ['-d', '--rm']);
       const [image, ...entry] = positional;
 
       if (!pulled(image)) fail(`Unable to find image '${image}' locally`, 125);
@@ -338,6 +341,8 @@ function docker() {
       }
 
       const name = one(found, '--name');
+
+      if (name?.endsWith('-proxy') && fs.existsSync(path.join(state, 'filter-fails'))) fail(`docker: Error response from daemon: failed to create task for container: failed to create shim task: OCI runtime create failed: ${name}.`, 125);
 
       if (name && readContainer(name)) fail(`Conflict. The container name "/${name}" is already in use.`, 125);
       const network = one(found, '--network');

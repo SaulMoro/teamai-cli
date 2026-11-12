@@ -142,12 +142,44 @@ describe('init', () => {
     expect(reply).not.toHaveProperty('ownLogins');
   });
 
-  it('offers a sandbox with the tools the image holds, and declares no network', async () => {
+  it('offers a sandbox with the tools the image holds on docker with node in the image, which runs the network filter, and declares no network', async () => {
+    engine.image(IMAGE, { claude: CLAUDE, node: '' });
     const reply = await init(start(), { provider: 'docker', image: IMAGE });
 
     expect(reply).toMatchObject({ ok: true, can: { isolation: 'sandbox', env: true, unattended: true, setup: true, workspace: ['read-only', 'new', 'continue', 'clone', 'team'], tools: ['claude'] } });
     expect(reply.can).not.toHaveProperty('network');
     expect(reply.can).not.toHaveProperty('hitl');
+  });
+
+  it.runIf(process.platform === 'linux')('offers a sandbox on Docker Engine on this Linux machine, whose addresses the filter refuses', async () => {
+    engine.image(IMAGE, { claude: CLAUDE, node: '' });
+    const reply = await init(start({ FAKE_ENGINE_OS: 'Ubuntu 24.04.1 LTS', FAKE_ENGINE_HOST: os.hostname() }), { provider: 'docker', image: IMAGE });
+
+    expect(reply).toMatchObject({ ok: true, can: { isolation: 'sandbox', unattended: true } });
+  });
+
+  // Without the filter, a step's container reaches every port of this machine (host.docker.internal), so it is no sandbox.
+  it.each<{ label: string; options: Message; tools: Record<string, string>; env?: NodeJS.ProcessEnv }>([
+    { label: 'docker with no node in the image', options: { provider: 'docker', image: IMAGE }, tools: { claude: CLAUDE } },
+    { label: 'podman, whose rootless network cannot connect the filter', options: { provider: 'podman', image: IMAGE }, tools: { claude: CLAUDE, node: '' } },
+    {
+      label: 'docker in a VM of its own, as Colima or Rancher Desktop runs it, whose address for this machine the filter does not know',
+      options: { provider: 'docker', image: IMAGE },
+      tools: { claude: CLAUDE, node: '' },
+      env: { FAKE_ENGINE_OS: 'Ubuntu 24.04.1 LTS', FAKE_ENGINE_HOST: 'colima' },
+    },
+  ])('offers isolation worktree, no unattended step and no attempt socket on $label', async ({ options, tools, env }) => {
+    engine.image(IMAGE, tools);
+    const connection = start(env);
+    const reply = await init(connection, options);
+    const at = place();
+    const op = newOp();
+    connection.send({ type: 'open', op, run: RUN, attempt: ATTEMPT, tool: 'claude', credentials: {}, view: { worktree: at.worktree, readonly: [at.git], result: at.result, runDir: at.runDir, toolHome: { CLAUDE_CONFIG_DIR: at.toolHome } } });
+    const accepted = await connection.next((message) => message.op === op && message.event === 'accepted');
+
+    expect(reply).toMatchObject({ ok: true, can: { isolation: 'worktree', tools: ['claude'] } });
+    expect(reply.can).not.toHaveProperty('unattended');
+    expect(accepted.handle).toBe(HANDLE);
   });
 });
 
@@ -1108,7 +1140,8 @@ describe('a prompt attempt in a container', () => {
     second.send({ type: 'close', handle: HANDLE });
     expect(await second.next((message) => message.event === 'closed' || message.event === 'close_failed', 30_000)).toEqual({ event: 'closed', handle: HANDLE });
 
-    expect(engine.calls().slice(before).map(([, command]) => command)).toEqual(['restart', 'rm']);
+    // The removal of its network filter and network, which a sandbox not behind one does not have, finds nothing.
+    expect(engine.calls().slice(before).map(([, command]) => command)).toEqual(['restart', 'rm', 'rm', 'network']);
     expect(engine.containers()).toEqual([]);
   });
 
@@ -1125,7 +1158,91 @@ describe('a prompt attempt in a container', () => {
     second.send({ type: 'close', handle: HANDLE });
     expect(await second.next((message) => message.event === 'closed' || message.event === 'close_failed', 30_000)).toEqual({ event: 'closed', handle: HANDLE });
 
-    expect(engine.calls().slice(before).map(([name, command]) => `${name} ${command}`)).toEqual(['docker rm']);
+    expect(engine.calls().slice(before).map(([name, command]) => `${name} ${command}`)).toEqual(['docker rm', 'docker rm', 'docker network']);
+    expect(engine.containers()).toEqual([]);
+  });
+
+  it('runs an exec in a place on the provider it was opened with, when a resume after a profile change inits another one', async () => {
+    const first = start();
+    await init(first, { provider: 'docker', image: IMAGE });
+    const at = place();
+    await openPlace(first, at);
+    first.child.kill('SIGKILL');
+    await first.end();
+    const second = start();
+
+    expect(await init(second, { provider: 'podman', image: IMAGE })).toMatchObject({ ok: true });
+    const before = engine.calls().length;
+
+    expect(await exec(second, { argv: ['/bin/sh', '-c', 'echo again'], cwd: at.worktree })).toMatchObject({ end: { event: 'exited', code: 0 }, output: 'again\n' });
+    expect(engine.calls().slice(before).filter(([, command]) => command === 'exec').map(([name]) => name)).toEqual(['docker']);
+    second.send({ type: 'close', handle: HANDLE });
+    expect(await second.next((message) => message.event === 'closed' || message.event === 'close_failed', 30_000)).toEqual({ event: 'closed', handle: HANDLE });
+  });
+
+  it('keeps the place of an open attempt, and runs its next exec, when an open of it again fails', async () => {
+    const connection = start();
+    await init(connection, { provider: 'docker', image: IMAGE });
+    const at = place();
+    expect((await openPlace(connection, at)).ready).toMatchObject({ event: 'ready' });
+    engine.daemon(false);
+    expect((await openPlace(connection, at)).ready).toMatchObject({ event: 'failed' });
+    engine.daemon(true);
+
+    expect(await exec(connection, { argv: ['/bin/sh', '-c', 'echo still'], cwd: at.worktree })).toMatchObject({ end: { event: 'exited', code: 0 }, output: 'still\n' });
+    connection.send({ type: 'close', handle: HANDLE });
+    expect(await connection.next((message) => message.event === 'closed' || message.event === 'close_failed', 30_000)).toEqual({ event: 'closed', handle: HANDLE });
+  });
+
+  it("keeps the addresses of this machine its step's filter reads current, as when a VPN comes up during a step, and removes them with the place", async () => {
+    engine.image(IMAGE, { claude: CLAUDE, node: '' });
+    const connection = start();
+    await init(connection, { provider: 'docker', image: IMAGE });
+    await openPlace(connection, place());
+    const file = path.join(dir, 'home', '.teamai', 'runtime-state', 'sandbox', 'docker', 'filters', HANDLE, 'this-machine');
+    const lan = Object.values(os.networkInterfaces()).flatMap((found) => found ?? []).filter((one) => !one.internal && one.family === 'IPv4').map((one) => one.address);
+    const listed = (): string[] => (fs.existsSync(file) ? fs.readFileSync(file, 'utf8').split('\n') : []);
+
+    expect(listed()).toEqual(expect.arrayContaining(lan));
+    // What the file held when the addresses it lists were not this machine's yet.
+    fs.writeFileSync(file, '');
+    await expect.poll(listed, { timeout: 10_000 }).toEqual(expect.arrayContaining(lan));
+    expect(lan.length).toBeGreaterThan(0);
+    connection.send({ type: 'close', handle: HANDLE });
+    await connection.next((message) => message.handle === HANDLE && (message.event === 'closed' || message.event === 'close_failed'));
+
+    expect(fs.existsSync(path.dirname(file))).toBe(false);
+  });
+
+  it("keeps the addresses of this machine a resumed step's filter reads current, when the resume after a profile change inits another provider", async () => {
+    engine.image(IMAGE, { claude: CLAUDE, node: '' });
+    const first = start();
+    await init(first, { provider: 'docker', image: IMAGE });
+    const at = place();
+    await openPlace(first, at);
+    first.child.kill('SIGKILL');
+    await first.end();
+    const file = path.join(dir, 'home', '.teamai', 'runtime-state', 'sandbox', 'docker', 'filters', HANDLE, 'this-machine');
+    const lan = Object.values(os.networkInterfaces()).flatMap((found) => found ?? []).filter((one) => !one.internal && one.family === 'IPv4').map((one) => one.address);
+    // What the file held when the addresses it lists were not this machine's yet.
+    fs.writeFileSync(file, '');
+    const second = start();
+    await init(second, { provider: 'podman', image: IMAGE });
+
+    expect(await exec(second, { argv: ['/bin/sh', '-c', 'echo again'], cwd: at.worktree })).toMatchObject({ end: { event: 'exited', code: 0 } });
+    await expect.poll(() => fs.readFileSync(file, 'utf8').split('\n'), { timeout: 10_000 }).toEqual(expect.arrayContaining(lan));
+    second.send({ type: 'close', handle: HANDLE });
+    expect(await second.next((message) => message.event === 'closed' || message.event === 'close_failed', 30_000)).toEqual({ event: 'closed', handle: HANDLE });
+  });
+
+  it('leaves no network of a first open whose network filter could not start, which no sweep would find', async () => {
+    engine.image(IMAGE, { claude: CLAUDE, node: '' });
+    engine.failFilter(true);
+    const connection = start();
+    await init(connection, { provider: 'docker', image: IMAGE });
+
+    expect((await openPlace(connection, place())).ready).toMatchObject({ event: 'failed', failure: { code: 'sandbox_failed', message: expect.stringContaining('could not start the network filter') } });
+    expect(engine.networks()).toEqual([]);
     expect(engine.containers()).toEqual([]);
   });
 
@@ -1142,7 +1259,7 @@ describe('a prompt attempt in a container', () => {
     second.send({ type: 'close', handle: HANDLE });
     expect(await second.next((message) => message.event === 'closed' || message.event === 'close_failed', 30_000)).toEqual({ event: 'closed', handle: HANDLE });
 
-    expect(engine.calls().slice(before).map(([name, command]) => `${name} ${command}`)).toEqual(['docker rm']);
+    expect(engine.calls().slice(before).map(([name, command]) => `${name} ${command}`)).toEqual(['docker rm', 'docker rm', 'docker network']);
   });
 
   it('answers a recover cancel with the end the runtime that ran the exec recorded while the stop ran, never silence', async () => {
@@ -1657,7 +1774,11 @@ const argv = process.argv.slice(2);
 const retried = argv.at(-1).includes('flaky network') ? [{ type: 'error', message: 'Reconnecting... 1/5' }] : [];
 const answer = JSON.stringify({ answer: { label: 'bad', reasoning: JSON.stringify({ sees, names, given, schema, argv }) } });
 const text = argv.at(-1).includes('explain yourself') ? 'I read the evidence.\\n\\n\`\`\`json\\n' + answer + '\\n\`\`\`\\n\\nThe work misses a test.' : answer;
-for (const line of [{ type: 'thread.started', thread_id: 'codex-thread-1' }, ...retried, { type: 'item.completed', item: { type: 'agent_message', text } }, { type: 'turn.completed', usage: { input_tokens: 30, cached_input_tokens: 10, output_tokens: 7 } }]) console.log(JSON.stringify(line));`;
+const lines = [{ type: 'thread.started', thread_id: 'codex-thread-1' }, ...retried, { type: 'item.completed', item: { type: 'agent_message', text } }, { type: 'turn.completed', usage: { input_tokens: 30, cached_input_tokens: 10, output_tokens: 7 } }].map((line) => JSON.stringify(line) + '\\n');
+// \`chatty\` prints 640 MiB of progress between its first line and the rest, more than one string of V8's can hold.
+const noise = argv.at(-1).includes('chatty') ? Array.from({ length: 640 }, () => 'p'.repeat(1024 * 1024 - 1) + '\\n') : [];
+const out = [lines[0], ...noise, ...lines.slice(1)];
+(function next() { while (out.length > 0) { if (!process.stdout.write(out.shift())) { process.stdout.once('drain', next); return; } } })();`;
 
 describe('a judge (a confined prompt) in a container of its own', () => {
   const SCHEMA = { type: 'object', properties: { answer: { type: 'object' } }, required: ['answer'] };
@@ -1734,6 +1855,15 @@ describe('a judge (a confined prompt) in a container of its own', () => {
     expect(JSON.stringify(engine.calls())).not.toContain('llm.acme.internal:8443/v1');
     expect(JSON.stringify(engine.calls())).not.toContain('judge-key-2');
   });
+
+  it('reads a codex judge that prints more than one string holds before its reply, keeping only the start and the end of its stdout', async () => {
+    const connection = start();
+    await init(connection, { provider: 'docker', image: IMAGE });
+    const credentials = { OPENAI_API_KEY: 'judge-key-4' };
+    await openJudge(connection, credentials);
+
+    expect(await judge(connection, { tool: 'codex', credentials, lease: { prompt: 'Judge it, chatty as you like.' }, ms: 170_000 })).toMatchObject({ event: 'finished', session: { tool: 'codex', id: 'codex-thread-1' }, result: { output: { answer: { label: 'bad' } } } });
+  }, 180_000);
 
   it('signs a codex judge in with a CODEX_API_KEY as it is given', async () => {
     const connection = start();
@@ -1908,7 +2038,7 @@ describe('a judge (a confined prompt) in a container of its own', () => {
     expect(judgeRun.filter((arg, index) => judgeRun[index - 1] === '-v')).toEqual([`${evidence}:/evidence:ro`]);
     expect(judgeRun.join(' ')).toContain(`--network ${HANDLE}-net`);
     expect(judgeRun.join(' ')).toContain('--cap-drop ALL');
-    expect(engine.calls()).toContainEqual(['docker', 'network', 'create', '--internal', '-o', 'com.docker.network.bridge.inhibit_ipv4=true', '--label', `teamai.run=${RUN}`, '--label', `teamai.attempt=${ATTEMPT}`, '--label', expect.stringMatching(/^teamai\.owner=[0-9a-f]{16}$/), `${HANDLE}-net`]);
+    expect(engine.calls()).toContainEqual(['docker', 'network', 'create', '--internal', '-o', 'com.docker.network.bridge.inhibit_ipv4=true', '-o', 'com.docker.network.enable_ipv6=false', '--label', `teamai.run=${RUN}`, '--label', `teamai.attempt=${ATTEMPT}`, '--label', expect.stringMatching(/^teamai\.owner=[0-9a-f]{16}$/), `${HANDLE}-net`]);
     // The filter in front of that network lets through only the provider's host.
     expect(proxyRun.at(-2)).toBe('3128');
     expect(proxyRun.at(-1)).toBe('api.anthropic.com:443');
@@ -3086,6 +3216,22 @@ describe('a warm image', () => {
     expect(await openAttempt(connection, at, ATTEMPT)).toMatchObject({ event: 'failed', failure: { code: 'bad_option', key: 'warm.cache', message: expect.stringContaining('package-lock.json is a link to a file outside the checkout') } });
     expect(builds()).toEqual({ saves: [], prepares: [] });
     expect(engine.containers()).toEqual([]);
+  });
+
+  it('keeps no place and serves no attempt socket for an attempt whose first open failed after it was accepted', async () => {
+    engine.image(IMAGE, { claude: CLAUDE, node: '' });
+    const connection = start();
+    await init(connection, { provider: 'docker', image: IMAGE, warm: { prepare: 'exit 7', cache: ['package-lock.json'] } });
+    const at = checkout();
+    const view = { worktree: at.worktree, readonly: [at.git], result: at.result, runDir: at.runDir, toolHome: { CLAUDE_CONFIG_DIR: at.toolHome } };
+    const op = newOp();
+    connection.send({ type: 'open', op, run: RUN, attempt: ATTEMPT, tool: 'claude', credentials: { CLAUDE_CODE_OAUTH_TOKEN: 'oauth-secret-2' }, view });
+    const { socket } = z.object({ socket: z.string() }).parse(JSON.parse(String((await connection.next((message) => message.op === op && message.event === 'accepted')).handle)));
+
+    expect(await connection.next((message) => message.op === op && (message.event === 'ready' || message.event === 'failed'), 30_000)).toMatchObject({ event: 'failed' });
+    expect(fs.existsSync(socket)).toBe(false);
+    connection.send({ type: 'reattach', handle: HANDLE });
+    expect(await connection.next((message) => message.handle === HANDLE && ['alive', 'gone', 'failed'].includes(String(message.event)))).toEqual({ event: 'gone', handle: HANDLE });
   });
 
   it('fails the open with bad_option on warm.cache naming a cache file the checkout does not hold, before any sandbox exists', async () => {

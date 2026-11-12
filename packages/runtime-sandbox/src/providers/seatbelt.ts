@@ -18,14 +18,18 @@ import { SYSTEM_BIN } from '../this-machine.js';
 //                                                    developer directory, the view's git paths and the PATH's tools,
 //                                                    read only; the place (worktree, result, run directory, tool
 //                                                    homes, the step's own home and temp directory), read and written
-//    network                                         as on the host, except Unix sockets: only in the place, and
-//                                                    the DNS resolver's
+//    network                                         as on the host, except this Mac itself: none of its ports
+//                                                    (loopback, and its own addresses) but the ones the
+//                                                    attempt's credentials name; and Unix sockets only in the
+//                                                    place, and the DNS resolver's
 //    never, whatever comes before                    a container engine's socket or state (Docker, Colima, OrbStack,
 //                                                    Lima, Rancher Desktop); a write to a git path inside the place,
 //                                                    or a rename or removal of a folder that holds one
 //
 //  A later rule wins over an earlier one. A path goes in as a `-D` parameter, never into the profile's text, so no path
-//  can change the profile. A step here is at `isolation: worktree`: it has no PID namespace and keeps this Mac's network.
+//  can change the profile. A step here is at `isolation: worktree`: it has no PID namespace and keeps this Mac's network,
+//  this Mac's own ports aside. macOS's `localhost` in a network rule covers every address of this Mac, its LAN address
+//  included, so a server the step starts itself is out of its reach too.
 //
 
 const SANDBOX_EXEC = PROVIDER_COMMANDS.seatbelt;
@@ -151,7 +155,7 @@ function anchoredOf({ writable, locked }: { writable: string[]; locked: string[]
 }
 
 /** The profile a step runs under. `memberHome` is the member's home, whose container engines no step reaches. */
-export function profileOf({ writable, readable, gitPaths, memberHome }: Pick<Sandboxed, 'writable' | 'readable' | 'gitPaths' | 'memberHome'>): SeatbeltProfile {
+export function profileOf({ writable, readable, gitPaths, memberHome, hostPorts }: Pick<Sandboxed, 'writable' | 'readable' | 'gitPaths' | 'memberHome' | 'hostPorts'>): SeatbeltProfile {
   const params: string[] = [];
   let count = 0;
 
@@ -171,6 +175,9 @@ export function profileOf({ writable, readable, gitPaths, memberHome }: Pick<San
 
   const lines = [
     BASE,
+    // A daemon of the member's on this Mac, such as Paseo's, may run what any local client asks, outside the sandbox.
+    '(deny network-outbound (remote ip "localhost:*"))',
+    ...hostPorts.map((port) => `(allow network-outbound (remote ip "localhost:${port}"))`),
     `(allow network-outbound (remote unix-socket (path-literal ${param('RESOLVER', RESOLVER)})))`,
     `(allow file-read* file-map-executable ${filters('subpath', 'READ', readRoots)})`,
     `(allow file-read* file-write* file-map-executable ${filters('subpath', 'WRITE', writable)})`,

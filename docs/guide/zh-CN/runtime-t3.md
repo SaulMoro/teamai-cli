@@ -239,7 +239,7 @@ T3 不提供这个工具时（命令不在你的 PATH 上、有两个实例都�
 
 ## 通过沙箱运行
 
-`use: t3, through: sandbox` 的条目照上文在 T3 Code 中运行每个步骤的线程，而线程的工具在这次尝试的沙箱里运行。条目的写法和沙箱做的事见 [通过应用运行](runtime-sandbox.md#通过应用运行teamai-sandbox-tool)。沙箱的提供方必须提供这次尝试的套接字：`docker`、`podman`、`sbx` 或 `bwrap`。目前只有 Claude 能这样运行；通过沙箱的 Codex 步骤会在打开时失败。
+`use: t3, through: sandbox` 的条目照上文在 T3 Code 中运行每个步骤的线程，而线程的工具在这次尝试的沙箱里运行。条目的写法和沙箱做的事见 [通过应用运行](runtime-sandbox.md#通过应用运行teamai-sandbox-tool)。沙箱必须提供这次尝试的套接字：`sbx`，或 Docker Desktop 上、这台 Linux 机器上 26.0.0 或更高（25.0.5、23.0.11）且镜像里有 `node` 的 `docker`，它们让工具连不到这台机器的端口（[步骤能连到什么](runtime-sandbox.md#步骤能连到这台机器的什么)）。目前只有 Claude 能这样运行；通过沙箱的 Codex 步骤会在打开时失败。
 
 每个步骤开始前，运行时在这个套接字上登记步骤的工具，T3 启动 teamai 的包装程序 `teamai-sandbox-<tool>` 代替工具本身。第一次时，teamai 会添加运行这个包装程序的 T3 提供方实例，和为团队工具添加实例一样：
 
@@ -247,10 +247,10 @@ T3 不提供这个工具时（命令不在你的 PATH 上、有两个实例都�
 ⚠ Step runtime "t3", operation op-08bf92d32391: Added the T3 Code provider instance "teamai-sandbox-claude" (driver Claude, Binary path /usr/local/bin/teamai-sandbox-claude), so teamai-sandbox-claude runs on T3 Code. It stays for later runs; remove it in T3 Code under Settings → Providers.
 ```
 
-步骤的会话从这次尝试的工具主目录读取，沙箱就在那里运行工具。如果提供方不提供套接字（`seatbelt`、`vercel`），步骤会在任何线程启动之前失败，teamai 也不会添加实例：
+步骤的会话从这次尝试的工具主目录读取，沙箱就在那里运行工具。如果沙箱不提供套接字（其他任何沙箱），步骤会在任何线程启动之前失败，teamai 也不会添加实例：
 
 ```text
-✖ Step "count" failed with runtime_failed: Step runtime "t3 through sandbox" could not open attempt abf6c98bd (open_failed): Runtime t3 runs a tool through another runtime only on that runtime's attempt socket, and teamai could not register this step's tool on it (its handle names no attempt socket), so the sandbox would refuse the tool. Run T3 through a sandbox provider that serves one: docker, podman, sbx or bwrap.
+✖ Step "count" failed with runtime_failed: Step runtime "t3 through sandbox" could not open attempt abf6c98bd (open_failed): Runtime t3 runs a tool through another runtime only on that runtime's attempt socket, and teamai could not register this step's tool on it (its handle names no attempt socket), so the sandbox would refuse the tool. Run T3 through a sandbox provider that serves one: sbx, or docker 26.0.0 or later (25.0.5, 23.0.11) on Docker Desktop or on this Linux machine, on an image that holds node.
 ```
 
 ## 项目脚本

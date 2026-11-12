@@ -1,3 +1,4 @@
+import { z } from 'zod';
 import type { Can, InitCredentials, InitInstance, PlaceView, RuntimeDisplay, RuntimeFailure, RuntimeMessage } from '@teamai/runtime-protocol';
 import type { UnusedGateways } from './sign-in.js';
 
@@ -34,6 +35,13 @@ export const ATTEMPT_ID = /^a[0-9a-f]{8}$/;
 /** An attempt's handle, `teamai-<run>-<attempt>`, which also names its container (sbx adds its journal: providers/sbx.ts). */
 export function handleOf({ run, attempt }: PlaceKey): string {
   return `teamai-${run}-${attempt}`;
+}
+
+/** The place `handleOf` named, or undefined for a name it did not make: another's, or a step's network or filter. */
+export function placeKeyOfHandle(handle: string): PlaceKey | undefined {
+  const [prefix, run = '', attempt = '', ...rest] = handle.split('-');
+
+  return prefix === 'teamai' && rest.length === 0 && RUN_ID.test(run) && ATTEMPT_ID.test(attempt) ? { run, attempt } : undefined;
 }
 
 /**
@@ -79,19 +87,36 @@ export interface Judges {
    * through only `hosts` (`host:port`), and no credential. Returns its id; an existing one of `key` is that judge's.
    */
   create(key: PlaceKey, { dir, hosts }: { dir: string; hosts: string[] }): Promise<{ ok: true; id: string } | { ok: false; failure: RuntimeFailure }>;
-  /** Removes what a judge's sandbox needed besides itself: its network and the filter in front of it. */
-  release(key: PlaceKey): Promise<{ ok: true } | { ok: false; failure: RuntimeFailure }>;
 }
 
 /**
  * How a sandbox reaches this machine itself: the name it has there, to which a URL credential on localhost is pointed
  * (loopback.ts), or, as a whole sentence, why teamai knows none.
  */
-export type HostRoute = { ok: true; alias: string } | { ok: false; refusal: string };
+export const HostRouteSchema = z.discriminatedUnion('ok', [z.object({ ok: z.literal(true), alias: z.string() }), z.object({ ok: z.literal(false), refusal: z.string() })]);
 
-/** What every provider does, whichever way its sandbox sees the place. */
+export type HostRoute = z.infer<typeof HostRouteSchema>;
+
 /** The image `warm` made or found for one open, which that open's `create` starts from rather than working the key out again. */
 export interface WarmedImage { image: string }
+
+/** What an open gives the creation of its sandbox. */
+export interface SandboxOpen {
+  view: PlaceView;
+  /** The attempt's prompt tool, as `open` names it (none for a command step), which picks sbx's template when no agent is set. */
+  tool: string | undefined;
+  /** The open's, the latest time the attempt's limits allow, which a hosted sandbox's lifetime must reach. */
+  deadline?: string;
+  /** What `warm` answered for this open, when it named the image the sandbox starts from. */
+  warmed?: WarmedImage;
+  /**
+   * The ports of this machine the attempt's credentials name (a model gateway on localhost): on a provider that keeps
+   * its sandbox from this machine, the only ones of it the sandbox reaches.
+   */
+  hostPorts: readonly number[];
+}
+
+/** What every provider does, whichever way its sandbox sees the place. */
 
 interface Sandboxing {
   /**
@@ -119,13 +144,8 @@ interface Sandboxing {
    * the ids of the scratch sandboxes of warm builds whose process no longer runs (warm.ts), which `destroy` removes.
    */
   owned?(): Promise<{ ok: true; sandboxes: Array<PlaceKey & { id: string }>; leftWarm?: string[] } | { ok: false; failure: RuntimeFailure }>;
-  /**
-   * Creates the attempt's sandbox with the view at its host paths and no credential, and returns its id. `tool` is the
-   * attempt's prompt tool, as `open` names it (none for a command step), which picks sbx's template when no agent is set.
-   * `deadline` is the open's, the latest time the attempt's limits allow, which a hosted sandbox's lifetime must reach.
-   * `warmed` is what `warm` answered for this open, when it named the image the sandbox starts from.
-   */
-  create(key: PlaceKey, view: PlaceView, tool: string | undefined, deadline?: string, warmed?: WarmedImage): Promise<{ ok: true; id: string } | { ok: false; failure: RuntimeFailure }>;
+  /** Creates the attempt's sandbox with the view at its host paths and no credential, and returns its id. */
+  create(key: PlaceKey, open: SandboxOpen): Promise<{ ok: true; id: string } | { ok: false; failure: RuntimeFailure }>;
   /**
    * On a provider with a warm image: makes the one an attempt with `view` and `tool` starts from, when it is not there
    * yet, before `create`, which then finds it, or starts from the image it names. It may take minutes, and nothing but
@@ -140,6 +160,11 @@ interface Sandboxing {
   reachesHost?(port: number, variable: string): Promise<{ ok: true } | { ok: false; failure: RuntimeFailure }>;
   /** The sandboxes of judges, on a provider that can confine one; a provider without them offers no confined prompt. */
   judges?: Judges;
+  /**
+   * Removes what the sandbox of `key`, a step's or a judge's, needed besides itself: its network and the filter in front
+   * of it, ok when it had none. Called once the sandbox is gone, at close and by a sweep.
+   */
+  release?(key: PlaceKey): Promise<{ ok: true } | { ok: false; failure: RuntimeFailure }>;
   /**
    * How a process outside this runtime, the sandbox wrapper, starts `spec.argv` in sandbox `id` with its stdin open:
    * the command line, and the whole environment to run it with, which holds every value; the argv names variables only.

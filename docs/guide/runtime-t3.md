@@ -239,7 +239,7 @@ When the instance that runs a team tool has another home than teamai gives the t
 
 ## Through a sandbox
 
-An entry `use: t3, through: sandbox` runs each step's thread in T3 Code as above, and the thread's tool in the attempt's sandbox. [Through an app](runtime-sandbox.md#through-an-app-teamai-sandbox-tool) shows the definition and what the sandbox does. The sandbox's provider must serve the attempt's socket: `docker`, `podman`, `sbx` or `bwrap`. Only Claude runs this way for now; a Codex step through a sandbox fails at open.
+An entry `use: t3, through: sandbox` runs each step's thread in T3 Code as above, and the thread's tool in the attempt's sandbox. [Through an app](runtime-sandbox.md#through-an-app-teamai-sandbox-tool) shows the definition and what the sandbox does. The sandbox must serve the attempt's socket: `sbx`, or `docker` on Docker Desktop or on this Linux machine, 26.0.0 or later (25.0.5, 23.0.11), with `node` in the image, which keep the tool from this machine's ports ([what a step reaches](runtime-sandbox.md#what-a-step-reaches-of-this-machine)). Only Claude runs this way for now; a Codex step through a sandbox fails at open.
 
 For each step, the runtime registers the step's tool on that socket, and T3 starts teamai's wrapper `teamai-sandbox-<tool>` in place of the tool. The first time, teamai adds the T3 provider instance that runs the wrapper, as it adds one for a team tool:
 
@@ -247,10 +247,10 @@ For each step, the runtime registers the step's tool on that socket, and T3 star
 ⚠ Step runtime "t3", operation op-08bf92d32391: Added the T3 Code provider instance "teamai-sandbox-claude" (driver Claude, Binary path /usr/local/bin/teamai-sandbox-claude), so teamai-sandbox-claude runs on T3 Code. It stays for later runs; remove it in T3 Code under Settings → Providers.
 ```
 
-The step's session is read in the attempt's tool home, where the sandbox runs the tool. With a provider that serves no socket (`seatbelt`, `vercel`), the step fails before any thread starts, and teamai adds no instance:
+The step's session is read in the attempt's tool home, where the sandbox runs the tool. With a sandbox that serves no socket (any other), the step fails before any thread starts, and teamai adds no instance:
 
 ```text
-✖ Step "count" failed with runtime_failed: Step runtime "t3 through sandbox" could not open attempt abf6c98bd (open_failed): Runtime t3 runs a tool through another runtime only on that runtime's attempt socket, and teamai could not register this step's tool on it (its handle names no attempt socket), so the sandbox would refuse the tool. Run T3 through a sandbox provider that serves one: docker, podman, sbx or bwrap.
+✖ Step "count" failed with runtime_failed: Step runtime "t3 through sandbox" could not open attempt abf6c98bd (open_failed): Runtime t3 runs a tool through another runtime only on that runtime's attempt socket, and teamai could not register this step's tool on it (its handle names no attempt socket), so the sandbox would refuse the tool. Run T3 through a sandbox provider that serves one: sbx, or docker 26.0.0 or later (25.0.5, 23.0.11) on Docker Desktop or on this Linux machine, on an image that holds node.
 ```
 
 ## Project scripts

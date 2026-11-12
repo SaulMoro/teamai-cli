@@ -52,7 +52,7 @@ export async function sweep({ provider, journal, warn }: { provider: Provider; j
         }
       });
 
-      // An attempt's containers (a judge's and its filter) go before its network, which is removed once.
+      // An attempt's containers (its sandbox and its filter) go before its network, which is removed once.
       const byAttempt = new Map<string, { key: PlaceKey; ids: string[] }>();
 
       for (const { id, run, attempt } of orphans) {
@@ -62,8 +62,8 @@ export async function sweep({ provider, journal, warn }: { provider: Provider; j
 
       await Promise.all([...byAttempt.values()].map(async ({ key, ids }) => {
         const destroyed = await Promise.all(ids.map((id) => provider.destroy(id)));
-        // A step's container has no filter or network, so their removal finds nothing and succeeds.
-        const removed = destroyed.find((done) => !done.ok) ?? (provider.judges ? await provider.judges.release(key) : { ok: true as const });
+        // A sandbox with no filter or network has nothing more to release, which succeeds.
+        const removed = destroyed.find((done) => !done.ok) ?? (provider.release ? await provider.release(key) : { ok: true as const });
 
         if (!removed.ok) warn(`teamai-runtime-sandbox: warning: ${provider.display(key).label} was left by an earlier run, and ${removed.failure.message}`);
       }));

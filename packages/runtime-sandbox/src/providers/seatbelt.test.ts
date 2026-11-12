@@ -1,8 +1,10 @@
 import { spawn } from 'node:child_process';
 import fs from 'node:fs';
+import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
-import { afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { z } from 'zod';
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { bundleRuntime, tempDir, type Connection, type Message } from '../testing/harness.js';
 import { exec, failStandIn, HANDLE, init, nativeHost, openPlace, placeIn, startOn, type NativeHost } from '../testing/native-harness.js';
 import { closeLeftovers, expectNothingLeft } from '../testing/leaks.js';
@@ -184,10 +186,10 @@ describe('seatbelt: lifecycle', () => {
     const op = 'op-0000cafe';
     first.send({ type: 'exec', op, handle: HANDLE, argv: ['waits'], env: {}, unset: [], credentials: {}, cwd: at.worktree });
     await first.next((message) => message.op === op && message.event === 'output');
-    first.child.kill('SIGKILL');
-    await first.end();
     const pids = path.join(host.home, '.teamai', 'runtime-state', 'sandbox', 'seatbelt', HANDLE, 'pids');
     const [pgid] = fs.readdirSync(pids).map(Number);
+    first.child.kill('SIGKILL');
+    await first.end();
 
     const second = start();
     await init(second, { provider: 'seatbelt' });
@@ -195,6 +197,29 @@ describe('seatbelt: lifecycle', () => {
 
     expect(await second.next((message) => message.op === op && ['cancelled', 'failed'].includes(String(message.event)))).toMatchObject({ event: 'cancelled' });
     expect(signalGroup(Number(pgid), 0)).toBe('gone');
+  });
+
+  it("removes an exec's group file once a killed runtime's step is taken down, so no later stop signals that number", async () => {
+    host.tool('waits', WAITS);
+    const first = start();
+    await init(first, { provider: 'seatbelt' });
+    const at = placeIn(host.dir);
+    await openPlace(first, at);
+    const op = 'op-0000cafe';
+    first.send({ type: 'exec', op, handle: HANDLE, argv: ['waits'], env: {}, unset: [], credentials: {}, cwd: at.worktree });
+    await first.next((message) => message.op === op && message.event === 'output');
+    const pids = path.join(host.home, '.teamai', 'runtime-state', 'sandbox', 'seatbelt', HANDLE, 'pids');
+    const [pgid] = fs.readdirSync(pids).map(Number);
+    first.child.kill('SIGKILL');
+    await first.end();
+    await vi.waitFor(() => { expect(signalGroup(Number(pgid), 0)).toBe('gone'); }, { timeout: 10_000 });
+
+    // The number is free for another group of the member's from now on, so nothing of this place names it any more.
+    await vi.waitFor(() => { expect(fs.readdirSync(pids)).toEqual([]); }, { timeout: 5_000 });
+    const second = start();
+    await init(second, { provider: 'seatbelt' });
+    second.send({ type: 'close', handle: HANDLE });
+    await second.next((message) => message.event === 'closed' && message.handle === HANDLE);
   });
 
   it('leaves alone a process group whose number a step held before this machine started, at close', async () => {
@@ -243,6 +268,38 @@ describe.runIf(process.platform === 'darwin')('seatbelt: on this Mac', () => {
 
     expect(end).toMatchObject({ event: 'exited', code: 0 });
     expect(JSON.parse(output)).toEqual(['ok', 'EPERM', 'EPERM']);
+  });
+});
+
+// A step reaches no port of this Mac but the ones its credentials name: not the member's daemons on loopback, such as
+// Paseo's, which take any local client and run what it asks outside the sandbox.
+describe.runIf(process.platform === 'darwin')('seatbelt: this Mac\'s own ports, on this Mac', () => {
+  const servers: net.Server[] = [];
+
+  /** A listener on this Mac's loopback that answers every connection with `reply`, and its port. */
+  async function listening(reply: string): Promise<number> {
+    const server = net.createServer((socket) => { socket.end(reply); });
+    servers.push(server);
+    await new Promise<void>((resolve) => { server.listen(0, '127.0.0.1', resolve); });
+
+    return z.object({ port: z.number() }).parse(server.address()).port;
+  }
+
+  afterEach(async () => {
+    await Promise.all(servers.splice(0).map((server) => new Promise((resolve) => { server.close(resolve); })));
+  });
+
+  it("refuses a step a port of this Mac's loopback, and lets it reach the gateway its credentials name there", async () => {
+    const daemon = await listening('daemon');
+    const gateway = await listening('gateway');
+    host.tool('connects', "const net = require('node:net'); const [host, port] = process.argv.slice(2); const socket = net.connect(Number(port), host); socket.on('data', (data) => { console.log(String(data)); process.exit(0); }); socket.on('error', (error) => { console.log(error.code); process.exit(0); });");
+    const connection = startOn(executable, host, open, { PATH: [host.tools, path.dirname(process.execPath), '/usr/bin', '/bin'].join(path.delimiter), TMPDIR: fs.realpathSync(host.dir), SANDBOX_TEST_SYSTEM_BIN: undefined });
+    expect(await init(connection, { provider: 'seatbelt' })).toMatchObject({ ok: true });
+    const at = placeIn(host.dir);
+    await openPlace(connection, at, { credentials: { ANTHROPIC_BASE_URL: `http://127.0.0.1:${gateway}/anthropic` } });
+    const reach = async (address: string, port: number): Promise<string> => (await exec(connection, { argv: ['connects', address, String(port)], cwd: at.worktree })).output.trim();
+
+    expect({ daemon: await reach('127.0.0.1', daemon), byName: await reach('localhost', daemon), gateway: await reach('127.0.0.1', gateway) }).toEqual({ daemon: 'EPERM', byName: 'EPERM', gateway: 'gateway' });
   });
 });
 

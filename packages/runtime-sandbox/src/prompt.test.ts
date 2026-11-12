@@ -154,6 +154,21 @@ describe('a prompt step in the attempt\'s container', () => {
     expect(launched(at).cwd).toBe(at.worktree);
   });
 
+  it('runs a prompt in a place on the provider it was opened with, when a resume after a profile change inits another one', async () => {
+    const first = start();
+    await init(first);
+    const at = await openPlace(first);
+    first.child.kill('SIGKILL');
+    await first.end();
+    const second = start();
+    second.send({ type: 'init', protocol: 1, mode: 'unattended', options: { provider: 'podman', image: IMAGE }, credentials: { env: ['ANTHROPIC_API_KEY'], logins: [] } });
+    expect(await second.next((message) => message.type === 'init', 30_000)).toMatchObject({ ok: true });
+    const before = engine.calls().length;
+
+    expect(await prompt(second, at)).toMatchObject({ event: 'finished', result: { output: { ok: true, reply: 'Done.' } } });
+    expect(engine.calls().slice(before).filter(([, command]) => command === 'exec').map(([name]) => name)).toEqual(['docker']);
+  });
+
   it('continues the session the lease names, and says it resumed it', async () => {
     const connection = start();
     await init(connection);
@@ -203,6 +218,26 @@ describe('the limits a prompt lease names', () => {
     const at = await openPlace(connection);
 
     expect(await prompt(connection, at, { prompt: 'hang on', limits: { timeoutMs: 800 } })).toMatchObject({ event: 'finished', stopped: 'timeout', session: { tool: 'claude' } });
+  });
+
+  it('fails a tool it could not stop at the timeout, naming what still runs and how to remove it, rather than letting it run on', async () => {
+    const connection = start();
+    await init(connection);
+    const at = await openPlace(connection);
+    const op = newOp();
+    const ending = prompt(connection, at, { prompt: 'hang on', limits: { timeoutMs: 1_500 } }, {}, op);
+    await vi.waitFor(() => { expect(fs.existsSync(path.join(at.toolHome, 'launch.json'))).toBe(true); }, { timeout: 10_000 });
+    // The engine stops answering while the tool runs, so the stop at the timeout fails.
+    engine.daemon(false);
+
+    expect(await ending).toMatchObject({
+      event: 'failed',
+      failure: { code: 'sandbox_failed', message: expect.stringMatching(/claude reached a limit of its step and could not be stopped: docker could not stop the processes in container .*docker rm --force/) },
+    });
+    // teamai closes the place of a failed step, which removes what still ran there.
+    engine.daemon(true);
+    connection.send({ type: 'close', handle: HANDLE });
+    expect(await connection.next((message) => message.event === 'closed' || message.event === 'close_failed', 30_000)).toEqual({ event: 'closed', handle: HANDLE });
   });
 
   it('fails a tool that prints nothing for longer than the idle limit, naming the limit', async () => {

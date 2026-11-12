@@ -91,7 +91,7 @@ The entry keeps what teamai reads itself, `credentials` and `max_parallel`, in i
 | --- | --- | --- |
 | `provider` | `docker` | `sbx`, `docker`, `podman`, `seatbelt`, `bwrap` or `vercel` |
 | `agent` | `claude` | `sbx` only: the agent template each sandbox starts from, `claude` or `codex`, or a kit reference that brings the tools. Leave it out to start each attempt from its own tool's template: a Claude step from `claude`, a Codex step from `codex`, a command step from the bare `shell`. `agent: shell` is refused, since that template holds no agent. |
-| `image` | `ghcr.io/acme/agent:1` | `docker` and `podman` only: the prebuilt image. It needs `/bin/sh` and the tools your steps run: `claude`, `codex` or `codebuddy`. Add `git` for steps that read history. |
+| `image` | `ghcr.io/acme/agent:1` | `docker` and `podman` only: the prebuilt image. It needs `/bin/sh` and the tools your steps run: `claude`, `codex` or `codebuddy`. Add `git` for steps that read history. A step runs with `TZ` set to your time zone, which the image applies only with its zoneinfo (`tzdata`), so that a tool's "try again at <time>" is read in your zone: the quick start's image, on Debian's `node:22-bookworm-slim`, has it, and an Alpine image needs `apk add tzdata`. |
 | `warm` | `prepare: npm ci --ignore-scripts` | An image with your package manager's store filled, made once and used by every attempt. See [A warm image](#a-warm-image). |
 | `credentials` (on the entry) | `CLAUDE_CODE_OAUTH_TOKEN: env:CLAUDE_CODE_OAUTH_TOKEN` | Read by teamai from your environment when the run starts, and given only to the step's tool, never to a command step. See [Credentials from your environment](workflow-advanced.md#credentials-from-your-environment). |
 
@@ -208,6 +208,21 @@ teamai then checks on the host what setup left in the worktree, as it does on `l
 ✖ Step "review" failed with setup_secret: Setup "npm ci" left the value of NPM_TOKEN in .npmrc, where the step could read it, so the step did not run. Make setup remove the files it writes NPM_TOKEN to, then retry the step.
 ```
 
+## What a step reaches of this machine
+
+A step's tool talks to its model provider, often through a gateway on this machine. Whatever else listens on this machine, such as a database, an app's local server or another agent's daemon, is a way out of the sandbox for a step that reaches it. This is what a step reaches of this machine on each provider:
+
+| Provider | What a step reaches of this machine | Isolation |
+| --- | --- | --- |
+| `docker` on Docker Desktop, or on Docker Engine on this Linux machine, with `node` in the image, 26.0.0 or later (25.0.5, 23.0.11) | Only the ports of this machine its credentials name, such as a gateway's. The container is on a network of its own whose one way out is a filter, set as its `HTTPS_PROXY` and `HTTP_PROXY`: it lets through any host off this machine and those ports, and refuses every other address of this machine and of the Docker host. | `sandbox`, unattended included |
+| `docker` otherwise, such as in a VM of its own (Colima, Rancher Desktop, Lima), and `podman` | Every port of this machine, through the address it has in the container | `worktree` |
+| `sbx` | What your sbx network policy allows: a port of this machine once `sbx policy allow network localhost:<port>` allows it | `sandbox`, unattended included |
+| `seatbelt` | Only the ports its credentials name, on any address of this Mac, so not even a server the step starts itself; a Unix socket only inside its place, and the DNS resolver's | `worktree` |
+| `bwrap` | Every port of this machine, and its abstract Unix sockets: the step shares this machine's network | `worktree` |
+| `vercel` | Nothing: a credential on `localhost` fails `bad_option` | `sandbox`, unattended included |
+
+At `worktree`, a step with `requires: { isolation: sandbox }` or `permissions: unattended` is not offered to the runtime, and an app's tool does not run there through [`teamai-sandbox-<tool>`](#through-an-app-teamai-sandbox-tool). On a filtered `docker` step, a client that ignores `HTTPS_PROXY` and `HTTP_PROXY` reaches nothing off this machine, and neither does a step whose environment names a proxy of yours: teamai does not pass the filter's traffic on to another proxy.
+
 ## Judging in the sandbox
 
 A scored pass is judged by its `teamai-score` run, whose judge step reads only the evidence teamai gathered. The sandbox runs that judge too, so a definition with only `sandbox` judges with no AI tool installed on your machine. Each judge gets a fresh container:
@@ -302,7 +317,7 @@ runtimes:
   - use: tools                                                # takes the judge
 ```
 
-**A gateway on this machine works as it is.** `localhost`, `127.0.0.1` or `::1` in a credential would be the container's own loopback, so teamai points it at the name your machine has in the container, keeping scheme, port and path. A judge's filter then lets through only that port of your machine.
+**A gateway on this machine works as it is.** `localhost`, `127.0.0.1` or `::1` in a credential would be the container's own loopback, so teamai points it at the name your machine has in the container, keeping scheme, port and path. A step's filter, and a judge's, then let through only that port of your machine.
 
 ```text
 ANTHROPIC_BASE_URL=http://127.0.0.1:4000/anthropic   (your shell)
@@ -312,7 +327,7 @@ ANTHROPIC_BASE_URL=http://host.containers.internal:4000/anthropic   (the step, o
 
 Docker Engine on Linux gives your machine no such name, so there the attempt fails `bad_option` before anything is created, naming the variable but never its value. Use an address of your machine the container reaches.
 
-**The image needs `node`** for the filter, and Docker needs to keep DNS inside an internal network: 26.0.0 or later, 25.0.5 or 23.0.11 (older versions forward a container's lookups out, CVE-2024-29018). Otherwise the sandbox offers no judge, and a definition with only the sandbox stops `confined_pending` at the judge. The quick start's image has `node`. Podman offers no judge in this version: its rootless network cannot connect the filter to the judge's network.
+**The image needs `node`** for the filter, and Docker needs to keep DNS inside an internal network: 26.0.0 or later, 25.0.5 or 23.0.11 (older versions forward a container's lookups out, CVE-2024-29018). Otherwise the sandbox offers no judge, and a definition with only the sandbox stops `confined_pending` at the judge; its steps then reach every port of this machine and run at `isolation: worktree` ([what a step reaches](#what-a-step-reaches-of-this-machine)). The quick start's image has `node`. Podman offers no judge in this version: its rootless network cannot connect the filter to the judge's network.
 
 What the judge does not enforce:
 
@@ -463,6 +478,8 @@ podman machine start                     # macOS and Windows
 teamai workflow start review --driver containers-podman
 ```
 
+A Podman step reaches every port of this machine, so it runs at `isolation: worktree` ([what a step reaches](#what-a-step-reaches-of-this-machine)).
+
 ## seatbelt and bwrap
 
 `seatbelt` (macOS 14 or later) and `bwrap` (Linux, [bubblewrap](https://github.com/containers/bubblewrap)) run each step as a sandboxed process on this machine, with this machine's own tools: no image and no daemon. They take only `provider` and `credentials`.
@@ -487,9 +504,9 @@ runtimes:
 
 - The step writes its worktree, its result and its tool home, and reads the git directories, a workflow folder and the directories on your `PATH` (under your home, only the `bin` directory itself). It cannot read your home or your temp directory, so your SSH keys, logins and the repositories there are out of reach: its `HOME` and `TMPDIR` are empty directories of its own, and Claude Code's `CLAUDE_CODE_TMPDIR` is that `TMPDIR`. On `bwrap` it sees nothing else of this machine but its system directories. On `seatbelt` it also reads macOS's system directories (`/usr`, `/System`, `/Library`, `/opt`) and Xcode's developer directory, so a repository under `/opt` stays readable; one elsewhere, such as under `/Volumes`, does not.
 - Its environment holds `PATH`, `USER`, `SHELL`, `LANG` and `TERM`, plus what teamai gives the step. None of your other variables reaches it.
-- It shares this machine's network, so a base URL on `localhost` or `127.0.0.1` reaches it as is.
+- A base URL on `localhost` or `127.0.0.1` reaches this machine as is. On `seatbelt`, the step reaches no other port of this Mac; on `bwrap`, it shares this machine's network, every port included ([what a step reaches](#what-a-step-reaches-of-this-machine)).
 - A Claude login in the macOS Keychain or in `~/.claude` is not read there: name a key in `credentials`, as for a container.
-- `seatbelt` denies, through `sandbox-exec`, whatever it does not allow. The step cannot signal a process it did not start or list processes with `ps` (macOS still lets it read another process's command line, so pass no secret on one), reach a Unix socket outside its place (but the DNS resolver's) or a container engine's (Docker, Colima, OrbStack, Lima, Rancher Desktop), or rename or remove a folder that holds a git file. It has no process namespace of its own, so a step with `requires: { isolation: sandbox }` or `permissions: unattended` is not offered to it, and a process the step starts in a session of its own (`setsid`) outlives the step. `bwrap` also gives each step its own process, IPC and user namespaces, and takes both.
+- `seatbelt` denies, through `sandbox-exec`, whatever it does not allow. The step cannot signal a process it did not start or list processes with `ps` (macOS still lets it read another process's command line, so pass no secret on one), reach a Unix socket outside its place (but the DNS resolver's) or a container engine's (Docker, Colima, OrbStack, Lima, Rancher Desktop), or rename or remove a folder that holds a git file. It has no process namespace of its own, so a process the step starts in a session of its own (`setsid`) outlives the step. `bwrap` gives each step its own process, IPC and user namespaces. Both run at `isolation: worktree`, so a step with `requires: { isolation: sandbox }` or `permissions: unattended` is not offered to either.
 
 When `bwrap` is missing, or AppArmor on Ubuntu 24.04 or later keeps it from creating a namespace, `init` fails `sandbox_unavailable` with the fix, and nothing runs on the host. For a missing `bwrap`, the fix is the install command of your distribution, as `/etc/os-release` names it (on Ubuntu or Debian):
 
@@ -551,7 +568,7 @@ A team instance runs through a link named after it, and the wrapper runs that in
 ln -s "$(command -v teamai-runtime-sandbox)" ~/.local/bin/teamai-sandbox-acme-claude
 ```
 
-The sandbox is the outer runtime of the entry, never the inner one: a definition that runs `sandbox` through another runtime fails with `driver_invalid`. It must mount the place at its host paths, so `sbx`, `docker`, `podman` and `bwrap` serve; `seatbelt` and `vercel` do not.
+The sandbox is the outer runtime of the entry, never the inner one: a definition that runs `sandbox` through another runtime fails with `driver_invalid`. It must mount the place at its host paths and keep the tool from this machine, so `sbx` and a filtered `docker` serve ([what a step reaches](#what-a-step-reaches-of-this-machine)); `podman`, `seatbelt`, `bwrap` and `vercel` do not.
 
 ```yaml
 # drivers/t3-sandboxed.yaml
@@ -647,13 +664,13 @@ sbx ls -q
 | `cancel_failed` | A cancel or a limit could not confirm the step stopped: the engine refused the stop, or the stop (a judge's removal included) and the end of the step's process took over 10 s. What ran there may still run, so teamai keeps the container, the work and the login. Example: `docker could not stop the processes in container teamai-r0123abcd-a0123abcd: Cannot connect to the Docker daemon. They may still run; remove the container with docker rm --force teamai-r0123abcd-a0123abcd.` | Start the engine again, then run `teamai workflow cancel <run>` again: the runtime stops the step and closes its place. Or remove it with the `docker rm --force` or `sbx rm --force` command the message names |
 | **Not closed** in run details | The engine could not remove the attempt's container or sandbox, or the removal and the end of what ran there took over 10 s, so what ran there may still run. The run ends as it would. | `docker rm --force <container>` or `sbx rm --force <sandbox>`, as the message says. Once nothing of it runs, `teamai workflow cancel <run> --release <attempt>` lets the attempt go: the runtime forgets the place even when it cannot remove it, and its message still names the `rm --force` command |
 | `runtime_interrupted` | teamai restarted while the step ran | `teamai workflow retry <run> <step>` |
-| `isolation_unproven` (from `teamai-sandbox-<tool>`) | The wrapper was started for an agent the attempt did not register, before the step registered, or outside the attempt's worktree, so it ran nothing | Start the step from teamai, not the app's own agent; a helper agent of the app is refused by design |
+| `isolation_unproven` (from `teamai-sandbox-<tool>`) | The wrapper was started for an agent the attempt did not register, before the step registered, or outside the attempt's worktree, so it ran nothing. Or the container is not behind a filter (Podman, a docker in a VM of its own, or Docker without `node` in the image or too old), so it reaches every port of this machine | Start the step from teamai, not the app's own agent; a helper agent of the app is refused by design. For a container, use Docker with `node` in the image ([what a step reaches](#what-a-step-reaches-of-this-machine)), or `sbx` |
 | `credentials_pending` (from `teamai-sandbox-<tool>`) | The sandbox runtime restarted and teamai has not reattached the attempt yet, so it holds no credentials for the tool | `teamai workflow resume <run>`: teamai reattaches the attempt with the credentials, and the app's next start of the tool is granted |
 | `tool_unsupported` (from `teamai-sandbox-<tool>`) | The sandbox does not offer the tool, or the instance's `command` is not installed in it | Add the command to the image or template the message names, or run the step with `--driver local` |
 
 ## Not in this version
 
 - Codex on a login dedicated to teamai in a container. On `sbx`, Codex signs in with `sbx secret set openai --oauth`.
-- Network rules for steps. `requires.network: false` is listed in `unenforced`, and a strict one waits for a driver that declares it. Only a judge's network is filtered.
+- Network rules for steps. `requires.network: false` is listed in `unenforced`, and a strict one waits for a driver that declares it. What a step reaches of this machine is [kept per provider](#what-a-step-reaches-of-this-machine); off this machine, a step reaches any host, but on `sbx`, where your network policy decides.
 - A judge on a tool login. A judge signs in with an env credential.
 - Windows. A sandbox mounts each path of the attempt at that same path, which a `C:\` path cannot be in a Linux sandbox, so on Windows `init` fails `sandbox_unavailable` for every provider and `teamai-sandbox-<tool>` exits 2. Run teamai, and the app that uses the wrapper, inside WSL2, or run the steps with `--driver local`.

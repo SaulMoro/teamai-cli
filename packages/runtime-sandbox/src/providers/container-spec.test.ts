@@ -1,5 +1,7 @@
 import { execFileSync, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
+import http from 'node:http';
+import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
 import { z } from 'zod';
@@ -36,7 +38,8 @@ const SbxListSchema = z.array(z.object({ name: z.string() }));
 const RUN = 'r0c0ffee1';
 const ATTEMPT = 'a0c0ffee1';
 const FAKE_IMAGE = 'ghcr.io/acme/spec:1';
-const REAL_IMAGE = 'teamai-spec/agent:1';
+// Unique to this run, so another run of the spec on this engine neither shares nor removes it.
+const REAL_IMAGE = `teamai-spec/agent:${process.pid}`;
 
 let fakes: FakeEngine | undefined;
 
@@ -79,7 +82,8 @@ function realTarget(engine: Engine): Target {
 
       const context = path.join(dir, 'image');
       fs.mkdirSync(context, { recursive: true });
-      fs.writeFileSync(path.join(context, 'Containerfile'), 'FROM docker.io/library/alpine:3\n');
+      // node runs the network filter in front of each step's container.
+      fs.writeFileSync(path.join(context, 'Containerfile'), 'FROM docker.io/library/node:22-alpine\n');
       cli(dir, ['build', '-q', '-t', REAL_IMAGE, '-f', path.join(context, 'Containerfile'), context]);
 
       return () => { spawnSync(path.join(shim(dir), engine), ['rmi', '-f', REAL_IMAGE], { stdio: 'ignore' }); };
@@ -94,6 +98,18 @@ function realTarget(engine: Engine): Target {
 const EngineSchema = z.enum(['docker', 'podman', 'sbx'], { error: (issue) => `CONTAINER_SPEC_ENGINES names ${String(issue.input)}; name docker, podman or sbx` });
 const named = (process.env.CONTAINER_SPEC_ENGINES ?? '').split(',').map((name) => name.trim()).filter((name) => name !== '');
 const TARGETS: Target[] = [fakeTarget('docker'), fakeTarget('podman'), fakeTarget('sbx'), ...named.map((name) => realTarget(EngineSchema.parse(name)))];
+
+/**
+ * A step that tries this machine's port `argv[2]` straight (host.docker.internal) and through its proxy (a CONNECT), and
+ * fetches its credential's gateway through the proxy, printing what each got.
+ */
+const REACH = String.raw`const net = require('node:net'); const http = require('node:http');
+const [port, neighbour] = process.argv.slice(2);
+const direct = () => new Promise((resolve) => { const socket = net.connect(Number(port), 'host.docker.internal'); socket.setTimeout(5000, () => { socket.destroy(); resolve('timeout'); }); socket.on('data', (data) => { resolve(String(data)); socket.destroy(); }); socket.on('error', (error) => resolve(error.code)); });
+const proxy = () => new URL(process.env.HTTP_PROXY || 'http://no-proxy.invalid:1');
+const tunnel = (host = 'host.docker.internal') => new Promise((resolve) => { const request = http.request({ host: proxy().hostname, port: proxy().port, method: 'CONNECT', path: host + ':' + port, timeout: 5000 }); request.on('connect', (response, socket) => { socket.destroy(); resolve(String(response.statusCode)); }); request.on('response', (response) => resolve(String(response.statusCode))); request.on('timeout', () => { request.destroy(); resolve('timeout'); }); request.on('error', (error) => resolve(error.code)); request.end(); });
+const fetched = () => new Promise((resolve) => { const request = http.request({ host: proxy().hostname, port: proxy().port, path: process.env.ANTHROPIC_BASE_URL, timeout: 5000 }, (response) => { let body = ''; response.on('data', (data) => { body += data; }); response.on('end', () => resolve(response.statusCode + ' ' + body)); }); request.on('timeout', () => { request.destroy(); resolve('timeout'); }); request.on('error', (error) => resolve(error.code)); request.end(); });
+(async () => { console.log(JSON.stringify({ direct: await direct(), tunnel: await tunnel(), neighbour: await tunnel(neighbour), gateway: await fetched() })); })();`;
 
 /** A command that waits until `file` exists, at most 20 s. */
 const waitFor = (file: string): string => `i=0; while [ ! -e '${file}' ] && [ $i -lt 200 ]; do sleep 0.1; i=$((i+1)); done`;
@@ -150,7 +166,7 @@ for (const target of TARGETS) {
 
     interface Opened { connection: Connection; handle: string; worktree: string; git: string }
 
-    async function opened(extra: NodeJS.ProcessEnv = {}): Promise<Opened> {
+    async function opened(extra: NodeJS.ProcessEnv = {}, credentials: Record<string, string> = {}): Promise<Opened> {
       const connection = start(extra);
       connection.send({ type: 'init', protocol: 1, mode: 'unattended', options: target.options, credentials: { env: [], logins: [] } });
       expect(await connection.next((message) => message.type === 'init', 300_000)).toMatchObject({ ok: true });
@@ -161,7 +177,7 @@ for (const target of TARGETS) {
       fs.mkdirSync(git, { recursive: true });
       fs.writeFileSync(path.join(git, 'HEAD'), 'ref: refs/heads/main\n');
       const op = newOp();
-      connection.send({ type: 'open', op, run: RUN, attempt: ATTEMPT, credentials: {}, view: { worktree, readonly: [git], result: path.join(root, 'out'), runDir: path.join(root, 'run'), toolHome: {} } });
+      connection.send({ type: 'open', op, run: RUN, attempt: ATTEMPT, credentials, view: { worktree, readonly: [git], result: path.join(root, 'out'), runDir: path.join(root, 'run'), toolHome: {} } });
       const accepted = await connection.next((message) => message.op === op && (message.event === 'accepted' || message.event === 'failed'));
       expect(await connection.next((message) => message.op === op && (message.event === 'ready' || message.event === 'failed'), 300_000)).toMatchObject({ event: 'ready' });
 
@@ -184,7 +200,8 @@ for (const target of TARGETS) {
     it('makes one sandbox for the attempt at open, and removes it at close', async () => {
       const place = await opened();
 
-      expect(target.containers(dir)).toHaveLength(1);
+      // A docker sandbox behind the network filter has the filter's container beside it.
+      expect(target.containers(dir).filter((name) => !name.endsWith('-proxy'))).toHaveLength(1);
       await close(place);
       expect(target.containers(dir)).toEqual([]);
     }, 600_000);
@@ -243,6 +260,41 @@ for (const target of TARGETS) {
       expect(await exec(place, { script: 'echo again', cwd: place.worktree })).toMatchObject({ end: { event: 'exited', code: 0 }, stdout: 'again\n' });
       expect(fs.existsSync(path.join(place.worktree, 'late.txt'))).toBe(false);
       await close(place);
+    }, 600_000);
+
+    // A daemon of the member's on this machine, such as Paseo's, may run what any local client asks, outside the
+    // sandbox: a step reaches no port of this machine but the ones its credentials name.
+    it.runIf(target.label === 'real docker')("keeps a step from this machine's ports, and lets it reach the gateway its credentials name there", async () => {
+      const daemon = net.createServer((socket) => { socket.end('daemon'); });
+      const gateway = http.createServer((_request, response) => { response.end('gateway'); });
+      const portOf = async (server: net.Server): Promise<number> => {
+        await new Promise<void>((resolve) => { server.listen(0, '127.0.0.1', resolve); });
+
+        return z.object({ port: z.number() }).parse(server.address()).port;
+      };
+
+      let place: Opened | undefined;
+
+      try {
+        const [daemonPort, gatewayPort] = [await portOf(daemon), await portOf(gateway)];
+        const credentials = { ANTHROPIC_BASE_URL: `http://127.0.0.1:${gatewayPort}/v1` };
+        place = await opened({}, credentials);
+        // Another address of the engine's VM, beside the one it names this machine by, as its own services listen on.
+        const nameAddress = execFileSync('docker', ['exec', `${place.handle}-proxy`, 'node', '-e', "require('node:dns').lookup('host.docker.internal', (error, address) => console.log(error ? '' : address))"], { encoding: 'utf8' }).trim();
+        const neighbour = nameAddress.replace(/\.(\d+)$/, (_all, last: string) => `.${Number(last) === 1 ? 2 : Number(last) - 1}`);
+        fs.writeFileSync(path.join(place.worktree, 'probe.js'), REACH);
+        const { end, stdout } = await exec(place, { script: `node probe.js ${daemonPort} ${neighbour}`, cwd: place.worktree, credentials });
+
+        expect(end).toMatchObject({ event: 'exited', code: 0 });
+        const reached = z.object({ direct: z.string(), tunnel: z.string(), neighbour: z.string(), gateway: z.string() }).parse(JSON.parse(stdout));
+        expect(reached.direct).not.toBe('daemon');
+        expect(net.isIPv4(neighbour)).toBe(true);
+        expect(reached).toMatchObject({ tunnel: '403', neighbour: '403', gateway: '200 gateway' });
+      } finally {
+        if (place) await close(place);
+        daemon.close();
+        gateway.close();
+      }
     }, 600_000);
 
     it.runIf(target.engine !== 'sbx')('fails init naming an image that cannot be pulled', async () => {

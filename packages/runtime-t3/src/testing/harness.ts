@@ -139,6 +139,10 @@ export interface FakeT3Config {
   environments?: Record<string, { projects: Array<{ id: string; title: string; workspaceRoot: string; deletedAt?: string | null; repositoryIdentity?: { canonicalKey: string } | null; defaultModelSelection?: { instanceId: string; model: string } | null }>; providers: FakeProvider[] }>;
   /** How long a send answers after it started the thread's turn, in ms. */
   sendMs?: number;
+  /** A send never answers, and starts no turn, as a T3 that stopped answering after its launch. */
+  sendHangs?: boolean;
+  /** The folder a launch with `scratch: true` binds in place of a new, empty one, as a T3 that ignored `scratch` would. */
+  scratchFolder?: string;
   /** How long after T3 answered a send the thread's turn starts, in ms: until then the thread reads as its earlier run ended. */
   turnStartsLateMs?: number;
 }
@@ -201,6 +205,8 @@ export interface FakeT3 {
   deleteThread(threadId: string): void;
   /** The person sends the thread a message in T3 Code: it runs again until the test changes it. */
   runAgain(threadId: string): void;
+  /** The person moves the idle thread to `folder` in T3 Code, as into a project: T3 reports that folder as its own from then on. */
+  moveThread(threadId: string, folder: string): void;
   /** Starts the fake server, or starts it again on the same state. */
   start(): Promise<void>;
   stop(): Promise<void>;
@@ -266,6 +272,11 @@ export function fakeT3(dir: string, workspaceRoot: string, { t3HomeInHome = fals
       fs.writeFileSync(path.join(state, 'threads', `${encodeURIComponent(thread.threadId)}.json`), JSON.stringify({ updatedAt: new Date().toISOString(), ...thread, provider: 'claudeAgent', settled: false, runCount: 1 }));
     },
     deleteThread: (threadId) => fs.rmSync(path.join(state, 'threads', `${encodeURIComponent(threadId)}.json`)),
+    moveThread(threadId, folder) {
+      const file = path.join(state, 'threads', `${encodeURIComponent(threadId)}.json`);
+      const thread = z.object({}).loose().parse(JSON.parse(fs.readFileSync(file, 'utf8')));
+      fs.writeFileSync(file, JSON.stringify({ ...thread, worktreePath: folder }));
+    },
     runAgain(threadId) {
       const file = path.join(state, 'threads', `${encodeURIComponent(threadId)}.json`);
       const thread = z.object({ runCount: z.number() }).loose().parse(JSON.parse(fs.readFileSync(file, 'utf8')));

@@ -3,6 +3,7 @@ import type { OpLedger } from '@teamai/runtime-kit/ledger';
 import { redact, redactJson } from '@teamai/shared/redact';
 import type { z } from 'zod';
 import { placeOf } from './attempt-socket.js';
+import { boundedEnds, boundedTail, TAIL_CHARS } from './bounded-tail.js';
 import { givenCredentials, type ExecOperations } from './exec.js';
 import type { Journal, Outcome } from './journal.js';
 import { EVIDENCE_DIR, inEvidenceDir, judgeOf } from './judge.js';
@@ -18,6 +19,9 @@ import { runStep, stepToolOf } from './step.js';
 //  A confined prompt is a judge: its place opens with no view, and the prompt runs its tool in a container of its own
 //  that sees only the prompt's directory, read-only (judge.ts).
 //
+
+/** How much of the end of a judge's stdout is kept: its reply, a JSON verdict, is far shorter. */
+const JUDGE_REPLY_CHARS = 1024 * 1024;
 
 type PromptRequest = z.infer<typeof PromptRequestSchema>;
 
@@ -165,12 +169,14 @@ export function prompts({ journal, ledger, env, execs, creation }: {
     const launch = judge.tool.launch({ ...lease, prompt: inEvidenceDir(lease.prompt, confined.dir) }, confined);
     // Only the credentials the judge's own tool reads, less any the prompt withholds.
     const scoped = Object.fromEntries(Object.entries(judge.credentials).filter(([name]) => !request.unset.includes(name)));
-    let stdout = '';
-    let stderr = '';
+    // A judge's tool may print without end: only the start and the end of its stdout are kept, where its session and
+    // its reply are.
+    const stdout = boundedEnds({ head: TAIL_CHARS, tail: JUDGE_REPLY_CHARS });
+    const stderr = boundedTail(4000);
 
     const ran = await provider.exec(id, { argv: launch.argv, env: { ...scoped, ...launch.env, ...request.env }, unset: request.unset, cwd: EVIDENCE_DIR }, (stream, data) => {
-      if (stream === 'stdout') stdout += data;
-      else stderr = `${stderr}${data}`.slice(-4000);
+      if (stream === 'stdout') stdout.push(data);
+      else stderr.push(data);
     });
 
     if (journal.isCancelled(op)) {
@@ -185,11 +191,11 @@ export function prompts({ journal, ledger, env, execs, creation }: {
       return;
     }
 
-    const reading = judge.tool.read(stdout);
+    const reading = judge.tool.read(stdout.text());
     const masked = (text: string): string => redact(text, { envSecrets: masks, patterns: false });
 
     if (ran.code !== 0) {
-      const lastStderr = stderr.trim().split('\n').at(-1) || 'it printed nothing on stderr';
+      const lastStderr = stderr.text().trim().split('\n').at(-1) || 'it printed nothing on stderr';
       settle({ state: 'failed', failure: { code: 'tool_failed', message: masked(`${lease.tool} exited with code ${ran.code} in the judge's container: ${reading.ok ? lastStderr : reading.message}`) } });
 
       return;

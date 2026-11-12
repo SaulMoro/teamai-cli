@@ -49,6 +49,8 @@ export interface FakeEngine {
   daemon(up: boolean): void;
   /** Makes `rm` fail, as a daemon that cannot remove a container, or work again. */
   failRemove(shouldFail: boolean): void;
+  /** Makes `run` of a network filter fail, as a daemon that cannot start one. */
+  failFilter(shouldFail: boolean): void;
   /** Undoes every fault and delay a test set, as a member mends their engine, so what the test left can be closed. */
   repair(): void;
   /** Makes an exec whose process a stop or remove killed end `ms` after the command that killed it returned. */
@@ -175,12 +177,16 @@ export function fakeEngine(dir: string): FakeEngine {
     ownedListings: () => (fs.existsSync(path.join(state, 'owned-listed')) ? fs.readFileSync(path.join(state, 'owned-listed'), 'utf8').length : 0),
     repair() {
       for (const name of fs.readdirSync(state)) {
-        if (['down', 'stop-lag', 'stop-delay', 'stop-hold', 'format-fails', 'create-hold', 'exec-hold', 'owned-hold', 'rm-fails'].includes(name) || name.startsWith('delay-')) fs.rmSync(path.join(state, name), { force: true });
+        if (['down', 'stop-lag', 'stop-delay', 'stop-hold', 'format-fails', 'create-hold', 'exec-hold', 'owned-hold', 'rm-fails', 'filter-fails'].includes(name) || name.startsWith('delay-')) fs.rmSync(path.join(state, name), { force: true });
       }
     },
     failRemove(shouldFail) {
       if (shouldFail) fs.writeFileSync(path.join(state, 'rm-fails'), '');
       else fs.rmSync(path.join(state, 'rm-fails'), { force: true });
+    },
+    failFilter(shouldFail) {
+      if (shouldFail) fs.writeFileSync(path.join(state, 'filter-fails'), '');
+      else fs.rmSync(path.join(state, 'filter-fails'), { force: true });
     },
     secret(service, isSet) {
       fs.mkdirSync(path.join(state, 'secrets'), { recursive: true });

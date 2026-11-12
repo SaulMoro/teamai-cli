@@ -270,26 +270,81 @@ export function noJudgeCredential(shell: NodeJS.ProcessEnv): RuntimeFailure {
   };
 }
 
+/** A filter rule that lets through every host but this machine itself. */
+export const ANY_HOST = '*';
+
+/** A filter rule that refuses one address of this machine, as the runtime sees it, which the filter's container cannot tell. */
+export const thisMachineRule = (address: string): string => `!${address}`;
+
 /**
- * The network filter, run with `node -e` in a container of the image on the engine's default network and the judge's
- * internal one: it answers only `CONNECT host:port`, and plain HTTP requests, to the hosts it is started with, and
- * pipes the bytes through.
+ * A filter rule that refuses every address listed in `file`, one per line, read again for each connection, so one this
+ * machine gains while the filter runs is refused too; the filter does not start without the file.
  */
-export const FILTER_SCRIPT = `const net = require('node:net'); const http = require('node:http');
-const [port, ...allowed] = process.argv.slice(1);
-const refuse = (response) => { response.writeHead(403); response.end('This network reaches only the model provider.\\n'); };
+export const thisMachineFileRule = (file: string): string => `@${file}`;
+
+/**
+ * The network filter, run with `node -e` in a container of the image on the engine's default network and the internal
+ * network of the sandbox it filters for: it answers only `CONNECT host:port`, and plain HTTP requests, and pipes the
+ * bytes through. Its rules, after its port:
+ *
+ *   host:port     let through as named: a judge's model provider, or a step's credential on this machine at the name
+ *                 the engine gives it (host.docker.internal:8317)
+ *   *             every other host, once it resolves only to addresses that are not this machine's: loopback,
+ *                 link-local, the network around each of the engine's names for this machine (its VM's other
+ *                 addresses), the networks of the filter's own container (other containers), and each `!address` given
+ *   !address      an address of this machine as the runtime sees it, such as its LAN address
+ *   @file         and every address `file` lists, read again for each connection, which the runtime keeps current
+ *
+ * A host is resolved once, and the connection goes to the address that was checked, so a name that resolves elsewhere
+ * the second time reaches nothing more. It listens only once it knows the engine's names for this machine.
+ */
+export const FILTER_SCRIPT = String.raw`const net = require('node:net'); const http = require('node:http'); const dns = require('node:dns'); const os = require('node:os'); const fs = require('node:fs');
+const [port, ...rules] = process.argv.slice(1);
+const files = rules.filter((rule) => rule.startsWith('@')).map((rule) => rule.slice(1));
+if (files.some((file) => !fs.existsSync(file))) process.exit(1);
+const allowed = rules.filter((rule) => rule !== '*' && !rule.startsWith('!') && !rule.startsWith('@'));
+const isOpen = rules.includes('*');
+const blocked = new net.BlockList();
+const block = (address) => { if (net.isIP(address)) blocked.addAddress(address, net.isIPv6(address) ? 'ipv6' : 'ipv4'); };
+for (const [subnet, prefix, family] of [['0.0.0.0', 8, 'ipv4'], ['127.0.0.0', 8, 'ipv4'], ['169.254.0.0', 16, 'ipv4'], ['::', 128, 'ipv6'], ['::1', 128, 'ipv6'], ['fe80::', 10, 'ipv6']]) blocked.addSubnet(subnet, prefix, family);
+for (const one of Object.values(os.networkInterfaces()).flat()) if (one && !one.internal) blocked.addSubnet(one.address.split('%')[0], Number(one.cidr.split('/')[1]), one.family === 'IPv6' ? 'ipv6' : 'ipv4');
+for (const rule of rules) if (rule.startsWith('!')) block(rule.slice(1));
+let listed = { text: undefined, list: new net.BlockList() };
+const listedNow = () => {
+  const text = files.map((file) => { try { return fs.readFileSync(file, 'utf8'); } catch { return listed.text ?? ''; } }).join('\n');
+  if (text !== listed.text) { const list = new net.BlockList(); for (const line of text.split('\n')) { const address = line.trim(); if (net.isIP(address)) list.addAddress(address, net.isIPv6(address) ? 'ipv6' : 'ipv4'); } listed = { text, list }; }
+  return listed.list;
+};
+const isThisMachine = (address) => { const family = net.isIPv6(address) ? 'ipv6' : 'ipv4'; return blocked.check(address, family) || listedNow().check(address, family); };
+const unbracketed = (host) => host.replace(/^\[(.*)\]$/, '$1');
+// Calls back with where to connect for host:port, or with nothing when the filter does not let it through.
+const route = (host, port, done) => {
+  if (allowed.includes(host + ':' + port)) { done(unbracketed(host)); return; }
+  if (!isOpen) { done(undefined); return; }
+  dns.lookup(unbracketed(host), { all: true }, (error, found) => { done(error || found.length === 0 || found.some((one) => isThisMachine(one.address)) ? undefined : found[0].address); });
+};
+const refuse = (response) => { response.writeHead(403); response.end('This network reaches only what teamai lets through, never this machine itself.\n'); };
 const server = http.createServer((request, response) => {
   let url; try { url = new URL(request.url); } catch { refuse(response); return; }
-  if (url.protocol !== 'http:' || !allowed.includes(url.hostname + ':' + (url.port || '80'))) { refuse(response); return; }
-  const upstream = http.request(url, { method: request.method, headers: request.headers }, (reply) => { response.writeHead(reply.statusCode, reply.headers); reply.pipe(response); });
-  upstream.on('error', () => response.destroy()); request.pipe(upstream);
+  if (url.protocol !== 'http:') { refuse(response); return; }
+  route(url.hostname, url.port || '80', (address) => {
+    if (address === undefined) { refuse(response); return; }
+    const upstream = http.request({ host: address, port: url.port || 80, method: request.method, path: url.pathname + url.search, headers: request.headers }, (reply) => { response.writeHead(reply.statusCode, reply.headers); reply.pipe(response); });
+    upstream.on('error', () => response.destroy()); request.pipe(upstream);
+  });
 });
 server.on('connect', (request, socket, head) => {
   const target = String(request.url);
   const at = target.lastIndexOf(':');
-  if (!allowed.includes(target) || at < 1) { socket.end('HTTP/1.1 403 Forbidden\\r\\n\\r\\n'); return; }
-  const upstream = net.connect(Number(target.slice(at + 1)), target.slice(0, at), () => { socket.write('HTTP/1.1 200 Connection Established\\r\\n\\r\\n'); upstream.write(head); upstream.pipe(socket); socket.pipe(upstream); });
-  upstream.on('error', () => socket.destroy()); socket.on('error', () => upstream.destroy());
+  if (at < 1) { socket.end('HTTP/1.1 403 Forbidden\r\n\r\n'); return; }
+  route(target.slice(0, at), target.slice(at + 1), (address) => {
+    if (address === undefined) { socket.end('HTTP/1.1 403 Forbidden\r\n\r\n'); return; }
+    const upstream = net.connect(Number(target.slice(at + 1)), address, () => { socket.write('HTTP/1.1 200 Connection Established\r\n\r\n'); upstream.write(head); upstream.pipe(socket); socket.pipe(upstream); });
+    upstream.on('error', () => socket.destroy()); socket.on('error', () => upstream.destroy());
+  });
 });
-server.listen(Number(port), '0.0.0.0');
+const names = isOpen ? ['host.docker.internal', 'gateway.docker.internal', 'host.containers.internal'] : [];
+// The network around each name's address too: the engine's VM has other addresses there, where other containers' ports listen.
+const blockAround = (address) => { if (net.isIPv4(address)) blocked.addSubnet(address, 24, 'ipv4'); else if (net.isIPv6(address)) blocked.addSubnet(address, 64, 'ipv6'); };
+Promise.all(names.map((name) => new Promise((resolve) => { dns.lookup(name, { all: true }, (error, found) => { for (const one of error ? [] : found) blockAround(one.address); resolve(); }); }))).then(() => server.listen(Number(port), '0.0.0.0'));
 process.on('SIGTERM', () => process.exit(0));`;

@@ -196,6 +196,55 @@ describe('teamai-runtime-t3', () => {
       expect(t3.threads()[0]?.message).toBeUndefined();
     });
 
+    it("touches nothing in a folder T3 gives a new judge thread that is not empty, and briefs no thread", async () => {
+      const member = path.join(dir, 'member-project');
+      fs.mkdirSync(member);
+      fs.writeFileSync(path.join(member, 'notes.md'), 'the member\'s own file\n');
+      t3.config({ scratchFolder: member });
+      const { runtime, handle } = await opened();
+
+      runtime.send(judge(handle, 'op-000000b3'));
+
+      expect(await ended(runtime, 'op-000000b3')).toEqual({
+        op: 'op-000000b3', event: 'failed',
+        failure: { code: 'judge_copy_failed', message: expect.stringContaining(`gave the judge thread a folder that is not empty, ${member}, so teamai copied nothing into it, and the judge did not start.`) },
+      });
+      expect(t3.threads()[0]?.message).toBeUndefined();
+      runtime.send({ type: 'close', handle });
+      expect(await runtime.next((line) => line['event'] === 'closed' || line['event'] === 'close_failed')).toEqual({ event: 'closed', handle });
+      expect(fs.readFileSync(path.join(member, 'notes.md'), 'utf8')).toBe('the member\'s own file\n');
+    });
+
+    it("touches nothing in the folder a judge thread was moved to before its restart, and removes only the copy teamai made", async () => {
+      t3.config({ sendHangs: true });
+      const first = await opened();
+      first.runtime.send(judge(first.handle, 'op-000000b4'));
+      // The copy is made and the brief is on its way when the runtime stops.
+      await expect.poll(() => t3.calls().some((call) => call.tool === 't3_thread_send')).toBe(true);
+      await first.runtime.close();
+      const [thread] = t3.threads();
+      const copy = z.string().parse(thread?.worktreePath);
+      const member = path.join(dir, 'member-project');
+      fs.mkdirSync(member);
+      fs.writeFileSync(path.join(member, 'notes.md'), 'the member\'s own file\n');
+      t3.moveThread(z.string().parse(thread?.threadId), member);
+      t3.config({ sendHangs: false });
+
+      const second = start();
+      second.send({ type: 'init', protocol: 1, mode: 'attended', options: { environment: 'local' } });
+      await second.next((line) => line['type'] === 'init');
+      second.send(judge(first.handle, 'op-000000b4'));
+
+      expect(await ended(second, 'op-000000b4')).toEqual({
+        op: 'op-000000b4', event: 'failed',
+        failure: { code: 'judge_copy_failed', message: expect.stringContaining(`now gives the judge thread the folder ${member}, not ${copy}, where teamai made its copy, so teamai copied nothing into it, and the judge did not start.`) },
+      });
+      second.send({ type: 'close', handle: first.handle });
+      expect(await second.next((line) => line['event'] === 'closed' || line['event'] === 'close_failed')).toEqual({ event: 'closed', handle: first.handle });
+      expect(fs.readFileSync(path.join(member, 'notes.md'), 'utf8')).toBe('the member\'s own file\n');
+      expect(fs.existsSync(copy)).toBe(false);
+    });
+
     it('neither copies nor briefs a judge whose place the person released while T3 launched its thread', async () => {
       t3.config({ launchMs: 12_000 });
       const { runtime, handle } = await opened();

@@ -25,7 +25,9 @@ import { isWithin, onPath, type NativeSandbox, type Sandboxed } from './native.j
 //  --new-session keeps a step from typing into a terminal it was started on (TIOCSTI). An exec starts detached, on no
 //  terminal, and goes without it: bwrap's init calls setsid before it binds its life to bwrap's, so an exec's watcher,
 //  which kills the exec's process group, would miss a step killed in its first milliseconds, and that step would run on.
-//  A tool an app's runtime starts through teamai's wrapper may be on a terminal, and keeps it.
+//  --share-net keeps this machine's network namespace, its loopback and abstract sockets included, and bwrap filters
+//  none of it, so a step reaches every port of this machine: it is at `isolation: worktree`, never unattended, and never
+//  the outer of an app's runtime.
 //
 
 /** The system directories every process needs, read only: whichever of them this distribution has. */
@@ -90,8 +92,8 @@ export function argsOf({ argv, cwd, writable, readable, gitPaths, isDetached }: 
 
 export const bwrap: NativeSandbox = {
   provider: 'bwrap',
-  isolation: 'sandbox',
-  isUnattended: true,
+  isolation: 'worktree',
+  isUnattended: false,
 
   async preflight(env) {
     const executable = onPath(PROVIDER_COMMANDS.bwrap, env.PATH);

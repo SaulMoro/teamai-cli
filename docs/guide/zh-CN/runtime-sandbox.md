@@ -91,7 +91,7 @@ sandbox 档案写明沙箱从什么构建：它的 provider 和该 provider 的�
 | --- | --- | --- |
 | `provider` | `docker` | `sbx`、`docker`、`podman`、`seatbelt`、`bwrap` 或 `vercel` |
 | `agent` | `claude` | 仅 `sbx`：每个沙箱从哪个 agent 模板启动，`claude` 或 `codex`，或者一个自带工具的 kit 引用。不写时，每次尝试从它自己工具的模板启动：Claude 步骤用 `claude`，Codex 步骤用 `codex`，命令步骤用裸的 `shell`。`agent: shell` 会被拒绝，因为那个模板里没有 agent。 |
-| `image` | `ghcr.io/acme/agent:1` | 仅 `docker` 和 `podman`：预先构建的镜像。它需要 `/bin/sh` 以及步骤要运行的工具：`claude`、`codex` 或 `codebuddy`。需要读取历史的步骤还要装 `git`。 |
+| `image` | `ghcr.io/acme/agent:1` | 仅 `docker` 和 `podman`：预先构建的镜像。它需要 `/bin/sh` 以及步骤要运行的工具：`claude`、`codex` 或 `codebuddy`。需要读取历史的步骤还要装 `git`。步骤运行时 `TZ` 设为你的时区，镜像只有带 zoneinfo（`tzdata`）才会应用它，这样工具给出的“请在 <时间> 后重试”才按你的时区读取：快速开始里基于 Debian `node:22-bookworm-slim` 的镜像自带它，Alpine 镜像需要 `apk add tzdata`。 |
 | `warm` | `prepare: npm ci --ignore-scripts` | 包管理器缓存已填好的镜像，只做一次，每次尝试都用它。见[预热镜像](#预热镜像)。 |
 | `credentials`（写在条目上） | `CLAUDE_CODE_OAUTH_TOKEN: env:CLAUDE_CODE_OAUTH_TOKEN` | 由 teamai 在运行开始时从你的环境里读取，只交给步骤的工具，从不交给命令步骤。见[来自你环境的凭据](workflow-advanced.md#来自你环境的凭据)。 |
 
@@ -208,6 +208,21 @@ docker exec -w /home/me/acme/app/.teamai/workflow-worktrees/… -e NPM_TOKEN -e 
 ✖ Step "review" failed with setup_secret: Setup "npm ci" left the value of NPM_TOKEN in .npmrc, where the step could read it, so the step did not run. Make setup remove the files it writes NPM_TOKEN to, then retry the step.
 ```
 
+## 步骤能连到这台机器的什么
+
+步骤的工具要和它的模型提供方通信，常常经由这台机器上的一个网关。这台机器上监听的其他东西，比如数据库、应用的本地服务器或另一个 agent 的守护进程，对连得到它的步骤来说就是一条逃出沙箱的路。各个提供方上，步骤能连到这台机器的这些东西：
+
+| 提供方 | 步骤能连到这台机器的什么 | 隔离 |
+| --- | --- | --- |
+| Docker Desktop 上的 `docker`，或这台 Linux 机器上 Docker Engine 的 `docker`，镜像里有 `node`，26.0.0 或更高（25.0.5、23.0.11） | 只有它的凭据写到的这台机器的端口，比如网关的端口。容器在自己的网络上，唯一的出口是一个过滤器，设为它的 `HTTPS_PROXY` 和 `HTTP_PROXY`：过滤器放行这台机器之外的任何主机和这些端口，拒绝这台机器和 Docker 主机的其他所有地址。 | `sandbox`，包括 unattended |
+| 其他情况下的 `docker`（比如跑在自己的虚拟机里：Colima、Rancher Desktop、Lima），以及 `podman` | 这台机器的每个端口，经由它在容器里的地址 | `worktree` |
+| `sbx` | 你的 sbx 网络策略允许的：这台机器的某个端口要等 `sbx policy allow network localhost:<port>` 放行之后 | `sandbox`，包括 unattended |
+| `seatbelt` | 只有它的凭据写到的端口，在这台 Mac 的任何地址上，所以连步骤自己启动的服务器也连不到；Unix 套接字只能是它的位置里的，以及 DNS 解析器的 | `worktree` |
+| `bwrap` | 这台机器的每个端口，以及它的抽象 Unix 套接字：步骤和这台机器共用网络 | `worktree` |
+| `vercel` | 什么都连不到：凭据里写 `localhost` 会以 `bad_option` 失败 | `sandbox`，包括 unattended |
+
+在 `worktree` 上，带 `requires: { isolation: sandbox }` 或 `permissions: unattended` 的步骤不会交给这个运行时，应用的工具也不会经由 [`teamai-sandbox-<tool>`](#通过应用运行teamai-sandbox-tool) 在那里运行。在经过过滤的 `docker` 步骤里，忽略 `HTTPS_PROXY` 和 `HTTP_PROXY` 的客户端连不到这台机器之外的任何东西；环境里写了你自己的代理的步骤也一样：teamai 不会把过滤器的流量转给另一个代理。
+
 ## 在 sandbox 里评判
 
 被评分的一轮由它的 `teamai-score` 运行评判，其中的评判步骤只读取 teamai 收集的证据。sandbox 也运行这个评判，所以只有 `sandbox` 的驱动定义不需要你机器上装有任何 AI 工具就能评判。每次评判都有一个全新的容器：
@@ -302,7 +317,7 @@ runtimes:
   - use: tools                                                # 接手评判
 ```
 
-**本机上的网关可以直接用。** 凭据里的 `localhost`、`127.0.0.1` 或 `::1` 在容器里会是容器自己的回环地址，所以 teamai 会把它改成你的机器在容器里的名字，协议、端口和路径保持不变。评判的过滤器也只放行你机器上的那个端口。
+**本机上的网关可以直接用。** 凭据里的 `localhost`、`127.0.0.1` 或 `::1` 在容器里会是容器自己的回环地址，所以 teamai 会把它改成你的机器在容器里的名字，协议、端口和路径保持不变。步骤的过滤器和评判的过滤器也只放行你机器上的那个端口。
 
 ```text
 ANTHROPIC_BASE_URL=http://127.0.0.1:4000/anthropic   （你的 shell）
@@ -312,7 +327,7 @@ ANTHROPIC_BASE_URL=http://host.containers.internal:4000/anthropic   （步骤，
 
 Linux 上的 Docker Engine 不给你的机器这样的名字，所以在那里尝试会在创建任何东西之前以 `bad_option` 失败，信息里说出变量名，但从不说出它的值。请改用容器能到达的你的机器的地址。
 
-**镜像里需要 `node`** 来运行过滤器，Docker 也要能把 DNS 限制在 internal 网络里：26.0.0 或更高、25.0.5 或 23.0.11（更旧的版本会把容器的查询转发出去，CVE-2024-29018）。否则 sandbox 不提供评判，只有这个 sandbox 的驱动定义运行到评判时会以 `confined_pending` 停下。快速开始里的镜像带有 `node`。这个版本的 Podman 不提供评判：它的 rootless 网络无法把过滤器接到评判的网络上。
+**镜像里需要 `node`** 来运行过滤器，Docker 也要能把 DNS 限制在 internal 网络里：26.0.0 或更高、25.0.5 或 23.0.11（更旧的版本会把容器的查询转发出去，CVE-2024-29018）。否则 sandbox 不提供评判，只有这个 sandbox 的驱动定义运行到评判时会以 `confined_pending` 停下；它的步骤也能连到这台机器的每个端口，以 `isolation: worktree` 运行（[步骤能连到什么](#步骤能连到这台机器的什么)）。快速开始里的镜像带有 `node`。这个版本的 Podman 不提供评判：它的 rootless 网络无法把过滤器接到评判的网络上。
 
 评判不保证的事：
 
@@ -463,6 +478,8 @@ podman machine start                     # macOS 和 Windows
 teamai workflow start review --driver containers-podman
 ```
 
+Podman 步骤能连到这台机器的每个端口，所以以 `isolation: worktree` 运行（[步骤能连到什么](#步骤能连到这台机器的什么)）。
+
 ## seatbelt 和 bwrap
 
 `seatbelt`（macOS 14 或更高版本）和 `bwrap`（Linux，[bubblewrap](https://github.com/containers/bubblewrap)）把每个步骤作为这台机器上的一个沙箱进程运行，用的是这台机器自己的工具：不需要镜像，也不需要守护进程。它们只接受 `provider` 和 `credentials`。
@@ -487,9 +504,9 @@ runtimes:
 
 - 步骤可以写它的工作树、结果和工具主目录，可以读 git 目录、工作流目录和你 `PATH` 上的目录（在你的主目录下只有 `bin` 目录本身）。它读不到你的主目录和临时目录，所以那里的 SSH 密钥、登录和仓库它都碰不到：它的 `HOME` 和 `TMPDIR` 是它自己的空目录，Claude Code 的 `CLAUDE_CODE_TMPDIR` 就是这个 `TMPDIR`。在 `bwrap` 上，除了系统目录，它看不到这台机器上的其他东西。在 `seatbelt` 上，它还能读 macOS 的系统目录（`/usr`、`/System`、`/Library`、`/opt`）和 Xcode 的开发者目录，所以 `/opt` 下的仓库仍然可读；其他位置（比如 `/Volumes` 下）的仓库读不到。
 - 它的环境只有 `PATH`、`USER`、`SHELL`、`LANG` 和 `TERM`，再加上 teamai 给这个步骤的变量。你的其他变量都到不了它那里。
-- 它和这台机器共用网络，所以 `localhost` 或 `127.0.0.1` 上的 base URL 原样可达。
+- `localhost` 或 `127.0.0.1` 上的 base URL 原样连到这台机器。在 `seatbelt` 上，步骤连不到这台 Mac 的其他端口；在 `bwrap` 上，它和这台机器共用网络，包括每个端口（[步骤能连到什么](#步骤能连到这台机器的什么)）。
 - 存在 macOS 钥匙串或 `~/.claude` 里的 Claude 登录在那里不会被读取：和容器一样，在 `credentials` 里写上一个密钥。
-- `seatbelt` 通过 `sandbox-exec` 拒绝它没有明确允许的一切。步骤不能给不是它启动的进程发信号，也不能用 `ps` 列出进程（macOS 仍允许它读取其他进程的命令行，所以不要在命令行里传递机密），不能连接它的位置之外的 Unix 套接字（DNS 解析器的除外）或容器引擎的套接字（Docker、Colima、OrbStack、Lima、Rancher Desktop），也不能重命名或删除存放 git 文件的文件夹。它没有自己的进程命名空间，所以带 `requires: { isolation: sandbox }` 或 `permissions: unattended` 的步骤不会交给它；步骤在自己的会话里（`setsid`）启动的进程会在步骤结束后继续运行。`bwrap` 还给每个步骤单独的进程、IPC 和用户命名空间，这两种步骤都能接。
+- `seatbelt` 通过 `sandbox-exec` 拒绝它没有明确允许的一切。步骤不能给不是它启动的进程发信号，也不能用 `ps` 列出进程（macOS 仍允许它读取其他进程的命令行，所以不要在命令行里传递机密），不能连接它的位置之外的 Unix 套接字（DNS 解析器的除外）或容器引擎的套接字（Docker、Colima、OrbStack、Lima、Rancher Desktop），也不能重命名或删除存放 git 文件的文件夹。它没有自己的进程命名空间，所以步骤在自己的会话里（`setsid`）启动的进程会在步骤结束后继续运行。`bwrap` 给每个步骤单独的进程、IPC 和用户命名空间。两者都以 `isolation: worktree` 运行，所以带 `requires: { isolation: sandbox }` 或 `permissions: unattended` 的步骤不会交给它们。
 
 当 `bwrap` 没有安装，或者 Ubuntu 24.04 及更高版本上的 AppArmor 不让它创建命名空间时，`init` 以 `sandbox_unavailable` 失败并给出修复方法，主机上什么都不会运行。`bwrap` 没有安装时，修复方法是 `/etc/os-release` 所写发行版的安装命令（Ubuntu 或 Debian 上）：
 
@@ -551,7 +568,7 @@ OpenCode 在那里只运行它的免费模型：teamai 不给它任何登录。
 ln -s "$(command -v teamai-runtime-sandbox)" ~/.local/bin/teamai-sandbox-acme-claude
 ```
 
-沙箱是这个条目的外层运行时，从不做内层：让 `sandbox` 经由另一个运行时运行的驱动定义会以 `driver_invalid` 失败。它必须把位置挂载在主机上的同一路径，所以 `sbx`、`docker`、`podman` 和 `bwrap` 可以，`seatbelt` 和 `vercel` 不行。
+沙箱是这个条目的外层运行时，从不做内层：让 `sandbox` 经由另一个运行时运行的驱动定义会以 `driver_invalid` 失败。它必须把位置挂载在主机上的同一路径，并让工具连不到这台机器，所以 `sbx` 和经过过滤的 `docker` 可以（[步骤能连到什么](#步骤能连到这台机器的什么)），`podman`、`seatbelt`、`bwrap` 和 `vercel` 不行。
 
 ```yaml
 # drivers/t3-sandboxed.yaml
@@ -647,13 +664,13 @@ sbx ls -q
 | `cancel_failed` | 取消或达到限制时，无法确认步骤已经停止：引擎拒绝了停止，或者停止（包括删除评判的容器）加上步骤进程的结束超过了 10 秒。那里运行的内容可能仍在运行，所以 teamai 保留容器、工作和登录。例如：`docker could not stop the processes in container teamai-r0123abcd-a0123abcd: Cannot connect to the Docker daemon. They may still run; remove the container with docker rm --force teamai-r0123abcd-a0123abcd.` | 先重新启动引擎，再运行一次 `teamai workflow cancel <run>`：运行时会停止步骤并关闭它的位置。也可以用信息里给出的 `docker rm --force` 或 `sbx rm --force` 命令删除它 |
 | 运行详情里的 **未关闭**（Not closed） | 无法删除这次尝试的容器或沙箱，或者删除和其中运行内容的结束超过了 10 秒，里面运行的东西可能还在运行。运行本身照常结束。 | 按信息里给出的命令执行 `docker rm --force <container>` 或 `sbx rm --force <sandbox>`。确认其中已没有任何东西在运行后，`teamai workflow cancel <run> --release <attempt>` 会放开这次尝试：即使运行时无法删除这个位置，也会忘掉它，信息里仍会给出 `rm --force` 命令 |
 | `runtime_interrupted` | 步骤运行时 teamai 重启了 | `teamai workflow retry <run> <step>` |
-| `isolation_unproven`（来自 `teamai-sandbox-<tool>`） | 包装器是为这次尝试没有登记的 agent 启动的，或者在步骤登记之前、在尝试的 worktree 之外启动的，所以什么都没有运行 | 从 teamai 启动步骤，而不是应用自己的 agent；应用的辅助 agent 按设计会被拒绝 |
+| `isolation_unproven`（来自 `teamai-sandbox-<tool>`） | 包装器是为这次尝试没有登记的 agent 启动的，或者在步骤登记之前、在尝试的 worktree 之外启动的，所以什么都没有运行。或者容器不在过滤器后面（Podman、跑在自己虚拟机里的 docker，或者镜像里没有 `node`、版本太旧的 Docker），所以它能连到这台机器的每个端口 | 从 teamai 启动步骤，而不是应用自己的 agent；应用的辅助 agent 按设计会被拒绝。容器的话，用镜像里有 `node` 的 Docker（[步骤能连到什么](#步骤能连到这台机器的什么)），或者 `sbx` |
 | `credentials_pending`（来自 `teamai-sandbox-<tool>`） | 沙箱运行时重启了，teamai 还没有重新连接这次尝试，所以它没有工具的凭据 | `teamai workflow resume <run>`：teamai 带着凭据重新连接这次尝试，应用下一次启动工具时就会得到授权 |
 | `tool_unsupported`（来自 `teamai-sandbox-<tool>`） | 沙箱不提供这个工具，或者实例的 `command` 没有安装在里面 | 把这个命令加到信息里给出的镜像或模板中，或者用 `--driver local` 运行这个步骤 |
 
 ## 这个版本还不支持
 
 - 在容器里使用 teamai 专用登录的 Codex。在 `sbx` 上，Codex 用 `sbx secret set openai --oauth` 登录。
-- 步骤的网络规则。`requires.network: false` 会列在 `unenforced` 里，严格要求它的步骤会等待一个声明了它的驱动。只有评判的网络会被过滤。
+- 步骤的网络规则。`requires.network: false` 会列在 `unenforced` 里，严格要求它的步骤会等待一个声明了它的驱动。步骤能连到这台机器的什么[按提供方而定](#步骤能连到这台机器的什么)；这台机器之外，步骤能连到任何主机，`sbx` 除外，那里由你的网络策略决定。
 - 用工具登录的评判。评判用环境变量凭据登录。
 - Windows。沙箱把尝试的每个路径挂载到同一路径上，而 `C:\` 路径在 Linux 沙箱里不存在，所以在 Windows 上，每个提供方的 `init` 都以 `sandbox_unavailable` 失败，`teamai-sandbox-<tool>` 以退出码 2 结束。请在 WSL2 里运行 teamai 和使用包装器的应用，或者用 `--driver local` 运行步骤。

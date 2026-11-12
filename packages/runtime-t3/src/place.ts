@@ -105,7 +105,7 @@ export function placeHandlers({ serving, adder, conversations }: { serving: Serv
   /** Why an open through a sandbox fails when the step's tool could not be registered on its attempt socket. */
   const unregistered = (why: string): RuntimeFailure => ({
     code: 'open_failed',
-    message: `Runtime t3 runs a tool through another runtime only on that runtime's attempt socket, and teamai could not register this step's tool on it (${why.replace(/\.$/, '')}), so the sandbox would refuse the tool. Run T3 through a sandbox provider that serves one: docker, podman, sbx or bwrap.`,
+    message: `Runtime t3 runs a tool through another runtime only on that runtime's attempt socket, and teamai could not register this step's tool on it (${why.replace(/\.$/, '')}), so the sandbox would refuse the tool. Run T3 through a sandbox provider that serves one: sbx, or docker 26.0.0 or later (25.0.5, 23.0.11) on Docker Desktop or on this Linux machine, on an image that holds node.`,
   });
 
   const open = async (request: Extract<RuntimeRequest, { type: 'open' }>): Promise<void> => {

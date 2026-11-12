@@ -97,28 +97,61 @@ export async function judged(t3: T3, thread: ThreadRecord): Promise<{ ok: true; 
   return output === undefined ? { ok: false, why: 'replied with no JSON value' } : { ok: true, result: { output } };
 }
 
+/** Whether `folder` is a directory, not a link to one, that holds nothing: the new scratch folder T3 makes for a launch. */
+function isEmptyFolder(folder: string): boolean {
+  try {
+    return fs.lstatSync(folder).isDirectory() && fs.readdirSync(folder).length === 0;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Why teamai will not copy into the folder T3 reports for a judge thread that has not run, or undefined when that folder
+ * is the judge's own: on a first launch, empty, as T3 makes a scratch folder; after a restart, the one the journal
+ * recorded the copy in. Any other folder may hold the member's files, which a copy would remove.
+ */
+function notOwnFolder({ folder, known, link }: { folder: string; known: ThreadRecord | undefined; link: string }): string | undefined {
+  if (known === undefined) {
+    return isEmptyFolder(folder)
+      ? undefined
+      : `T3 Code gave the judge thread a folder that is not empty, ${folder}, so teamai copied nothing into it, and the judge did not start. A judge's copy goes only into the new, empty folder T3 Code makes for a scratch thread. Check that your T3 Code makes scratch threads (update it if not), and run the step again. The thread, ${link}, is left idle.`;
+  }
+
+  return known.copy === folder
+    ? undefined
+    : `T3 Code now gives the judge thread the folder ${folder}, not ${known.copy ?? 'the one teamai would copy into'}, where teamai made its copy, so teamai copied nothing into it, and the judge did not start. The thread, ${link}, was moved in T3 Code before it ran; run the step again, and it starts a new judge thread.`;
+}
+
 /**
  * Launches a judge's thread idle in a scratch folder, unless the journal holds it (`known`), fills the folder with a
- * read-only copy of its directory, then briefs it. The copy is journaled before it is made, so close removes it
- * whatever happens next. A thread that already ran, after a restart, was copied and briefed then.
+ * read-only copy of its directory, then briefs it. The folder is the judge's only when it is proven so (`notOwnFolder`):
+ * only then is it journaled as the copy, which close removes whatever happens next, and filled. A thread that already
+ * ran, after a restart, was copied and briefed then.
  */
-export async function launchJudge({ t3, request, confined, opened, journalThread, thread, known, isReleased }: {
+export async function launchJudge({ t3, request, confined, opened, journalThread, thread, known, isReleased, linkOf }: {
   t3: T3;
   request: PromptRequest;
   confined: ConfinedPrompt;
   opened: PlaceRecord;
-  journalThread: (threadId: string, copy: string, model: string | undefined) => Promise<ThreadRecord>;
+  journalThread: (threadId: string, copy: string | undefined, model: string | undefined) => Promise<ThreadRecord>;
   thread: NewThread;
   known: ThreadRecord | undefined;
   /** Whether the person released the judge's place meanwhile. */
   isReleased(): boolean;
+  /** The link that opens a thread in T3 Code, which a refusal names it by. */
+  linkOf(threadId: string): string;
 }): Promise<ThreadRecord> {
   const scratch = known ? undefined : await t3.launchScratch(thread);
   const threadId = known?.threadId ?? scratch?.threadId ?? '';
   const shell = await t3.thread(threadId);
 
   if (shell.worktreePath === null) throw new Error(`T3 Code gave the thread ${threadId} no folder.`);
-  const launched = known ?? await journalThread(threadId, shell.worktreePath, scratch?.modelSelection?.model);
+  const refused = shell.runCount === 0 ? notOwnFolder({ folder: shell.worktreePath, known, link: linkOf(threadId) }) : undefined;
+  // A folder not proven the judge's is journaled as no copy: close then archives the thread, and removes nothing.
+  const launched = known ?? await journalThread(threadId, refused === undefined ? shell.worktreePath : undefined, scratch?.modelSelection?.model);
+
+  if (refused !== undefined) throw new JudgeCopyFailed(refused);
 
   if (shell.runCount === 0 && isReleased()) throw new JudgeReleased('teamai released the place while T3 Code launched the judge thread, so it did not brief that thread, and the judge did not start.');
 

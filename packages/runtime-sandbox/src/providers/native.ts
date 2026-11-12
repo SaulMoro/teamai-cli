@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { z } from 'zod';
-import { PlaceViewSchema, type Can, type PlaceView, type RuntimeFailure } from '@teamai/runtime-protocol';
+import { PlaceViewSchema, type Can, type RuntimeFailure } from '@teamai/runtime-protocol';
 import { signalGroup } from '@teamai/shared/process-group';
 import { readRegularFileSync } from '@teamai/shared/regular-file';
 import { COMMAND_MS, handleOf, type ExecEnd, type ExecSpec, type Provider } from '../provider.js';
@@ -57,6 +57,8 @@ export interface Sandboxed {
   tmp: string;
   /** Whether the command starts detached, as an exec does: leading a process group and a session of its own, with no terminal. */
   isDetached: boolean;
+  /** The ports of this machine the attempt's credentials name: on seatbelt, the only ones of its loopback the step reaches. */
+  hostPorts: readonly number[];
 }
 
 /** The variables of the runtime's own environment a step's process keeps: what a shell and a locale need, no secret. */
@@ -67,7 +69,9 @@ const SIGTERM_GRACE_MS = 2_000;
 /**
  * How an exec starts, in the process group of its own it leads: a background shell blocked on fd 3, the read end of a
  * pipe whose write end only the runtime holds, kills the whole group once that pipe ends (the exec ended, or the runtime
- * died, however it died), and the exec's command replaces the launching shell without fd 3. The watcher is in place
+ * died, however it died), and the exec's command replaces the launching shell without fd 3. Its first argument is the
+ * place's `pids` directory: the watcher removes the group's file there before its first kill, so a runtime that died
+ * leaves no file naming a number another group may hold later, which a stop would then signal. The watcher is in place
  * before the sandbox starts, outside it, so no SIGKILL of the runtime, however early, leaves the step running (after
  * sandcastle's `bwrapProcess.ts` watcher and `sandboxes/seatbelt.ts` watchdog). A process the step starts in a session
  * of its own (`setsid`) leaves the group, and outlives it.
@@ -78,7 +82,7 @@ const SIGTERM_GRACE_MS = 2_000;
  * its init included, stays in the group, as an exec goes without --new-session (bwrap.ts), so the group's kill ends it
  * however early it comes.
  */
-const LAUNCH = 'set -m 2>/dev/null\n{ read -r _ || :; n=0; while kill -9 -$$ 2>/dev/null && [ $n -lt 50 ]; do n=$((n+1)); sleep 0.1; done; } <&3 >/dev/null 2>&1 &\nset +m 2>/dev/null\nexec 3<&-\nexec "$@"';
+const LAUNCH = 'pids=$1; shift\nset -m 2>/dev/null\n{ read -r _ || :; rm -f "$pids/$$"; n=0; while kill -9 -$$ 2>/dev/null && [ $n -lt 50 ]; do n=$((n+1)); sleep 0.1; done; } <&3 >/dev/null 2>&1 &\nset +m 2>/dev/null\nexec 3<&-\nexec "$@"';
 
 /** The executable `name` as `pathVariable` finds it, or undefined. */
 export function onPath(name: string, pathVariable: string | undefined): string | undefined {
@@ -205,12 +209,14 @@ export function nativeProvider({ sandbox, state, env, home }: { sandbox: NativeS
     return failed(`${provider} could not stop the processes of sandbox ${id} (process groups ${left.join(', ')}). Stop them with \`kill -KILL ${left.map((pgid) => `-${pgid}`).join(' ')}\`.`);
   };
 
-  const ViewFileSchema = z.object({ view: PlaceViewSchema });
+  // A place an earlier runtime wrote names no port: its steps reach none of this machine's.
+  const ViewFileSchema = z.object({ view: PlaceViewSchema, hostPorts: z.array(z.number().int().min(1).max(65_535)).default([]) });
 
-  const viewOf = (id: string): PlaceView | undefined => {
+  /** The place of sandbox `id`: the view open gave, and the ports of this machine its credentials name. */
+  const placeOf = (id: string): z.infer<typeof ViewFileSchema> | undefined => {
     const file = path.join(dirOf(id), 'view.json');
 
-    return fs.existsSync(file) ? ViewFileSchema.parse(JSON.parse(readRegularFileSync(file, 'utf8'))).view : undefined;
+    return fs.existsSync(file) ? ViewFileSchema.parse(JSON.parse(readRegularFileSync(file, 'utf8'))) : undefined;
   };
 
   /**
@@ -219,9 +225,10 @@ export function nativeProvider({ sandbox, state, env, home }: { sandbox: NativeS
    * directory, and the spec's names, less those it withholds.
    */
   const launchOf = (id: string, spec: ExecSpec, { isDetached }: Pick<Sandboxed, 'isDetached'>): { ok: true; command: string; args: string[]; env: NodeJS.ProcessEnv } | { ok: false; failure: RuntimeFailure } => {
-    const view = viewOf(id);
+    const place = placeOf(id);
 
-    if (view === undefined) return { ok: false, failure: { code: 'runtime_gone', message: `Sandbox ${id} has no place on this machine any more.` } };
+    if (place === undefined) return { ok: false, failure: { code: 'runtime_gone', message: `Sandbox ${id} has no place on this machine any more.` } };
+    const { view, hostPorts } = place;
     const [argv0 = ''] = spec.argv;
     const own = { home: realOf(path.join(dirOf(id), 'home')), tmp: realOf(path.join(dirOf(id), 'tmp')) };
     const kept = Object.fromEntries(KEPT.flatMap((name) => (env[name] === undefined ? [] : [[name, env[name]]])));
@@ -240,6 +247,7 @@ export function nativeProvider({ sandbox, state, env, home }: { sandbox: NativeS
       home: own.home,
       tmp: own.tmp,
       isDetached,
+      hostPorts,
     });
 
     return { ok: true, command: onPath(command, env.PATH) ?? command, args, env: childEnv };
@@ -286,14 +294,14 @@ export function nativeProvider({ sandbox, state, env, home }: { sandbox: NativeS
       };
     },
 
-    async create(key, view) {
+    async create(key, { view, hostPorts }) {
       const id = handleOf(key);
 
       // A writable path made here is the member's, as a bind mount's is.
       for (const at of [view.worktree, view.result, view.runDir, ...Object.values(view.toolHome)]) fs.mkdirSync(at, { recursive: true });
 
       for (const sub of ['home', 'tmp', 'pids']) fs.mkdirSync(path.join(dirOf(id), sub), { recursive: true, mode: 0o700 });
-      fs.writeFileSync(path.join(dirOf(id), 'view.json'), JSON.stringify({ view }), { mode: 0o600 });
+      fs.writeFileSync(path.join(dirOf(id), 'view.json'), JSON.stringify({ view, hostPorts }), { mode: 0o600 });
 
       return { ok: true, id };
     },
@@ -316,7 +324,7 @@ export function nativeProvider({ sandbox, state, env, home }: { sandbox: NativeS
       return new Promise((resolve) => {
         // A process group of its own, so a stop ends the step and whatever it started.
         // Found on the runtime's PATH, never on one the step sets.
-        const child = spawn('/bin/sh', ['-c', LAUNCH, 'sh', command, ...args], { cwd: spec.cwd, env: childEnv, detached: true, stdio: ['ignore', 'pipe', 'pipe', 'pipe'] });
+        const child = spawn('/bin/sh', ['-c', LAUNCH, 'sh', pidsOf(id), command, ...args], { cwd: spec.cwd, env: childEnv, detached: true, stdio: ['ignore', 'pipe', 'pipe', 'pipe'] });
         const pidFile = child.pid === undefined ? undefined : path.join(pidsOf(id), String(child.pid));
 
         if (pidFile) fs.writeFileSync(pidFile, '');
