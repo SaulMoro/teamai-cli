@@ -1732,6 +1732,21 @@ describe('uninstall', () => {
     ]).toEqual([true, '- name every endpoint\n', false]);
   });
 
+  it('keeps, in the data home it removes, the drivers, runtimes, sandbox profiles and tool instances the member wrote there', async () => {
+    const { homeDir, repoPath, teamaiHome } = await setupFixture(tmpDir);
+    vi.stubEnv('HOME', homeDir);
+    vi.stubEnv('SHELL', '/bin/zsh');
+    const own = ['drivers/gpu/DRIVER.yaml', 'runtimes/acme.yaml', 'sandboxes/default.yaml', 'tools/acme-claude.yaml'];
+    for (const file of own) await fse.outputFile(path.join(teamaiHome, file), 'mine\n');
+    await fse.outputFile(path.join(teamaiHome, 'rules', 'testing', 'RULE.md'), 'Test first.\n');
+    mockAutoDetectInit.mockResolvedValue({ localConfig: makeLocalConfig(homeDir, repoPath), teamConfig: makeTeamConfig() });
+
+    await uninstall({ force: true });
+
+    expect(await Promise.all(own.map((file) => fse.readFile(path.join(teamaiHome, file), 'utf8')))).toEqual(own.map(() => 'mine\n'));
+    expect(await fse.pathExists(path.join(teamaiHome, 'rules'))).toBe(false);
+  });
+
   it('previews the delivered folders of a worktree in self mode by what they are, whatever their type (#1787)', async () => {
     const { homeDir, repoPath } = await setupFixture(tmpDir);
     const projectRoot = path.join(tmpDir, 'business-repo');

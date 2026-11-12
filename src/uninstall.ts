@@ -58,6 +58,7 @@ import {
   type Scope,
   type ManagedMcpManifest,
   installScopeName,
+  getTeamaiHomeDir,
 } from './types.js';
 import { BUILTIN_RULE_NAMES, TEAMAI_CONTEXT_RULE_NAME } from './builtin-rules.js';
 import { isLegacyCursorRuleFile, keptLegacyCopiesWarning, ruleStemFromFilename, usesMdcRules, type InstructionBlock, type LegacyRuleDir } from './resources/rule-format.js';
@@ -3299,10 +3300,15 @@ async function executeRemoval(
       const sharedManifest = plan.preserveSharedManifest && await pathExists(plan.preserveSharedManifest)
         ? await readFileSafe(plan.preserveSharedManifest) : null;
 
+      // The member's own drivers, runtimes, sandbox profiles and tool instances, which teamai reads and never writes.
+      const { PERSONAL_DIRS } = await import('./workflow/runtimes/definitions.js');
+      const own = Object.values(PERSONAL_DIRS).map((dir) => path.join(getTeamaiHomeDir(), dir));
+
       const kept = [
         ...docsInside ? [plan.docsDir!] : [],
         ...plan.keptForProjects.paths,
         ...await keptFolders(plan.teamaiHome),
+        ...(await Promise.all(own.map(async (dir) => (dir.startsWith(plan.teamaiHome + path.sep) && await pathExists(dir) ? [dir] : [])))).flat(),
       ];
 
       await unregisterWorktreesIn(plan.teamaiHome, plan.checkouts, plan.unpushedSideBranches);
