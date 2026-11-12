@@ -1,18 +1,18 @@
 import { createHash } from 'node:crypto';
 import fs from 'node:fs/promises';
-import os from 'node:os';
 import path from 'node:path';
 import { createInterface } from 'node:readline/promises';
 import { z } from 'zod';
 import { RUNTIME_PROTOCOL } from '@teamai/runtime-protocol';
 import { resolvePathCommand } from '@teamai/shared/cli-path';
 import { copyRegularTree, readRegularFile, readRegularFileNoLink } from '@teamai/shared/regular-file';
+import { signalPid } from '@teamai/shared/process-group';
 import { parseYaml } from '@teamai/shared/yaml';
 import { teamaiBin } from '../../default-drivers.js';
 import type { RunMode } from '../../launch-context.js';
 import { isSymlink, RESOURCE_LAYOUTS } from '../../resources/resolver.js';
 import { acceptTeamCommand } from '../../tool-instances.js';
-import { getTeamaiHomeDir } from '../../types.js';
+import { getDataHome, getTeamaiHomeDir, type LocalConfig } from '../../types.js';
 import { writeJsonAtomic } from '../../utils/fs.js';
 import type { WorkflowFailure } from '../types.js';
 import type { ResolvedDriver } from './definitions.js';
@@ -338,17 +338,35 @@ function unanswered(source: ExternalRuntime): Acceptance {
 /** The runtime a source runs as, and what removes the copy it runs from once nothing runs it. */
 export type PinnedRuntime = { ok: true; source: ExternalRuntime; remove: () => Promise<void> };
 
+/** Where each teamai process keeps the copies of team runtime folders it runs: `<pid>-<random>`, one per open. */
+function runtimeCopies(config: LocalConfig): string {
+  return path.join(getDataHome(config), 'workflows', 'runtime-copies');
+}
+
+/** Removes the copies in `dir` whose teamai process is gone, as a killed one leaves them. */
+async function removeOrphanCopies(dir: string): Promise<void> {
+  for (const entry of await fs.readdir(dir).catch(() => [])) {
+    const pid = Number(entry.split('-')[0]);
+
+    if (Number.isSafeInteger(pid) && signalPid(pid, 0) === 'gone') await fs.rm(path.join(dir, entry), { recursive: true, force: true });
+  }
+}
+
 /**
  * `source` as it runs: a team runtime folder copied where no pull reaches it, with the revision of that copy, so the
- * revision a person accepts is all that runs, for as long as it runs. Any other runtime runs where it was found, with
- * nothing to remove.
+ * revision a person accepts is all that runs, for as long as it runs. The copy sits in the data home, where programs
+ * run as from the team repo, not in the temp folder, which may forbid it; a copy whose teamai was killed goes at the
+ * next one. Any other runtime runs where it was found, with nothing to remove.
  */
-export async function pinRuntime(source: ExternalRuntime): Promise<PinnedRuntime | { ok: false; failure: WorkflowFailure }> {
+export async function pinRuntime(source: ExternalRuntime, { config }: { config: LocalConfig }): Promise<PinnedRuntime | { ok: false; failure: WorkflowFailure }> {
   const { trust, launch } = source;
 
   if (trust.kind !== 'folder' || launch.kind !== 'executable') return { ok: true, source, remove: async () => undefined };
 
-  const copy = await fs.mkdtemp(path.join(os.tmpdir(), 'teamai-runtime-'));
+  const copies = runtimeCopies(config);
+  await removeOrphanCopies(copies);
+  await fs.mkdir(copies, { recursive: true });
+  const copy = await fs.mkdtemp(path.join(copies, `${process.pid}-`));
   const remove = async (): Promise<void> => fs.rm(copy, { recursive: true, force: true });
 
   const refused = async (reason: string): Promise<{ ok: false; failure: WorkflowFailure }> => {

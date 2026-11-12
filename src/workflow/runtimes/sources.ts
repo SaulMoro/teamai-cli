@@ -346,7 +346,7 @@ async function openRuntime(driver: ResolvedDriver, { use, options, sandbox }: { 
 
   if (!values.ok) return values;
   // What is accepted is the copy it runs from, which no pull changes while it runs.
-  const pinned = await pinRuntime(source);
+  const pinned = await pinRuntime(source, { config: driver.config });
 
   if (!pinned.ok) return pinned;
   const runs = pinned.source;

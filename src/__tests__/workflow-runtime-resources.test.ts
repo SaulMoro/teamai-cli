@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -128,7 +129,7 @@ describe('which runtime a name finds', () => {
     // The runtime reads a file of its own folder a while after it started, then exits, as code that loads a module late.
     const team = teamWith({
       'runtimes/acme/RUNTIME.yaml': 'protocol: 1\nentry: ./runtime\n',
-      'runtimes/acme/runtime': `#!/bin/sh\nsleep 1.5\ncat "$(dirname "$0")/payload.txt" > '${seen}'\n`,
+      'runtimes/acme/runtime': `#!/bin/sh\nsleep 1.5\ncat "$(dirname "$0")/payload.txt" > '${seen}'\ncd "$(dirname "$0")" && pwd -P > '${seen}.from'\n`,
       'runtimes/acme/payload.txt': 'accepted\n',
     });
     const { locateRuntime, acceptRuntime } = await import('../workflow/runtimes/locate.js');
@@ -144,6 +145,31 @@ describe('which runtime a name finds', () => {
     await opened;
 
     expect(fs.readFileSync(seen, 'utf8')).toBe('accepted\n');
+    // The temp folder may forbid running programs, where the team's own folder ran before.
+    expect(fs.readFileSync(`${seen}.from`, 'utf8').startsWith(fs.realpathSync(os.tmpdir()))).toBe(false);
+  });
+
+  it('removes the copy a killed teamai left of a team runtime folder, at the next run of it', async () => {
+    const team = teamWith({ 'runtimes/acme/RUNTIME.yaml': 'protocol: 1\nentry: ./runtime\n', 'runtimes/acme/runtime': '#!/bin/sh\nexit 0\n' });
+    const { locateRuntime, pinRuntime } = await import('../workflow/runtimes/locate.js');
+    const resolved = await resolveDriver(team, 'acme', { personal: true });
+    if (!resolved.ok) throw new Error(resolved.failure.message);
+    const found = await locateRuntime(resolved.driver, 'acme');
+    if (!found.ok || found.source.kind === 'builtin') throw new Error('no team runtime');
+    // A teamai that pinned the folder, then was killed before it removed its copy.
+    const gone = spawnSync(process.execPath, ['-e', '']).pid;
+    const pid = vi.spyOn(process, 'pid', 'get').mockReturnValue(gone);
+    const left = await pinRuntime(found.source, { config: team });
+    pid.mockRestore();
+    if (!left.ok || left.source.launch.kind !== 'executable') throw new Error('no copy');
+    const leftDir = path.dirname(left.source.launch.executable);
+    expect(fs.existsSync(leftDir)).toBe(true);
+
+    const next = await pinRuntime(found.source, { config: team });
+    if (!next.ok) throw new Error(next.failure.message);
+
+    expect(fs.existsSync(leftDir)).toBe(false);
+    await next.remove();
   });
 
   it('takes the exact name in every layer before teamai-<name>, and the member\'s before the team\'s', async () => {
