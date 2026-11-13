@@ -286,6 +286,16 @@ export function isToolOwnState(entry: string, text: string): boolean {
   return !holds(parsed);
 }
 
+/** Where a program keeps state of its own, which teamai writes none of. */
+const OWN_STATE = TOOL_HOMES.map((dir) => ({ owner: 'the tool', dir }));
+
+/** Whose own state the entry left behind with `value` is, and the folder it keeps it in; undefined when it may be teamai's. */
+export function ownStateOf(entry: string, value: string | undefined): { owner: string; dir: string } | undefined {
+  if (teamaiPlace(entry, value)) return undefined;
+
+  return OWN_STATE.find(({ dir }) => entry.startsWith(`${dir}/`));
+}
+
 /** A run's branch, which a run that succeeded keeps as its result (docs/guide/workflow.md, The branches a run leaves). */
 const RUN_BRANCH = /^project\/\.git\/refs\/heads\/teamai(\/r[0-9a-f]{16}(\/[^/]+(\/p\d+)?)?)?$/;
 
@@ -444,8 +454,10 @@ async function reverseOf(world: World, place: LedgerPlace): Promise<{ leaks: str
       continue;
     }
 
-    if (change === 'left behind' && under(entry, TOOL_HOMES) && !teamaiPlace(entry, after[entry])) {
-      excuse(`the tool's own state in ${TOOL_HOMES.find((dir) => entry.startsWith(`${dir}/`)) ?? entry}, where teamai writes none of it`, entry);
+    const own = change === 'left behind' ? ownStateOf(entry, after[entry]) : undefined;
+
+    if (own !== undefined) {
+      excuse(`${own.owner}'s own state in ${own.dir}, where teamai writes none of it`, entry);
       continue;
     }
 

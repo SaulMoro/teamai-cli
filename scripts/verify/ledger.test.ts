@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { environmentNotes, isToolOwnState } from './ledger.js';
+import { environmentNotes, isToolOwnState, ownStateOf } from './ledger.js';
 
 const roots: string[] = [];
 
@@ -38,5 +38,16 @@ describe("a tool's own state file in a ledger's section (e)", () => {
     ['home/.other.json', '{}', false],
   ])('judges %s holding %s as the tool\'s own: %s', (entry, text, own) => {
     expect(isToolOwnState(entry, text)).toBe(own);
+  });
+});
+
+describe("another program's own state in a ledger's section (e)", () => {
+  it.each([
+    ['home/.claude/projects/-w-project/s.jsonl', 'f'.repeat(64), { owner: 'the tool', dir: 'home/.claude' }],
+    ['home/.claude', 'dir', undefined],
+    ['home/.claude/skills/teamai-share/SKILL.md', 'f'.repeat(64), undefined],
+    ['project/.git/refs/heads/main', 'f'.repeat(40), undefined],
+  ])('judges %s holding %s as the state of %o', (entry, value, own) => {
+    expect(ownStateOf(entry, value)).toEqual(own);
   });
 });
