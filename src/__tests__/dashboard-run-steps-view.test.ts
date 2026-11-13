@@ -107,6 +107,17 @@ describe("a run's Steps", () => {
     expect([...new Set(chinese.keys)].filter((key) => !Object.hasOwn(dashboardMessages, key))).toEqual([]);
   });
 
+  it('names a pass\'s place as its runtime shows it rather than by the handle teamai keeps for it, which is the runtime\'s own id', () => {
+    const handle = JSON.stringify({ place: 'teamai-r7-a1', socket: '/private/tmp/teamai-r7/attempt.sock' });
+    const shown: Step = { step: 'tell', pass: 1, status: 'succeeded', runtime: { name: 'sandbox', driver: 'boxed', handle, phase: 'closed', display: { label: 'teamai-r7-a1 (docker)' } } };
+    const bare: Step = { step: 'mark', pass: 1, status: 'succeeded', runtime: { name: 'fleet', driver: 'gpu-fleet', handle: 'fleet-r7-a2', phase: 'closed' } };
+    const { html } = render([shown, bare]);
+
+    expect(text(html)).toContain('Runtime: sandbox · closed Place: teamai-r7-a1 (docker)');
+    expect(text(html)).not.toContain('attempt.sock');
+    expect(text(html)).toContain('Runtime: fleet · fleet-r7-a2 · closed');
+  });
+
   it('shows why the runtime could not close a pass\'s place, which may still hold what ran there', () => {
     const step: Step = {
       step: 'review', pass: 1, status: 'failed',

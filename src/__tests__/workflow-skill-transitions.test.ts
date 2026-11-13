@@ -1121,10 +1121,10 @@ const CASES: Array<{ name: string; rows: string[]; run: () => Promise<string[]> 
       const made = await harness({ check: withPrompt(CHECK, 'test'), gated: withPrompt(GATED, 'lint'), approved: withPrompt(APPROVED, 'lint') });
       const ready = { session: T3_APP, canStart: () => Promise.resolve(true) };
       expect(await made.call({ kind: 'describe', name: 'check' }, { app: ready })).toMatchObject({ data: { describe: { ask: {
-        kind: 'background', start: 'teamai workflow start check --driver t3', background: 'Each prompt step appears in T3 Code as a thread under this thread.',
+        kind: 'background', start: 'teamai workflow start check --driver t3', background: "Each prompt step appears in T3 Code as a thread under this thread, except a step that resumes the session of an earlier step in the same workspace on the same tool (session: continue or session: { from }), which goes on in that step's thread while T3 Code still has it.",
       } } } });
       expect(await made.call({ kind: 'describe', name: 'gated' }, { app: ready })).toMatchObject({ data: { describe: { ask: {
-        kind: 'ask', background: 'Each prompt step appears in T3 Code as a thread under this thread.',
+        kind: 'ask', background: "Each prompt step appears in T3 Code as a thread under this thread, except a step that resumes the session of an earlier step in the same workspace on the same tool (session: continue or session: { from }), which goes on in that step's thread while T3 Code still has it.",
         question: { options: [{ label: 'Yes, start it', start: 'teamai workflow start gated --driver t3 --confirmed' }] },
       } } } });
       expect(await made.call({ kind: 'describe', name: 'approved' }, { app: ready })).toMatchObject({ data: { describe: { ask: {

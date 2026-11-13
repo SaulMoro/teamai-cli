@@ -561,7 +561,7 @@ export async function runPromptStep({ config, lock, driver, lease, adapter = ste
 
   if (lease.permissions === 'unattended') input.unattended = true;
 
-  if (target.instance?.command) input.command = target.instance.command;
+  if (target.instance) input.instance = { name: launched, ...(target.instance.command && { command: target.instance.command }) };
 
   // In teamai's process the tool keeps its session in the home the step's environment names, such as a CODEX_HOME
   // outside HOME, which teamai does not record as the tool's root: the attempt's record says where, for scoring. An

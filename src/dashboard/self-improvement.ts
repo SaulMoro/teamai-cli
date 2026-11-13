@@ -365,7 +365,8 @@ async function loopRuns(config: LocalConfig): Promise<LoopRun[]> {
     .sort((left, right) => Date.parse(right.startedAt) - Date.parse(left.startedAt))
     .slice(0, RUN_LIMIT)
     .map(({ run, status, startedAt, endedAt, source, ...rest }) => ({
-      run, status, startedAt, source, endedAt, username: 'username' in rest ? rest.username : undefined,
+      // A run of this machine's that another install ended is as it ended there.
+      run, status: 'elsewhere' in rest && rest.elsewhere?.kind === 'ended' ? rest.elsewhere.status : status, startedAt, source, endedAt, username: 'username' in rest ? rest.username : undefined,
     }));
 }
 

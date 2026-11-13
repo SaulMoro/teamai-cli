@@ -9,8 +9,11 @@ import { runStepLaunch, toolLauncher, type StepLaunchHost, type StepLaunchInput,
 
 /** A step's launch as the engine asks for it: what the launch takes, and its limits. */
 export interface StepRun extends StepLaunchInput, StepLimits {
-  /** The command that starts the tool, when an instance of it has its own; the tool's own command otherwise. */
-  command?: string;
+  /**
+   * The tool instance the step runs, when it runs one: its name, which the launch's messages use, and its own command,
+   * when it has one; the tool's own command starts it otherwise.
+   */
+  instance?: { name: string; command?: string };
 }
 
 /** What a run gave: the launch's result, which `started` says whether the tool's process started (#1176). */
@@ -104,8 +107,9 @@ export function stepLauncher(deps: StepLaunchDeps, {
 
     if (!profile) return { started: false, exitCode: 1, failure: { code: 'tool_unsupported', message: `The local workflow tool "${tool}" is not supported` } };
     await fs.mkdir(path.dirname(input.resultPath), { recursive: true });
-    const command = input.command ?? profile.command;
-    const executable = input.command === undefined ? resolveTool(command) : resolveInstanceCommand(command);
+    const own = input.instance?.command;
+    const command = own ?? profile.command;
+    const executable = own === undefined ? resolveTool(command) : resolveInstanceCommand(command);
 
     if (!executable) {
       return {
@@ -115,11 +119,11 @@ export function stepLauncher(deps: StepLaunchDeps, {
       };
     }
 
-    // `command` is resolved above; the launch ignores it.
-    const { budget, timeoutMs, idleTimeoutMs, command: _command, ...run } = input;
+    // The instance's command is resolved above; the launch takes only its name.
+    const { budget, timeoutMs, idleTimeoutMs, instance, ...run } = input;
 
     return runStepLaunch({
-      tool: { name: tool, family: profile.family, step: profile.step, executable },
+      tool: { name: instance?.name ?? tool, family: profile.family, step: profile.step, executable },
       input: run,
       start,
       canReattach,

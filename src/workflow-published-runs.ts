@@ -85,6 +85,27 @@ export type ResumableRun =
   | { kind: 'ended'; run: RunState; owner: HandoffOwner; status: Exclude<RunStatus, 'running'> };
 
 /**
+ * How teamai-reports, as this machine last read it, holds a running run of this machine: here, by another install that
+ * claimed it since, which may offer it again (`isOffered`), or ended by that install.
+ */
+export type LocalStanding =
+  | { kind: 'here'; isOffered: boolean }
+  | { kind: 'claimed'; owner: HandoffOwner; ownedAt: string; isOffered: boolean }
+  | { kind: 'ended'; owner: HandoffOwner; status: Exclude<RunStatus, 'running'> };
+
+/** Where running run `run` of this machine stands on teamai-reports, for install `self`. Reads no network. */
+async function standing(config: LocalConfig, run: RunState, self: Pick<HandoffOwner, 'id'>): Promise<LocalStanding> {
+  const read = run.publication === undefined || !usesBranchWorktree(config) ? undefined : await readSnapshot(config, RunIdSchema.parse(run.id));
+  const snapshot = read?.createdAt === run.createdAt ? read : undefined;
+
+  if (snapshot === undefined || snapshot.owner.id === self.id) return { kind: 'here', isOffered: snapshot?.offered !== undefined };
+
+  if (snapshot.status !== 'running') return { kind: 'ended', owner: snapshot.owner, status: snapshot.status };
+
+  return { kind: 'claimed', owner: snapshot.owner, ownedAt: snapshot.ownedAt, isOffered: snapshot.offered !== undefined };
+}
+
+/**
  * Every running run on this machine's reports checkout, offered ones first, oldest offer first, then held ones, the
  * latest claim first. Each offered one says what holds it back from `taker`. A snapshot this teamai cannot read is left
  * out. Reads no network; reads the team commit a run's workflows came from when this machine's cache differs.
@@ -338,14 +359,19 @@ async function resumable(config: LocalConfig, { taker, env, repository }: { take
   const local = runs.filter((run) => run.status === 'running').sort((left, right) => right.createdAt.localeCompare(left.createdAt));
 
   const mine = await Promise.all(local.map(async (run): Promise<Exclude<ResumableRun, { kind: 'offered' }> | undefined> => {
-    const read = run.publication === undefined || !usesBranchWorktree(config) ? undefined : await readSnapshot(config, RunIdSchema.parse(run.id));
-    const snapshot = read?.createdAt === run.createdAt ? read : undefined;
+    const stands = await standing(config, run, self);
 
-    if (snapshot === undefined || snapshot.owner.id === self.id) return { kind: 'here', run, isOffered: snapshot?.offered !== undefined };
+    switch (stands.kind) {
+      case 'here': return { kind: 'here', run, isOffered: stands.isOffered };
+      case 'ended': return { kind: 'ended', run, owner: stands.owner, status: stands.status };
+      // One the other install offers again is listed with the offered ones.
+      case 'claimed': return stands.isOffered ? undefined : { kind: 'claimed', run, owner: stands.owner, ownedAt: stands.ownedAt };
+      default: {
+        const unhandled: never = stands;
 
-    if (snapshot.status !== 'running') return { kind: 'ended', run, owner: snapshot.owner, status: snapshot.status };
-
-    return snapshot.offered === undefined ? { kind: 'claimed', run, owner: snapshot.owner, ownedAt: snapshot.ownedAt } : undefined;
+        return unhandled;
+      }
+    }
   }));
 
   const held = mine.filter((row) => row !== undefined);
@@ -357,4 +383,4 @@ async function resumable(config: LocalConfig, { taker, env, repository }: { take
   return [...offered, ...held];
 }
 
-export const PublishedRuns = { list, candidates, resumable } as const;
+export const PublishedRuns = { list, candidates, resumable, standing } as const;
