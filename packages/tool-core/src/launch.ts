@@ -28,6 +28,16 @@ export interface CallOutput {
  */
 export const ASSUMED_OPENCODE_MAJOR = 2;
 
+/**
+ * OpenCode's major version from what `opencode --version` printed (`opencode v2.0.24` on V2, `1.18.35` on V1):
+ * ASSUMED_OPENCODE_MAJOR when it holds no version number, as a build from source prints.
+ */
+export function opencodeMajorOf(printed: string): number {
+  const match = /(\d+)\.\d+/.exec(printed);
+
+  return match ? Number(match[1]) : ASSUMED_OPENCODE_MAJOR;
+}
+
 /** What a call's arguments may name: the prompt, and fresh paths in a scratch directory for its prompt and last message. */
 export interface CallInput {
   prompt: string;

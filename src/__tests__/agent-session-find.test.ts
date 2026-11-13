@@ -423,6 +423,16 @@ describe('AgentSession.find on OpenCode', () => {
     expect(hits).toMatchObject([{ platform: 'opencode', title: 'tool probe' }]);
   });
 
+  // A build that prints no version number, such as one from source, is taken as OpenCode V2, as pull and doctor take it.
+  it('finds a session through an OpenCode that prints no version number', async () => {
+    const sessionId = plantOpencode(workspace('ws'));
+    setFakeOpencodeVersion(dataHome, 'opencode local');
+
+    const found = await AgentSession.find({ platform: 'opencode', sessionId });
+
+    expect(found).toMatchObject({ status: 'done', session: { title: 'tool probe' } });
+  });
+
   // OpenCode 1 has no `opencode session export`.
   it('fails with tool_unavailable on OpenCode 1', async () => {
     plantOpencode(workspace('ws'));

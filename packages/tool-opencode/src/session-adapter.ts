@@ -31,6 +31,7 @@ import { resolveRealCwd } from '@teamai/tool-core/sessions/fs';
 import { deriveOpencodeMessageIds, deriveTargetSessionId } from '@teamai/tool-core/sessions/ids';
 import type { ExecResult, Processes } from '@teamai/shared/exec';
 import { writeRegularFile } from '@teamai/shared/regular-file';
+import { opencodeMajorOf } from '@teamai/tool-core/launch';
 
 const OPENCODE_TO_IR_TOOL: ReadonlyMap<string, string> = new Map([
   ['read', 'read_file'],
@@ -472,9 +473,8 @@ export class OpencodeAdapter extends AgentAdapter {
   /** Run an `opencode session` command; throws `ToolUnavailableError` when no OpenCode 2 runs here. */
   private async session(args: string[], cwd?: string): Promise<ExecResult> {
     const version = await this.processes.probe('opencode');
-    const major = /(\d+)\.\d+/.exec(version)?.[1];
 
-    if (!major || Number(major) < 2) {
+    if (!version || opencodeMajorOf(version) < 2) {
       throw new ToolUnavailableError(
         version
           ? `OpenCode ${version} has no \`opencode session export\`. Upgrade OpenCode to version 2 or later.`
