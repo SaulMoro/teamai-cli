@@ -9,8 +9,8 @@ const majorVersions = new Map<string, Promise<number>>();
 /**
  * OpenCode's major version, from `<binary> --version` (`opencode v2.0.24` on
  * V2, `1.18.35` on V1), asked once per binary per run. 2 when the binary is
- * absent or prints no version: where teamai cannot tell, it takes the current
- * major, V2.
+ * absent, exits non-zero, takes over 5 s or prints no version: where teamai
+ * cannot tell, it takes the current major, V2.
  */
 export function opencodeMajorVersion(binary = 'opencode'): Promise<number> {
   let version = majorVersions.get(binary);
