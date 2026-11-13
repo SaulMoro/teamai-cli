@@ -171,11 +171,14 @@ describe('which runtime a name finds', () => {
     containerPid.mockRestore();
     hostname.mockRestore();
     if (!elsewhere.ok || elsewhere.source.launch.kind !== 'executable') throw new Error('no copy');
+    // A copy a killed teamai left before copies named their host: `<pid>-<random>`, this host's, as every one was then.
+    const legacy = path.join(path.dirname(leftDir), `${gone}-Ab12Cd`);
+    fs.mkdirSync(legacy);
 
     const next = await pinRuntime(found.source, { config: team });
     if (!next.ok) throw new Error(next.failure.message);
 
-    expect([fs.existsSync(leftDir), fs.existsSync(path.dirname(elsewhere.source.launch.executable))]).toEqual([false, true]);
+    expect([fs.existsSync(leftDir), fs.existsSync(path.dirname(elsewhere.source.launch.executable)), fs.existsSync(legacy)]).toEqual([false, true, false]);
     await elsewhere.remove();
     if (next.source.launch.kind !== 'executable') throw new Error('no copy');
     // The person reviews what runs, which a pull no longer changes, at the revision they accept.
