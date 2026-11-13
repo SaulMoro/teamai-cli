@@ -804,13 +804,6 @@ export type ShortcutEnd = z.infer<typeof ShortcutDoneSchema>;
 export async function runShortcut({ workflow, inputs, command, json, nobodyAnswers, preview = false, teamRepo }: ShortcutRun): Promise<ShortcutEnd | undefined> {
   setStderrOnly(true);
 
-  if (nobodyAnswers !== undefined && !personAnswers(resolveRunMode(process.env))) {
-    log.error(nobodyAnswers);
-    process.exitCode = 1;
-
-    return undefined;
-  }
-
   const refused = (failure: WorkflowFailure): void => {
     if (json) {
       writeEnvelope({ error: failure }, collectEnvSecrets());
@@ -827,6 +820,13 @@ export async function runShortcut({ workflow, inputs, command, json, nobodyAnswe
 
   if (nested !== undefined) {
     refused(nestedWorkflowError(nested));
+
+    return undefined;
+  }
+
+  if (nobodyAnswers !== undefined && !personAnswers(resolveRunMode(process.env))) {
+    log.error(nobodyAnswers);
+    process.exitCode = 1;
 
     return undefined;
   }

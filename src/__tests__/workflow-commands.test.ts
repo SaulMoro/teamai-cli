@@ -720,7 +720,7 @@ describe('a released command\'s shortcut where a step of a run works', () => {
     return { config, work, git };
   }
 
-  const shortcut = (): Promise<unknown> => runShortcut({ workflow: 'mark', inputs: {}, command: 'teamai mark', json: true });
+  const shortcut = (options: { nobodyAnswers?: string } = {}): Promise<unknown> => runShortcut({ workflow: 'mark', inputs: {}, command: 'teamai mark', json: true, ...options });
 
   it.each([
     ['in a workflow worktree', (work: string) => {
@@ -734,11 +734,16 @@ describe('a released command\'s shortcut where a step of a run works', () => {
     onBranch(git);
     vi.spyOn(process, 'cwd').mockReturnValue(placeOf(work));
 
+    vi.stubEnv('CI', 'true');
+
     const started = await capture(() => workflowStart('mark', { driver: 'local' }));
     const shortcutAnswer = await capture(async () => { await shortcut(); });
+    // One that needs a person, run where nobody answers, is refused for where it runs first.
+    const askingAnswer = await capture(async () => { await shortcut({ nobodyAnswers: 'Nobody here answers this run.' }); });
 
     expect(started).toMatchObject({ error: { code: 'nested_workflow' } });
     expect(shortcutAnswer).toEqual(started);
+    expect(askingAnswer).toEqual(started);
     expect(fs.existsSync(runsDir(config)) ? fs.readdirSync(runsDir(config)) : []).toEqual([]);
   });
 
