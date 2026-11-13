@@ -639,6 +639,7 @@ export function runtimeMessageSchemas<TDisplay extends z.ZodType>({ display }: {
   const failure = RuntimeFailureSchema.strict();
   const can = CanSchema.extend({ confined: z.array(ConfinedOfferSchema.strict()).optional() }).strict();
   const finished = { ...finishedPrompt, session: PromptSessionSchema.strict(), confined: ConfinedKeptSchema.strict().optional() };
+
   const opState = z.discriminatedUnion('state', [
     z.object({ op: OpIdSchema, state: z.literal('running') }).strict(),
     z.object({ op: OpIdSchema, state: z.literal('exited'), code: z.number().int(), stdout: z.string() }).strict(),
