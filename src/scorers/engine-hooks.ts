@@ -1,12 +1,14 @@
 /**
  * The scoring the engine and its protocol reach: starting the scoring of settled passes, staging a clone pass's tree as
- * evidence, and describe's judging line. `src/workflow/` imports `src/scorers/` only through this module, so the engine
- * never learns how a pass is scored.
+ * evidence, describe's judging line, and what teamai does on this machine around a benchmark check step, whose command
+ * runs where its runtime runs it. `src/workflow/` imports `src/scorers/` only through this module, so the engine never
+ * learns how a pass is scored.
  */
 import type { RunMode } from '../launch-context.js';
 import type { LocalConfig } from '../types.js';
 import type { JsonValue } from '@teamai/shared/json';
 import { log } from '@teamai/shared/log';
+import type * as BenchmarkChecks from '../benchmark/trial.js';
 import type { StartedRun, WorkflowClient } from '../workflow/protocol.js';
 import type { RunState } from '../workflow/types.js';
 import { removeSubjectEvidence } from './evidence.js';
@@ -20,6 +22,19 @@ export { scoringUnavailable } from './home.js';
 export type { ScoredLabels } from './pass-scoring.js';
 
 export { stageEvidence } from './scoring-evidence.js';
+
+// Loaded on call: the benchmark's checks reach place.ts and engine.ts, which import this module.
+const benchmarkChecks = (): Promise<typeof BenchmarkChecks> => import('../benchmark/trial.js');
+
+/** `prepareCheckPlace` of the benchmark's checks: what teamai does in a check step's place before its command runs. */
+export async function prepareCheckPlace(input: Parameters<typeof BenchmarkChecks.prepareCheckPlace>[0]): ReturnType<typeof BenchmarkChecks.prepareCheckPlace> {
+  return (await benchmarkChecks()).prepareCheckPlace(input);
+}
+
+/** `decideCheckReport` of the benchmark's checks: a check step's output, decided from its exit code. */
+export async function decideCheckReport(input: Parameters<typeof BenchmarkChecks.decideCheckReport>[0]): ReturnType<typeof BenchmarkChecks.decideCheckReport> {
+  return (await benchmarkChecks()).decideCheckReport(input);
+}
 
 /**
  * Starts the scoring of every settled scored pass of run `runId` that none started yet, and answers each run that

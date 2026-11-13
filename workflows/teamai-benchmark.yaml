@@ -53,7 +53,15 @@ finally:
     requires: { host: true }
     command: teamai benchmark report
     env: { COMPARE: "{{ inputs.fail_on_regression }}" }
-    output: { text: string, table: json, regression: dropped | held | no_comparable | off }
+    output: { text: string, table: json, regression: dropped | held | no_comparable | off, unchecked: string }
+  # Fails when a baseline's or a trial's check could not run, naming each as report's text does: the run measured
+  # nothing for them. Drop it to report them without failing.
+  - id: checks
+    needs: [report]
+    if: steps.report.outputs.unchecked != ''
+    requires: { host: true }
+    command: node -e "process.stderr.write(process.env.UNCHECKED + '\n'); process.exit(1)"
+    env: { UNCHECKED: "{{ steps.report.outputs.unchecked }}" }
   - id: regression
     needs: [report]
     if: steps.report.outputs.regression == 'dropped'

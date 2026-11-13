@@ -6,7 +6,7 @@ import type { ReportedAgent } from '../agent-observation.js';
 import { DefaultWorkflows } from '../default-workflows.js';
 import { driverIdentity, sameDriver } from '../driver-identity.js';
 import type { WorkflowEnv } from '../env-resolution.js';
-import { scoringUnavailable, startedByPasses, verifiedScorers } from '../scorers/engine-hooks.js';
+import { decideCheckReport, prepareCheckPlace, scoringUnavailable, startedByPasses, verifiedScorers } from '../scorers/engine-hooks.js';
 import { resolveRunMode, type RunMode } from '../launch-context.js';
 import { stopLeftInProcess } from './runtimes/cancelled.js';
 import type { LocalConfig } from '../types.js';
@@ -584,7 +584,30 @@ async function placeLeased(config: LocalConfig, lock: RunLock, leased: Leased, a
 
   if (held) return { kind: 'busy', ...held };
 
-  return preparePlace({ config, lock, root, lease, adopt });
+  return preparedPlace({ config, lock, root, lease, adopt });
+}
+
+/**
+ * Prepares the place of `lease` (`preparePlace`), then does what a benchmark check step needs there on this machine
+ * before its command runs where its runtime runs it (`prepareCheckPlace`). Every prepare of a lease goes through here, so
+ * a check step's command never runs in a place its check was not prepared in; one that could not be is left as prepare
+ * found it, and its step fails with why.
+ */
+export async function preparedPlace(input: Parameters<typeof preparePlace>[0]): Promise<PlacePrepared> {
+  const prepared = await preparePlace(input);
+
+  if (prepared.kind !== 'prepared') return prepared;
+  const { config, lock, lease } = input;
+  const run = await readRun(config, lock.run);
+
+  const failure = run === 'missing' || run === 'corrupt'
+    ? { code: 'run_unreadable', message: `Run ${lock.run} cannot be read, so attempt ${lease.attempt} has no place to run in` } satisfies WorkflowFailure
+    : await prepareCheckPlace({ config, run, attempt: lease.attempt, dir: prepared.dir });
+
+  if (!failure) return prepared;
+  const unrestored = await abandonPlace({ config, lock, attempt: lease.attempt });
+
+  return { kind: 'failed', failure: unrestored ? { ...failure, message: `${failure.message} ${unrestored}` } : failure };
 }
 
 /**
@@ -1041,14 +1064,18 @@ async function settleManaged(input: { config: LocalConfig; lock: RunLock; attemp
     return reportAttempt(config, lock.run, report, secrets);
   }
 
-  const end: StepEnd = { outcome: report.outcome };
+  const run = await readRun(config, lock.run);
+  const ended = { ...report, outcome: report.outcome };
+  // A benchmark check step's output is decided here, from its exit code, before its place is finished with it.
+  const decided = run === 'missing' || run === 'corrupt' ? ended : await decideCheckReport({ config, run, report: ended });
+  const end: StepEnd = { outcome: decided.outcome };
 
-  if (report.message !== undefined) end.message = report.message;
+  if (decided.message !== undefined) end.message = decided.message;
 
-  if (report.failure) end.failure = report.failure;
+  if (decided.failure) end.failure = decided.failure;
   const finished = await finishPlace({ config, lock, attempt, end, secrets, changed: input.changed });
   // A limit goes only with a step that succeeded: a failure to keep its work replaces both.
-  const { limit, ...unlimited } = report;
+  const { limit, ...unlimited } = decided;
   const body: ReportInput = { ...unlimited, ...finished };
 
   if (limit !== undefined && finished.outcome === 'success') body.limit = limit;

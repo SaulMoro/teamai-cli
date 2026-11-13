@@ -1,8 +1,8 @@
 /**
  * How a trial's steps become its result, and the benchmark record. Pure over an ended run: the step states
  * the engine keeps, with what each check step output, the frozen plan, and the verdicts of each trial's scorers
- * (`verdicts.ts`). It classifies nothing: `teamai benchmark check` did that once, when the check ran, and stored the
- * correctness label of a check task's trial.
+ * (`verdicts.ts`). It classifies nothing: teamai did that once, from the check step's exit code (trial.ts), and stored
+ * the correctness label of a check task's trial.
  *
  * Results are never failure codes, and no value here enters record `status` or `steps[].outcome`: an older dashboard
  * drops a whole record on an enum value it does not know.
@@ -17,7 +17,7 @@ import { stepDefinitions } from '../workflow/scope.js';
 import { LimitSchema } from '../workflow/requirements.js';
 import type { RunState } from '../workflow/types.js';
 import { definedFields } from '../utils/defined-fields.js';
-import { CHECK_CAUSES, CheckOutputSchema, type CheckOutput } from '../scorers/check.js';
+import { CHECK_CAUSES, CheckOutputSchema, type CheckCause, type CheckOutput } from '../scorers/check.js';
 import { compareAgent } from './agent-match.js';
 import { baselineStepOf, BenchmarkEstimateSchema, checkStepOf, correctnessScorerName, PlannedJudgeSchema, type BenchmarkPlan, type PlannedArm, type PlannedTask, type PlannedTrial } from './plan.js';
 import type { RunPlan } from './run-plan.js';
@@ -199,7 +199,8 @@ export function benchmarkRecord(run: RunState, { plan, prefix }: RunPlan, verdic
     trials: plan.trials.map((trial) => {
       const judged = verdictsOf(trial);
       const task = plan.tasks.find(({ id }) => id === trial.task);
-      const check = checkOutputOf(stateOf(checkStepOf(trial)));
+      const checkState = stateOf(checkStepOf(trial));
+      const check = checkOutputOf(checkState);
       const work = stateOf(trial.step);
       const result = trialResultOf({ prompt: work, work: workOf(run, `${prefix}${trial.step}`), check, verdicts: judged }, plan, trial);
       const arm = plan.arms.find(({ name }) => name === trial.arm);
@@ -225,7 +226,9 @@ export function benchmarkRecord(run: RunState, { plan, prefix }: RunPlan, verdic
         ...trial, step: `${prefix}${trial.step}`, result, verdicts: judged.map(({ scorer, outcome, decider, asPlanned }) => definedFields<TrialVerdict>({ scorer, outcome, decider, asPlanned })), ...entry,
       };
 
-      if (result === 'error' && check?.result === 'could_not_run') recorded.failure = { cause: check.cause };
+      const cause = result === 'error' ? (check?.result === 'could_not_run' ? check.cause : failedCheckCause(checkState)) : undefined;
+
+      if (cause !== undefined) recorded.failure = { cause };
       const calibration = calibrations.find((one) => one.step === recorded.step && one.pass === (work?.pass ?? 1));
 
       if (calibration) recorded.calibration = definedFields({ label: calibration.label, passed: calibration.passed, decider: calibration.decider, scoringCost: calibration.scoringCost });
@@ -412,6 +415,45 @@ function unlaunched(work: TrialWork): boolean {
   return unleased(work, work.isPrompt) && work.states.some((state) => state.status === 'failed' && state.failure?.code === 'tool_unavailable');
 }
 
+/**
+ * A line for each check of `run` that said nothing: a baseline whose check could not run on its starting commit, and a
+ * trial whose work ended but whose check never ran to a verdict, each with why, as its step output or failed it. The run
+ * measured nothing for them, so its report names them, and teamai's benchmark workflow fails its `checks` gate on them.
+ */
+export function uncheckedChecks(run: RunState, { plan, prefix }: RunPlan): string[] {
+  const stateOf = (step: string): StepState | undefined => run.steps.find((state) => state.id === `${prefix}${step}`);
+
+  const why = (state: StepState | undefined): string => {
+    const output = checkOutputOf(state);
+
+    if (output?.result === 'could_not_run') return output.cause;
+
+    if (state === undefined) return 'its step never ran';
+
+    if (state.status === 'failed') return state.failure ? `${state.failure.code}: ${state.failure.message}` : 'its step failed';
+
+    return state.status === 'cancelled' ? 'the run ended while it ran' : `its step is ${state.status}`;
+  };
+
+  const baselines = plan.tasks.flatMap((task) => {
+    const state = stateOf(baselineStepOf(task.id));
+
+    return baselineOf(state, task) === 'could_not_run' ? [`Baseline ${task.id}: ${why(state)}`] : [];
+  });
+
+  const trials = plan.trials.flatMap((trial) => {
+    const judge = plan.tasks.find((task) => task.id === trial.task)?.judge;
+    const state = stateOf(checkStepOf(trial));
+    const check = checkOutputOf(state);
+
+    if (judge === undefined || judge.kind === 'criteria' || stateOf(trial.step)?.status !== 'succeeded' || (check !== undefined && check.result !== 'could_not_run')) return [];
+
+    return [`Trial ${trial.order}/${plan.trials.length} ${trial.task} ${trial.arm}: ${why(state)}`];
+  });
+
+  return [...baselines, ...trials];
+}
+
 /** `unlaunched` of the trial whose work step is `step`. */
 export function unlaunchedTrial(run: RunState, step: string): boolean {
   return unlaunched(workOf(run, step));
@@ -474,6 +516,24 @@ function correctnessResult(verdict: EntryVerdict | undefined): TrialResult {
 
       return unhandled;
     }
+  }
+}
+
+/**
+ * Why a check step that ended before its command ran to an exit could not check: it ran out of time, its own or the
+ * run's, or teamai could not put back `protect` or write `check.add` in its place. The record's cause, as the check's
+ * output would carry it.
+ */
+function failedCheckCause(state: StepState | undefined): CheckCause | undefined {
+  if (state?.status !== 'failed' && state?.status !== 'cancelled') return undefined;
+
+  switch (state.failure?.code) {
+    case 'timeout':
+      return 'timeout';
+    case 'trial_prepare_failed':
+      return 'prepare_failed';
+    default:
+      return undefined;
   }
 }
 

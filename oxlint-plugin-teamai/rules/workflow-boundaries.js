@@ -139,7 +139,8 @@ const ENTRIES = [
       'plan.ts': 'any', 'terms.ts': 'any', 'suite.ts': 'any', 'table.ts': 'any', 'result.ts': 'any', 'history.ts': 'any', 'suite-cache.ts': 'any',
       'run-plan.ts': ['src/scorers/score-plan.ts', 'src/scorers/evidence-dir.ts', 'src/scorers/score-subjects.ts'],
       'calibration.ts': ['src/scorers/score-subjects.ts'],
-      'trial.ts': ['src/workflow-commands.ts'],
+      // The protocol prepares and decides a check step through the scoring hooks, on the machine that runs teamai.
+      'trial.ts': ['src/workflow-commands.ts', 'src/scorers/engine-hooks.ts'],
       'start.ts': ['src/workflow-commands.ts'],
       'report.ts': ['src/workflow-commands.ts'],
       'estimate.ts': ['src/workflow-commands.ts'],

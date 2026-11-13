@@ -8,10 +8,11 @@ import { z } from 'zod';
 import type { LocalConfig } from '../types.js';
 import * as cliPaths from '@teamai/shared/cli-path';
 import { trialsOf } from '../benchmark/plan.js';
+import { decideCheckReport } from '../benchmark/trial.js';
 import { planBenchmark } from '../benchmark/start.js';
 import { ScoreVerbs } from '../score-verbs.js';
 import { attemptEnv } from '../workflow/attempt-marker.js';
-import { benchmarkRecord, type BenchmarkRecord } from '../benchmark/result.js';
+import { benchmarkRecord, uncheckedChecks, type BenchmarkRecord } from '../benchmark/result.js';
 import { planOfRun } from '../benchmark/run-plan.js';
 import { TrialVerdicts } from '../benchmark/verdicts.js';
 import { LabelStore } from '../scorers/label-store.js';
@@ -67,6 +68,13 @@ async function startFix(shape?: Parameters<typeof suiteOf>[0]): Promise<{ config
   return { config, runId: String(started.data.run) };
 }
 
+/** The checks of `run` the run's report names as having not run. */
+function uncheckedOf(run: RunState): string[] {
+  const planned = planOfRun(run);
+  if ('failure' in planned) throw new Error(planned.failure.message);
+  return uncheckedChecks(run, planned.found);
+}
+
 /** The benchmark record the run's report would write, from the plan its plan step printed and no verdict. */
 function recordOf(run: RunState): BenchmarkRecord {
   const planned = planOfRun(run);
@@ -114,7 +122,7 @@ describe('benchmark plan run', () => {
     const next = await leaseNext(config, runId, driver, { can, prepare: true });
 
     expect(next).toMatchObject({ data: { lease: {
-      step: 'trials.baselines.t01', command: 'teamai benchmark check --baseline',
+      step: 'trials.baselines.t01', command: 'node test.js',
       workspace: { mode: 'new', base: { commit: RUN_START }, clone: { commit: RUN_START, team: { treatment: 'none' } } },
     } } });
   });
@@ -308,10 +316,10 @@ describe('benchmark plan run', () => {
   });
 
   it.each([
-    ['passed', { result: 'passed', verdicts: [{ scorer: 'teamai:correctness:t01', outcome: { kind: 'labelled', label: 'correct', score: 1, passed: true }, decider: { by: 'check', task: 'TASK' } }] }],
-    ['failed', { result: 'failed', verdicts: [{ scorer: 'teamai:correctness:t01', outcome: { kind: 'labelled', label: 'incorrect', score: 0, passed: false }, decider: { by: 'check', task: 'TASK' } }] }],
-    ['could_not_run', { result: 'error', failure: { cause: 'not_found' }, verdicts: [{ scorer: 'teamai:correctness:t01', outcome: { kind: 'unscored', because: 'check_could_not_run' } }] }],
-  ] as const)('records a trial whose check outputs %s by the correctness label that check stored, launching no judge', async (output, recorded) => {
+    ['passed', { result: 'passed', verdicts: [{ scorer: 'teamai:correctness:t01', outcome: { kind: 'labelled', label: 'correct', score: 1, passed: true }, decider: { by: 'check', task: 'TASK' } }] }, []],
+    ['failed', { result: 'failed', verdicts: [{ scorer: 'teamai:correctness:t01', outcome: { kind: 'labelled', label: 'incorrect', score: 0, passed: false }, decider: { by: 'check', task: 'TASK' } }] }, []],
+    ['could_not_run', { result: 'error', failure: { cause: 'not_found' }, verdicts: [{ scorer: 'teamai:correctness:t01', outcome: { kind: 'unscored', because: 'check_could_not_run' } }] }, ['Trial 1/1 t01 a01: not_found']],
+  ] as const)('records a trial whose check outputs %s by the correctness label that check stored, launching no judge', async (output, recorded, unchecked) => {
     const { config, runId } = await startFix();
     const prompt = await leasePrompt(config, runId);
     await reportAttempt(config, runId, { ...prompt, outcome: 'success', driver });
@@ -327,17 +335,32 @@ describe('benchmark plan run', () => {
     if ('failure' in planned) throw new Error(planned.failure.message);
     const task = planned.found.plan.tasks[0]?.sourceHash;
     const record = await judgedRecordOf(config, run);
-    expect(check).toMatchObject({ step: 'trials.r1.t01.a01.check', command: 'teamai benchmark check --trial' });
+    expect(check).toMatchObject({ step: 'trials.r1.t01.a01.check', command: 'node test.js' });
     expect(next).toMatchObject({ data: { done: { outcome: 'succeeded' } } });
     expect(record.trials).toEqual([expect.objectContaining(JSON.parse(JSON.stringify(recorded).replaceAll('TASK', task ?? '')))]);
     expect(record.scorers).toEqual([{ name: 'teamai:correctness:t01', rubric: { sourceHash: expect.any(String) }, labels: [{ value: 'correct', score: 1 }, { value: 'incorrect', score: 0 }], passingScore: 1 }]);
     expect(run.steps.map((step) => step.id).filter((id) => id.includes('score'))).toEqual([]);
+    expect(uncheckedOf(run)).toEqual(unchecked);
+  });
+
+  it('fails a check step reported without its exit code, whatever outputs the report carries', async () => {
+    const { config, runId } = await startFix();
+    const prompt = await leasePrompt(config, runId);
+    await reportAttempt(config, runId, { ...prompt, outcome: 'success', driver });
+    const check = LeaseSchema.parse(await leaseNext(config, runId, driver, { can, prepare: true })).data.lease;
+    const run = await readRun(config, runId);
+    if (typeof run !== 'object') throw new Error(`run ${runId} is ${run}`);
+
+    const decided = await decideCheckReport({ config, run, report: { ...check, outcome: 'success', driver, outputs: { result: 'passed', cause: '', label: '' } } });
+
+    expect(decided).toMatchObject({ outcome: 'failed', failure: { code: 'invalid_report', message: expect.stringContaining('report its exitCode') } });
+    expect(decided).not.toHaveProperty('outputs');
   });
 
   it.each([
-    ['passed', 'invalid'],
-    ['could_not_run', 'could_not_run'],
-  ] as const)('runs no trial of a task whose baseline %s, and ends the run with its baseline in the record', async (baseline, recorded) => {
+    ['passed', 'invalid', []],
+    ['could_not_run', 'could_not_run', ['Baseline t01: not_found']],
+  ] as const)('runs no trial of a task whose baseline %s, and ends the run with its baseline in the record', async (baseline, recorded, unchecked) => {
     const { config, runId } = await startFix({ arms: 2, repetitions: 2 });
     await settleBaselines(config, runId, driver, can, { t01: baseline });
 
@@ -350,6 +373,7 @@ describe('benchmark plan run', () => {
       tasks: [{ id: 't01', baseline: recorded }],
       trials: Array(4).fill(expect.objectContaining({ result: 'not_run' })),
     });
+    expect(uncheckedOf(run)).toEqual(unchecked);
   });
 
   it('records that the check could not run for a baseline the run stopped while it ran', async () => {
@@ -374,6 +398,7 @@ describe('benchmark plan run', () => {
     if (typeof run !== 'object') throw new Error(`run ${runId} is ${run}`);
     expect(next).toMatchObject({ data: { done: { outcome: 'succeeded' } } });
     expect(recordOf(run)).toMatchObject({ tasks: [{ id: 't01', baseline: 'could_not_run' }], trials: [{ result: 'not_run' }] });
+    expect(uncheckedOf(run)).toEqual(['Baseline t01: its step failed']);
   });
 
   it("ends the run failed at its timeout while a trial's check runs, and records the trial an error", async () => {
@@ -389,7 +414,7 @@ describe('benchmark plan run', () => {
     const run = await readRun(config, runId);
     if (typeof run !== 'object') throw new Error(`run ${runId} is ${run}`);
     expect(next).toMatchObject({ data: { done: { outcome: 'failed', failure: { code: 'timeout' } } } });
-    expect(recordOf(run)).toMatchObject({ tasks: [{ id: 't01', baseline: 'valid' }], trials: [{ step: 'trials.r1.t01.a01.prompt', result: 'error' }] });
+    expect(recordOf(run)).toMatchObject({ tasks: [{ id: 't01', baseline: 'valid' }], trials: [{ step: 'trials.r1.t01.a01.prompt', result: 'error', failure: { cause: 'timeout' } }] });
   });
 
   it("runs a task's trials whatever another task's baseline did, and ends the run succeeded with both scopes failed", async () => {

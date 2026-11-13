@@ -110,7 +110,7 @@ describe('the workflow a benchmark plan prints', () => {
   it("pins every task's correctness scorer with its labels and passing score, and lists a check task's on no step, so no judge runs", async () => {
     const { run, plan } = await plannedRun(suiteOf({ arms: 2 }));
 
-    expect(plan.schemaVersion).toBe(2);
+    expect(plan.schemaVersion).toBe(3);
     expect(plan.scorers).toEqual([{
       name: 'teamai:correctness:t01', rubric: { sourceHash: expect.stringMatching(/^[0-9a-f]{64}$/) },
       labels: [{ value: 'correct', score: 1 }, { value: 'incorrect', score: 0 }], passingScore: 1,
@@ -196,12 +196,12 @@ describe('the workflow a benchmark plan prints', () => {
 
     expect(planOfRun(run, 'trials.r1.t01.a01.check')).toEqual({ failure: {
       code: 'benchmark_plan_outdated',
-      message: `Run ${run.id} measures a benchmark plan of schemaVersion 1, which the teamai that started it froze, and this teamai reads only schemaVersion 2, so the run cannot go on here. Run it with the teamai that started it, or start the suite again with teamai benchmark run fix.`,
+      message: `Run ${run.id} measures a benchmark plan of schemaVersion 1, which the teamai that started it froze, and this teamai reads only schemaVersion 3, so the run cannot go on here. Run it with the teamai that started it, or start the suite again with teamai benchmark run fix.`,
     } });
   });
 
-  it('is refused by report and check once its plan is of schemaVersion 2 but not its shape', async () => {
-    const { run } = await plannedRun(suiteOf(), { outputsOf: (bundle) => ({ definition: { ...bundle, workflows: {} }, plan: { schemaVersion: 2 } }) });
+  it('is refused by report and check once its plan is of schemaVersion 3 but not its shape', async () => {
+    const { run } = await plannedRun(suiteOf(), { outputsOf: (bundle) => ({ definition: { ...bundle, workflows: {} }, plan: { schemaVersion: 3 } }) });
 
     expect(planOfRun(run, 'trials.r1.t01.a01.check')).toMatchObject({ failure: {
       code: 'run_unreadable',
