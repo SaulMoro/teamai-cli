@@ -29,7 +29,7 @@ import type { ExecAnswer, ExecQuestion } from '@teamai/runtime-protocol/step-run
 import { definitionsOf, type Definitions } from '../handoff.js';
 import { createRun } from '../engine.js';
 import { runLocalDriver, type DriverRuntimes } from '../drivers/local/local-driver.js';
-import { cancelRun } from '../run-controls.js';
+import { cancelRun, endRunsPartOf } from '../run-controls.js';
 import { knownSecrets, resolveWorkflowEnv, type WorkflowEnv } from '../../env-resolution.js';
 import { sameEnvName } from '../../resources/env-key.js';
 import { runCopyBranch } from '../workspace.js';
@@ -358,6 +358,8 @@ async function finishLeftClaims(config: LocalConfig, records: FleetRecord[], { r
       // else stops either. One that may still run keeps the claim, so no second copy of the step runs beside it. What ran
       // in its own process, such as a Codex judge, also left its login held: that is written back and released.
       const stopped = await stopLeftInProcess(config, record.run, record.attempt);
+      // A run its killed step's process started and drove is part of that attempt, which ended with that process.
+      await endRunsPartOf(config, { run: record.run, attempt: record.attempt });
       const isEnded = !isHeld(record) && record.state !== 'cancelling';
       const isLeftRunning = stopped.kind !== 'ended' && stopped.left.length > 0;
 
@@ -714,6 +716,8 @@ async function runClaim(config: LocalConfig, { lock, claim, root, secrets, membe
     // A restarted member goes on from work its killed run pushed, which is the step's work even when this run adds none.
     return finish(saved.to === claim.start ? ran : { ...ran, to: saved.to });
   } finally {
+    // However the step ended, a run its command's process started and drove ends with it.
+    await endRunsPartOf(config, { run, attempt });
     await Promise.all([fs.rm(work, { recursive: true, force: true }), fs.rm(runDir, { recursive: true, force: true })]);
   }
 }

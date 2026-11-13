@@ -19,7 +19,7 @@ import { wholeFit } from '../workflow/whole-workflow.js';
 import { pendingRecords, type WorkflowRunRecord } from '../workflow/records.js';
 import { cancelRun, respondProvenance, respondToHitl, retryStep } from '../workflow/run-controls.js';
 import { getTeamSecretsPath, writeSecretStore } from '../secret-store.js';
-import { readRun, runFilePath, runLockPath, runScratchDir, runsDir, updateRun } from '../workflow/store.js';
+import { attemptDir, AttemptIdSchema, readRun, RunIdSchema, runFilePath, runLockPath, runScratchDir, runsDir, updateRun } from '../workflow/store.js';
 import type { TokenUsage } from '@teamai/tool-core/stdout';
 import type { DriverIdentity, OutputSchema, RunState } from '../workflow/types.js';
 import { knownSecrets } from '../env-resolution.js';
@@ -6461,5 +6461,47 @@ describe('a run whose only driver runs nothing but the host slot, as the built-i
     await leaseNext(config, runId, driverA, { can: HOST.offers[0].can, alone: HOST });
 
     expect(await readRun(config, runId)).toMatchObject({ steps: [{ id: 'review', status: 'failed', failure: (refusal('review', 'runs a prompt') as { error: object }).error }] });
+  });
+});
+
+describe('a run part of a step its run another machine keeps', () => {
+  const partOf = { run: RunIdSchema.parse('r0123456789abcdef'), attempt: AttemptIdSchema.parse('a01234567') };
+
+  it('runs while a fleet member keeps that attempt\'s directory here, and is cancelled at the first next once it is gone', async () => {
+    const { config } = testConfig();
+    fs.writeFileSync(path.join(config.repo.localPath, 'workflows', 'build.yaml'), TWO_STEPS);
+    await syncScorersThenWorkflows(config);
+    fs.mkdirSync(attemptDir(config, partOf.run, partOf.attempt), { recursive: true });
+    const started = await startRun(config, 'build', {}, { secrets: await knownSecrets(config), partOf });
+    if ('error' in started) throw new Error(started.error.message);
+    const runId = String(started.data.run);
+
+    expect(await leaseNext(config, runId, driverA)).toMatchObject({ data: { lease: { step: 'one' } } });
+    fs.rmSync(attemptDir(config, partOf.run, partOf.attempt), { recursive: true });
+
+    expect(await leaseNext(config, runId, driverA)).toMatchObject({ data: { done: { run: runId, outcome: 'cancelled' } } });
+    const ended = await readRun(config, runId);
+    expect(ended !== 'missing' && ended !== 'corrupt' ? ended.steps.map((step) => [step.id, step.status, 'failure' in step ? step.failure?.message : undefined]) : ended).toEqual([
+      ['one', 'cancelled', `Ended: attempt ${partOf.attempt} of run ${partOf.run} stopped (its run is gone)`],
+      ['two', 'skipped', undefined],
+    ]);
+  });
+
+  it('runs again once a person retries it after its step ended, out of that step', async () => {
+    const { config } = testConfig();
+    fs.writeFileSync(path.join(config.repo.localPath, 'workflows', 'build.yaml'), TWO_STEPS);
+    await syncScorersThenWorkflows(config);
+    const secrets = await knownSecrets(config);
+    fs.mkdirSync(attemptDir(config, partOf.run, partOf.attempt), { recursive: true });
+    const started = await startRun(config, 'build', {}, { secrets, partOf });
+    if ('error' in started) throw new Error(started.error.message);
+    const runId = String(started.data.run);
+    await leaseNext(config, runId, driverA);
+    fs.rmSync(attemptDir(config, partOf.run, partOf.attempt), { recursive: true });
+    expect(await leaseNext(config, runId, driverA)).toMatchObject({ data: { done: { outcome: 'cancelled' } } });
+
+    expect(await retryStep(config, runId, secrets, 'one')).not.toHaveProperty('error');
+
+    expect(await leaseNext(config, runId, driverA)).toMatchObject({ data: { lease: { step: 'one' } } });
   });
 });

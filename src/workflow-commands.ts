@@ -21,7 +21,7 @@ import { getRepoIdentity } from './session-flow/sync.js';
 import { memberPlace, takeFleetAttempt } from './workflow/fleet/member.js';
 import { DEFAULT_FLEET_POOL, listOpenAttempts, readOfferedMarker, woken, type OpenAttempt } from './workflow/fleet/record.js';
 import { readableReportsWorktree, reportsRefusedMessage } from './utils/reports-branch.js';
-import { callerProvenance, cancelRun, respondProvenance, respondToHitl, restartCommand, retriedRunsAgain, retryStep } from './workflow/run-controls.js';
+import { callerProvenance, cancelRun, endRunsPartOf, respondProvenance, respondToHitl, restartCommand, retriedRunsAgain, retryStep } from './workflow/run-controls.js';
 import { isIsolated, runCopyToMerge } from './workflow/workspace.js';
 import { headCommit } from './workflow/worktree.js';
 import { localStrictCan, personAnswers, runLocalDriver, STOP_SIGNALS, withDriverLock, type LocalDriverOptions } from './workflow/drivers/local/local-driver.js';
@@ -38,6 +38,7 @@ import { getBusinessRoot, getDataHome, usesBranchWorktree, type LocalConfig, typ
 import type { JsonValue } from '@teamai/shared/json';
 import { AttemptIdSchema, installOwner, readRun, RunIdSchema, runRemovalRefusal, type RunId, takeRunLock } from './workflow/store.js';
 import { startAsCli } from './workflow/cli-start.js';
+import { commandStepPart } from './workflow/part-of-step.js';
 import { commandExitMessage, inProcessClient, isRefusal, resumeRefusal, workflowNotFound, type InvokeCaller, type NextPrepare, type StartedRun, invokeRefusal } from './workflow/protocol.js';
 import { isSkillRunnerHolding, parseInputsFlag, parseSkillCall, parseSkillResume, runSkillCall, sessionDrivesRun, skillContext, whileNoDriverHere } from './workflow/drivers/skill/skill-driver.js';
 import { loadCachedWorkflow, namespaceConflictOf, resolveStart } from './workflow/cache.js';
@@ -703,10 +704,12 @@ async function startDriven(input: {
   const awaits = byDefault && awaitsOf(byDefault);
   const start = { inputs, checkout: process.cwd(), alone, timeout, awaits };
   const client = inProcessClient({ config, env });
+  // A run this process drives on the local driver inside a command step is part of that step, and ends with it.
+  const partOf = options.driver === LOCAL_DRIVER ? await commandStepPart(config, process.env) : undefined;
 
   const started = (shortcut.startsAs === 'cli' && caller.evidence.kind !== 'none') || isInStep
-    ? await startAsCli(client, name, { ...start, mode: caller.mode })
-    : await client.start(name, { ...start, caller, instead: shortcut.instead, startedBy: 'person' });
+    ? await startAsCli(client, name, { ...start, mode: caller.mode, partOf })
+    : await client.start(name, { ...start, caller, instead: shortcut.instead, startedBy: 'person', partOf });
 
   if ('error' in started && shortcut.present) {
     await shortcut.present(config, started, secrets);
@@ -1369,6 +1372,8 @@ export async function workflowCancel(runId: string, step?: string, options: { re
       const cancelled = await cancelRun(config, runId, secrets, step, undefined, { heldLock: lock });
       const isSettled = 'error' in cancelled && cancelled.error.code === 'run_settled';
       const stopped = !('error' in cancelled) || isSettled ? await stopCancelledAttempts(config, lock, { isRunnerHolding: isSkillRunnerHolding, release: release?.data }) : undefined;
+      // After their processes stopped, which a run one of them drove ran in.
+      await endRunsPartOfCancelled(config, run.data);
 
       // Of a run that had settled, what this cancel did is the places it closed or let go, which it answers with.
       if (!isSettled || stopped === undefined || stopped.closed.length + stopped.released.length === 0) return cancelled;
@@ -1381,9 +1386,28 @@ export async function workflowCancel(runId: string, step?: string, options: { re
     if (taken.kind === 'held') return taken.value;
 
     if (release) log.warn(`A driver of run ${runId} is still live, so attempt ${release.data} is not released. Stop that driver, then run teamai workflow cancel ${runId} --release ${release.data} again.`);
+    const cancelled = await cancelRun(config, runId, secrets, step);
+    // The live driver stops the cancelled attempts too, and ends these runs as it closes each; ended here, they stop now.
+    await endRunsPartOfCancelled(config, run.data);
 
-    return cancelRun(config, runId, secrets, step);
+    return cancelled;
   });
+}
+
+/**
+ * Ends the runs part of each attempt run `run` cancelled (`endRunsPartOf`), by this cancel or one before it, as a cancel
+ * of a run that settled stops again what its cancelled attempts left.
+ */
+async function endRunsPartOfCancelled(config: LocalConfig, run: RunId): Promise<void> {
+  const state = await readRun(config, run);
+
+  if (state === 'missing' || state === 'corrupt') return;
+
+  for (const attempt of state.cancelledAttempts ?? []) {
+    const parsed = AttemptIdSchema.safeParse(attempt);
+
+    if (parsed.success) await endRunsPartOf(config, { run, attempt: parsed.data });
+  }
 }
 
 /** Publishes a run to teamai-reports, with the sessions its unsettled steps continue when asked. */

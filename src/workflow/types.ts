@@ -12,7 +12,7 @@ import type { OnLimit, Requirements, Setup, TurnLimits, Unenforced } from './req
 import type { LeaseSession } from './workspace.js';
 import type { ConfinedLease } from './lease-wire.js';
 import type { StepModel } from './step-model.js';
-import type { RunId } from './store.js';
+import type { PartOfStep, RunId } from './store.js';
 import type { ClonePlace } from './clone.js';
 import type { JsonValue } from '@teamai/shared/json';
 import type { DriverName } from './driver-name.js';
@@ -531,6 +531,11 @@ export interface RunState {
    * as `run.id`, which is the same in every workflow a run runs.
    */
   nestedIn?: RunId;
+  /**
+   * The attempt of another run's `command` step this run is part of: that step's process started and drove it. It ends
+   * with that attempt, cancelled, however the attempt ends. Local run state only: a claim elsewhere takes the run out of the step.
+   */
+  partOf?: PartOfStep;
   /** Who started the run. A claim keeps it. Absent on runs started before it was recorded. */
   startedBy?: StartedBy;
   /** The driver `workflows.driver` started the run for, which the machine that started it does not run. Absent on a run started for no driver in particular. */

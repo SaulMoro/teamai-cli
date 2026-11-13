@@ -17,7 +17,7 @@ import { offeredToPerson, offerToPerson, reconcileTakenCopies } from '../../hand
 import { UsageLimits } from '../../usage-limits.js';
 import { LeaseWireSchema } from '../../lease-wire.js';
 import { inProcessRuntimeOf, type DecidedCan, type DriverCan, type Missing } from '../../requirements.js';
-import { callerProvenance, respondProvenance, respondToHitl, type ResponseInput } from '../../run-controls.js';
+import { callerProvenance, endRunsPartOf, respondProvenance, respondToHitl, type ResponseInput } from '../../run-controls.js';
 import { isRecord } from '../../expression.js';
 import { toolsStepRuntime, type StepLauncher } from '@teamai/runtime-tools';
 import { failureReport, launchToolFor, promptOfferOf, promptRuntimeOn, runPromptStep, type AskPerson, type StagedLease } from '../../steps/prompt.js';
@@ -817,6 +817,8 @@ async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, given: 
   const lastClosed = new Map<RuntimeSlot, string>();
 
   const closeRun = async (attempt: AttemptId): Promise<void> => {
+    // A run its command step's process started and drove is part of the attempt, and ends with it.
+    await endRunsPartOf(config, { run: runId, attempt });
     const closing = attemptRuns.get(attempt);
     const handle = localHandles.get(attempt);
     const slot = slotOf.get(attempt);
@@ -960,7 +962,9 @@ async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, given: 
     for (const { attempt, driver: by } of state.stoppedAttempts ?? []) {
       const left = AttemptIdSchema.safeParse(attempt);
 
-      if (by.kind === 'local' && by.machine === driver.machine && left.success && !attemptRuns.has(left.data)) await stopLeftInProcess(config, runId, left.data);
+      if (by.kind !== 'local' || by.machine !== driver.machine || !left.success || attemptRuns.has(left.data)) continue;
+      await stopLeftInProcess(config, runId, left.data);
+      await endRunsPartOf(config, { run: runId, attempt: left.data });
     }
   };
 

@@ -55,7 +55,8 @@ import {
 } from './requirements.js';
 import { knownSecrets, resolveWorkflowEnv, secretKey, type WorkflowEnv } from '../env-resolution.js';
 import { TeamPin } from './team-pin.js';
-import { deliveryLockPath, generateRunId, installOwner, isRunId, readAttemptOutcomes, readRun, runScratchDir, updateRun, type RunLock } from './store.js';
+import { deliveryLockPath, generateRunId, installOwner, isRunId, readAttemptOutcomes, readRun, RunIdSchema, runScratchDir, updateRun, type PartOfStep, type RunLock } from './store.js';
+import { judgeStepAttempt, recordPart } from './part-of-step.js';
 import { cleanUpSucceededRun } from './leftovers.js';
 import { withFileLock } from '../update.js';
 import { admitWorkflow, heldSecret, type Admitted } from './admission.js';
@@ -1529,7 +1530,7 @@ export async function startRun(
   name: string,
   // oxlint-disable-next-line teamai/no-unknown-parameters -- the parse boundary: start's inputs as the CLI or a driver sent them, checked here first
   inputs: unknown,
-  { secrets, ...options }: { secrets: Record<string, string>; runMode?: RunMode; startedBy?: StartedBy; awaits?: RunState['awaits']; driver?: DriverIdentity; base?: RunState['base']; checkout?: string; timeout?: number; alone?: SoleDriver },
+  { secrets, ...options }: { secrets: Record<string, string>; runMode?: RunMode; startedBy?: StartedBy; awaits?: RunState['awaits']; driver?: DriverIdentity; base?: RunState['base']; checkout?: string; timeout?: number; alone?: SoleDriver; partOf?: PartOfStep },
 ): Promise<WorkflowEnvelope> {
   const admission = await admitStart(config, name, inputs, { secrets, base: options.base });
 
@@ -1569,7 +1570,7 @@ async function gitPrefix(dir: string): Promise<string> {
  */
 export async function createRun(
   config: LocalConfig,
-  { secrets, driver, alone, ...input }: Pick<RunState, 'name' | 'inputs' | 'sourceHash' | 'teamRevision' | 'runMode' | 'startedBy' | 'awaits' | 'definition' | 'workflows' | 'folder' | 'folders' | 'base' | 'checkout' | 'timeout' | 'nestedIn'>
+  { secrets, driver, alone, ...input }: Pick<RunState, 'name' | 'inputs' | 'sourceHash' | 'teamRevision' | 'runMode' | 'startedBy' | 'awaits' | 'definition' | 'workflows' | 'folder' | 'folders' | 'base' | 'checkout' | 'timeout' | 'nestedIn' | 'partOf'>
     & Required<Pick<RunState, 'origin'>> & { secrets: Record<string, string>; driver?: DriverIdentity; alone?: SoleDriver },
 ): Promise<WorkflowEnvelope> {
   const workflows = input.workflows ?? {};
@@ -1602,6 +1603,7 @@ export async function createRun(
     runMode: input.runMode,
     origin: input.origin,
     nestedIn: input.nestedIn,
+    partOf: input.partOf,
     startedBy: input.startedBy,
     awaits: input.awaits,
     driver,
@@ -1634,6 +1636,9 @@ export async function createRun(
       return unhandled;
     }
   }
+
+  // Listed once its file holds `partOf`: the driver that stops the attempt ends what it finds listed there.
+  if (run.partOf) await recordPart(config, run.partOf, RunIdSchema.parse(run.id));
 
   // #1083: publish the start record; a failed publication is queued locally
   // and retried on the next pull — it never fails the run itself.
@@ -2386,8 +2391,6 @@ export async function leaseNext(config: LocalConfig, runId: string, driver: Driv
     restartQueued(run, driver, unstarted, now);
     run.takesWhole = options.can?.workflow === true || options.alone?.offers.some((offer) => offer.can.workflow === true) === true;
 
-    if (options.drivesUnder?.run === run.id) run.isLeasedUnderLock = true;
-    else delete run.isLeasedUnderLock;
     let reconciled = reconcileRun(run, now);
 
     // A workflow a step produced is known only now: refused as a start refuses one it knows, the run settles again, and a
@@ -2485,6 +2488,17 @@ export async function leaseNext(config: LocalConfig, runId: string, driver: Driv
     // An agent's HITL answers every other gate, as auto-approve would.
     const personHolds = (): Held[] => (handoff?.kind === 'offers' ? waitingForPerson(run, { autoApprove: can.hitl === true || isAutoApproved }) : []);
     const byAgent = can.hitl === true && handoff !== undefined;
+    // A run part of a step ends with that step's attempt (`partOf`): a driver that stops the attempt ends it, and this
+    // ends one no driver could, as when the step's driver was killed, at the first next after. Its `finally` steps run.
+    const ofStep = run.partOf !== undefined && run.finalizing === undefined ? await judgeStepAttempt(config, run.partOf, now) : undefined;
+
+    if (ofStep?.kind === 'ended') {
+      stopWhere(run, () => true, ofStep.failure, run.revision, now);
+      // As a cancel ends it: its steps say why.
+      const ended = await done({ outcome: 'cancelled', settledAt: run.revision });
+
+      if (ended) return ended;
+    }
 
     for (;;) {
       // Ends reached through reports, and deadlines passed, apply before an open lease is handed back, so a restarted
@@ -2506,7 +2520,11 @@ export async function leaseNext(config: LocalConfig, runId: string, driver: Driv
       const other = run.steps.find((step): step is LeasedStep => step.status === 'leased' && !sameDriver(step.lease.driver, driver));
 
       if (other) return wait(other);
+      // Set with the driver it describes, so a driver told to wait never speaks for the one that holds the lease.
       run.driver = driver;
+
+      if (options.drivesUnder?.run === run.id) run.isLeasedUnderLock = true;
+      else delete run.isLeasedUnderLock;
 
       // A driver with HITL answers optional gates itself unless the person chose auto-approve for this run; it never
       // follows workflows.auto_approve. One that relays them follows it, as a driver without HITL would.
