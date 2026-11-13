@@ -4,14 +4,15 @@ import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { syncScorersThenWorkflows } from '../scorers/team-sync.js';
 import { log } from '@teamai/shared/log';
-import type { LocalConfig } from '../types.js';
+import { getDataHome, type LocalConfig } from '../types.js';
 import { leaseNext, parseNextPayload, parseReport, reportAttempt, startRun, type NextOptions } from '../workflow/engine.js';
-import { callerProvenance, cancelRun, respondProvenance, respondToHitl, retryStep } from '../workflow/run-controls.js';
+import { callerProvenance, cancelRun, endRunsPartOf, respondProvenance, respondToHitl, retryStep } from '../workflow/run-controls.js';
 import { pendingRecords } from '../workflow/records.js';
 import { projectRun } from '../workflow/snapshot.js';
-import { readRun, runFilePath, runScratchDir } from '../workflow/store.js';
+import { attemptDir, AttemptIdSchema, readRun, RunIdSchema, runFilePath, runsRemovalLockIn, runScratchDir } from '../workflow/store.js';
 import type { RunState, WorkflowEnvelope } from '../workflow/types.js';
 import { knownSecrets } from '../env-resolution.js';
+import { acquireLock, releaseLock } from '../update.js';
 
 const roots: string[] = [];
 const driver = { kind: 'test', machine: 'test', workspace: '/work' };
@@ -258,6 +259,28 @@ describe('workflow cancellation', () => {
   });
 });
 
+describe('a run part of a step', () => {
+  it('is cancelled once its step ended while teamai removes runs on this machine', async () => {
+    const outer = await fixture('  - id: work\n    command: echo work');
+    const lease = data(await outer.next()).lease;
+    const partOf = { run: RunIdSchema.parse(outer.id), attempt: AttemptIdSchema.parse(lease.attempt) };
+    fs.mkdirSync(attemptDir(outer.config, partOf.run, partOf.attempt), { recursive: true });
+    const secrets = await knownSecrets(outer.config);
+    const started = await startRun(outer.config, 'build', {}, { secrets, partOf });
+    if ('error' in started) throw new Error(started.error.message);
+    await cancelRun(outer.config, outer.id, secrets, 'work');
+    const removal = runsRemovalLockIn(getDataHome(outer.config));
+    expect(await acquireLock(removal)).toBe(true);
+
+    try {
+      await endRunsPartOf(outer.config, partOf);
+    } finally {
+      await releaseLock(removal);
+    }
+
+    expect(await readRun(outer.config, String(started.data.run))).toMatchObject({ status: 'cancelled' });
+  }, 30_000);
+});
 
 describe('workflow retry', () => {
   it.each(['cancelled', 'failed', 'succeeded'])('points to resume after reopening a %s run', async (outcome) => {

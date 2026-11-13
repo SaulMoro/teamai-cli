@@ -363,7 +363,11 @@ export async function endRunsPartOf(config: LocalConfig, partOf: PartOfStep): Pr
       await stopCancelledAttempts(config, lock, { isRunnerHolding: runnerAlive });
     }, { waitMs: 0 }).catch(runRemovalRefusal);
 
-    if (cancel && 'kind' in taken && taken.kind === 'busy') await cancelRun(config, part, cancel.secrets, undefined, cancel.failure);
+    const isHeld = 'kind' in taken && taken.kind === 'held';
+    const isRemoved = 'error' in taken && taken.error.code === 'run_not_found';
+
+    // Its lock busy, or refused while runs are removed: cancelled without it, as teamai workflow cancel does.
+    if (cancel && !isHeld && !isRemoved) await cancelRun(config, part, cancel.secrets, undefined, cancel.failure);
   }
 }
 
