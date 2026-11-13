@@ -298,7 +298,7 @@ extends: claude
 paths: { skills: .claude/team-skills, rules: .claude/rules }
 ```
 
-`teamai doctor` names each key such `paths` drop: `paths in tools/claude.yaml replaces claude's default entry whole and drops keys the default provides: settings (.claude/settings.json — hook reconciliation silently skips the tool), …`.
+`teamai doctor` names each key such `paths` drop: ``paths in tools/claude.yaml replaces claude's default entry whole and drops keys the default provides: `settings` (.claude/settings.json — hook reconciliation silently skips the tool), …``.
 
 **Your own build.** `~/.teamai/tools/<name>.yaml` holds your own instances. teamai reads that directory and never writes it. One there replaces the team's of the same name for you, needs no acceptance, and is ignored by `workflow resume --next`, which runs a teammate's run on the team's tools.
 

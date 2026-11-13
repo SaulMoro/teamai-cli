@@ -298,7 +298,7 @@ extends: claude
 paths: { skills: .claude/team-skills, rules: .claude/rules }
 ```
 
-`teamai doctor` 会列出这类 `paths` 丢掉的每个键：`paths in tools/claude.yaml replaces claude's default entry whole and drops keys the default provides: settings (.claude/settings.json — hook reconciliation silently skips the tool), …`。
+`teamai doctor` 会列出这类 `paths` 丢掉的每个键：``paths in tools/claude.yaml replaces claude's default entry whole and drops keys the default provides: `settings` (.claude/settings.json — hook reconciliation silently skips the tool), …``。
 
 **自己的版本。** `~/.teamai/tools/<name>.yaml` 放你自己的实例。teamai 只读这个目录，从不写入。这里的实例会替换团队同名实例（只对你生效），不需要接受；`workflow resume --next` 会忽略它，因为接手的是队友的运行，用团队的工具。
 
