@@ -1142,7 +1142,7 @@ describe('a prompt attempt in a container', () => {
     expect(await second.next((message) => message.event === 'closed' || message.event === 'close_failed', 30_000)).toEqual({ event: 'closed', handle: HANDLE });
 
     // The removal of its network filter and network, which a sandbox not behind one does not have, finds nothing.
-    expect(engine.calls().slice(before).map(([, command]) => command)).toEqual(['restart', 'rm', 'rm', 'network']);
+    expect(engine.calls().slice(before).map(([, command]) => command)).toEqual(['inspect', 'restart', 'rm', 'rm', 'network']);
     expect(engine.containers()).toEqual([]);
   });
 

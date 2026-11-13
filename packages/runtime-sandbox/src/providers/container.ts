@@ -2,6 +2,7 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { setTimeout as sleep } from 'node:timers/promises';
 import { readRegularFileSync, writeRegularFile } from '@teamai/shared/regular-file';
 import type { ContainerEngine, ProfileOption, WarmOptions } from '../options.js';
 import { PROVIDER_COMMANDS } from '../provider-commands.js';
@@ -50,7 +51,8 @@ import { cliOf, commandsOf, definedOnly, heldProbe, signalled, LAUNCHABLE, mount
 //  Values never appear in an argv: `-e NAME` takes each from the engine CLI's own environment. Only the names an exec
 //  is given cross into the container, so nothing else of teamai's environment does. The container's processes run one
 //  exec at a time (teamai opens, execs, collects and closes each attempt in turn), so a stop restarts the container,
-//  which ends every process in it and keeps the container for the next exec.
+//  which ends every process in it and keeps the container for the next exec, while every path it mounts is still there.
+//  Once one is gone, the stop removes the container instead, since a start would make that path again.
 //
 
 /** The private home of the step's processes inside the container. */
@@ -155,6 +157,12 @@ function dnsStaysInside(version: string): boolean {
 
 /** Where a warm image's prepare runs, with the copies of the `cache` files mounted there. */
 const WARM_DIR = '/teamai-warm';
+
+/** The host path of each bind mount of a container, one per line. */
+const BIND_SOURCES = '{{range .Mounts}}{{if eq .Type "bind"}}{{println .Source}}{{end}}{{end}}';
+
+/** How often a removal another one is making is looked at until the container is gone. */
+const REMOVAL_POLL_MS = 200;
 
 /** Seconds a stop waits before the engine kills the container, well inside COMMAND_MS. */
 const STOP_GRACE = '5';
@@ -368,6 +376,23 @@ export function containerProvider({ engine, image, owner, host, warm, profile, s
     return await isPresent(tag) ? { ok: true, image: tag } : sandboxFailed(`The warm image ${tag} was removed after it was made for attempt ${attempt}, so no sandbox was made for it. Start the step again, and teamai makes the image again.`);
   };
 
+  const destroy: Provider['destroy'] = async (id) => {
+    const deadline = Date.now() + COMMAND_MS;
+    const removed = await cli(['rm', '--force', id], { timeoutMs: COMMAND_MS });
+
+    if (removed.kind === 'ran' && (removed.code === 0 || /no such container/i.test(removed.stderr))) return { ok: true };
+
+    // Another removal of it, such as a stop's while this is a close's, goes on in the engine: ok once it is gone.
+    while (removed.kind === 'ran' && /already in progress/i.test(removed.stderr) && Date.now() < deadline) {
+      await sleep(REMOVAL_POLL_MS);
+      const left = await cli(['inspect', '--type', 'container', '--format', BIND_SOURCES, id], { timeoutMs: Math.max(1, deadline - Date.now()) });
+
+      if (left.kind === 'ran' && left.code !== 0 && /no such container/i.test(left.stderr)) return { ok: true };
+    }
+
+    return { ok: false, failure: { code: 'sandbox_failed', message: `${engine} could not remove container ${id}: ${why(removed)}. Remove it with \`${engine} rm --force ${id}\`.` } };
+  };
+
   const find: Provider['find'] = async (key) => {
     const listed = await cli(['ps', '-a', '-q', '--filter', `label=teamai.run=${key.run}`, '--filter', `label=teamai.attempt=${key.attempt}`], { timeoutMs: COMMAND_MS, isListing: true });
 
@@ -570,20 +595,21 @@ export function containerProvider({ engine, image, owner, host, warm, profile, s
     },
 
     async stop(id) {
+      const unstopped = (ran: Ran) => ({ ok: false, failure: { code: 'sandbox_failed', message: `${engine} could not stop the processes in container ${id}: ${why(ran)}. They may still run; remove the container with \`${engine} rm --force ${id}\`.` } }) satisfies { ok: false; failure: RuntimeFailure };
+      // A start makes each bind source that is gone again, as an empty directory (Docker Desktop 29), or fails: a
+      // container whose place went is removed instead. A restart is one engine call, so the step's next exec never
+      // finds the container stopped.
+      const listed = await cli(['inspect', '--type', 'container', '--format', BIND_SOURCES, id], { timeoutMs: COMMAND_MS });
+
+      if (listed.kind !== 'ran' || listed.code !== 0) return unstopped(listed);
+
+      if (listed.stdout.split('\n').some((source) => source !== '' && !fs.existsSync(source))) return destroy(id);
       const restarted = await cli(['restart', '--time', STOP_GRACE, id], { timeoutMs: COMMAND_MS });
 
-      if (restarted.kind === 'ran' && restarted.code === 0) return { ok: true };
-
-      return { ok: false, failure: { code: 'sandbox_failed', message: `${engine} could not stop the processes in container ${id}: ${why(restarted)}. They may still run; remove the container with \`${engine} rm --force ${id}\`.` } };
+      return restarted.kind === 'ran' && restarted.code === 0 ? { ok: true } : unstopped(restarted);
     },
 
-    async destroy(id) {
-      const removed = await cli(['rm', '--force', id], { timeoutMs: COMMAND_MS });
-
-      if (removed.kind === 'ran' && (removed.code === 0 || /no such container/i.test(removed.stderr))) return { ok: true };
-
-      return { ok: false, failure: { code: 'sandbox_failed', message: `${engine} could not remove container ${id}: ${why(removed)}. Remove it with \`${engine} rm --force ${id}\`.` } };
-    },
+    destroy,
 
     name: handleOf,
     display: (key, warmed) => {

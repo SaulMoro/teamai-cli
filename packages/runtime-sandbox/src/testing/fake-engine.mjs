@@ -17,7 +17,9 @@
 //                       `stop-delay` holding a number of milliseconds makes `restart` (sbx: `stop`) wait that long
 //                       before it stops anything, as a daemon that is slow to answer; a file `stop-hold` holding a
 //                       number of milliseconds makes it wait that long once it stopped the processes, before it
-//                       answers, as an engine that restarts the container does; a file `delay-<command>`
+//                       answers, as an engine that restarts the container does; a file `rm-hold` holding a number of
+//                       milliseconds makes docker's `rm` wait that long once it stopped the processes, before the
+//                       container is gone, while another `rm` of it fails as already in progress; a file `delay-<command>`
 //                       holding a number of milliseconds makes that command (`run`, `rm`, …) wait that long first;
 //                       a file `format-fails` makes `ps --format` fail as an engine that cannot render it; a file
 //                       `version` holding a version makes `version` print it, as an upgraded engine does; a file
@@ -124,6 +126,15 @@ function signalGroup(pgid, name) {
   if (!Number.isSafeInteger(pgid) || pgid <= 1) return;
 
   try { process.kill(-pgid, name); } catch { /* gone */ }
+}
+
+/**
+ * Starts `container` again, as docker's `start` does. Docker Desktop (29.4.3) makes each bind source that is gone again,
+ * as an empty directory, before the container runs; podman refuses the start instead, which this does not model.
+ */
+function startContainer(container) {
+  // One a removal took meanwhile is not started.
+  if (writeContainer({ ...container, running: true }) && engine === 'docker') for (const { source } of container.mounts) fs.mkdirSync(source, { recursive: true });
 }
 
 /** Stops every process group an exec of the container whose directory is `dir` started, as a container stop does. */
@@ -448,7 +459,20 @@ function docker() {
       if (!container) fail(`Error response from daemon: No such container: ${positional[0]}`);
       killProcesses(path.join(containers, container.id));
       waitAsLongAs('stop-hold');
+      startContainer(container);
       process.stdout.write(`${positional[0]}\n`);
+      break;
+    }
+
+    case 'inspect': {
+      // The one template the container provider asks for: each bind mount's host path, one per line.
+      const { found, rest: positional } = options(rest, ['--type', '--format']);
+      const container = readContainer(positional[0]);
+
+      if (one(found, '--type') !== 'container' || !one(found, '--format')?.includes('.Mounts')) fail(`fake ${engine}: inspect answers only --type container --format with .Mounts`);
+
+      if (!container) fail(`Error: No such container: ${positional[0]}`);
+      process.stdout.write(container.mounts.map(({ source }) => `${source}\n`).join(''));
       break;
     }
 
@@ -457,6 +481,14 @@ function docker() {
       const container = readContainer(positional[0]);
 
       if (fs.existsSync(path.join(state, 'rm-fails'))) fail(`Error response from daemon: cannot remove container "${positional[0]}": could not kill: tried to kill container, but did not receive an exit event`);
+
+      if (container?.removing) fail(`Error response from daemon: removal of container ${container.id} is already in progress`);
+
+      if (container && fs.existsSync(path.join(state, 'rm-hold'))) {
+        writeContainer({ ...container, running: false, removing: true });
+        killProcesses(path.join(containers, container.id));
+        waitAsLongAs('rm-hold');
+      }
 
       if (!container || !removeContainer(container)) fail(`Error response from daemon: No such container: ${positional[0]}`);
       process.stdout.write(`${positional[0]}\n`);
