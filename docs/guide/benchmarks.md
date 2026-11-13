@@ -395,7 +395,7 @@ check:
 
 Before the first trial of a task with a `check`, with `successCriteria` or without, teamai writes the task's `check.add` files, runs setup and runs the check once, on a fresh clone of the starting commit. A task with only `successCriteria` has no baseline.
 
-The check runs where the trials run, such as in a sandbox, so whatever `check.run` calls must be there; teamai need not be. teamai writes `check.add`, and for a trial puts `protect` back, in the clone on your machine before the check runs, and reads its exit code after.
+The check runs where the trials run, such as in a sandbox, so whatever `check.run` calls must be there; teamai need not be. teamai writes `check.add`, and for a trial puts `protect` back, in the clone on your machine before the check runs, and reads its exit code after. A baseline's setup runs after `check.add` is written, since in a sandbox setup runs there: a setup that removes untracked files, such as `git clean -fdx`, removes them too.
 
 | The check at the starting commit | The task |
 | --- | --- |
@@ -851,7 +851,7 @@ finally:
   - id: checks
     needs: [report]
     if: steps.report.outputs.unchecked != ''
-    command: printf '%s\n' "$UNCHECKED" >&2; exit 1
+    command: node -e "process.stderr.write(process.env.UNCHECKED + '\n'); process.exit(1)"
     env: { UNCHECKED: "{{ steps.report.outputs.unchecked }}" }
   - id: regression
     needs: [report]

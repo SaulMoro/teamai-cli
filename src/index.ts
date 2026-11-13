@@ -972,7 +972,7 @@ selfImprovementCmd
 
 const benchmarkCmd = program
   .command('benchmark')
-  .description('Run a benchmark suite, and the commands its run\'s steps run. run starts the workflow teamai-benchmark, teamai\'s default or the team\'s file of that name, whose plan, check and report steps run the other commands; try needs no run.');
+  .description('Run a benchmark suite, and the commands its run\'s steps run. run starts the workflow teamai-benchmark, teamai\'s default or the team\'s file of that name, whose plan and report steps run the other commands, and whose check steps run each task\'s own check; try needs no run.');
 
 benchmarkCmd
   .command('run <suite>')

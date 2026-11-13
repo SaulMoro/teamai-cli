@@ -395,7 +395,7 @@ check:
 
 对带 `check` 的任务，不论有没有 `successCriteria`，teamai 在它的第一个 trial 之前，在起始提交的全新克隆上写入任务的 `check.add` 文件，运行 setup，并运行一次 check。只有 `successCriteria` 的任务没有基线。
 
-check 在 trial 运行的地方运行，例如沙箱中，所以 `check.run` 调用的东西必须在那里；teamai 不必在。check 运行之前，teamai 在你机器上的克隆中写入 `check.add`，对 trial 还恢复 `protect`；运行之后，teamai 读取它的退出码。
+check 在 trial 运行的地方运行，例如沙箱中，所以 `check.run` 调用的东西必须在那里；teamai 不必在。check 运行之前，teamai 在你机器上的克隆中写入 `check.add`，对 trial 还恢复 `protect`；运行之后，teamai 读取它的退出码。基线的 setup 在写入 `check.add` 之后运行，因为在沙箱中 setup 在沙箱里运行：删除未跟踪文件的 setup（例如 `git clean -fdx`）也会删除它们。
 
 | check 在起始提交上 | 任务 |
 | --- | --- |
@@ -851,7 +851,7 @@ finally:
   - id: checks
     needs: [report]
     if: steps.report.outputs.unchecked != ''
-    command: printf '%s\n' "$UNCHECKED" >&2; exit 1
+    command: node -e "process.stderr.write(process.env.UNCHECKED + '\n'); process.exit(1)"
     env: { UNCHECKED: "{{ steps.report.outputs.unchecked }}" }
   - id: regression
     needs: [report]

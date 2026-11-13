@@ -60,7 +60,7 @@ finally:
     needs: [report]
     if: steps.report.outputs.unchecked != ''
     requires: { host: true }
-    command: printf '%s\n' "$UNCHECKED" >&2; exit 1
+    command: node -e "process.stderr.write(process.env.UNCHECKED + '\n'); process.exit(1)"
     env: { UNCHECKED: "{{ steps.report.outputs.unchecked }}" }
   - id: regression
     needs: [report]
