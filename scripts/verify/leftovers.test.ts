@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { signalChild } from '@teamai/shared/process-group';
-import { attributeLeftover, cleanupPlan, linesOf, planCleanup, probeHere, worldTier, type WorldTies } from './leftovers.js';
+import { attributeLeftover, cleanupPlan, linesOf, planCleanup, probeHere, removeLeftover, worldTier, type WorldTies } from './leftovers.js';
 import type { World } from './world.js';
 
 const roots: string[] = [];
@@ -119,18 +119,21 @@ describe("the sbx row of section (f)", () => {
     expect(fs.readFileSync(path.join(dir, 'removed'), 'utf8')).toBe(name);
   });
 
-  it("lists the warm templates teamai saved in a world's HOME, where sbx keeps its image store, and removes them there", async () => {
+  it("lists the warm templates teamai saved in a world's HOME, where sbx keeps its image store, and the kit templates sbx assembled there, and removes them there, one already gone too", async () => {
     const dir = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-verify-sbx-')));
     roots.push(dir);
     const bin = path.join(dir, 'bin');
     fs.mkdirSync(bin);
-    // sbx's own template and one the member saved stay; only teamai's warm template, `teamai-warm:<key>`, is teamai's.
+    // sbx's own template and one the member saved stay; teamai's warm template, `teamai-warm:<key>`, is teamai's, and the
+    // kit template sbx 0.53.0 assembled in the world's HOME for the sandbox it was saved from holds the same image.
     const templates = JSON.stringify([
-      { id: 'a'.repeat(64), repository: 'docker.io/docker/sandbox-templates', tag: 'claude-code-docker' },
-      { id: 'b'.repeat(64), repository: 'teamai-warm', tag: 'k0123abcd' },
-      { id: 'c'.repeat(64), repository: 'mine', tag: 'teamai-warm' },
+      { id: `sha256:${'a'.repeat(64)}`, repository: 'docker.io/docker/sandbox-templates', tag: 'claude-code-docker' },
+      { id: `sha256:${'b'.repeat(64)}`, repository: 'docker.io/library/teamai-warm', tag: 'k0123abcd' },
+      { id: `sha256:${'b'.repeat(64)}`, repository: 'docker.io/library/sandbox-kit-assembled', tag: '680a35427e6eced7' },
+      { id: `sha256:${'c'.repeat(64)}`, repository: 'mine', tag: 'teamai-warm' },
     ]);
-    fs.writeFileSync(path.join(bin, 'sbx'), `#!/bin/sh\n[ "$HOME" = '${dir}/home' ] || { printf '[]'; exit 0; }\ncase "$1 $2" in 'ls --json') printf '[]' ;; 'template ls') printf '%s' '${templates}' ;; 'template rm') printf '%s' "$3 $4" > '${dir}/removed' ;; *) exit 1 ;; esac\n`, { mode: 0o755 });
+    // A second removal of one answers as sbx 0.53.0 does for a template that is gone.
+    fs.writeFileSync(path.join(bin, 'sbx'), `#!/bin/sh\n[ "$HOME" = '${dir}/home' ] || { printf '[]'; exit 0; }\ncase "$1 $2" in 'ls --json') printf '[]' ;; 'template ls') printf '%s' '${templates}' ;; 'template rm') if grep -qxF "$4" '${dir}/removed' 2>/dev/null; then echo "error: cannot remove template \\"$4\\": delete template: image not found: request failed: 404 Not Found: no image \\"$4\\"" >&2; exit 1; fi; printf '%s\\n' "$4" >> '${dir}/removed' ;; *) exit 1 ;; esac\n`, { mode: 0o755 });
     const world: World = {
       runId: SELF.runId, dir, project: `${dir}/project`, team: `${dir}/team.git`, home: `${dir}/home`, tmp: `${dir}/tmp`, logs: `${dir}/logs`, bin: `${dir}/bin`,
       build: { commit: 'c', dirty: false, version: '0.0.0', tarball: 't.tgz', sha256: 's', node: 'v20' },
@@ -144,11 +147,15 @@ describe("the sbx row of section (f)", () => {
     const findings = observed.flatMap((seen) => (seen.kind === 'observed' ? seen.findings : []));
 
     expect(observed.filter((seen) => seen.kind === 'not_observed')).toEqual([]);
-    expect(findings.map((finding) => [finding.what, finding.attribution.kind])).toEqual([['sbx template teamai-warm:k0123abcd', 'own']]);
-    const [command = 'true', ...args] = findings[0]?.remove ?? [];
+    expect(findings.map((finding) => [finding.what, finding.attribution.kind])).toEqual([
+      ['sbx template docker.io/library/teamai-warm:k0123abcd', 'own'],
+      ["sbx template docker.io/library/sandbox-kit-assembled:680a35427e6eced7 (sbx's own, which teamai uninstall leaves)", 'own'],
+    ]);
+
     // As cleanup runs it: from the harness's own environment, never asking before it removes.
-    expect(spawnSync(command, args).status).toBe(0);
-    expect(fs.readFileSync(path.join(dir, 'removed'), 'utf8')).toBe('--force teamai-warm:k0123abcd');
+    for (const finding of findings) expect(removeLeftover({ command: finding.remove ?? [], gone: finding.gone })).toEqual({ ok: true, wasThere: true });
+    expect(fs.readFileSync(path.join(dir, 'removed'), 'utf8')).toBe('docker.io/library/teamai-warm:k0123abcd\ndocker.io/library/sandbox-kit-assembled:680a35427e6eced7\n');
+    expect(removeLeftover({ command: findings[0]?.remove ?? [], gone: findings[0]?.gone })).toEqual({ ok: true, wasThere: false });
   });
 
   it("never takes the warm templates of the harness's HOME, where a world made before its env was kept is asked, for the world's", async () => {

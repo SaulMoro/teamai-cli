@@ -6,6 +6,7 @@
  * A world that ran no step runtime pays for the process check alone; the rows that ask an engine are loaded only once
  * the world's own records show a runtime outside teamai's process ran (`worldTier`).
  */
+import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -89,6 +90,8 @@ export interface Finding {
   readonly attribution: Attribution;
   /** The command that removes it, for a kind cleanup may remove; a process has none: cleanup never signals one. */
   readonly remove?: readonly string[];
+  /** What `remove` says on stderr, exiting non-zero, when it is gone already: cleanup takes that as removed. */
+  readonly gone?: RegExp;
   /** What the person does to end it, for a kind cleanup refuses over: its refusal prints it beside the finding. */
   readonly next?: string;
 }
@@ -347,7 +350,17 @@ export async function leftoversSection(world: World): Promise<{ leaks: string[];
  */
 export type CleanupPlan =
   | { kind: 'refuse'; refusals: Array<{ why: string; items: string[] }> }
-  | { kind: 'remove'; removals: Array<{ what: string; command: readonly string[] }>; unobserved: string[] };
+  | { kind: 'remove'; removals: Array<{ what: string; command: readonly string[]; gone?: RegExp }>; unobserved: string[] };
+
+/** Runs one removal of a cleanup plan from the harness's environment: whether it removed it, or found it gone, or why it failed. */
+export function removeLeftover({ command, gone }: { command: readonly string[]; gone?: RegExp }): { ok: true; wasThere: boolean } | { ok: false; why: string } {
+  const [executable = 'true', ...args] = command;
+  const ran = spawnSync(executable, args, { encoding: 'utf8', stdio: ['ignore', 'ignore', 'pipe'], timeout: 60_000 });
+
+  if (ran.status === 0) return { ok: true, wasThere: true };
+
+  return gone !== undefined && gone.test(ran.stderr) ? { ok: true, wasThere: false } : { ok: false, why: ran.error?.message ?? ran.stderr.trim() };
+}
 
 /** The plan for what each row observed, judged by the row's `onCleanup`: only this world's own findings count. */
 export function cleanupPlan(rows: ReadonlyArray<{ onCleanup: CleanupRule; observed: readonly Observed[] }>): CleanupPlan {
@@ -372,7 +385,7 @@ export function cleanupPlan(rows: ReadonlyArray<{ onCleanup: CleanupRule; observ
             refuse(onCleanup.found, finding.next === undefined ? finding.what : `${finding.what}: ${finding.next}`);
             break;
           case 'remove':
-            if (finding.remove !== undefined) removals.push({ what: finding.what, command: finding.remove });
+            if (finding.remove !== undefined) removals.push({ what: finding.what, command: finding.remove, ...(finding.gone && { gone: finding.gone }) });
             break;
           case 'keep':
             break;
