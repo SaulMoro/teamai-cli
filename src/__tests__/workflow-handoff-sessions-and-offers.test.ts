@@ -17,7 +17,7 @@ import { pendingRecords, queueRunRecord } from '../workflow/records.js';
 import { runLocalDriver } from '../workflow/drivers/local/local-driver.js';
 import { cancelRun } from '../workflow/run-controls.js';
 import { type StepLauncher } from '@teamai/runtime-tools';
-import { AttemptIdSchema, installOwner, readRun, RunIdSchema } from '../workflow/store.js';
+import { AttemptIdSchema, installOwner, readRun, RunIdSchema, runFilePath } from '../workflow/store.js';
 import { attemptRuntimePath } from '../workflow/runtimes/attempt.js';
 import { PublishedRuns, type Taker } from '../workflow-published-runs.js';
 import type { WorkflowDefinition, WorkflowEnvelope } from '../workflow/types.js';
@@ -803,7 +803,11 @@ describe('offering a run to a runner (#1390)', () => {
     expect(published).not.toHaveProperty('repository');
   });
 
-  it('publishes no run while a place held here for a conversation cannot be closed, and keeps that place', async () => {
+  it.each([
+    { run: 'that could be published', isPrivate: false, code: 'place_kept', says: 'ran on step runtime "toy" of driver "gone"' },
+    // Refused before any place is closed, so its conversation is not lost for an offer that never happens.
+    { run: 'of a private workflow', isPrivate: true, code: 'isolated_run', says: 'runs private workflow' },
+  ])('publishes no run $run while a place held here for a conversation cannot be closed, and keeps that place', async ({ isPrivate, code, says }) => {
     const acme = team();
     const alice = await acme.member('alice');
     const runId = await start(alice);
@@ -819,10 +823,15 @@ describe('offering a run to a runner (#1390)', () => {
       runtime: 'toy', driver: 'gone', phase: 'collected', open: { op: 'op-0123456789abcdef', handle: 'toy-held' }, prompt: { op: 'op-fedcba9876543210' },
       heldFor: { conversation: { tool: 'claude', id: 'session-one' }, workspace: 'shared' },
     }));
+    if (isPrivate) {
+      const file = runFilePath(alice.config, RunIdSchema.parse(runId));
+      const stored = JSON.parse(fs.readFileSync(file, 'utf8'));
+      fs.writeFileSync(file, JSON.stringify({ ...stored, definition: { ...stored.definition, private: true } }));
+    }
 
     const published = await publishRun(alice.config, runId, { env: {}, checkout: alice.checkout });
 
-    expect(published).toMatchObject({ ok: false, error: { code: 'place_kept', message: expect.stringContaining(`Attempt ${attempt} ran on step runtime "toy" of driver "gone"`) } });
+    expect(published).toMatchObject({ ok: false, error: { code, message: expect.stringContaining(says) } });
     expect(originFile(acme.origin, `workflows/runs/${runId}/state.json`)).toBeNull();
     expect(JSON.parse(fs.readFileSync(runtime, 'utf8'))).toMatchObject({ phase: 'collected', heldFor: { conversation: { id: 'session-one' } } });
   });
