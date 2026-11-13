@@ -1,5 +1,6 @@
 import { PassThrough } from 'node:stream';
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { log, setStderrOnly } from '@teamai/shared/log';
 import { RUNTIME_PROTOCOL_ENV, RuntimeMessageSchema, type OpId, type RuntimeMessage, type RuntimeRequest } from '@teamai/runtime-protocol';
 import { opLedger } from './ledger.js';
 import { serveRuntime, type RuntimeHandlers } from './serve.js';
@@ -49,6 +50,24 @@ describe('serving runtime protocol 1', () => {
 
     expect(seen).toEqual([`exec ${OP}`, 'close h-1']);
     expect(runtime.written).toEqual([]);
+  });
+
+  describe('a warning a module it runs logs, as a session reader of a transcript too large to read', () => {
+    afterEach(() => {
+      setStderrOnly(false);
+      vi.restoreAllMocks();
+    });
+
+    it('goes to stderr, never to stdout, which carries only protocol lines teamai parses', async () => {
+      const stdout = vi.spyOn(console, 'log').mockImplementation(() => {});
+      const stderr = vi.spyOn(console, 'error').mockImplementation(() => {});
+      const runtime = served(() => ({ exec: async () => { log.warn('token-usage: transcript too large to read'); } }));
+
+      await runtime.send(exec(OP));
+
+      expect(stdout).not.toHaveBeenCalled();
+      expect(stderr).toHaveBeenCalledWith(expect.stringContaining('token-usage: transcript too large to read'));
+    });
   });
 
   it('ends with status 0 once teamai closes its stdin', async () => {

@@ -1,3 +1,4 @@
+import { setStderrOnly } from '@teamai/shared/log';
 import readline from 'node:readline';
 import { ignoreTypeOfServiceRefusal } from '@teamai/shared/type-of-service';
 import { CANCEL_FAILED, OpIdSchema, RUNTIME_PROTOCOL, RUNTIME_PROTOCOL_ENV, RuntimeHandleSchema, RuntimeRequestSchema, type OpId, type RuntimeRequest } from '@teamai/runtime-protocol';
@@ -118,6 +119,9 @@ export function serveRuntime({ name, input = process.stdin, env, ledger, handler
   }
 
   delete env[RUNTIME_PROTOCOL_ENV];
+  // stdout carries only protocol lines, and teamai stops a runtime at any other: a line a module it runs logs, as a
+  // session reader's warning, goes to stderr, which teamai keeps for debugging.
+  setStderrOnly(true);
   // A fetch to an app that resets its connection fails that request, never the runtime.
   ignoreTypeOfServiceRefusal();
 

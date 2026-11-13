@@ -64,12 +64,13 @@ function endLine(ended: OpEnd): RuntimeMessage {
   const { op } = ended;
 
   switch (ended.state) {
-    case 'finished':
-      return {
-        op, event: 'finished', session: ended.session, result: ended.result,
-        ...(ended.usage && { usage: ended.usage }), ...(ended.model && { model: ended.model }), ...(ended.cost && { cost: ended.cost }), ...(ended.confined && { confined: ended.confined }), ...(ended.resumed !== undefined && { resumed: ended.resumed }),
-        ...(ended.stopped && { stopped: ended.stopped }),
-      };
+    case 'finished': {
+      // Every field of a finished prompt goes out as it ended, so one the protocol adds needs no change here.
+      const { state: _state, ...finished } = ended;
+
+      return { ...finished, event: 'finished' };
+    }
+
     case 'cancelled':
       return { op, event: 'cancelled' };
     case 'failed':
