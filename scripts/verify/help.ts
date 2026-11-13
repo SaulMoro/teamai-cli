@@ -32,8 +32,9 @@ Verdicts, reported with the combination and entry point (VERIFIED: claude x git 
   UNVERIFIABLE  a prerequisite is missing (a tool, a sign-in, Windows), or a part says NOT OBSERVED; name it
 A fix is proved by a pair: FAILED in a world built from main, VERIFIED in a world built from the change.
 
-Run ledger after the last run, before cleanup. Paste the verdict, the commands, build.json's line from the run's
-first output, and the ledger's last line into the PR's real-CLI record.
+Run ledger after the last run, before cleanup. It uninstalls teamai, which removes the run records under the world's
+HOME: read what a claim needs from a run's record first. Paste the verdict, the commands, build.json's line from the
+run's first output, and the ledger's last line into the PR's real-CLI record.
 
 More:
   npm run -s verify -- help drivers           where a step runs: each driver's entry point and the end state that proves
