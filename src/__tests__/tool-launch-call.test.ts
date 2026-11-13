@@ -136,7 +136,8 @@ it('runs OpenCode with the prompt on stdin and joins the text parts it prints, w
 
   expect(answer).toEqual({ text: 'first line\nsecond line', tool: 'opencode', tokens: { input: 30, output: 6, cachedInput: 7 } });
   const { args, stdin } = await opencode.invocation();
-  expect(args).toEqual(['run', '--format', 'json']);
+  // The fake prints no version, so OpenCode is taken as V2, which runs the call on its own server.
+  expect(args).toEqual(['run', '--standalone', '--format', 'json']);
   expect(stdin).toBe('Summarize');
 });
 
