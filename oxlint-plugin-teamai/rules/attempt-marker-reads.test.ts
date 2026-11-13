@@ -19,6 +19,7 @@ invalid('rejects the marker read under another name', `import { ATTEMPT_ENV as M
 invalid('rejects the marker taken apart from an env', `${IMPORTED}export const marker = (env: NodeJS.ProcessEnv) => { const { [ATTEMPT_ENV]: value } = env; return value; };`);
 invalid('rejects the marker read by its spelling', `export const marker = (env: NodeJS.ProcessEnv) => env['TEAMAI_WORKFLOW_ATTEMPT'];`, (output) => expect(output).toContain(MESSAGE));
 invalid('rejects a read in a folder no rule names yet', `${IMPORTED}export const marker = process.env[ATTEMPT_ENV];`, undefined, { filename: 'src/brand-new-area/reader.ts' });
+invalid("rejects a read in a package module that shares a reader's file name", `import { ATTEMPT_ENV } from 'teamai/launch-context';\nexport const marker = process.env[ATTEMPT_ENV];`, undefined, { filename: 'packages/brand-new/src/launch-context.ts' });
 invalid('rejects a read in a package no rule names yet', `import { ATTEMPT_ENV } from 'teamai/launch-context';\nexport const marker = process.env[ATTEMPT_ENV];`, undefined, { filename: 'packages/brand-new/src/reader.ts' });
 
 valid('allows setting the marker for a process teamai starts', `${IMPORTED}export const mark = (env: NodeJS.ProcessEnv, marker: string) => { env[ATTEMPT_ENV] = marker; };`);

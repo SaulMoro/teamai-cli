@@ -1,5 +1,5 @@
 import { defineRule } from '@oxlint/plugins';
-import { inProductionSource, inTestSupport, isOneOf, isProductionSource, isTestSupportPath, scopedFiles, stringLiteralValue } from '../utils.js';
+import { isProductionSource, isTestSupportPath, repositoryPath, scopedFiles, stringLiteralValue } from '../utils.js';
 
 const MESSAGE = 'Read the attempt marker through markedAttempt in src/workflow/attempt-marker.ts, which parses <run>/<attempt> once, or attemptMarker there for its value as set. Setting or removing it stays allowed.';
 const SPELLING = 'TEAMAI_WORKFLOW_ATTEMPT';
@@ -24,7 +24,7 @@ export function isAttemptMarkerReadChecked(file) {
 export default defineRule({
   meta: { type: 'problem', docs: { description: 'Read the workflow attempt marker only through the module that parses it.' } },
   create(context) {
-    if (!inProductionSource(context) || inTestSupport(context) || isOneOf(context, MARKER_READERS)) return {};
+    if (!isAttemptMarkerReadChecked(repositoryPath(context).relative)) return {};
     // The marker's name and every name a module imports it under.
     const names = new Set([NAME]);
 
