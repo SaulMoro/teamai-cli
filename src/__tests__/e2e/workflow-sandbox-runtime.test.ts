@@ -305,7 +305,7 @@ describe('sandbox profiles', () => {
 
     const ran = await runCLI(['workflow', 'start', 'review', '--driver', 'inline'], repo, { ...engineEnv, CLAUDE_CODE_OAUTH_TOKEN: 'oauth-value-4d8e' });
 
-    expect(envelope(ran)).toMatchObject({ error: { code: 'bad_option', message: expect.stringMatching(/drivers\/inline\.yaml gives runtime "sandbox" the option "provider", and a sandbox's options live in a sandbox profile: move them to sandboxes\/inline\.yaml in the team repo \(or ~\/\.teamai\/sandboxes\/inline\.yaml for yourself\), name it on the entry with sandbox: inline, and start again\.$/) } });
+    expect(envelope(ran)).toMatchObject({ error: { code: 'bad_option', message: expect.stringMatching(/^Driver definition drivers\/inline\.yaml in the team repo gives runtime "sandbox" the option "provider", and a sandbox's options live in a sandbox profile: move them to sandboxes\/inline\.yaml in the team repo \(or ~\/\.teamai\/sandboxes\/inline\.yaml for yourself\), name it on the entry with sandbox: inline, and start again\.$/) } });
     expect(engineCalls().slice(before)).toEqual([]);
   });
 
