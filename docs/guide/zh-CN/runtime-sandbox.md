@@ -1,8 +1,8 @@
 # Sandbox 运行时
 
-`sandbox` [步骤运行时](workflow-advanced.md#驱动定义和步骤运行时)把工作流步骤的每次尝试放进一个独立的沙箱里运行：Docker Sandboxes 的微型虚拟机，或者来自团队构建的镜像的容器。Agent 只能处理该步骤的工作树，碰不到你机器上的其他内容。sandbox 在那里启动工具，并执行步骤的各项限制；结果的读取，以及提交和推送，仍然由 teamai 在主机上完成。
+`sandbox` [步骤运行时](workflow-advanced.md#驱动定义和步骤运行时)把工作流步骤的每次尝试放进一个独立的沙箱里运行：Docker Sandboxes 的微型虚拟机、来自团队构建的镜像的容器、这台机器上的沙箱进程，或者 Vercel Sandbox。Agent 只能处理该步骤的工作树，碰不到你机器上的其他内容。sandbox 在那里启动工具，并执行步骤的各项限制；结果的读取，以及提交和推送，仍然由 teamai 在主机上完成。
 
-这个版本支持 `sbx`（[Docker Sandboxes](#sbxdocker-sandboxes)）、`docker` 和 `podman`。它随 teamai 一起发布，可执行文件名为 `teamai-runtime-sandbox`。
+这个版本支持 `sbx`（[Docker Sandboxes](#sbxdocker-sandboxes)）、`docker`、`podman`、`seatbelt`、`bwrap` 和 `vercel`。它随 teamai 一起发布，可执行文件名为 `teamai-runtime-sandbox`。
 
 ## 快速开始
 
@@ -65,7 +65,7 @@ teamai workflow start review --driver containers
 ```
 
 ```text
-ℹ Run r7c41d09e2b6a5f13 started. If it stops before it ends, continue it here with: teamai workflow resume r7c41d09e2b6a5f13 --driver containers, or hand it to another machine with: teamai workflow publish r7c41d09e2b6a5f13
+ℹ Run r7c41d09e2b6a5f13 started. If it stops before it ends, continue it here with: teamai workflow resume r7c41d09e2b6a5f13, or hand it to another machine with: teamai workflow publish r7c41d09e2b6a5f13
 {"data":{"done":{"run":"r7c41d09e2b6a5f13","outcome":"succeeded","record":"published"},"cancelled":[]}}
 ```
 
@@ -325,7 +325,7 @@ ANTHROPIC_BASE_URL=http://host.docker.internal:4000/anthropic       （步骤，
 ANTHROPIC_BASE_URL=http://host.containers.internal:4000/anthropic   （步骤，Podman 上）
 ```
 
-Linux 上的 Docker Engine 不给你的机器这样的名字，所以在那里尝试会在创建任何东西之前以 `bad_option` 失败，信息里说出变量名，但从不说出它的值。请改用容器能到达的你的机器的地址。
+Linux 上的 Docker Engine 不给你的机器这样的名字，所以在那里步骤会在创建任何东西之前以 `runtime_failed` 失败，并写明 `bad_option`，信息里说出变量名，但从不说出它的值。请改用容器能到达的你的机器的地址。
 
 **镜像里需要 `node`** 来运行过滤器，Docker 也要能把 DNS 限制在 internal 网络里：26.0.0 或更高、25.0.5 或 23.0.11（更旧的版本会把容器的查询转发出去，CVE-2024-29018）。否则 sandbox 不提供评判，只有这个 sandbox 的驱动定义运行到评判时会以 `confined_pending` 停下；它的步骤也能连到这台机器的每个端口，以 `isolation: worktree` 运行（[步骤能连到什么](#步骤能连到这台机器的什么)）。快速开始里的镜像带有 `node`。这个版本的 Podman 不提供评判：它的 rootless 网络无法把过滤器接到评判的网络上。
 
@@ -503,7 +503,7 @@ runtimes:
 ```
 
 - 步骤可以写它的工作树、结果和工具主目录，可以读 git 目录、工作流目录和你 `PATH` 上的目录（在你的主目录下只有 `bin` 目录本身）。它读不到你的主目录和临时目录，所以那里的 SSH 密钥、登录和仓库它都碰不到：它的 `HOME` 和 `TMPDIR` 是它自己的空目录，Claude Code 的 `CLAUDE_CODE_TMPDIR` 就是这个 `TMPDIR`。在 `bwrap` 上，除了系统目录，它看不到这台机器上的其他东西。在 `seatbelt` 上，它还能读 macOS 的系统目录（`/usr`、`/System`、`/Library`、`/opt`）和 Xcode 的开发者目录，所以 `/opt` 下的仓库仍然可读；其他位置（比如 `/Volumes` 下）的仓库读不到。
-- 它的环境只有 `PATH`、`USER`、`SHELL`、`LANG` 和 `TERM`，再加上 teamai 给这个步骤的变量。你的其他变量都到不了它那里。
+- 它的环境只有 `PATH`、`USER`、`LOGNAME`、`SHELL`、`LANG`、`LC_ALL`、`LC_CTYPE`、`TERM` 和 `TZ`，再加上 teamai 给这个步骤的变量。你的其他变量都到不了它那里。
 - `localhost` 或 `127.0.0.1` 上的 base URL 原样连到这台机器。在 `seatbelt` 上，步骤连不到这台 Mac 的其他端口；在 `bwrap` 上，它和这台机器共用网络，包括每个端口（[步骤能连到什么](#步骤能连到这台机器的什么)）。
 - 存在 macOS 钥匙串或 `~/.claude` 里的 Claude 登录在那里不会被读取：和容器一样，在 `credentials` 里写上一个密钥。
 - `seatbelt` 通过 `sandbox-exec` 拒绝它没有明确允许的一切。步骤不能给不是它启动的进程发信号，也不能用 `ps` 列出进程（macOS 仍允许它读取其他进程的命令行，所以不要在命令行里传递机密），不能连接它的位置之外的 Unix 套接字（DNS 解析器的除外）或容器引擎的套接字（Docker、Colima、OrbStack、Lima、Rancher Desktop），也不能重命名或删除存放 git 文件的文件夹。它没有自己的进程命名空间，所以步骤在自己的会话里（`setsid`）启动的进程会在步骤结束后继续运行。`bwrap` 给每个步骤单独的进程、IPC 和用户命名空间。两者都以 `isolation: worktree` 运行，所以带 `requires: { isolation: sandbox }` 或 `permissions: unattended` 的步骤不会交给它们。
@@ -542,7 +542,7 @@ runtimes:
 
 - teamai 用 `VERCEL_TOKEN`、`VERCEL_TEAM_ID` 和 `VERCEL_PROJECT_ID`，或者用 `VERCEL_OIDC_TOKEN`（先 `vercel link`，再 `vercel env pull`）登录 Vercel。`provider_auth` 可以为其中任意一个指定另一个变量或一个文件。它们在这台机器上读取，永远不会到达步骤。
 - teamai 把工作树、git 目录和工作流目录（只读）、运行的文件和工具主目录按主机路径复制进去。步骤结束时，它把工作树、结果和工具主目录复制回来，修改和删除都会带回；步骤在运行的文件里写下的文件也会带回，但那里不删除任何东西，因为其他步骤也会写那里。git 目录和工作流目录不会复制回来。步骤放下的链接以链接的形式带回，这次尝试的目录之外什么都不会写。
-- 每个沙箱创建时都关闭持久化，并在尝试关闭时删除。不设置时，`timeout` 持续到步骤时间限制之后 5 分钟；步骤没有时间限制时为 45 分钟。沙箱必须在时间限制之后再存活这 5 分钟，才能把步骤的工作拷回来：如果 `timeout` 更早结束，或者时间限制在 5 小时以后，步骤会在创建任何沙箱之前以 `timeout` 上的 `bad_option` 失败。
+- 每个沙箱创建时都关闭持久化，并在尝试关闭时删除。不设置时，`timeout` 持续到步骤时间限制之后 5 分钟；步骤没有时间限制时为 45 分钟。沙箱必须在时间限制之后再存活这 5 分钟，才能把步骤的工作拷回来：如果 `timeout` 更早结束，或者时间限制在 4 小时 55 分钟以后，步骤会在创建任何沙箱之前以 `runtime_failed` 失败，并写明 `timeout` 上的 `bad_option`。
 - Vercel 上的沙箱连不到这台机器，所以指向 `localhost` 或 `127.0.0.1` 的凭据（例如 `ANTHROPIC_BASE_URL`）会以 `bad_option` 失败。
 - 遗留下来的沙箱会以 `teamai-<home id>-<run>-<attempt>` 的名字出现在 Vercel 控制台（Sandboxes）里。下一个打开的尝试会删除它，或者它的 timeout 到了就会结束它。
 
@@ -656,12 +656,12 @@ sbx ls -q
 | `sandbox_unavailable` | 没有安装 `sbx`、`docker` 或 `podman`，它的守护进程或虚拟机没有运行，sbx 还没有网络策略，拉取不到镜像，或者你的 sbx 策略不允许沙箱访问 base URL 指向的本机端口。`bwrap` 没有安装，或者 AppArmor 不让它创建命名空间（Ubuntu 24.04 及更高版本）；`seatbelt` 运行在低于 14 的 macOS 上，或者运行在另一个 macOS 沙箱里（macOS 不支持沙箱嵌套）；`vercel` 找不到 Vercel 登录。不会改为在主机上运行。 | 安装或启动它：`sbx daemon start`、Docker Desktop、`sudo systemctl start docker`，或 `podman machine start`。sbx 执行 `sbx policy init balanced`，或信息里给出的 `sbx policy allow network localhost:<port>`。镜像问题请检查名称，并执行 `docker login <registry>`。bwrap 执行信息里给出的、适用于你的发行版的安装命令，并按信息里给出的 AppArmor 配置处理；seatbelt 需要 macOS 14，或者从该沙箱所属的应用或工具之外的终端启动 teamai；vercel 需要 `VERCEL_TOKEN` 加 `VERCEL_TEAM_ID` 和 `VERCEL_PROJECT_ID`，或 `VERCEL_OIDC_TOKEN`（先 `vercel link`，再 `vercel env pull`）。 |
 | `tool_unavailable` | 步骤的工具在 sandbox 里登录不了 | 执行信息里点名的命令：sbx 上执行 `sbx run claude <任意目录>` 再 `/login`，或 `sbx secret set openai --oauth`；容器里执行 `claude setup-token`，再导出 `CLAUDE_CODE_OAUTH_TOKEN` 并写进 `credentials` |
 | `credential_missing` | 凭据对应的变量在 teamai 运行的地方没有设置，或者评判没有拿到它的工具会读取的环境变量凭据 | 设置信息里点名的变量，或者把它点名的密钥加到 `credentials` |
-| `confined_pending` | 驱动定义里没有运行时提供评判用的工具：镜像缺少 `node` 或那个工具，驱动定义没给它密钥，Docker 早于 26.0.0，或者 provider 是 `podman` 或 `sbx` | 把 `node` 和工具装进镜像、在 `credentials` 里加上工具的密钥、升级 Docker，或者在驱动定义里列上 `tools` |
+| `confined_pending` | 驱动定义里没有运行时提供评判用的工具：镜像缺少 `node` 或那个工具，驱动定义没给它密钥，Docker 早于 26.0.0（25.0.5、23.0.11），或者 provider 是 `podman` 或 `sbx` | 把 `node` 和工具装进镜像、在 `credentials` 里加上工具的密钥、升级 Docker，或者在驱动定义里列上 `tools` |
 | `bad_option` | sandbox 档案里有键或值写错了（`sbx` 写了 `agent: shell`），条目的 `options` 里写了档案的键，或者在 Linux 上的 Docker Engine 里，`ANTHROPIC_BASE_URL` 这类凭据指向那里的容器到不了的 `localhost` 或 `127.0.0.1` | 修正消息指出的文件并推送；Linux 上的 base URL 改用容器能到达的你的机器的地址 |
 | `sandbox_profile_not_found` | 没有任何一层有条目指定的档案 | 在团队仓库里添加 `sandboxes/<name>.yaml` 并运行 `teamai pull`，或者为自己添加 `~/.teamai/sandboxes/<name>.yaml` |
 | `sandbox_profile_invalid` | 档案不是 YAML 映射、写了 `credentials` 或 `max_parallel`，或者作为文件夹含有链接 | 修正消息指出的文件；`credentials` 和 `max_parallel` 留在条目上 |
 | `sandbox_failed` | 无法创建或查找这次尝试的容器或沙箱，例如运行中途退出了 Docker Desktop。查找失败的容器仍算作这次尝试的，不会当作已经不存在。 | 查看步骤失败里给出的信息。先重新启动引擎，再删除剩下的：`docker ps -a --filter label=teamai.run=<run>` 或 `sbx ls` 会列出它，信息里给出了要执行的 `docker rm --force` 或 `sbx rm --force` 命令 |
-| `cancel_failed` | 取消或达到限制时，无法确认步骤已经停止：引擎拒绝了停止，或者停止（包括删除评判的容器）加上步骤进程的结束超过了 10 秒。那里运行的内容可能仍在运行，所以 teamai 保留容器、工作和登录。例如：`docker could not stop the processes in container teamai-r0123abcd-a0123abcd: Cannot connect to the Docker daemon. They may still run; remove the container with docker rm --force teamai-r0123abcd-a0123abcd.` | 先重新启动引擎，再运行一次 `teamai workflow cancel <run>`：运行时会停止步骤并关闭它的位置。也可以用信息里给出的 `docker rm --force` 或 `sbx rm --force` 命令删除它 |
+| `cancel_failed` | 取消或达到限制时，无法确认步骤已经停止：引擎拒绝了停止，或者停止（包括删除评判的容器）加上步骤进程的结束超过了 10 秒。那里运行的内容可能仍在运行，所以 teamai 保留容器、工作和登录。例如：``docker could not stop the processes in container 3f9c2a7e1b04: Cannot connect to the Docker daemon. They may still run; remove the container with `docker rm --force 3f9c2a7e1b04`.`` | 先重新启动引擎，再运行一次 `teamai workflow cancel <run>`：运行时会停止步骤并关闭它的位置。也可以用信息里给出的 `docker rm --force` 或 `sbx rm --force` 命令删除它 |
 | 运行详情里的 **未关闭**（Not closed） | 无法删除这次尝试的容器或沙箱，或者删除和其中运行内容的结束超过了 10 秒，里面运行的东西可能还在运行。运行本身照常结束。 | 按信息里给出的命令执行 `docker rm --force <container>` 或 `sbx rm --force <sandbox>`。确认其中已没有任何东西在运行后，`teamai workflow cancel <run> --release <attempt>` 会放开这次尝试：即使运行时无法删除这个位置，也会忘掉它，信息里仍会给出 `rm --force` 命令 |
 | `runtime_interrupted` | 步骤运行时 teamai 重启了 | `teamai workflow retry <run> <step>` |
 | `isolation_unproven`（来自 `teamai-sandbox-<tool>`） | 包装器是为这次尝试没有登记的 agent 启动的，或者在步骤登记之前、在尝试的 worktree 之外启动的，所以什么都没有运行。或者容器不在过滤器后面（Podman、跑在自己虚拟机里的 docker，或者镜像里没有 `node`、版本太旧的 Docker），所以它能连到这台机器的每个端口 | 从 teamai 启动步骤，而不是应用自己的 agent；应用的辅助 agent 按设计会被拒绝。容器的话，用镜像里有 `node` 的 Docker（[步骤能连到什么](#步骤能连到这台机器的什么)），或者 `sbx` |
@@ -670,7 +670,6 @@ sbx ls -q
 
 ## 这个版本还不支持
 
-- 在容器里使用 teamai 专用登录的 Codex。在 `sbx` 上，Codex 用 `sbx secret set openai --oauth` 登录。
 - 步骤的网络规则。`requires.network: false` 会列在 `unenforced` 里，严格要求它的步骤会等待一个声明了它的驱动。步骤能连到这台机器的什么[按提供方而定](#步骤能连到这台机器的什么)；这台机器之外，步骤能连到任何主机，`sbx` 除外，那里由你的网络策略决定。
 - 用工具登录的评判。评判用环境变量凭据登录。
 - Windows。沙箱把尝试的每个路径挂载到同一路径上，而 `C:\` 路径在 Linux 沙箱里不存在，所以在 Windows 上，每个提供方的 `init` 都以 `sandbox_unavailable` 失败，`teamai-sandbox-<tool>` 以退出码 2 结束。请在 WSL2 里运行 teamai 和使用包装器的应用，或者用 `--driver local` 运行步骤。
