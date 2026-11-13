@@ -15,8 +15,9 @@ const HARNESS_CHANGED: Record<HarnessChange['part'], string> = {
  * stands on it and outcomes. Each cell names its column, so a drawer narrower than the table shows each pass as a card.
  * The dashboard client embeds it after `judgingView`, and so supplies `e`, `t`, `label`, `number`, `runStatus`,
  * `outcomesHtml`, `agentHarness`, `harnessRole` and `passJudgingHtml`.
- * A pass whose attempt ran on a step runtime shows the runtime, its handle, how far the attempt got, what the runtime
- * shows of the place (a label, its link, its fields), under the step, and the attempt holding a login the pass waits for.
+ * A pass whose attempt ran on a step runtime shows the runtime, how far the attempt got, and what the runtime shows of the
+ * place (a label, its link, its fields), under the step, and the attempt holding a login the pass waits for. The handle,
+ * the runtime's own id for the place, shows only while the runtime shows nothing of it, and stays in the name's title.
  */
 export const runStepsView = `
 const RUN_STEP_HEADS=['STEP','PASS','STATUS','TOKENS','ANSWER','SCORES','OUTCOMES'];
@@ -36,7 +37,9 @@ function runtimeShown(d) {
  return '<br><b>'+label('Place')+':</b> '+name+(fields?'<br>'+fields:'');
 }
 function runtimeLine(r) {
- return r?'<div class="runtime-line"><b>'+label('Runtime')+':</b> <span data-verbatim>'+e(r.name)+'</span> · <span title="'+e(r.handle||'')+'" data-verbatim>'+(r.handle?e(r.handle):label('no handle yet'))+'</span> · '+label(r.phase)+runtimeShown(r.display)+'</div>':'';
+ if(!r)return '';
+ const handle=r.display?'':'<span data-verbatim>'+(r.handle?e(r.handle):label('no handle yet'))+'</span> · ';
+ return '<div class="runtime-line"><b>'+label('Runtime')+':</b> <span title="'+e(r.handle||'')+'" data-verbatim>'+e(r.name)+'</span> · '+handle+label(r.phase)+runtimeShown(r.display)+'</div>';
 }
 function notClosedLine(r) {
  return r?.closeFailed?'<div class="runtime-line amber"><b>'+label('Not closed')+':</b> <span data-verbatim>'+e(r.closeFailed.code)+'</span> · <span data-verbatim>'+e(r.closeFailed.message)+'</span></div>':'';
