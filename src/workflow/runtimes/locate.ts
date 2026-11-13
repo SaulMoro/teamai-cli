@@ -357,14 +357,16 @@ async function copierHost(): Promise<string> {
 
 /**
  * Removes the copies in `dir` whose teamai process is gone, as a killed one leaves them. A pid of another host or pid
- * namespace names no process here, so its copies stay, for as long as that teamai may run from them.
+ * namespace names no process here, so its copies stay, for as long as that teamai may run from them. A copy named before
+ * copies named their host, `<pid>-<random>`, is taken as this host's, as every one was then.
  */
 async function removeOrphanCopies(dir: string, host: string): Promise<void> {
   for (const entry of await fs.readdir(dir).catch(() => [])) {
-    const [pidPart, hostPart] = entry.split('-');
-    const pid = Number(pidPart);
+    const parts = entry.split('-');
+    const pid = Number(parts[0]);
+    const isHere = parts.length === 2 || parts[1] === host;
 
-    if (hostPart === host && Number.isSafeInteger(pid) && signalPid(pid, 0) === 'gone') await fs.rm(path.join(dir, entry), { recursive: true, force: true });
+    if (isHere && Number.isSafeInteger(pid) && signalPid(pid, 0) === 'gone') await fs.rm(path.join(dir, entry), { recursive: true, force: true });
   }
 }
 
