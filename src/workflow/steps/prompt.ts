@@ -355,7 +355,7 @@ export async function runPromptStep({ config, lock, driver, lease, adapter = ste
     : contract && lease.cwd ? await detectProjectConfig(lease.cwd) ?? config : config;
 
   const stepConfig = teamConfig ?? config;
-  const loaded = lease.agent && teamConfig ? await loadDeployedAgent({ tool: selected, name: lease.agent, config: teamConfig, toolPaths }) : undefined;
+  const loaded = lease.agent && teamConfig ? await loadDeployedAgent({ tool: launched, name: lease.agent, config: teamConfig, toolPaths }) : undefined;
   const agent = loaded?.spec;
 
   if (lease.agent && !agent) {
@@ -366,7 +366,7 @@ export async function runPromptStep({ config, lock, driver, lease, adapter = ste
   }
 
   const chosen = await chooseStepModel({
-    step: lease.step, tool: selected, model: lease.model, defaultModel: lease.defaultModel, agent: agent ?? undefined, config: stepConfig,
+    step: lease.step, tool: launched, model: lease.model, defaultModel: lease.defaultModel, agent: agent ?? undefined, config: stepConfig,
     passesAgentFile: !onRuntime?.launchesAgents,
   });
 

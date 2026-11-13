@@ -8,7 +8,7 @@ import type { ConfinedOffer } from '@teamai/runtime-protocol';
 import { confinedEnvNames, isConfinedTool, runConfined, type ConfinedResult, type ConfinedRun } from './confined-launch.js';
 import type { ConfinedTool } from '../launch-registry.js';
 import type { TokenUsage } from '@teamai/tool-core/stdout';
-import { isAgentToolId } from '../tool-registry.js';
+import { agentFormatOf } from '../tool-registry.js';
 import { type LocalConfig } from '../types.js';
 import { JsonValueSchema, type JsonValue } from '@teamai/shared/json';
 import { observedModel } from '../agent-observation.js';
@@ -70,7 +70,7 @@ async function firstResolving<TTool extends string>({ config, lease }: Pick<Conf
 
     if (!asks) return { tool };
 
-    if (!isAgentToolId(tool)) {
+    if (agentFormatOf(tool) === undefined) {
       reasons.push(`${tool} takes no model teamai resolves.`);
       continue;
     }
