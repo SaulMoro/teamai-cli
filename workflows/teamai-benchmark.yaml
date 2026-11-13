@@ -62,8 +62,8 @@ finally:
     requires: { host: true }
     command: node -e "process.stderr.write(process.env.UNCHECKED + '\n'); process.exit(1)"
     env: { UNCHECKED: "{{ steps.report.outputs.unchecked }}" }
-  # Fails when no trial produced a result, naming each trial that ended in an error as report's text does: the run
-  # measured nothing. Drop it to report such a run without failing.
+  # Fails when no trial produced a result and a trial ended in an error, naming each such trial as report's text does:
+  # the run measured nothing. Drop it to report such a run without failing.
   - id: results
     needs: [report]
     if: steps.report.outputs.unmeasured != ''

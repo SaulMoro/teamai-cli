@@ -743,11 +743,11 @@ $ teamai benchmark run fix-auth --sandbox
 | `benchmark run` 退出码 | 何时 |
 | --- | --- |
 | 0 | 运行成功，写出了报告，且下面没有关卡失败。 |
-| 1 | 套件或启动被拒绝、运行超时或被取消，或者某个 `finally` 步骤失败或被取消：报告、check 无法运行时的 `checks` 关卡、没有 trial 得出结果时的 `results` 关卡，或者 `--fail-on-regression` 发现下降时的 `regression` 关卡。 |
+| 1 | 套件或启动被拒绝、运行超时或被取消，或者某个 `finally` 步骤失败或被取消：报告、check 无法运行时的 `checks` 关卡、没有 trial 得出结果且有 trial 以错误结束时的 `results` 关卡，或者 `--fail-on-regression` 发现下降时的 `regression` 关卡。 |
 
 仍在等待发布的记录从不改变退出码。
 
-当每个 trial 都以错误结束或没有运行时，例如没有 trial 能打开它的沙箱，运行什么也没有衡量。结果会列出每个以错误结束的 trial 及其原因。随后 `results` 步骤失败，`benchmark run` 以 1 退出：
+当没有 trial 得出结果且有 trial 以错误结束时，例如没有 trial 能打开它的沙箱，运行什么也没有衡量。结果会列出每个以错误结束的 trial 及其原因。被取消或被运行超时停下的 trial 并非因自身错误而结束，不会被列出：被取消或超时的运行本身已经以 1 退出。随后 `results` 步骤失败，`benchmark run` 以 1 退出：
 
 ```text
 No trial produced a result, so the run measured nothing. These trials ended with an error:
@@ -862,8 +862,8 @@ finally:
     if: steps.report.outputs.unchecked != ''
     command: node -e "process.stderr.write(process.env.UNCHECKED + '\n'); process.exit(1)"
     env: { UNCHECKED: "{{ steps.report.outputs.unchecked }}" }
-  # Fails when no trial produced a result, naming each trial that ended in an error as report's text does: the run
-  # measured nothing. Drop it to report such a run without failing.
+  # Fails when no trial produced a result and a trial ended in an error, naming each such trial as report's text does:
+  # the run measured nothing. Drop it to report such a run without failing.
   - id: results
     needs: [report]
     if: steps.report.outputs.unmeasured != ''
