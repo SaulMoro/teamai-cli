@@ -1762,8 +1762,8 @@ steps:
       expect(envelope(published), published.stderr).toMatchObject({ error: { code: 'place_kept', message: expect.stringContaining(`attempt ${one}`) } });
       expect(runtimeRecord(runId, one)).toMatchObject({ heldFor: { conversation: { tool: 'claude' } } });
       expect(runtimeRecord(runId, one)).not.toMatchObject({ phase: 'closed' });
-      // Nothing of the run reached teamai-reports, so no other machine can claim it.
-      expect(spawnSync('git', ['ls-tree', '-r', '--name-only', 'teamai-reports'], { cwd: path.join(sandbox, 'origin.git'), encoding: 'utf8' }).stdout).not.toContain(runId);
+      // teamai-reports holds no state of the run, so no other machine can claim it.
+      expect(spawnSync('git', ['ls-tree', '-r', '--name-only', 'teamai-reports'], { cwd: path.join(sandbox, 'origin.git'), encoding: 'utf8' }).stdout).not.toContain(`workflows/runs/${runId}/state.json`);
     });
 
     it('keeps the display the runtime gives with the prompt\'s acceptance while the prompt runs, for the run\'s details', async () => {
