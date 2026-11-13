@@ -25,8 +25,9 @@ A world freezes the build it was made from. Change teamai and the next proof nee
 the checkout has moved on. Start from \`teamai init ${TEAM_URL} --provider git --agent claude\`.
 
 A command that asks a question, such as accepting a team tool, needs a terminal: with none it runs unattended and
-refuses. Answer it through script: on macOS \`sh <run> sh -c '(sleep 8; printf y) | script -q /dev/null teamai <args>'\`,
-on Linux \`... | script -q -c 'teamai <args>' /dev/null\`.
+refuses. \`script -q /dev/null teamai <args>\` gives it one on macOS, \`script -q -c 'teamai <args>' /dev/null\` on Linux.
+Write y and a newline to its input only once the question is in its output: an answer sent earlier, or without the
+newline, leaves the run waiting, and an input at end of file (< /dev/null) ends it interrupted.
 
 Use the real tool on its cheapest model (claude -p --model haiku; \`doctor --drivers\` names each tool's). A faked tool
 proves the fake. A tool that is not installed or not signed in here makes the claim UNVERIFIABLE, not passed.
