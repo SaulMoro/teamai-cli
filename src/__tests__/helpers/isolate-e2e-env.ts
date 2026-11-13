@@ -3,6 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterAll } from 'vitest';
+import { installFakeOpencode } from '@teamai/tool-opencode/testing';
 
 // E2E fixtures run `git`, and the git hooks teamai installs run
 // `PATH="$HOME/.teamai/bin:$PATH" teamai hook-dispatch ...`. With the real HOME
@@ -34,6 +35,12 @@ fs.writeFileSync(path.join(bin, 'teamai'), `#!/bin/sh\nexec "${process.execPath}
 fs.chmodSync(path.join(bin, 'teamai'), 0o755);
 fs.writeFileSync(path.join(bin, 'teamai.cmd'), `@"${process.execPath}" "${cli}" %*\r\n`);
 
+// OpenCode's version decides how teamai delivers to it and launches it, and the first `opencode` on PATH was the
+// machine's, or under `npm run` the opencode-ai devDependency (V1), so a case passed or failed by how the suite was
+// started. Every file meets a stand-in V2 first instead, `opencode v2.0.29` as CI installs, which answers `--version`
+// and fails any command it does not know. A case that means another version, or the real binary, puts its own first.
+const opencode = installFakeOpencode();
+
 // The temporary directory too, as isolate-home gives unit tests theirs: no
 // other file then works in it, so a skill runner left working there fails the
 // test that left it (teardown-writers.ts). Beside the sandbox rather than in
@@ -52,7 +59,7 @@ process.env.USERPROFILE = home;
 // test that sets HOME for one spawn gets that home's ~/.config as well.
 delete process.env.XDG_CONFIG_HOME;
 process.env.GIT_CONFIG_NOSYSTEM = '1';
-process.env.PATH = `${bin}${path.delimiter}${process.env.PATH ?? ''}`;
+process.env.PATH = [bin, opencode, process.env.PATH ?? ''].join(path.delimiter);
 process.env.TMPDIR = tmp;
 process.env.TMP = tmp;
 process.env.TEMP = tmp;
@@ -63,5 +70,6 @@ afterAll(() => {
     else process.env[name] = value;
   }
   fs.rmSync(sandbox, { recursive: true, force: true });
+  fs.rmSync(opencode, { recursive: true, force: true });
   fs.rmSync(tmp, { recursive: true, force: true });
 });
