@@ -37,6 +37,7 @@ import type { Unenforced } from './requirements.js';
 import { isFailureCode, type FailureCode } from './failure-codes.js';
 import type { DriverIdentity, RunState, RunStatus, WorkflowFailure } from './types.js';
 import { definedFields } from '../utils/defined-fields.js';
+import { RESERVED_DRIVERS } from './reserved-drivers.js';
 import { parseYaml } from '@teamai/shared/yaml';
 import { readRegularFile, writeRegularFile } from '@teamai/shared/regular-file';
 
@@ -179,7 +180,8 @@ export function buildStartRecord(
     runMode: run.runMode || undefined,
     origin: run.origin || undefined,
     isolated: isIsolated(run) ? true : undefined,
-    driver: driver ? { kind: driver.kind, ...(run.driveOptions?.driver !== undefined && { definition: run.driveOptions.driver }) } : undefined,
+    // Only the local driver runs a definition, so another kind's record names none the run kept from a local drive.
+    driver: driver ? { kind: driver.kind, ...(driver.kind === RESERVED_DRIVERS.local && run.driveOptions?.driver !== undefined && { definition: run.driveOptions.driver }) } : undefined,
     status: 'running',
     startedAt: run.createdAt,
     username,

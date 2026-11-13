@@ -143,6 +143,8 @@ describe('#1083 workflow run records', () => {
     expect(buildStartRecord(run, driver, 'tester').driver).toEqual({ kind: 'local', definition: 'boxed' });
     expect(buildEndRecord({ ...run, status: 'succeeded' }, driver, 'tester').driver).toEqual({ kind: 'local', definition: 'boxed' });
     expect(buildEndRecord(runState(), driver, 'tester').driver).toEqual({ kind: 'local' });
+    // Only the local driver runs a definition: another driver that ends the run ran on none.
+    expect(buildEndRecord({ ...run, status: 'succeeded' }, { ...driver, kind: 'skill' }, 'tester').driver).toEqual({ kind: 'skill' });
   });
 
   it('reads and merges queued records published before and after source provenance', async () => {
