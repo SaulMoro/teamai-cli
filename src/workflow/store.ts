@@ -3,12 +3,12 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { z } from 'zod';
 import { DriverSchema } from '../driver-identity.js';
-import { writeFileAtomic, writeJsonAtomic } from '../utils/fs.js';
+import { errnoCode, writeFileAtomic, writeJsonAtomic } from '../utils/fs.js';
 import { resolveReal } from '../utils/path-safety.js';
 import { redact, redactJson } from '@teamai/shared/redact';
 import { getDataHome, type LocalConfig } from '../types.js';
 import type { JsonValue } from '@teamai/shared/json';
-import { acquireLock, releaseLock } from '../update.js';
+import { acquireLock, lockState, releaseLock } from '../update.js';
 import { ArchivedPassSchema, FailureSchema, ReleasedTokensSchema, SessionContinuationSchema, StepStateSchema, StoppedAttemptSchema } from './step-state.js';
 import type { HandoffOwner } from './snapshot.js';
 import { uniqueOutcomes, WorkOutcomeSchema, type WorkOutcome } from '../outcomes.js';
@@ -235,6 +235,36 @@ const LockOwnerSchema = z.object({ pid: z.number().int() });
 
 /** What `takeRunLock` did: ran its body, which answered `value`, or found the lock `busy` and ran nothing. */
 export type LockTaken<T> = { kind: 'held'; value: T } | { kind: 'busy'; error: { code: 'driver_running'; message: string } };
+
+/**
+ * The runs of `runs`, a data home's `workflows/runs`, that a live process of this machine drives: those whose
+ * `driver.lock` it holds, with its pid when the lock names one. None when the folder is not there.
+ */
+export async function runsDrivenIn(runs: string): Promise<Array<{ run: RunId; pid: number | undefined }>> {
+  let names: string[];
+
+  try {
+    names = (await fs.readdir(runs)).sort();
+  } catch (error) {
+    if (errnoCode(error) === 'ENOENT') return [];
+    throw error;
+  }
+
+  const driven: Array<{ run: RunId; pid: number | undefined }> = [];
+
+  for (const name of names) {
+    const run = RunIdSchema.safeParse(name);
+
+    if (!run.success) continue;
+    const lock = path.join(runs, run.data, 'driver.lock');
+
+    if (await lockState(lock) !== 'live') continue;
+    const owner = LockOwnerSchema.safeParse(parsedJson(await readRegularFile(lock, 'utf8').catch(() => null)));
+    driven.push({ run: run.data, pid: owner.success ? owner.data.pid : undefined });
+  }
+
+  return driven;
+}
 
 /**
  * Runs `body` holding `runs/<run>/driver.lock`, the one lock every driver of `run` on this machine takes, or answers
