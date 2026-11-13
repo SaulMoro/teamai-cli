@@ -1826,6 +1826,30 @@ describe('uninstall', () => {
     expect([await fse.pathExists(path.join(projectRoot, '.codex', 'agents')), await fse.pathExists(path.join(projectRoot, '.claude', 'agents', 'mine.md'))]).toEqual([false, true]);
   });
 
+  // Self mode's init makes each tool's rules folder before a rule is in it (known-agents.ts), so a team with no rule leaves it empty.
+  it('removes the empty rules folder self mode seeds, and keeps one holding the member\'s rule', async () => {
+    const { homeDir, repoPath } = await setupFixture(tmpDir);
+    const projectRoot = path.join(tmpDir, 'business-repo');
+    vi.stubEnv('HOME', homeDir);
+    vi.stubEnv('SHELL', '/bin/zsh');
+    await fse.ensureDir(path.join(projectRoot, '.claude', 'rules'));
+    await fse.outputFile(path.join(projectRoot, '.cursor', 'rules', 'mine.mdc'), '# mine\n');
+    const dataHome = path.join(homeDir, '.teamai', 'projects', 'business-repo-0123456789abcdef');
+    await fse.ensureDir(dataHome);
+
+    const localConfig = makeLocalConfig(homeDir, repoPath, {
+      scope: 'project',
+      projectRoot,
+      dataHome,
+      repo: { localPath: projectRoot, remote: '', kind: 'self', businessRepoRoot: projectRoot },
+    });
+    mockAutoDetectInit.mockResolvedValue({ localConfig, teamConfig: makeTeamConfig({ toolPaths: { claude: { skills: '.claude/skills', rules: '.claude/rules' }, cursor: { skills: '.cursor/skills', rules: '.cursor/rules' } } }) });
+
+    await uninstall({ force: true });
+
+    expect([await fse.pathExists(path.join(projectRoot, '.claude', 'rules')), await fse.pathExists(path.join(projectRoot, '.cursor', 'rules', 'mine.mdc'))]).toEqual([false, true]);
+  });
+
   it.each([
     ['takes a side branch origin has nothing to add to', [], ''],
     ['keeps a side branch holding a publish that could not push, and names it', ['[teamai] learning: retry on 429'], '  teamai-learnings\n'],

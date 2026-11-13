@@ -167,8 +167,8 @@ interface RemovalPlan {
   ruleDirs: string[];
   /** Every tool's agents directories, read as `ruleDirs` are. */
   agentDirs: string[];
-  /** In self mode, the agents directories of the tools this removes, which init makes before anything is in them: each goes once empty. */
-  seededAgentDirs: string[];
+  /** In self mode, the rules and agents directories of the tools this removes, which init makes before anything is in them: each goes once empty. */
+  seededDirs: string[];
   /** The rules globs teamai owns in OpenCode's opencode.json `instructions`, per file (#946). */
   opencodeOwnedGlobs: OpencodeRuleGlobEntries[];
   /** Built-in agent .md files deployed by the CLI (e.g. teamai-recall). */
@@ -1599,7 +1599,7 @@ async function buildRemovalPlan(
     keptFiles: [],
     ruleDirs: [...new Set([...rulesDirsByTool.values()].flat())],
     agentDirs: [...new Set([...agentDirsByTool.values()].flat())],
-    seededAgentDirs: isSelfMode(localConfig) ? [...new Set(toolsToMerge.flatMap((tool) => agentDirsByTool.get(tool) ?? []))] : [],
+    seededDirs: isSelfMode(localConfig) ? [...new Set(toolsToMerge.flatMap((tool) => [...rulesDirsByTool.get(tool) ?? [], ...agentDirsByTool.get(tool) ?? []]))] : [],
     opencodeOwnedGlobs: [],
     agentFiles: [],
     joycodeAgentIndexes: [],
@@ -3505,7 +3505,7 @@ async function sweepCreatedLeftovers(plan: RemovalPlan, hooksLeft: ReadonlyArray
  * folder up to the tool's rules directory; never a directory outside one, so a tool's own root stays.
  */
 function emptiedDirs(plan: RemovalPlan): string[] {
-  const dirs = new Set([...plan.skillDirs.map(({ dir }) => path.dirname(dir)), ...plan.agentFiles.map((file) => path.dirname(file)), ...plan.seededAgentDirs]);
+  const dirs = new Set([...plan.skillDirs.map(({ dir }) => path.dirname(dir)), ...plan.agentFiles.map((file) => path.dirname(file)), ...plan.seededDirs]);
   const ownedRuleFiles = plan.claudeMdFiles.flatMap(({ path: file, owned }) => (owned ? [file] : []));
 
   for (const file of [...plan.ruleFiles, ...ownedRuleFiles]) {
