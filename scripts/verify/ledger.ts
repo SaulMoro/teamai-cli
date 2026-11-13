@@ -416,6 +416,9 @@ const REMOTE_REF = /^project\/\.git\/refs\/remotes(\/|$)/;
 /** git's note of the last fetch, which every fetch rewrites whoever asked for it, as it does the remote's refs. */
 const FETCH_HEAD = 'project/.git/FETCH_HEAD';
 
+/** git's note of the last commit's message, which every commit rewrites whoever made it, as \`init --self\`'s does. */
+const COMMIT_EDITMSG = 'project/.git/COMMIT_EDITMSG';
+
 /** teamai's own directories: whatever wrote last there, it is teamai's to remove. */
 const TEAMAI_ROOTS = ['home/.teamai', 'project/.teamai'];
 
@@ -630,6 +633,11 @@ async function reverseOf(world: World, place: LedgerPlace, rules: LedgerRules): 
 
     if (entry === FETCH_HEAD) {
       excuse("git's note of the last fetch", entry);
+      continue;
+    }
+
+    if (entry === COMMIT_EDITMSG) {
+      excuse("git's note of the last commit's message", entry);
       continue;
     }
 
