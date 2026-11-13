@@ -96,7 +96,7 @@ describe('a probe of a machine of the world', () => {
     };
     const started = Date.now();
 
-    expect(captureOn(world, { kind: 'world' }, ['sbx', 'ls', '--json'], { timeoutMs: 300 })).toEqual({ code: null, stdout: '', why: 'NOT OBSERVED: sbx ls --json did not answer within 0.3 s' });
+    expect(captureOn(world, { kind: 'world' }, ['sbx', 'ls', '--json'], { timeoutMs: 300 })).toEqual({ code: null, stdout: '', why: 'NOT OBSERVED: sbx ls --json did not answer within 0.3 s', errno: 'ETIMEDOUT' });
     expect(Date.now() - started).toBeLessThan(5_000);
   });
 });

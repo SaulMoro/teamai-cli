@@ -234,9 +234,9 @@ export function captureOn(world: World, target: Target, argv: readonly string[],
   const place = placeOf(world, target);
   // From /, so the probe's own processes name no path of the world.
   const { command, args, env } = commandOf(world, { ...place, env: place.env ?? harnessEnvironment() }, argv, { pass: new Map(), cwd: '/' });
-  const { code, stdout, why } = runProbe({ command, args, shown: argv, cwd: '/', env, timeoutMs, maxBuffer: 256 * 1024 ** 2 });
+  const { code, stdout, why, errno } = runProbe({ command, args, shown: argv, cwd: '/', env, timeoutMs, maxBuffer: 256 * 1024 ** 2 });
 
-  return { code, stdout, why };
+  return { code, stdout, why, ...(errno !== undefined && { errno }) };
 }
 
 /** Each machine a world's commands run on: this one, whose process table every member on it shares, and each member's container. */
@@ -249,15 +249,24 @@ export function machinesOf(world: World): Array<{ label: string; target: Target;
 
 /**
  * Each install of the world on this machine, its own and each host member's: the verb argument that names it (`<run>`
- * or `<run>@<member>`), its HOME, and the environment its commands get. A program that keeps its state per HOME, as sbx
- * keeps its sandboxes, is asked there, as teamai asks it, never in the harness's HOME.
+ * or `<run>@<member>`), its HOME, the environment its commands get, and the command line that runs `argv` there from any
+ * environment, such as cleanup's. A program that keeps its state per HOME, as sbx keeps its sandboxes, is asked there,
+ * as teamai asks it. A world made before its environment was kept is asked with the harness's, as `captureOn` asks it.
  */
-export function hostInstalls(world: World): Array<{ at: string; target: Target; home: string; env: Readonly<Record<string, string>> }> {
+export function hostInstalls(world: World) {
   const targets: Target[] = [{ kind: 'world' }, ...(world.members ?? []).flatMap((member): Target[] => (member.machine === 'host' ? [{ kind: 'member', name: member.name }] : []))];
 
   return targets.map((target) => {
     const place = placeOf(world, target);
+    const { env } = place;
 
-    return { at: target.kind === 'world' ? world.runId : `${world.runId}@${target.name}`, target, home: place.home, env: place.env ?? harnessEnvironment() };
+    return {
+      at: target.kind === 'world' ? world.runId : `${world.runId}@${target.name}`,
+      target,
+      home: place.home,
+      env: env ?? harnessEnvironment(),
+      // The kept environment holds no secret. A world made before it was kept runs it with the harness's, as it was asked.
+      commandLine: (argv: readonly string[]): string[] => (env === undefined ? [...argv] : ['env', '-i', ...Object.entries(env).map(([name, value]) => `${name}=${value}`), ...argv]),
+    };
   });
 }

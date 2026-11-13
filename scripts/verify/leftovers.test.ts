@@ -1,4 +1,4 @@
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -89,6 +89,34 @@ describe('what each row reads from what an engine or the process table printed',
 
     expect(parseContainers('abc123\tteamai-r1-a1\t0123456789abcdef\tr1\trunning\n')).toEqual([{ id: 'abc123', name: 'teamai-r1-a1', owner: '0123456789abcdef', run: 'r1', state: 'running' }]);
     expect(parseMounts('abc123abc123ffff\t/w/20261112T120000-aaaaaa/project\t/tmp/x\n')).toEqual(new Map([['abc123abc123', ['/w/20261112T120000-aaaaaa/project', '/tmp/x']]]));
+  });
+});
+
+describe("the sbx row of section (f)", () => {
+  it("lists a world's sbx sandboxes in its own HOME, where sbx keeps them, and removes them there", async () => {
+    const dir = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-verify-sbx-')));
+    roots.push(dir);
+    const bin = path.join(dir, 'bin');
+    fs.mkdirSync(bin);
+    const name = `teamai-${SELF.journals[0]}-r0123abcd-a0123abcd`;
+    // sbx keeps its sandboxes per HOME: only the world's HOME lists the world's sandbox, and only there does rm reach it.
+    fs.writeFileSync(path.join(bin, 'sbx'), `#!/bin/sh\n[ "$HOME" = '${dir}/home' ] || { printf '[]'; exit 0; }\ncase "$1" in ls) printf '[{"name":"${name}"}]' ;; rm) printf '%s' "$3" > '${dir}/removed' ;; esac\n`, { mode: 0o755 });
+    const world: World = {
+      runId: SELF.runId, dir, project: `${dir}/project`, team: `${dir}/team.git`, home: `${dir}/home`, tmp: `${dir}/tmp`, logs: `${dir}/logs`, bin: `${dir}/bin`,
+      build: { commit: 'c', dirty: false, version: '0.0.0', tarball: 't.tgz', sha256: 's', node: 'v20' },
+      createdAt: '2026-11-12T18:00:00.000Z',
+      baseline: { teamRefs: {}, checkoutStatus: [] },
+      env: { HOME: `${dir}/home`, PATH: `${bin}:/usr/bin:/bin` },
+    };
+    const { sbxSandboxes } = await import('./leftovers/sbx.js');
+
+    const [seen] = await sbxSandboxes.observe({ world, self: SELF, others: [], records: { files: [], runs: [], runtimeJournals: 0 } });
+
+    expect(seen?.kind === 'observed' ? seen.findings.map((finding) => [finding.what, finding.attribution.kind]) : seen).toEqual([[`sbx sandbox ${name}`, 'own']]);
+    const [command = 'true', ...args] = (seen?.kind === 'observed' ? seen.findings[0]?.remove : undefined) ?? [];
+    // As cleanup runs it: from the harness's own environment.
+    expect(spawnSync(command, args).status).toBe(0);
+    expect(fs.readFileSync(path.join(dir, 'removed'), 'utf8')).toBe(name);
   });
 });
 
