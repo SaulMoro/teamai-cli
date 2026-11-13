@@ -634,8 +634,9 @@ export type OpState = z.infer<typeof OpStateSchema>;
  * so a runtime that gets it wrong loses only its display, and reads `can` as its own driver offer.
  */
 export function runtimeMessageSchemas<TDisplay extends z.ZodType>({ display }: { display: TDisplay }) {
-  // The nested shapes of a reply, read as strictly as the reply itself. The shared schemas stay open, since they also
-  // read what is no reply: a driver's `can`, which carries its own keys, and a runtime's own journal.
+  // The nested shapes of a reply, read as strictly as the reply itself, save a prompt's `result`, which the agent wrote.
+  // The shared schemas stay open, since they also read what is no reply: a driver's `can`, which carries its own keys,
+  // and a runtime's own journal.
   const failure = RuntimeFailureSchema.strict();
   const can = CanSchema.extend({ confined: z.array(ConfinedOfferSchema.strict()).optional() }).strict();
   const finished = { ...finishedPrompt, session: PromptSessionSchema.strict(), confined: ConfinedKeptSchema.strict().optional() };
@@ -659,7 +660,8 @@ export function runtimeMessageSchemas<TDisplay extends z.ZodType>({ display }: {
    * does: teamai seeds it, copies a `login` into it and reads sessions there.
    * `conversations: true` says a prompt's conversation outlives the prompt in its place, so a later prompt can continue
    * it, and teamai holds the place for it. Absent: teamai holds no place of the runtime for a later prompt.
-   * Read strictly, as every reply is at every depth (`can` and its offers too): a key teamai does not know fails the start. Protocol 1 has not been released, and
+   * Read strictly, as every reply is at every depth (`can` and its offers too), save a prompt's `result`, which the agent
+   * wrote and the runtime only relays: a key teamai does not know fails the start. Protocol 1 has not been released, and
    * teamai ships its runtimes with the engine, so a new key lands with the teamai that reads it and the protocol stays 1.
    */
   const InitReply = z.discriminatedUnion('ok', [
