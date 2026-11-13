@@ -13,7 +13,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { z } from 'zod';
 import { LeaseWireSchema } from '../../workflow/lease-wire.js';
 import type { EnvScope } from '../../workflow/requirements.js';
-import { benchmarkFixture, envelope, PRODUCT_URL, runFixBenchmark, startFixBenchmark, type BenchmarkFixture, type Envelope } from '../helpers/benchmark-fixture.js';
+import { benchmarkFixture, commandLeaseReport, envelope, PRODUCT_URL, runFixBenchmark, startFixBenchmark, type BenchmarkFixture, type Envelope } from '../helpers/benchmark-fixture.js';
 
 const WITHHELD = ['GITHUB_TOKEN', 'GH_TOKEN', 'GITLAB_TOKEN', 'GL_TOKEN', 'CI_JOB_TOKEN', 'SSH_AUTH_SOCK', 'GIT_ASKPASS', 'SSH_ASKPASS'];
 const WITH_SETUP = `schemaVersion: v1alpha1
@@ -72,17 +72,17 @@ function fromOutside(fixture: BenchmarkFixture, run: string, identity = { kind: 
     ...lease.env,
     TEAMAI_WORKFLOW_ATTEMPT: `${run}/${lease.attempt}`,
   });
-  const launch = async (file: string, args: string[], lease: Lease, env: NodeJS.ProcessEnv): Promise<{ code: number; stdout: string }> => execute(file, args, { cwd: lease.cwd, env })
+  const launch = async (file: string, args: string[], lease: Lease, env: NodeJS.ProcessEnv): Promise<{ code: number | null; stdout: string }> => execute(file, args, { cwd: lease.cwd, env })
     .then(({ stdout }) => ({ code: 0, stdout }), (error: unknown) => {
       const exited = ExitedSchema.parse(error);
-      return { code: exited.code ?? 1, stdout: exited.stdout ?? '' };
+      return { code: exited.code ?? null, stdout: exited.stdout ?? '' };
     });
   /** Runs the lease's setup, when it has one, and answers whether it passed. */
   const setUp = async (lease: Lease): Promise<boolean> => !lease.setup || (await launch('/bin/sh', ['-c', lease.setup.command], lease, envOf(lease, lease.setup.envScope))).code === 0;
   const command = async (lease: Lease): Promise<Envelope> => {
     if (lease.command === undefined) throw new Error(`step ${lease.step} runs no command`);
     const ran = await setUp(lease) ? await launch('/bin/sh', ['-c', lease.command], lease, envOf(lease, lease.envScope)) : undefined;
-    return send(lease, ran?.code === 0 ? { outcome: 'success', ...(lease.output !== undefined ? { outputs: JSON.parse(ran.stdout) } : {}) } : { outcome: 'failed' });
+    return send(lease, ran ? commandLeaseReport(ran) : { outcome: 'failed' });
   };
   const judged: string[] = [];
   /** Answers a lease confined to `dir` with a correct label, as a confined run of claude would, after reading the diff there. */
