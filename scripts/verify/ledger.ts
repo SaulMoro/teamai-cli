@@ -286,25 +286,35 @@ export function isToolOwnState(entry: string, text: string): boolean {
   return !holds(parsed);
 }
 
+/** What sbx v0.51.0 writes for itself on macOS in a HOME it is asked `sbx ls` from while not signed in there; anything else of it stays a LEAK. */
+const SBX_OWN = ['analyticskit', 'auth-ambiguous-refresh', 'auth-cooldown', 'locks', 'settings.json.lock', 'sandboxd/client.log'];
+
 /**
- * Where a program keeps state of its own, which teamai writes none of: what a sandbox or a thread left running is
- * section (f)'s. `makesDir`: the program makes the folder too, while a tool's home is #1808's (KNOWN_LEFTOVERS).
+ * Where a program keeps state of its own, which teamai writes none of: `dir` names it in a note, `paths` are its own.
+ * `makesDir`: the program makes those folders, and those that hold them, too; a tool's home is #1808's (KNOWN_LEFTOVERS).
+ * Never a whole store a teamai run fills, such as sbx's images and sandbox disks: what is left there stays a LEAK.
  */
 const OWN_STATE = [
-  ...TOOL_HOMES.map((dir) => ({ owner: 'the tool', dir, makesDir: false })),
+  ...TOOL_HOMES.map((dir) => ({ owner: 'the tool', dir, paths: [dir], makesDir: false })),
   // T3 Code checkpoints the project a thread of a teamai run works in, under refs/t3.
-  { owner: 'T3 Code', dir: 'project/.git/refs/t3', makesDir: true },
-  // sbx on macOS, in whichever HOME it is asked from: teamai's sandbox runtime, doctor and the observer ask in a world's.
-  { owner: 'sbx', dir: 'home/Library/Application Support/com.docker.sandboxes', makesDir: true },
-  { owner: 'sbx', dir: 'home/Library/Caches/com.docker.sandboxes', makesDir: true },
+  { owner: 'T3 Code', dir: 'project/.git/refs/t3', paths: ['project/.git/refs/t3'], makesDir: true },
+  // Teamai's sandbox runtime, doctor and the observer all ask sbx in a world's HOME.
+  { owner: 'sbx', dir: 'home/Library/Application Support/com.docker.sandboxes', paths: SBX_OWN.map((own) => `home/Library/Application Support/com.docker.sandboxes/sandboxes/${own}`), makesDir: true },
+  { owner: 'sbx', dir: 'home/Library/Caches/com.docker.sandboxes', paths: ['home/Library/Caches/com.docker.sandboxes/sandboxes/policykit'], makesDir: true },
 ];
 
-/** Whose own state the entry left behind with `value` is, and the folder it keeps it in; undefined when it may be teamai's. */
-export function ownStateOf(entry: string, value: string | undefined): { owner: string; dir: string } | undefined {
+/**
+ * Whose own state the entry left behind with `value` is, and the folder a note names; or the owner of a folder made only
+ * to hold such state, whose other contents are judged on their own; undefined when it may be teamai's.
+ */
+export function ownStateOf(entry: string, value: string | undefined): { kind: 'state'; owner: string; dir: string } | { kind: 'folder'; owner: string } | undefined {
   if (teamaiPlace(entry, value)) return undefined;
-  const own = OWN_STATE.find(({ dir, makesDir }) => entry.startsWith(`${dir}/`) || (makesDir && value === 'dir' && (entry === dir || dir.startsWith(`${entry}/`))));
+  const state = OWN_STATE.find(({ paths, makesDir }) => paths.some((own) => entry.startsWith(`${own}/`) || (makesDir && entry === own)));
 
-  return own === undefined ? undefined : { owner: own.owner, dir: own.dir };
+  if (state !== undefined) return { kind: 'state', owner: state.owner, dir: state.dir };
+  const folder = value === 'dir' ? OWN_STATE.find(({ paths, makesDir }) => makesDir && paths.some((own) => own.startsWith(`${entry}/`))) : undefined;
+
+  return folder === undefined ? undefined : { kind: 'folder', owner: folder.owner };
 }
 
 /** A run's branch, which a run that succeeded keeps as its result (docs/guide/workflow.md, The branches a run leaves). */
@@ -430,9 +440,7 @@ async function reverseOf(world: World, place: LedgerPlace): Promise<{ leaks: str
   const under = (entry: string, dirs: Iterable<string>): boolean => [...dirs].some((dir) => entry.startsWith(`${dir}/`));
 
   const excuse = (why: string, entry: string): void => {
-    const listed = [...theirs.values()].flat();
-
-    if (!listed.includes(entry) && !under(entry, listed)) theirs.set(why, [...theirs.get(why) ?? [], entry]);
+    if (!under(entry, [...theirs.values()].flat())) theirs.set(why, [...theirs.get(why) ?? [], entry]);
   };
 
   const repository = repositoryView(place.project);
@@ -469,11 +477,12 @@ async function reverseOf(world: World, place: LedgerPlace): Promise<{ leaks: str
 
     const own = change === 'left behind' ? ownStateOf(entry, after[entry]) : undefined;
 
-    if (own !== undefined) {
-      // A folder that only holds the program's is listed as the program's own folder.
-      excuse(`${own.owner}'s own state in ${own.dir}, where teamai writes none of it`, own.dir.startsWith(`${entry}/`) ? own.dir : entry);
+    if (own?.kind === 'state') {
+      excuse(`${own.owner}'s own state in ${own.dir}, where teamai writes none of it`, entry);
       continue;
     }
+
+    if (own?.kind === 'folder') continue;
 
     if (REMOTE_REF.test(entry)) {
       excuse("git's copy of what the remote holds", entry);
