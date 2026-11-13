@@ -169,7 +169,8 @@ describe("the container engines' row of section (f)", () => {
     const dir = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-verify-engine-')));
     roots.push(dir);
     const engine = fakeDocker29(dir, images);
-    vi.stubEnv('PATH', `${engine.bin}:/usr/bin:/bin`);
+    // The fake docker alone: a podman of the host, as CI runners have in /usr/bin, would answer for its own state.
+    vi.stubEnv('PATH', engine.bin);
     const world: World = {
       runId: SELF.runId, dir, project: `${dir}/project`, team: `${dir}/team.git`, home: `${dir}/home`, tmp: `${dir}/tmp`, logs: `${dir}/logs`, bin: engine.bin,
       build: { commit: 'c', dirty: false, version: '0.0.0', tarball: 't.tgz', sha256: 's', node: 'v20' },
