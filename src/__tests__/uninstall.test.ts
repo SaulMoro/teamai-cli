@@ -1948,6 +1948,19 @@ describe('uninstall', () => {
     it('removes each one no change of which is left out of its branch, with what git and teamai set up for them, and keeps the branches', async () => {
       const branches = ['teamai/r0123456789abcdef/fail/p1', 'teamai/r1111111111111111/build/p1'];
       const { projectRoot, worktrees, excludeBefore, configBefore } = await projectWithRunWorktrees(branches);
+      const printed: string[] = [];
+      const logSpy = vi.spyOn(console, 'log').mockImplementation((line?: unknown) => { printed.push(String(line ?? '')); });
+
+      try {
+        await uninstall({ dryRun: true });
+      } finally {
+        logSpy.mockRestore();
+      }
+
+      // The setup is the project's, named once: a run worktree is no checkout of the member's.
+      const realRoot = await fse.realpath(projectRoot);
+      expect(printed.filter((line) => line.includes('Workflow worktree setup in'))).toEqual([`   Workflow worktree setup in ${realRoot}, with no workflow worktree left:`]);
+      expect(printed.filter((line) => line.includes('extensions.worktreeConfig'))).toHaveLength(1);
 
       await uninstall({ force: true });
 

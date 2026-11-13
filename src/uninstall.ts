@@ -1900,7 +1900,7 @@ async function buildRemovalPlan(
       }
 
       if (!agentFilter) {
-        const { removeWorktreeSetup, runWorktreesOf } = await import('./workflow/worktree.js');
+        const { removeWorktreeSetup, runWorktreesOf, worktreeCheckout } = await import('./workflow/worktree.js');
 
         // The checkouts of one repository list the same worktrees.
         for (const checkout of plan.checkouts) {
@@ -1917,9 +1917,14 @@ async function buildRemovalPlan(
         }
 
         const gone = plan.runWorktrees.flatMap(({ worktree }) => (worktree.kind === 'removable' ? [worktree.dir] : []));
+        // The exclude block and the git config are the repository's: each checkout of it names them, so they are listed once.
+        const listed = new Set<string>();
 
-        for (const checkout of plan.checkouts) {
-          const entries = await removeWorktreeSetup(checkout, { dryRun: true, gone });
+        // A run worktree is no checkout of the member's: it goes above, and its setup is the project's.
+        for (const checkout of plan.checkouts.filter((dir) => worktreeCheckout(dir) === undefined)) {
+          const entries = (await removeWorktreeSetup(checkout, { dryRun: true, gone })).filter((entry) => !listed.has(entry));
+
+          for (const entry of entries) listed.add(entry);
 
           if (entries.length > 0) plan.worktreeSetups.push({ checkout, entries });
         }
