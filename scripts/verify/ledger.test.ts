@@ -153,6 +153,16 @@ describe("a tool instance's home in a ledger's section (e)", () => {
     expect(rules.isToolOwnState('home/.acme-claude/.claude.json', '{"mcpServers":{"docs":{"command":"node"}}}')).toBe(false);
   });
 
+  it('keeps what teamai delivers to the paths an instance sets for itself a LEAK, as its tool\'s', async () => {
+    const home = homeWithInstances();
+    const team = path.join(home, '.teamai', 'projects', 'w-project-0123456789abcdef', 'team-repo');
+    fs.writeFileSync(path.join(team, 'tools', 'acme-claude.yaml'), 'schemaVersion: v1alpha1\nname: acme-claude\nextends: claude\nhome: { dir: .acme-claude }\npaths: { skills: .acme-claude/skills, settings: .acme-claude/settings.json, mcp: .acme-claude/.claude.json, userScope: { rules: .acme-claude/team-rules } }\n');
+    const rules = ledgerRules(await toolInstancesIn(home));
+
+    expect(['home/.acme-claude/skills/hello-world/SKILL.md', 'home/.acme-claude/settings.json', 'home/.acme-claude/.claude.json', 'home/.acme-claude/team-rules/style.md'].map((entry) => rules.ownStateOf(entry, sha))).toEqual([undefined, undefined, undefined, undefined]);
+    expect(rules.ownStateOf('home/.acme-claude/projects/-w-project/s.jsonl', sha)).toEqual({ kind: 'state', owner: 'the tool', dir: 'home/.acme-claude' });
+  });
+
   it('excuses nothing in the home of an instance it could not read', () => {
     const rules = ledgerRules([]);
 

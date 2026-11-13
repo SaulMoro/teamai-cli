@@ -286,11 +286,19 @@ interface ToolView {
   readonly paths: z.infer<typeof ToolPathsSchema>;
   /** `entry`, a `home/…` or `project/…` path the shipped tool reads, as this one reads it. */
   readonly placed: (entry: string) => string;
+  /**
+   * What teamai delivers under HOME beyond what the tool reads as placed: an instance's own `paths`, which
+   * `instanceReadPath` leaves as they are. A shipped tool's deliveries are among its reads.
+   */
+  readonly homeDeliveries: readonly string[];
 }
 
 const SHIPPED_PATHS = TeamaiConfigBaseSchema.shape.toolPaths.parse(undefined);
 
-const SHIPPED_VIEWS: readonly ToolView[] = TOOL_ORDER.map((tool) => ({ tool, home: descriptorOf(tool).home.dir, paths: SHIPPED_PATHS[tool] ?? {}, placed: (entry) => entry }));
+const SHIPPED_VIEWS: readonly ToolView[] = TOOL_ORDER.map((tool) => ({ tool, home: descriptorOf(tool).home.dir, paths: SHIPPED_PATHS[tool] ?? {}, placed: (entry) => entry, homeDeliveries: [] }));
+
+/** The fields of tool paths teamai delivers to in user scope. */
+const USER_FIELDS = ['skills', 'rules', 'settings', 'agents', 'hooks', 'claudemd'] as const;
 
 /** The view of `instance`; none for one with no home of its own, which reads where its tool does. */
 function instanceView(instance: ResolvedToolInstance): ToolView[] {
@@ -302,7 +310,13 @@ function instanceView(instance: ResolvedToolInstance): ToolView[] {
     return base === 'home' || base === 'project' ? `${base}/${instanceReadPath(instance, { from: base, relative: rest.join('/') })}` : entry;
   };
 
-  return [{ tool: instance.extends, home: instance.home.dir, paths: instance.paths ?? defaultPathsOf(instance), placed }];
+  const paths = instance.paths ?? defaultPathsOf(instance);
+  const relatives = [...USER_FIELDS.map((field) => paths.userScope?.[field] ?? paths[field]), paths.mcp].flatMap((relative) => relative ?? []);
+  // Under HOME, or under the tool's home where its user paths are relative to it (Copilot's): either is teamai's.
+  const home = instance.home.dir;
+  const homeDeliveries = relatives.flatMap((relative) => [`home/${relative}`, `home/${home}/${relative}`]);
+
+  return [{ tool: instance.extends, home, paths, placed, homeDeliveries }];
 }
 
 /**
@@ -440,7 +454,7 @@ export interface LedgerRules {
 export function ledgerRules(instances: readonly ResolvedToolInstance[]): LedgerRules {
   const views = [...SHIPPED_VIEWS, ...instances.flatMap(instanceView)];
   const reads = [...new Set(views.flatMap((view) => toolReads(view.tool).map(view.placed)))];
-  const homeWrites = reads.filter((read) => read.startsWith('home/'));
+  const homeWrites = [...reads.filter((read) => read.startsWith('home/')), ...views.flatMap((view) => view.homeDeliveries)];
 
   const projectWrites = [...new Set([
     ...views.flatMap(({ paths }) => [paths.skills, paths.rules, paths.settings, paths.agents, paths.mcpProject, paths.claudemd].flatMap((write) => (write === undefined ? [] : [`project/${write}`]))),
