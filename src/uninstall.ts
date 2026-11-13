@@ -72,6 +72,7 @@ import { listTeamAgentDirs, listTeamAgentFolders, ownsAgentCopy, updateJoycodeAg
 import { RulesHandler, inlineRulesLabelOf, inlineRulesLocationOf, isLegacyLayoutCopy, ownsRuleCopy } from './resources/rules.js';
 import { deliveredHashes, projectCheckouts, syncDeliveredGitExclude } from './pull.js';
 import { BUILTIN_AGENT_NAMES } from './builtin-agents.js';
+import { teamaiBin } from './default-drivers.js';
 import { BUILTIN_SKILL_NAMES, LEGACY_BUILTIN_SKILL_NAMES, isCliOwnedSkillName } from './cli-skill-names.js';
 import { ownedSkillFiles, prunedWhole, removeOwnedFiles, skillsGuardBase } from './skill-owned-files.js';
 import { cleanupOf, hookAdapterDirIn, hookSettingsFile, installOf, isInstalledFor, locate, openclawWorkspaceDir, ownOf, SHARED_AGENT_SKILLS_PATH, workspaceHooksOf, writesOf, type Location } from './locate.js';
@@ -102,6 +103,7 @@ import {
 } from './utils/fs.js';
 import { installationsPath } from './installations.js';
 import { listQueuesIn } from './utils/pending-learnings.js';
+import { execCommand } from '@teamai/shared/exec';
 import { log } from '@teamai/shared/log';
 import { askConfirmation } from './utils/prompt.js';
 import { getUserHome, expandHome } from '@teamai/shared/home';
@@ -3508,6 +3510,7 @@ async function sweepCreatedLeftovers(plan: RemovalPlan, hooksLeft: ReadonlyArray
 
   try {
     if (await pathExists(runtimeState)) {
+      await removeSandboxWarm(home);
       await remove(runtimeState);
       log.success(`Removed ${runtimeState}/: what teamai's step runtimes kept`);
     }
@@ -3827,6 +3830,39 @@ export async function uninstall(opts: UninstallOptions): Promise<void> {
   } else {
     await uninstallHomeOnly(opts);
   }
+}
+
+/** How a member finds and removes by hand the warm images and sbx templates the sandbox runtime saved. */
+const WARM_BY_HAND = 'List them with `docker image ls teamai-warm`, `podman image ls teamai-warm` and `sbx template ls`, and remove each teamai-warm one with `docker image rm`, `podman image rm` or `sbx template rm --force`.';
+
+/**
+ * Has the sandbox runtime remove, in `home`, the warm images and sbx templates it saved there, before the journal that
+ * records them goes: each line it prints on stdout names one it removed, each on stderr one that stays.
+ */
+async function removeSandboxWarm(home: string): Promise<void> {
+  const runtime = teamaiBin('teamai-runtime-sandbox');
+
+  if (runtime === undefined) {
+    log.warn(`teamai's sandbox runtime (teamai-runtime-sandbox) is missing from this install, so the warm images and sbx templates it saved stay. ${WARM_BY_HAND}`);
+
+    return;
+  }
+
+  let ran: Awaited<ReturnType<typeof execCommand>>;
+
+  try {
+    ran = await execCommand(process.execPath, [runtime, 'remove-warm'], { env: { ...process.env, HOME: home }, timeoutMs: 300_000 });
+  } catch (e) {
+    log.warn(`Could not run teamai's sandbox runtime to remove the warm images and sbx templates it saved (${e instanceof Error ? e.message : String(e)}), so they stay. ${WARM_BY_HAND}`);
+
+    return;
+  }
+
+  for (const line of ran.stdout.split('\n').filter((said) => said.trim() !== '')) log.success(line);
+
+  for (const line of ran.stderr.split('\n').filter((said) => said.trim() !== '')) log.warn(line);
+
+  if (ran.code !== 0) log.warn(`teamai's sandbox runtime stopped with exit code ${ran.code} while it removed the warm images and sbx templates it saved, so some may stay. ${WARM_BY_HAND}`);
 }
 
 /**

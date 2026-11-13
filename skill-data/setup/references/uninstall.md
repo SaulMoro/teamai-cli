@@ -28,6 +28,9 @@ machine** (all tools)?"*
   those needs `teamai uninstall` run in it; after the last one, one more
   `teamai uninstall` outside any project removes what is left in `~/.teamai`,
   except the user's own `drivers/`, `runtimes/`, `sandboxes/` and `tools/` there.
+  That last one also removes the warm images and sbx templates teamai's sandbox
+  made, one `Removed …` line each; one it cannot remove is a warning with the
+  command that does.
 
 Reassure them (in their language): *"This only removes things from your computer.
 Your team's repo on the website is untouched — you can rejoin any time with
