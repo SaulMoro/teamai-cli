@@ -71,7 +71,7 @@ function byHand(fixture: BenchmarkFixture, run: string, identity = { kind: 'exte
     const env = { ...Object.fromEntries(Object.entries(fixture.env).filter(([key]) => !withheld.includes(key))), ...lease.env, TEAMAI_WORKFLOW_ATTEMPT: `${run}/${lease.attempt}` };
     const ran = await execute('/bin/sh', ['-c', lease.command], { cwd: lease.cwd, env }).then(({ stdout }) => ({ code: 0, stdout }), (error: unknown) => {
       const exited = ExitedSchema.parse(error);
-      return { code: exited.code ?? 1, stdout: exited.stdout ?? '' };
+      return { code: exited.code ?? null, stdout: exited.stdout ?? '' };
     });
     return send({ driver: identity, attempt: lease.attempt, revision: lease.revision, ...commandLeaseReport(ran) });
   };

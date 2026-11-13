@@ -72,10 +72,10 @@ function fromOutside(fixture: BenchmarkFixture, run: string, identity = { kind: 
     ...lease.env,
     TEAMAI_WORKFLOW_ATTEMPT: `${run}/${lease.attempt}`,
   });
-  const launch = async (file: string, args: string[], lease: Lease, env: NodeJS.ProcessEnv): Promise<{ code: number; stdout: string }> => execute(file, args, { cwd: lease.cwd, env })
+  const launch = async (file: string, args: string[], lease: Lease, env: NodeJS.ProcessEnv): Promise<{ code: number | null; stdout: string }> => execute(file, args, { cwd: lease.cwd, env })
     .then(({ stdout }) => ({ code: 0, stdout }), (error: unknown) => {
       const exited = ExitedSchema.parse(error);
-      return { code: exited.code ?? 1, stdout: exited.stdout ?? '' };
+      return { code: exited.code ?? null, stdout: exited.stdout ?? '' };
     });
   /** Runs the lease's setup, when it has one, and answers whether it passed. */
   const setUp = async (lease: Lease): Promise<boolean> => !lease.setup || (await launch('/bin/sh', ['-c', lease.setup.command], lease, envOf(lease, lease.setup.envScope))).code === 0;

@@ -205,7 +205,7 @@ const CommandLeaseSchema = z.object({
  */
 export function commandLeaseReport({ code, stdout }: { code: number | null; stdout: string }): { outcome: 'success' | 'failed'; exitCode?: number; outputs?: unknown } {
   const settled = { outcome: code === 0 ? 'success' as const : 'failed' as const, ...(code === null ? {} : { exitCode: code }) };
-  if (code !== 0 || stdout.trim() === '') return settled;
+  if (stdout.trim() === '') return settled;
   try {
     return { ...settled, outputs: JSON.parse(stdout) };
   } catch {
