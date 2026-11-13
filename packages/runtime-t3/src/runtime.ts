@@ -18,8 +18,9 @@ import type { T3Command } from './t3-command.js';
 // ─── teamai-runtime-t3 ───
 //
 //  Runtime protocol 1 for T3 Code: each prompt step runs as a T3 thread of its own, on the worktree teamai prepared,
-//  where the person can watch it, steer it or stop it. It runs no command: command steps and setup go to the next
-//  runtime of the driver definition (`local` in teamai-t3).
+//  where the person can watch it, steer it or stop it. It runs no command: a command step goes to another runtime of
+//  the driver definition, or to the host slot (teamai-t3 declares no other), and a prompt step with setup needs a
+//  runtime that runs both.
 //
 //    init     connect to the environment, signing in when attended; offer the tools its provider instances run, and
 //             to judge with them best effort (a confined prompt)
