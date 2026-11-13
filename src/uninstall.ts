@@ -74,7 +74,7 @@ import { BUILTIN_SKILL_NAMES, LEGACY_BUILTIN_SKILL_NAMES, isCliOwnedSkillName } 
 import { ownedSkillFiles, prunedWhole, removeOwnedFiles, skillsGuardBase } from './skill-owned-files.js';
 import { cleanupOf, hookAdapterDirIn, hookSettingsFile, installOf, isInstalledFor, locate, openclawWorkspaceDir, ownOf, SHARED_AGENT_SKILLS_PATH, workspaceHooksOf, writesOf, type Location } from './locate.js';
 import { toolHome, toolHomesAcrossProfiles } from './tool-home.js';
-import { channelsOf, hookSyntaxOf, isToolId, descriptorOf } from './tool-registry.js';
+import { channelsOf, hookSyntaxOf, isToolId, descriptorOf, toolOf } from './tool-registry.js';
 import { CODEX_TOOL_IDS } from './utils/tool-names.js';
 import { CODEX_TOOL, describeOutsideSkillLink, readTeamSkills, skillOrigin } from './resources/skills.js';
 import { allowsSkillDirectory, describeSkillDirectoryBlock, findSkillDirectoryBlock } from './skill-directory.js';
@@ -168,6 +168,8 @@ interface RemovalPlan {
   agentDirs: string[];
   /** In self mode, the agents directories of the tools this removes, which init makes before anything is in them: each goes once empty. */
   seededAgentDirs: string[];
+  /** The folders the tool instances this removes take teamai's resources in, from their resolved paths: each goes once empty. */
+  instanceFolders: string[];
   /** The rules globs teamai owns in OpenCode's opencode.json `instructions`, per file (#946). */
   opencodeOwnedGlobs: OpencodeRuleGlobEntries[];
   /** Built-in agent .md files deployed by the CLI (e.g. teamai-recall). */
@@ -1599,6 +1601,7 @@ async function buildRemovalPlan(
     ruleDirs: [...new Set([...rulesDirsByTool.values()].flat())],
     agentDirs: [...new Set([...agentDirsByTool.values()].flat())],
     seededAgentDirs: isSelfMode(localConfig) ? [...new Set(toolsToMerge.flatMap((tool) => agentDirsByTool.get(tool) ?? []))] : [],
+    instanceFolders: instanceFoldersOf(toolsToMerge, toolPaths, baseDir),
     opencodeOwnedGlobs: [],
     agentFiles: [],
     joycodeAgentIndexes: [],
@@ -3487,12 +3490,33 @@ async function sweepCreatedLeftovers(plan: RemovalPlan, hooksLeft: ReadonlyArray
   }
 }
 
+/** The fields of a tool's paths that name a folder; the others name a file. */
+const FOLDER_FIELDS: ReadonlySet<string> = new Set(['skills', 'rules', 'agents']);
+
+/**
+ * The folders under `baseDir` the tool instances among `tools` take teamai's resources in, from their resolved
+ * `toolPaths`, which init makes before anything is in them. An instance named like a shipped tool adjusts that tool, and
+ * keeps its folders as it does.
+ */
+function instanceFoldersOf(tools: readonly string[], toolPaths: ReturnType<typeof scopedToolPaths>, baseDir: string): string[] {
+  const inside = (relative: string): boolean => !path.isAbsolute(relative) && !relative.split('/').some((segment) => ['', '.', '..', '~'].includes(segment));
+
+  return [...new Set(tools.flatMap((tool) => {
+    const instance = toolOf(tool)?.instance;
+
+    if (instance === undefined || instance.name === instance.extends) return [];
+
+    return Object.entries(toolPaths[tool] ?? {}).flatMap(([field, relative]) =>
+      (typeof relative === 'string' && FOLDER_FIELDS.has(field) && inside(relative) ? [path.join(baseDir, ...relative.split('/'))] : []));
+  }))];
+}
+
 /**
  * The directories uninstall removed teamai's skills, rules and agents from, deepest first. Above a rule file, each
  * folder up to the tool's rules directory; never a directory outside one, so a tool's own root stays.
  */
 function emptiedDirs(plan: RemovalPlan): string[] {
-  const dirs = new Set([...plan.skillDirs.map(({ dir }) => path.dirname(dir)), ...plan.agentFiles.map((file) => path.dirname(file)), ...plan.seededAgentDirs]);
+  const dirs = new Set([...plan.skillDirs.map(({ dir }) => path.dirname(dir)), ...plan.agentFiles.map((file) => path.dirname(file)), ...plan.seededAgentDirs, ...plan.instanceFolders]);
   const ownedRuleFiles = plan.claudeMdFiles.flatMap(({ path: file, owned }) => (owned ? [file] : []));
 
   for (const file of [...plan.ruleFiles, ...ownedRuleFiles]) {

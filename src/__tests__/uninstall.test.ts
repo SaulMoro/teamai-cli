@@ -4555,6 +4555,35 @@ describe('uninstall', () => {
     expect(await fse.pathExists(checkoutSettings)).toBe(false);
   });
 
+  describe('a team tool instance in a workspace', () => {
+    const ACME_CLAUDE = 'schemaVersion: v1alpha1\nname: acme-claude\nextends: claude\nhome: { dir: .acme-claude }\n';
+
+    /** A workspace whose team repo adds acme-claude, set up as init leaves it: its rules and agents folders made before anything is in them. */
+    async function setupInstance(): Promise<{ projectRoot: string; folder: string }> {
+      const { homeDir, repoPath } = await setupFixture(tmpDir);
+      vi.stubEnv('HOME', homeDir);
+      vi.stubEnv('SHELL', '/bin/zsh');
+      const projectRoot = path.join(tmpDir, 'workspace');
+      const folder = path.join(projectRoot, '.acme-claude');
+      await fse.outputFile(path.join(repoPath, 'teamai.yaml'), YAML.stringify(makeTeamConfig()));
+      await fse.outputFile(path.join(repoPath, 'tools', 'acme-claude.yaml'), ACME_CLAUDE);
+      for (const dir of ['agents', 'rules']) await fse.ensureDir(path.join(folder, dir));
+      const localConfig = makeLocalConfig(projectRoot, repoPath, { scope: 'project', projectRoot, enabledAgents: ['claude', 'acme-claude'] });
+      const { loadTeamConfig } = await import('../config.js');
+      mockAutoDetectInit.mockResolvedValue({ localConfig, teamConfig: await loadTeamConfig(repoPath, localConfig) });
+
+      return { projectRoot, folder };
+    }
+
+    it('removes the folders it set up for the instance once nothing is in them', async () => {
+      const { folder } = await setupInstance();
+
+      await uninstall({ force: true });
+
+      expect([await fse.pathExists(path.join(folder, 'agents')), await fse.pathExists(path.join(folder, 'rules'))]).toEqual([false, false]);
+    });
+  });
+
   describe('with two workspaces and no user scope', () => {
     async function setupWorkspace(homeDir: string, name: string, enabledAgents: string[]) {
       const projectRoot = path.join(tmpDir, name);
