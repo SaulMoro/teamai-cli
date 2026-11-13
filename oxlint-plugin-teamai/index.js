@@ -41,6 +41,7 @@ import uncachedEntry from './rules/uncached-entry.js';
 import familyFacts from './rules/family-facts.js';
 import worktreeRemoval from './rules/worktree-removal.js';
 import opencodeMajor from './rules/opencode-major.js';
+import shippedToolIds from './rules/shipped-tool-ids.js';
 
 // The anti-slop rules are vendored TypeScript. oxlint imports plugins with plain
 // Node, and `npm run lint` runs on Node 20 in CI, which can't import TypeScript:
@@ -92,6 +93,7 @@ export default definePlugin({
     'family-facts': familyFacts,
     'opencode-major': opencodeMajor,
     'worktree-removal': worktreeRemoval,
+    'shipped-tool-ids': shippedToolIds,
     ...antiSlopRules,
   },
 });
