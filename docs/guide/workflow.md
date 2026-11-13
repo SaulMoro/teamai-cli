@@ -79,7 +79,7 @@ Every step after the first lists the steps it waits for in `needs`. `needs: []` 
 
 A step can carry an `if` expression. When it is false, the step is skipped, and that does not fail the run. An expression reads `steps.<id>.outcome` (`success`, `failed`, or `skipped`) and `steps.<id>.outputs.<field>`, only for steps it needs, directly or through their needs. It has `==`, `!=`, `<`, `<=`, `>`, `>=`, `&&`, `||`, `!`, parentheses, and the literals `'text'`, numbers, `true`, `false`, `null`, and `[]`. A path can index an array, as in `steps.review.outputs.files[0]`. The functions `length`, `any`, `all`, and `filter` read arrays. A missing value reads as `null`. `false`, `null`, `0`, and `''` are false; everything else is true. `==` is strict and compares whole values: `'1' == 1` and `'Build' == 'build'` are false.
 
-A step whose dependency failed still runs when its `if` reads every failed dependency. Use this to recover:
+A step whose dependency failed still runs when its `if` reads every failed dependency, through its `outcome` or its `outputs`. An output the failed step did not give reads as `null`, so `steps.check.outputs.text != ''` is then true and the step runs; to run only on an output, compare it with a value, as in `steps.check.outputs.text == 'done'`. Use this to recover:
 
 ```yaml
   - id: label

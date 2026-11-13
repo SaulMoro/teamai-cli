@@ -79,7 +79,7 @@ steps:
 
 步骤可以带 `if` 表达式。表达式为假时跳过该步骤，这不会让运行失败。表达式可以读取 `steps.<id>.outcome`（`success`、`failed` 或 `skipped`）和 `steps.<id>.outputs.<field>`，且只能读取该步骤直接或间接依赖的步骤。可用 `==`、`!=`、`<`、`<=`、`>`、`>=`、`&&`、`||`、`!`、括号，以及字面量 `'text'`、数字、`true`、`false`、`null` 和 `[]`。路径可以用下标读取数组元素，例如 `steps.review.outputs.files[0]`。函数 `length`、`any`、`all` 和 `filter` 读取数组。不存在的值读作 `null`。`false`、`null`、`0` 和 `''` 为假，其他值都为真。`==` 是严格比较，并比较整个值：`'1' == 1` 和 `'Build' == 'build'` 都为假。
 
-依赖失败的步骤，如果 `if` 读取了每个失败的依赖，仍会运行。可以用它做补救：
+依赖失败的步骤，如果 `if` 通过 `outcome` 或 `outputs` 读取了每个失败的依赖，仍会运行。失败步骤没有给出的输出读作 `null`，此时 `steps.check.outputs.text != ''` 为真，该步骤会运行；只想在某个输出上运行时，把它和一个值比较，例如 `steps.check.outputs.text == 'done'`。可以用它做补救：
 
 ```yaml
   - id: label
