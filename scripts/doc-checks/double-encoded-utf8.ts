@@ -2,9 +2,10 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { check } from '../doc-check.js';
 
-// A UTF-8 lead byte read as Latin-1 and encoded again turns into one of Â..ô followed by a character of U+0080..U+00BF
-// (`…` becomes `â\u0080¦`). An edit that wrote non-ASCII text without its encoding, such as perl without -CSD, leaves it.
-const ENCODED_TWICE = /[Â-ô][\u0080-¿]/u;
+// A UTF-8 sequence read as Latin-1 and encoded again turns into its lead, one of Â..ô, followed by as many characters of
+// U+0080..U+00BF as the lead takes (`…` becomes `â\u0080¦`), so Latin-1 text such as «café» does not match. An edit that
+// wrote non-ASCII text without its encoding, such as perl without -CSD, leaves it.
+const ENCODED_TWICE = /[Â-ß][\u0080-¿]|[à-ï][\u0080-¿]{2}|[ð-ô][\u0080-¿]{3}/u;
 
 // Every file members and agents read, but images, whose bytes are no text.
 const ROOTS = ['docs', 'skill-data'];
