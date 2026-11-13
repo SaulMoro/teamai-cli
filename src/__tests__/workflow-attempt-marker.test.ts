@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { nestedCall, nestedStart } from '../workflow/attempt-marker.js';
+import { markedAttempt, nestedCall, nestedStart } from '../workflow/attempt-marker.js';
 
 const roots: string[] = [];
 
@@ -55,5 +55,23 @@ describe('nested workflow starts', () => {
   it('refuses a call on a run that exists only on the marker, not in a workflow place', () => {
     expect(nestedCall({})).toBeUndefined();
     expect(nestedCall({ TEAMAI_WORKFLOW_ATTEMPT: 'r0123456789abcdef/a0000000a' })).toEqual({ kind: 'marker', attempt: 'r0123456789abcdef/a0000000a' });
+  });
+});
+
+describe('the attempt a marker names', () => {
+  it('is the run and the attempt of a marker that names exactly one of each', () => {
+    expect(markedAttempt({ TEAMAI_WORKFLOW_ATTEMPT: 'r0123456789abcdef/a0000000a' })).toEqual({ run: 'r0123456789abcdef', attempt: 'a0000000a' });
+  });
+
+  it.each([
+    ['unset', undefined],
+    ['empty', ''],
+    ['a run alone', 'r0123456789abcdef'],
+    ['an extra segment', 'r0123456789abcdef/a0000000a/x'],
+    ['a run id that is none', 'run-1/a0000000a'],
+    ['an attempt id that is none', 'r0123456789abcdef/attempt'],
+    ['a trailing slash', 'r0123456789abcdef/a0000000a/'],
+  ])('is none for %s', (_, marker) => {
+    expect(markedAttempt({ TEAMAI_WORKFLOW_ATTEMPT: marker })).toBeUndefined();
   });
 });
