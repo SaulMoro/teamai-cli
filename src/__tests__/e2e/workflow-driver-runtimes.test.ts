@@ -1037,7 +1037,7 @@ steps:
 
     const [review] = readRunState(runOf(ran)).steps;
     expect(review, ran.stderr).toMatchObject({ status: 'succeeded', unenforced: [{ requirement: 'isolation', asked: 'worktree', provided: 'none' }] });
-    const warning = `Runtime toy of driver toyfull runs steps in full access on this machine, as ${path.join(repo, '.teamai', 'drivers', 'toyfull.yaml')} sets: they run without asking for permission, an unattended run approves the runtime's own full-access sign-in where it asks for one, and teamai cannot prove any isolation. Their isolation is recorded as none.`;
+    const warning = `Runtime toy of driver toyfull runs steps in full access on this machine, as drivers/toyfull.yaml in the team repo sets: they run without asking for permission, an unattended run approves the runtime's own full-access sign-in where it asks for one, and teamai cannot prove any isolation. Their isolation is recorded as none.`;
     expect(ran.stderr.split(warning).length - 1).toBe(1);
   });
 
