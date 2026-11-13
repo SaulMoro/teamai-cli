@@ -12,7 +12,7 @@ import { getUserHome } from '@teamai/shared/home';
 import { isOnPath, pathDirs } from '@teamai/shared/lookpath';
 import { log } from '@teamai/shared/log';
 import { type ToolId } from './tools.js';
-import { isToolId, descriptorOf, type DescriptorOf } from './tool-registry.js';
+import { descriptorOf, toolOf, type DescriptorOf } from './tool-registry.js';
 
 /**
  * WorkBuddy 5.6.2 and 5.7.6 (`VENDOR_ASSETS` in main/index.js) unpack each
@@ -306,8 +306,8 @@ const BUNDLED_SHELLS: Record<BundledShellTool, () => string | null> = {
   codebuddy: resolveCodebuddyShell,
 };
 
-function isBundledShellTool(tool: string): tool is BundledShellTool {
-  return isToolId(tool) && descriptorOf(tool).hooks.shell === 'bundled';
+function isBundledShellTool(tool: ToolId): tool is BundledShellTool {
+  return descriptorOf(tool).hooks.shell === 'bundled';
 }
 
 /**
@@ -315,5 +315,7 @@ function isBundledShellTool(tool: string): tool is BundledShellTool {
  * none (the caller should then fall back to the /bin/sh check).
  */
 export function bundledShellFor(tool: string): string | null {
-  return isBundledShellTool(tool) ? BUNDLED_SHELLS[tool]() : null;
+  const base = toolOf(tool)?.base;
+
+  return base !== undefined && isBundledShellTool(base) ? BUNDLED_SHELLS[base]() : null;
 }
