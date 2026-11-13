@@ -57,13 +57,18 @@ describe("another program's own state in a ledger's section (e)", () => {
     ['project/.git/refs/t3', 'dir', { kind: 'state', owner: 'T3 Code', dir: 'project/.git/refs/t3' }],
     ['project/.git/refs/t3x', 'dir', undefined],
     ['project/.git/refs/t3/teamai/r1', sha, undefined],
-    // What sbx v0.51.0 writes on macOS in the HOME an `sbx ls` is asked from while it is not signed in there.
+    // What sbx v0.51.0 and v0.53.0 write on macOS in the HOME an `sbx ls` or `sbx template ls` is asked from while it is
+    // not signed in there.
     [`${SBX}/sandboxes/analyticskit/events/default/anonymous/sandboxes~1~0.marlin.v1.proto`, sha, { kind: 'state', owner: 'sbx', dir: SBX }],
     [`${SBX}/sandboxes/locks/dockerhub-refresh-77792493ac080e9d.lock`, sha, { kind: 'state', owner: 'sbx', dir: SBX }],
     [`${SBX}/sandboxes/auth-cooldown`, 'dir', { kind: 'state', owner: 'sbx', dir: SBX }],
     [`${SBX}/sandboxes/settings.json.lock`, sha, { kind: 'state', owner: 'sbx', dir: SBX }],
     [`${SBX}/sandboxes/sandboxd/client.log`, sha, { kind: 'state', owner: 'sbx', dir: SBX }],
     [`${SBX_CACHE}/sandboxes/policykit/governor.db`, sha, { kind: 'state', owner: 'sbx', dir: SBX_CACHE }],
+    // What sbx v0.53.0 adds there for `sbx secret ls`, which teamai asks once `sbx ls` answers: its update check and its
+    // feature toggles.
+    [`${SBX}/sandboxes/sandboxd/update-state.json`, sha, { kind: 'state', owner: 'sbx', dir: SBX }],
+    [`${SBX_CACHE}/sandboxes/unleash-toggles-production.json`, sha, { kind: 'state', owner: 'sbx', dir: SBX_CACHE }],
     // A folder that holds them is judged by what it holds.
     [`${SBX}/sandboxes/sandboxd`, 'dir', { kind: 'folder', owner: 'sbx' }],
     ['home/Library', 'dir', { kind: 'folder', owner: 'sbx' }],

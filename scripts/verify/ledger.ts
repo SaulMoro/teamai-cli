@@ -286,8 +286,12 @@ export function isToolOwnState(entry: string, text: string): boolean {
   return !holds(parsed);
 }
 
-/** What sbx v0.51.0 writes for itself on macOS in a HOME it is asked `sbx ls` from while not signed in there; anything else of it stays a LEAK. */
-const SBX_OWN = ['analyticskit', 'auth-ambiguous-refresh', 'auth-cooldown', 'locks', 'settings.json.lock', 'sandboxd/client.log'];
+/**
+ * What sbx v0.51.0 and v0.53.0 write for themselves on macOS in a HOME they are asked `sbx ls` or `sbx template ls`
+ * from while not signed in there, and what v0.53.0 adds for `sbx secret ls`, which teamai asks once `sbx ls` answers:
+ * its update check, and its feature toggles in its cache. Anything else of it stays a LEAK.
+ */
+const SBX_OWN = ['analyticskit', 'auth-ambiguous-refresh', 'auth-cooldown', 'locks', 'settings.json.lock', 'sandboxd/client.log', 'sandboxd/update-state.json'];
 
 /**
  * Where a program keeps state of its own, which teamai writes none of: `dir` names it in a note, `paths` are its own.
@@ -298,9 +302,9 @@ const OWN_STATE = [
   ...TOOL_HOMES.map((dir) => ({ owner: 'the tool', dir, paths: [dir], makesDir: false })),
   // T3 Code checkpoints the project a thread of a teamai run works in, under refs/t3.
   { owner: 'T3 Code', dir: 'project/.git/refs/t3', paths: ['project/.git/refs/t3'], makesDir: true },
-  // Teamai's sandbox runtime, doctor and the observer all ask sbx in a world's HOME.
+  // Teamai's sandbox runtime, doctor, the observer and section (f) all ask sbx in a world's HOME.
   { owner: 'sbx', dir: 'home/Library/Application Support/com.docker.sandboxes', paths: SBX_OWN.map((own) => `home/Library/Application Support/com.docker.sandboxes/sandboxes/${own}`), makesDir: true },
-  { owner: 'sbx', dir: 'home/Library/Caches/com.docker.sandboxes', paths: ['home/Library/Caches/com.docker.sandboxes/sandboxes/policykit'], makesDir: true },
+  { owner: 'sbx', dir: 'home/Library/Caches/com.docker.sandboxes', paths: ['policykit', 'unleash-toggles-production.json'].map((own) => `home/Library/Caches/com.docker.sandboxes/sandboxes/${own}`), makesDir: true },
 ];
 
 /**
