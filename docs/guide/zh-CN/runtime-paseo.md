@@ -358,7 +358,7 @@ Judge whether the change does what the step asked. Read the diff and the session
 ✖ Step "classify" failed with model_unavailable: The Paseo daemon at ws://127.0.0.1:6767/ws has no claude model claude-opus-0-1. It offers: claude-opus-5-5, claude-opus-5, claude-fable-5-1, claude-fable-5, claude-opus-4-8[1m], claude-opus-4-8, claude-sonnet-5-5, claude-sonnet-5, claude-sonnet-5[1m], claude-opus-4-7[1m], claude-opus-4-7, claude-opus-4-6[1m], claude-opus-4-6, claude-sonnet-4-6[1m], claude-sonnet-4-6, claude-haiku-5-5, claude-haiku-4-5.
 ```
 
-智能体拿到步骤的提示词。延续前面某个步骤会话的步骤，能延续时会在那个步骤的智能体里继续，见[延续步骤的对话](#延续步骤的对话)。Paseo 不报告完整的 token 数，所以有 token 预算的步骤交给下一个运行时。
+智能体拿到步骤的提示词。延续前面某个步骤会话的步骤，能延续时会在那个步骤的智能体里继续，见[延续步骤的对话](#延续步骤的对话)。守护进程在本机时，Claude 或 Codex 步骤会报告其会话记录的 token 数，在评分读取该会话的地方读取。OpenCode 步骤，或在其他机器上的守护进程中运行的步骤，不报告 token 数；所以当守护进程提供 OpenCode 或在其他机器上运行时，有 token 预算的步骤交给下一个运行时。
 
 ## 团队工具实例
 
@@ -486,7 +486,7 @@ paseo permit allow 7c483fce --all
 
 ## 延续步骤的对话
 
-带 `session.from` 或 `session: continue` 的提示词步骤，会在前面那个步骤的 Paseo 智能体里继续。teamai 把这个步骤作为该智能体的新一轮对话发送，所以它记得自己读过和说过的内容，运行记录把会话记为已恢复（resumed）。满足以下条件时才这样做：
+带 `session.from` 或 `session: continue` 的提示词步骤，会在前面那个步骤的 Paseo 智能体里继续。teamai 把这个步骤作为该智能体的新一轮对话发送，所以它记得自己读过和说过的内容，运行记录把会话记为已恢复（resumed），只计这一轮的 token 数。满足以下条件时才这样做：
 
 - 该智能体仍在 Paseo 中、没有被归档，它的那一轮已经结束，且没有其他步骤的一轮正在其中运行；
 - 这个步骤在同一个 Paseo 工作区中工作，例如在外层步骤打开的副本里、带 `workspace: continue` 的步骤；

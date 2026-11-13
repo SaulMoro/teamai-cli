@@ -358,7 +358,7 @@ A model the daemon lacks fails before any agent starts:
 ✖ Step "classify" failed with model_unavailable: The Paseo daemon at ws://127.0.0.1:6767/ws has no claude model claude-opus-0-1. It offers: claude-opus-5-5, claude-opus-5, claude-fable-5-1, claude-fable-5, claude-opus-4-8[1m], claude-opus-4-8, claude-sonnet-5-5, claude-sonnet-5, claude-sonnet-5[1m], claude-opus-4-7[1m], claude-opus-4-7, claude-opus-4-6[1m], claude-opus-4-6, claude-sonnet-4-6[1m], claude-sonnet-4-6, claude-haiku-5-5, claude-haiku-4-5.
 ```
 
-The agent gets the step's prompt. A step that continues an earlier step's session goes on in that step's agent when it can, as [Continue a step's conversation](#continue-a-steps-conversation) describes. Paseo reports no full token counts, so a step under a token budget runs on the next runtime.
+The agent gets the step's prompt. A step that continues an earlier step's session goes on in that step's agent when it can, as [Continue a step's conversation](#continue-a-steps-conversation) describes. On a daemon on this machine, a Claude or Codex step reports the tokens its session records, read where scoring reads that session. An OpenCode step, or a step on a daemon on another machine, reports none, so when the daemon offers OpenCode or runs elsewhere, a step under a token budget runs on the next runtime.
 
 ## Team tool instances
 
@@ -486,7 +486,7 @@ In an attended run, a step with `interactive: true` runs as a Paseo agent you wo
 
 ## Continue a step's conversation
 
-A prompt step with `session.from` or `session: continue` goes on in the earlier step's Paseo agent. teamai sends the step as a new turn of that agent, so it keeps what it read and said, and the run records the session as resumed. It does so when:
+A prompt step with `session.from` or `session: continue` goes on in the earlier step's Paseo agent. teamai sends the step as a new turn of that agent, so it keeps what it read and said, and the run records the session as resumed, with the tokens of that turn only. It does so when:
 
 - the agent is still in Paseo, not archived, and its turn has ended, with no other step's turn running in it;
 - the step works in the same Paseo workspace, such as a step with `workspace: continue` in the copy an enclosing step opened;

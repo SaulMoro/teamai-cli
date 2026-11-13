@@ -349,7 +349,7 @@ An `interactive: true` prompt step opens a thread you work in. The thread is tol
 
 ## Continue a step's conversation
 
-A prompt step with `session.from` or `session: continue` goes on in the earlier step's T3 thread. teamai sends the step as a new turn in that thread, so the agent keeps what it read and said there, and the run records the session as resumed. It does so when:
+A prompt step with `session.from` or `session: continue` goes on in the earlier step's T3 thread. teamai sends the step as a new turn in that thread, so the agent keeps what it read and said there, and the run records the session as resumed. Like every T3 step, it reports the tokens its Claude or Codex session records, here only those of its own turn. It does so when:
 
 - the earlier step's thread is still in T3 Code, and its turn has ended;
 - the step works in the same folder;
@@ -418,5 +418,5 @@ No machine linked to T3 Code has https://github.com/acme/acme-app.git as a proje
 - A step's thread is a thread of its own, not a child of the thread that started the run, and so is a woken member's thread: T3 records no parent for either.
 - It takes no `credentials`. A thread's tool runs in T3 Code's environment, on T3 Code's own sign-in, so teamai refuses them for this runtime before a step runs: `NAME: env:VAR` with `t3 does not offer can.env, so it cannot keep a credential to the processes it is for`, and `<tool>: login` with `t3 launches agents its own way, in each tool's own home, so it brings no login`.
 - A read-only prompt step runs in the copy teamai keeps for it, as a `new` step does in its worktree. A `clone` or `team` step runs on its own folder, which teamai adds to T3 Code as a project. Once the folder is gone, the next T3 step that closes removes that project. A prompt step with a `role`, `env` or `setup` runs only on another runtime of the definition that offers them, such as `tools`; `teamai-t3` lists none, so there it fails `requirement_unmet`.
-- T3 reports no token usage, so a `budget` in tokens cannot be checked here, and it cannot cap `max_turns`.
+- It cannot cap `max_turns`.
 - `permissions: unattended` steps are not offered. They need a thread whose tool runs in a sandbox, which a later version adds.

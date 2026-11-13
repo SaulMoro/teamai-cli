@@ -349,7 +349,7 @@ teamai workflow cancel r70d31098c8884803
 
 ## 继续一个步骤的对话
 
-带 `session.from` 或 `session: continue` 的提示词步骤会在前一个步骤的 T3 线程里继续。teamai 把这个步骤作为该线程的新一轮发送，所以 agent 保留它在那里读过和说过的内容，运行把会话记为 resumed。满足以下条件时才会这样：
+带 `session.from` 或 `session: continue` 的提示词步骤会在前一个步骤的 T3 线程里继续。teamai 把这个步骤作为该线程的新一轮发送，所以 agent 保留它在那里读过和说过的内容，运行把会话记为 resumed。和每个 T3 步骤一样，它报告其 Claude 或 Codex 会话记录的 token 数，这里只算它自己这一轮的。满足以下条件时才会这样：
 
 - 前一个步骤的线程仍在 T3 Code 中，并且它的那一轮已经结束；
 - 这个步骤在同一个文件夹里工作；
@@ -418,5 +418,5 @@ No machine linked to T3 Code has https://github.com/acme/acme-app.git as a proje
 - 步骤的线程是独立的线程，不是启动运行的那个线程的子线程；被唤醒成员的线程也一样：T3 不为它们记录父线程。
 - 它不接受 `credentials`。线程的工具在 T3 Code 的环境中、用 T3 Code 自己的登录运行，所以 teamai 会在任何步骤运行之前拒绝为这个运行时配置的凭据：`NAME: env:VAR` 的提示是 `t3 does not offer can.env, so it cannot keep a credential to the processes it is for`，`<tool>: login` 的提示是 `t3 launches agents its own way, in each tool's own home, so it brings no login`。
 - 只读的提示词步骤在 teamai 为它保留的副本里运行，和 `new` 步骤在它的 worktree 里一样。`clone` 或 `team` 步骤在它自己的文件夹上运行，teamai 会把那个文件夹添加为 T3 Code 项目。文件夹被删除后，下一个关闭的 T3 步骤会删除这个项目。带 `role`、`env` 或 `setup` 的提示词步骤只在定义中提供它们的其他运行时（例如 `tools`）上运行；`teamai-t3` 没有这样的运行时，所以在那里以 `requirement_unmet` 失败。
-- T3 不报告 token 用量，所以这里无法检查以 token 计的 `budget`，也无法限制 `max_turns`。
+- 它无法限制 `max_turns`。
 - 不提供 `permissions: unattended` 的步骤。它们需要一个工具在沙箱中运行的线程，后续版本会加入。
