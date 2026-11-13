@@ -294,6 +294,9 @@ const OWN_STATE = [
   ...TOOL_HOMES.map((dir) => ({ owner: 'the tool', dir, makesDir: false })),
   // T3 Code checkpoints the project a thread of a teamai run works in, under refs/t3.
   { owner: 'T3 Code', dir: 'project/.git/refs/t3', makesDir: true },
+  // sbx on macOS, in whichever HOME it is asked from: teamai's sandbox runtime, doctor and the observer ask in a world's.
+  { owner: 'sbx', dir: 'home/Library/Application Support/com.docker.sandboxes', makesDir: true },
+  { owner: 'sbx', dir: 'home/Library/Caches/com.docker.sandboxes', makesDir: true },
 ];
 
 /** Whose own state the entry left behind with `value` is, and the folder it keeps it in; undefined when it may be teamai's. */
@@ -427,7 +430,9 @@ async function reverseOf(world: World, place: LedgerPlace): Promise<{ leaks: str
   const under = (entry: string, dirs: Iterable<string>): boolean => [...dirs].some((dir) => entry.startsWith(`${dir}/`));
 
   const excuse = (why: string, entry: string): void => {
-    if (!under(entry, [...theirs.values()].flat())) theirs.set(why, [...theirs.get(why) ?? [], entry]);
+    const listed = [...theirs.values()].flat();
+
+    if (!listed.includes(entry) && !under(entry, listed)) theirs.set(why, [...theirs.get(why) ?? [], entry]);
   };
 
   const repository = repositoryView(place.project);
@@ -465,7 +470,8 @@ async function reverseOf(world: World, place: LedgerPlace): Promise<{ leaks: str
     const own = change === 'left behind' ? ownStateOf(entry, after[entry]) : undefined;
 
     if (own !== undefined) {
-      excuse(`${own.owner}'s own state in ${own.dir}, where teamai writes none of it`, entry);
+      // A folder that only holds the program's is listed as the program's own folder.
+      excuse(`${own.owner}'s own state in ${own.dir}, where teamai writes none of it`, own.dir.startsWith(`${entry}/`) ? own.dir : entry);
       continue;
     }
 

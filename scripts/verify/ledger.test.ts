@@ -53,6 +53,13 @@ describe("another program's own state in a ledger's section (e)", () => {
     ['project/.git/refs/t3', 'dir', { owner: 'T3 Code', dir: 'project/.git/refs/t3' }],
     ['project/.git/refs/t3x', 'dir', undefined],
     ['project/.git/refs/t3/teamai/r1', 'f'.repeat(64), undefined],
+    // What sbx v0.51.0 writes on macOS in the HOME it is asked from, as `sbx ls` from a HOME never signed in left it.
+    ['home/Library/Application Support/com.docker.sandboxes/sandboxes/analyticskit/session.json', 'f'.repeat(64), { owner: 'sbx', dir: 'home/Library/Application Support/com.docker.sandboxes' }],
+    ['home/Library/Caches/com.docker.sandboxes/sandboxes/policykit/governor.db', 'f'.repeat(64), { owner: 'sbx', dir: 'home/Library/Caches/com.docker.sandboxes' }],
+    ['home/Library/Caches', 'dir', { owner: 'sbx', dir: 'home/Library/Caches/com.docker.sandboxes' }],
+    ['home/Library', 'dir', { owner: 'sbx', dir: 'home/Library/Application Support/com.docker.sandboxes' }],
+    ['home/Library/Preferences', 'dir', undefined],
+    ['home/Library/Preferences/com.example.plist', 'f'.repeat(64), undefined],
   ])('judges %s holding %s as the state of %o', (entry, value, own) => {
     expect(ownStateOf(entry, value)).toEqual(own);
   });
