@@ -1,7 +1,8 @@
 import fs from 'node:fs';
+import { syncBuiltinESMExports } from 'node:module';
 import os from 'node:os';
 import path from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { sessionSince } from './sessions.js';
 
 describe('the session a step thread kept', () => {
@@ -21,6 +22,39 @@ describe('the session a step thread kept', () => {
     try {
       expect(await sessionSince({ driver: 'claudeAgent', toolHome, cwd, since: launchedAt })).toMatchObject({ kind: 'found', session: { id: '5ab0c71a-0000-4000-8000-000000000001' } });
     } finally {
+      fs.rmSync(toolHome, { recursive: true, force: true });
+    }
+  });
+
+  it.each([
+    {
+      cause: 'a file system error that is not about permission', error: (folder: string) => Object.assign(new Error(`EMFILE: too many open files, scandir '${folder}'`), { code: 'EMFILE', path: folder }),
+      why: (folder: string) => `reading ${folder} failed (EMFILE: too many open files, scandir '${folder}')`,
+    },
+    { cause: 'an error that is not the file system\'s', error: () => new TypeError('listing broke'), why: () => 'listing broke' },
+  ])('is a failed lookup, with its message, not a folder teamai has no permission to read, when listing the store hits $cause', async ({ error, why }) => {
+    const toolHome = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-t3-sessions-')));
+    const folder = path.join(toolHome, 'sessions', '2026');
+    fs.mkdirSync(folder, { recursive: true });
+    // The store lists through node:fs's named exports, which follow the default object only once synced. Other folders list
+    // through opendir, which the spy leaves alone.
+    vi.spyOn(fs, 'readdirSync').mockImplementation(((dir: fs.PathLike, _options: { withFileTypes: true }) => {
+      if (dir.toString() === folder) throw error(folder);
+      const listing = fs.opendirSync(dir.toString());
+      const entries: fs.Dirent[] = [];
+
+      for (let entry = listing.readSync(); entry !== null; entry = listing.readSync()) entries.push(entry);
+      listing.closeSync();
+
+      return entries;
+    }) as typeof fs.readdirSync);
+    syncBuiltinESMExports();
+
+    try {
+      expect(await sessionSince({ driver: 'codex', toolHome, cwd: path.join(toolHome, 'worktree'), since: Date.now() })).toEqual({ kind: 'failed', why: why(folder) });
+    } finally {
+      vi.restoreAllMocks();
+      syncBuiltinESMExports();
       fs.rmSync(toolHome, { recursive: true, force: true });
     }
   });
