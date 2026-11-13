@@ -281,6 +281,16 @@ export function runRemovalRefusal(error: unknown): { error: { code: 'run_not_fou
   throw error;
 }
 
+/**
+ * Whether this machine keeps anything of run `run`: its record, or its folder, which alone is what a fleet member keeps
+ * of a run it claimed. Both go only when an uninstall, or retention, removes the run.
+ */
+export async function isRunHere(config: LocalConfig, run: RunId): Promise<boolean> {
+  const kept = await Promise.all([runFilePath(config, run), path.join(runsDir(config), run)].map(async (file) => (await fs.stat(file).catch(() => undefined)) !== undefined));
+
+  return kept.includes(true);
+}
+
 /** The pid lock file `lock` names, when it names one. */
 async function lockPid(lock: string): Promise<number | undefined> {
   const owner = LockOwnerSchema.safeParse(parsedJson(await readRegularFile(lock, 'utf8').catch(() => null)));
@@ -368,11 +378,10 @@ export async function takeRunLock<T>(config: LocalConfig, run: RunId, body: (loc
 async function tryDriverLock(config: LocalConfig, run: RunId): Promise<'held' | 'busy'> {
   const dataHome = getDataHome(config);
   const removal = runsRemovalLockIn(dataHome);
-  const isRecorded = async (): Promise<boolean> => (await fs.stat(runFilePath(config, run)).catch(() => undefined)) !== undefined;
-  const wasRecorded = await isRecorded();
+  const wasRecorded = await isRunHere(config, run);
 
   const tried = await withFileLock(removal, RUNS_REMOVAL_LOCK_WAIT, async () => {
-    if (wasRecorded && !await isRecorded()) return 'removed';
+    if (wasRecorded && !await isRunHere(config, run)) return 'removed';
 
     return await acquireLock(driverLockPath(config, run)) ? 'held' : 'busy';
   }, { createParent: false });

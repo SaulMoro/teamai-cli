@@ -14,7 +14,7 @@ import type { LaunchTool } from '../../launch-registry.js';
 import { getDataHome, type LocalConfig } from '../../types.js';
 import { withFileLock } from '../../update.js';
 import { errnoCode, writeJsonAtomic } from '../../utils/fs.js';
-import { attemptDir, AttemptIdSchema, attemptResultPath, attemptsDir, RunIdSchema, RUNS_REMOVAL_LOCK_WAIT, runsRemovalLockIn, type AttemptId, type RunId } from '../store.js';
+import { attemptDir, AttemptIdSchema, attemptResultPath, attemptsDir, isRunHere, RunIdSchema, RUNS_REMOVAL_LOCK_WAIT, runsRemovalLockIn, type AttemptId, type RunId } from '../store.js';
 import type { WorkflowFailure } from '../types.js';
 import type { SessionRef } from '../workspace.js';
 import { redact } from '@teamai/shared/redact';
@@ -852,15 +852,13 @@ function attemptThrough({ config, run, attempt, sends, driver, sources, deadline
 
       if (before?.closeFailed) opening.closeFailed = before.closeFailed;
       const lock = runsRemovalLockIn(getDataHome(config));
-      const runDir = path.dirname(attemptsDir(config, run));
-      const isRunRecorded = async (): Promise<boolean> => (await fs.stat(runDir).catch(() => undefined)) !== undefined;
-      const wasRunRecorded = await isRunRecorded();
+      const wasRunRecorded = await isRunHere(config, run);
 
       // An uninstall holds this lock from its check that no place is open until it has removed the runs, so a run it
       // removed meanwhile is gone once this takes it, and a place recorded there would have no run to close it. A data
       // home it removed whole is not made again: only a run never recorded before needs it made.
       const recorded = await withFileLock(lock, RUNS_REMOVAL_LOCK_WAIT, async () => {
-        if (wasRunRecorded && !await isRunRecorded()) return false;
+        if (wasRunRecorded && !await isRunHere(config, run)) return false;
         await save(opening);
 
         return true;
