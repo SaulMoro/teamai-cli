@@ -24,6 +24,10 @@ or TEAMAI_* variable of your shell reaches them. Set one on the command line whe
 A world freezes the build it was made from. Change teamai and the next proof needs a new world; doctor warns when
 the checkout has moved on. Start from \`teamai init ${TEAM_URL} --provider git --agent claude\`.
 
+A command that asks a question, such as accepting a team tool, needs a terminal: with none it runs unattended and
+refuses. Answer it through script: on macOS \`sh <run> sh -c '(sleep 8; printf y) | script -q /dev/null teamai <args>'\`,
+on Linux \`... | script -q -c 'teamai <args>' /dev/null\`.
+
 Use the real tool on its cheapest model (claude -p --model haiku; \`doctor --drivers\` names each tool's). A faked tool
 proves the fake. A tool that is not installed or not signed in here makes the claim UNVERIFIABLE, not passed.
 
