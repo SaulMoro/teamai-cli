@@ -51,7 +51,10 @@ export default defineRule({
     /** @type {any[]} the launchers this file passes to a launch */
     const passed = [];
 
-    /** Whether `value`, a launch's launcher, is one this file makes: a function it writes, or one a function of its own builds. */
+    /**
+     * Whether `value`, a launch's launcher, is one this file makes: a function it writes, or one a function of its own builds.
+     * @returns {boolean}
+     */
     const isMadeHere = (/** @type {any} */ value, depth = 0) => {
       if (depth > 4 || value === undefined || value === null) return false;
 
