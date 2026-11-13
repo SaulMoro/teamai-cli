@@ -126,3 +126,22 @@ describe('a prompt the host slot answers, and the limits a runtime stops its too
     expect(RuntimeMessageSchema.safeParse({ type: 'init', ok: true, can: {}, prompt: true, toolHome: true, conversations: true }).success).toBe(true);
   });
 });
+
+describe('a reply read strictly, at every depth', () => {
+  const OP = 'op-0123abcd';
+  const finished = { session: { tool: 'claude', id: 'session-1' }, result: { output: {} } };
+
+  it.each([
+    { what: 'a can key', reply: { type: 'init', ok: true, can: { max_turn: true } }, key: 'max_turn', path: ['can'] },
+    { what: 'a key of a confined offer', reply: { type: 'init', ok: true, can: { confined: [{ level: 'verified', tools: ['claude'], acess: 'full' }] } }, key: 'acess', path: ['can', 'confined', 0] },
+    { what: 'a failure key', reply: { op: OP, event: 'failed', failure: { code: 'exec_failed', message: 'm', hint: 'x' } }, key: 'hint', path: ['failure'] },
+    { what: 'a session key', reply: { op: OP, event: 'finished', ...finished, session: { tool: 'claude', id: 's', path: '/x' } }, key: 'path', path: ['session'] },
+    { what: 'a kept confinement key', reply: { op: OP, event: 'finished', ...finished, confined: { level: 'verified', access: 'full', dir: '/x' } }, key: 'dir', path: ['confined'] },
+    { what: 'a key of an operation reattach reports', reply: { event: 'alive', handle: 'toy-1', ops: [{ op: OP, state: 'running', pid: 4 }] }, key: 'pid', path: ['ops', 0] },
+  ])('refuses $what it does not know, naming it', ({ reply, key, path }) => {
+    const parsed = RuntimeMessageSchema.safeParse(reply);
+
+    expect(parsed.success).toBe(false);
+    expect(parsed.error?.issues.flatMap((issue) => ('errors' in issue ? issue.errors.flat() : [issue]))).toContainEqual(expect.objectContaining({ code: 'unrecognized_keys', keys: [key], path }));
+  });
+});
