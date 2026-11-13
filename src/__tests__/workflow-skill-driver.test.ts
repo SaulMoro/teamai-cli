@@ -1125,6 +1125,28 @@ steps:
     for (const running of later) expect(running).not.toContain(serve.attempt);
   });
 
+  it('stops the command of a run an uninstall removed while it ran, and makes no data home again', async () => {
+    const stops: string[] = [];
+    const harness = await skillHarness({ serve: SERVE }, {
+      runners: (runners) => ({ ...runners, command: (input) => (input.command === 'sleep 300' ? untilStopped(() => { stops.push(input.attempt); }) : runners.command(input)) }),
+    });
+    roots.push(harness.root);
+    const started = await harness.call({ kind: 'start', name: 'serve', answers: { parallel: 1, confirmed: false }, inputs: undefined });
+    if (!('data' in started) || !('turn' in started.data)) throw new Error(JSON.stringify(started));
+    const { run } = started.data.turn;
+    const serve = started.data.turn.running.find((entry) => entry.step === 'serve');
+    if (serve?.phase !== 'running') throw new Error(JSON.stringify(started.data.turn));
+    const dataHome = getDataHome(harness.config);
+    fs.rmSync(dataHome, { recursive: true, force: true });
+
+    const checked = async (): Promise<void> => {
+      for (let poll = 0; poll < 5; poll += 1) await harness.context.runners.sleep(0);
+    };
+    await expect(checked()).rejects.toThrow(`Run ${run} is not on this machine`);
+    expect(stops).toEqual([serve.attempt]);
+    expect(fs.existsSync(dataHome)).toBe(false);
+  });
+
   it.each([
     // The person cancels the run from their terminal while setup runs.
     { stop: 'the run cancelled', timeout: '', meanwhile: async (client: WorkflowClient, run: RunId) => { await client.cancel(run); }, step: { status: 'cancelled' } },
