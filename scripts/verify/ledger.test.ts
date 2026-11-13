@@ -163,6 +163,13 @@ describe("a tool instance's home in a ledger's section (e)", () => {
     expect(rules.ownStateOf('home/.acme-claude/projects/-w-project/s.jsonl', sha)).toEqual({ kind: 'state', owner: 'the tool', dir: 'home/.acme-claude' });
   });
 
+  it("reads a member's own instance in place of the team's of the same name", async () => {
+    const home = homeWithInstances();
+    fs.writeFileSync(path.join(home, '.teamai', 'tools', 'acme-claude.yaml'), 'schemaVersion: v1alpha1\nname: acme-claude\nextends: claude\nhome: { dir: .mine }\n');
+
+    expect((await toolInstancesIn(home)).filter((instance) => instance.name === 'acme-claude').map((instance) => instance.home?.dir)).toEqual(['.mine']);
+  });
+
   it('excuses nothing in the home of an instance it could not read', () => {
     const rules = ledgerRules([]);
 

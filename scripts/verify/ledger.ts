@@ -240,14 +240,16 @@ export async function toolInstancesIn(home: string): Promise<ResolvedToolInstanc
     return config.success ? [config.data.repo.localPath] : [];
   });
 
-  const instances = await Promise.all([
-    ...[...new Set(teamRepos)].map((root) => teamToolInstances({ root, namespaces: async () => 'legacy' })),
-    // The member's own folder has the team root's layout, with no namespaces.
+  const [team, own] = await Promise.all([
+    Promise.all([...new Set(teamRepos)].map((root) => teamToolInstances({ root, namespaces: async () => 'legacy' }))),
+    // The member's own folder has the team root's layout, with no namespaces; their instance replaces the team's.
     teamToolInstances({ root: path.join(home, '.teamai'), namespaces: async () => [] }),
   ]);
 
+  const instances = [...team.flat().filter((instance) => !own.some((mine) => mine.name === instance.name)), ...own];
+
   // `.acme/`, `./.acme` and `.acme` name one folder.
-  return instances.flat().map((instance) => (instance.home === undefined ? instance : { ...instance, home: { ...instance.home, dir: path.posix.normalize(instance.home.dir).replace(/\/+$/, '') } }));
+  return instances.map((instance) => (instance.home === undefined ? instance : { ...instance, home: { ...instance.home, dir: path.posix.normalize(instance.home.dir).replace(/\/+$/, '') } }));
 }
 
 const Base = z.enum(['home', 'project']);
