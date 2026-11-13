@@ -627,6 +627,8 @@ describe('uninstall', () => {
     vi.stubEnv('HOME', homeDir);
     const dataHome = path.join(teamaiHome, 'projects', 'current');
     const record = path.join(dataHome, 'workflows', 'runs', 'r0123456789abcdef', 'attempts', 'a01234567', 'runtime.json');
+    // An attempt opens a place of a run its data home records.
+    await fse.outputJson(path.join(dataHome, 'workflows', 'runs', 'r0123456789abcdef.json'), {});
     mockAutoDetectInit.mockResolvedValue({
       localConfig: makeLocalConfig(homeDir, repoPath, { scope: 'project', projectRoot: homeDir, dataHome }),
       teamConfig: makeTeamConfig(),

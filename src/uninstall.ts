@@ -2766,15 +2766,24 @@ async function forgetUninstalledToolPaths(
   if (localConfig.scope === 'project') await syncDeliveredGitExclude(localConfig, createDeliveryRecorder());
 }
 
-/** The partition's sync lock, as pull and push take it; null when the scope has none (HTTP). */
+/**
+ * The partition's sync lock, as pull and push take it; null when the scope has none (HTTP), or no data home to hold
+ * it in, which taking the lock does not make.
+ */
 async function takeSyncLock(localConfig: LocalConfig): Promise<string | null | false> {
   if (localConfig.repo.kind === 'http') return null;
-  const { acquireLock } = await import('./update.js');
+  const { acquireLock, LockDirectoryGoneError } = await import('./update.js');
   const lock = path.join(getDataHome(localConfig), SYNC_LOCK_FILENAME);
 
   // A pull a git hook or session start left running finishes soon.
   for (let attempt = 0; attempt < 50; attempt++) {
-    if (await acquireLock(lock)) return lock;
+    try {
+      if (await acquireLock(lock, { createParent: false })) return lock;
+    } catch (error) {
+      if (error instanceof LockDirectoryGoneError) return null;
+      throw error;
+    }
+
     await new Promise((resolve) => setTimeout(resolve, 200));
   }
 
@@ -3751,7 +3760,7 @@ async function refusedForLiveRuns(dataHomes: () => Promise<readonly string[]>, {
  * taken.
  */
 async function whilePlacesLocked(dataHomes: readonly string[], body: () => Promise<void>): Promise<void> {
-  const { acquireLock, releaseLock } = await import('./update.js');
+  const { acquireLock, LockDirectoryGoneError, releaseLock } = await import('./update.js');
   const { PLACES_LOCK_WAIT, placesLockIn } = await import('./workflow/runtimes/attempt.js');
   const held: string[] = [];
 
@@ -3759,12 +3768,21 @@ async function whilePlacesLocked(dataHomes: readonly string[], body: () => Promi
     for (const dataHome of dataHomes) {
       const lock = placesLockIn(dataHome);
       let isHeld = false;
+      let isGone = false;
 
-      for (let attempt = 0; attempt < PLACES_LOCK_WAIT.attempts && !isHeld; attempt++) {
-        isHeld = await acquireLock(lock);
+      // A data home that is not there holds no run, and taking its lock does not make it.
+      for (let attempt = 0; attempt < PLACES_LOCK_WAIT.attempts && !isHeld && !isGone; attempt++) {
+        try {
+          isHeld = await acquireLock(lock, { createParent: false });
+        } catch (error) {
+          if (!(error instanceof LockDirectoryGoneError)) throw error;
+          isGone = true;
+        }
 
-        if (!isHeld) await new Promise((resolve) => setTimeout(resolve, PLACES_LOCK_WAIT.delayMs));
+        if (!isHeld && !isGone) await new Promise((resolve) => setTimeout(resolve, PLACES_LOCK_WAIT.delayMs));
       }
+
+      if (isGone) continue;
 
       if (!isHeld) {
         log.error(`Cannot uninstall: a step runtime is opening a place of a run in ${dataHome}, as ${lock} stays taken. Run \`teamai uninstall\` again once the run has its place.`);
