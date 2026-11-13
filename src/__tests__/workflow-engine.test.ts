@@ -6486,4 +6486,22 @@ describe('a run part of a step its run another machine keeps', () => {
       ['two', 'skipped', undefined],
     ]);
   });
+
+  it('runs again once a person retries it after its step ended, out of that step', async () => {
+    const { config } = testConfig();
+    fs.writeFileSync(path.join(config.repo.localPath, 'workflows', 'build.yaml'), TWO_STEPS);
+    await syncScorersThenWorkflows(config);
+    const secrets = await knownSecrets(config);
+    fs.mkdirSync(attemptDir(config, partOf.run, partOf.attempt), { recursive: true });
+    const started = await startRun(config, 'build', {}, { secrets, partOf });
+    if ('error' in started) throw new Error(started.error.message);
+    const runId = String(started.data.run);
+    await leaseNext(config, runId, driverA);
+    fs.rmSync(attemptDir(config, partOf.run, partOf.attempt), { recursive: true });
+    expect(await leaseNext(config, runId, driverA)).toMatchObject({ data: { done: { outcome: 'cancelled' } } });
+
+    expect(await retryStep(config, runId, secrets, 'one')).not.toHaveProperty('error');
+
+    expect(await leaseNext(config, runId, driverA)).toMatchObject({ data: { lease: { step: 'one' } } });
+  });
 });

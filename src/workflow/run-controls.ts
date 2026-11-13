@@ -785,6 +785,8 @@ export async function retryStep(config: LocalConfig, runId: string, secrets: Rec
     }
 
     if (ended) run.limitsFrom = { at: now, tokens: spentTokens(run, () => true) };
+    // A person's retry runs it on its own: no longer part of the step that started it, which may have ended.
+    delete run.partOf;
 
     if (reopened) {
       run.status = 'running';
