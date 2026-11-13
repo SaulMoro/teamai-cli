@@ -1,7 +1,8 @@
 /**
  * sbx sandboxes teamai named (`teamai-<journal>-…`), tied to a world by the owner journal of one of its HOMEs, and the warm
- * templates teamai saved (`teamai-warm:<key>`), tied to a world by the HOME whose image store holds them. sbx keeps both
- * per HOME, so each install on this machine is asked in its own, with its own environment, as teamai asks.
+ * templates teamai saved (`teamai-warm:<key>`), tied to a world by the HOME sbx was asked in, whose image store holds
+ * them. sbx keeps both per HOME, so each install on this machine is asked in its own, with its own environment, as
+ * teamai asks; a world made before its environment was kept is asked in the harness's HOME, which is no world's.
  */
 import { PROVIDER_COMMANDS } from '../../../packages/runtime-sandbox/src/provider-commands.js';
 import { journalOfSandboxName } from '../../../packages/runtime-sandbox/src/provider.js';
@@ -30,8 +31,8 @@ function sandboxesOn({ self, others }: LeftoverContext, { commandLine }: Install
   };
 }
 
-/** teamai's warm templates `sbx template ls --json` lists in the install's HOME, or that it could not list them. */
-function templatesOn({ world, self, others }: LeftoverContext, { target, home, commandLine }: Install, of: string): Observed {
+/** teamai's warm templates `sbx template ls --json` lists in the HOME the install's environment names, or that it could not list them. */
+function templatesOn({ world, self, others }: LeftoverContext, { target, env, commandLine }: Install, of: string): Observed {
   const listed = captureOn(world, target, [command, 'template', 'ls', '--json']);
   const saved = listed.code === 0 ? sbxWarmTemplatesListed(listed.stdout) : undefined;
 
@@ -39,7 +40,7 @@ function templatesOn({ world, self, others }: LeftoverContext, { target, home, c
 
   return {
     kind: 'observed',
-    findings: saved.map(({ ref }) => ({ what: `sbx template ${ref}`, attribution: attributeLeftover({ paths: [home], journals: [], runs: [], marked: true }, self, others), remove: commandLine([command, 'template', 'rm', '--force', ref]) })),
+    findings: saved.map(({ ref }) => ({ what: `sbx template ${ref}`, attribution: attributeLeftover({ paths: env.HOME === undefined ? [] : [env.HOME], journals: [], runs: [], marked: true }, self, others), remove: commandLine([command, 'template', 'rm', '--force', ref]) })),
     notes: [],
   };
 }

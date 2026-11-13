@@ -150,6 +150,30 @@ describe("the sbx row of section (f)", () => {
     expect(spawnSync(command, args).status).toBe(0);
     expect(fs.readFileSync(path.join(dir, 'removed'), 'utf8')).toBe('--force teamai-warm:k0123abcd');
   });
+
+  it("never takes the warm templates of the harness's HOME, where a world made before its env was kept is asked, for the world's", async () => {
+    const dir = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-verify-sbx-')));
+    const harnessHome = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'harness-home-')));
+    roots.push(dir, harnessHome);
+    const bin = path.join(dir, 'bin');
+    fs.mkdirSync(bin);
+    // The maintainer's own sbx, in the harness's HOME, keeps a warm template teamai saved for them outside any world.
+    fs.writeFileSync(path.join(bin, 'sbx'), `#!/bin/sh\n[ "$HOME" = '${harnessHome}' ] || { printf '[]'; exit 0; }\ncase "$1 $2" in 'ls --json') printf '[]' ;; 'template ls') printf '[{"repository":"teamai-warm","tag":"kmine"}]' ;; *) exit 1 ;; esac\n`, { mode: 0o755 });
+    vi.stubEnv('HOME', harnessHome);
+    vi.stubEnv('PATH', `${bin}:/usr/bin:/bin`);
+    const world: World = {
+      runId: SELF.runId, dir, project: `${dir}/project`, team: `${dir}/team.git`, home: `${dir}/home`, tmp: `${dir}/tmp`, logs: `${dir}/logs`, bin: `${dir}/bin`,
+      build: { commit: 'c', dirty: false, version: '0.0.0', tarball: 't.tgz', sha256: 's', node: 'v20' },
+      createdAt: '2026-11-12T18:00:00.000Z',
+      baseline: { teamRefs: {}, checkoutStatus: [] },
+    };
+    const { sbxLeftovers } = await import('./leftovers/sbx.js');
+
+    const observed = await sbxLeftovers.observe({ world, self: { ...SELF, paths: [dir] }, others: [], records: { files: [], runs: [], runtimeJournals: 0 } });
+    const findings = observed.flatMap((seen) => (seen.kind === 'observed' ? seen.findings : []));
+
+    expect(findings.map((finding) => [finding.what, finding.attribution.kind])).toEqual([['sbx template teamai-warm:kmine', 'ambiguous']]);
+  });
 });
 
 describe("a row's lines in section (f)", () => {
