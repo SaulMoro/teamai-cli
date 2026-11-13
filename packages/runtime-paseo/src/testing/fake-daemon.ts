@@ -248,10 +248,20 @@ type AgentRecord = z.infer<typeof AgentRecordSchema>;
  * (`sessions/<yyyy>/<mm>/<dd>/rollout-<time>-<session id>.jsonl`), and a later turn goes on in it. With `usage`, the
  * turn's response record bills it, counting cached input inside the input tokens, beside the thread's running total.
  */
+/** The rollout of `sessionId` under `sessions`, relative to it; none when the store holds none, or has a folder it cannot list. */
+function rolloutUnder(sessions: string, sessionId: string): string | undefined {
+  try {
+    return fs.existsSync(sessions) ? entriesUnder(sessions).find(({ entry }) => entry.isFile() && entry.name.endsWith(`-${sessionId}.jsonl`))?.relative : undefined;
+  } catch {
+    // A folder of the store it cannot list, as another user's: Codex finds its session by its id, and writes on.
+    return undefined;
+  }
+}
+
 function writeRollout(agent: AgentRecord, home: string, sessionId: string): void {
   const at = new Date();
   const sessions = path.join(home, 'sessions');
-  const kept = fs.existsSync(sessions) ? entriesUnder(sessions).find(({ entry }) => entry.isFile() && entry.name.endsWith(`-${sessionId}.jsonl`))?.relative : undefined;
+  const kept = rolloutUnder(sessions, sessionId);
   const day = path.join(sessions, String(at.getFullYear()), String(at.getMonth() + 1).padStart(2, '0'), String(at.getDate()).padStart(2, '0'));
   const file = kept === undefined ? path.join(day, `rollout-${at.toISOString().slice(0, 19).replaceAll(':', '-')}-${sessionId}.jsonl`) : path.join(sessions, kept);
   const { usage } = agent.behaviour;

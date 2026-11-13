@@ -627,18 +627,23 @@ describe('teamai-runtime-t3', () => {
       expect(await ended(runtime, 'op-00000012')).toMatchObject({ event: 'failed', failure: { code: 'tool_failed', message: expect.stringContaining(`claude kept no session for ${worktree} in ${path.join(t3.home, '.claude')}, so the step cannot be scored or resumed.`) } });
     });
 
-    it.skipIf(process.platform === 'win32')('fails a thread whose session folder teamai cannot list, saying which folder and how to let teamai read it', async () => {
+    // Claude's own project folder, which it writes its transcript into; for Codex, a folder of its store another user left,
+    // which Codex never lists and teamai's listing of the store enters.
+    it.skipIf(process.platform === 'win32').each([
+      { tool: 'claude', model: 'claude-opus-5-5', folder: () => path.join(t3.home, '.claude', 'projects', encodeCwdClaude(fs.realpathSync(worktree))) },
+      { tool: 'codex', model: 'gpt-6.1-sol', folder: () => path.join(t3.home, '.codex', 'sessions', '0000') },
+    ])('fails a $tool thread whose session folder teamai cannot list, saying which folder and how to let teamai read it', async ({ tool, model, folder: folderOf }) => {
       t3.config({ agent: { output: { verdict: 'approve' } } });
-      // Claude can write its transcript there, and teamai cannot list the folder.
-      const folder = path.join(t3.home, '.claude', 'projects', encodeCwdClaude(fs.realpathSync(worktree)));
+      // The tool can write there, and teamai cannot list the folder.
+      const folder = folderOf();
       fs.mkdirSync(folder, { recursive: true });
       fs.chmodSync(folder, 0o300);
       const { runtime, handle } = await opened();
 
-      runtime.send(prompt(handle, 'op-0000fe11'));
+      runtime.send(prompt(handle, 'op-0000fe11', { tool, model: { name: model } }));
 
       try {
-        expect(await ended(runtime, 'op-0000fe11')).toMatchObject({ event: 'failed', failure: { code: 'tool_failed', message: expect.stringContaining(`finished, but teamai cannot list ${folder}, where claude keeps the step's session, because it has no permission to read it, so the step cannot be scored or resumed. Let the user teamai runs as read ${folder}, then retry the step.`) } });
+        expect(await ended(runtime, 'op-0000fe11')).toMatchObject({ event: 'failed', failure: { code: 'tool_failed', message: expect.stringContaining(`finished, but teamai cannot list ${folder}, where ${tool} keeps the step's session, because it has no permission to read it, so the step cannot be scored or resumed. Let the user teamai runs as read ${folder}, then retry the step.`) } });
       } finally {
         fs.chmodSync(folder, 0o700);
       }

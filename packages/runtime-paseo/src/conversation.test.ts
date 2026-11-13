@@ -171,20 +171,25 @@ describe('teamai-runtime-paseo', () => {
     expect(await runtime.next(isEnd('op-0000000b'))).toMatchObject({ event: 'finished', session: { tool }, usage });
   });
 
-  it('finishes a step whose session it cannot list, reporting no tokens rather than failing the step', async () => {
-    const home = path.join(dir, 'daemon-user', '.claude');
-    // Claude can write its transcript there, and teamai cannot list the folder.
-    const folder = path.join(home, 'projects', encodeCwdClaude(worktree));
+  // Claude's own project folder, which it writes its transcript into; for Codex, a folder of its store another user left,
+  // which Codex never lists and teamai's listing of the store enters.
+  it.each([
+    { tool: 'claude', home: 'claude_home', env: {}, folder: (home: string) => path.join(home, 'projects', encodeCwdClaude(worktree)) },
+    { tool: 'codex', home: 'codex_home', env: { codex_login: 'signed_in' }, folder: (home: string) => path.join(home, 'sessions', '0000') },
+  ] as const)('finishes a $tool step whose session it cannot list, reporting no tokens rather than failing the step', async ({ tool, home: homeKey, env, folder: folderIn }) => {
+    const home = path.join(dir, 'daemon-user', `.${tool}`);
+    // The tool can write there, and teamai cannot list the folder.
+    const folder = folderIn(home);
     fs.mkdirSync(folder, { recursive: true });
     fs.chmodSync(folder, 0o300);
-    behave({ output: { verdict: 'approve' }, claude_home: home, usage: { input: 1_200, output: 340, cache_read: 18_000 } });
-    const runtime = start();
+    behave({ output: { verdict: 'approve' }, [homeKey]: home, ...env, usage: { input: 1_200, output: 340, cache_read: 18_000 } });
+    const runtime = start({ CODEX_HOME: home });
     await ready(runtime);
-    runtime.send(promptRequest(await opened(runtime), 'op-0000000b'));
+    runtime.send(promptRequest(await opened(runtime), 'op-0000000b', { tool, model: undefined }));
 
     try {
       const end = await runtime.next(isEnd('op-0000000b'));
-      expect(end).toMatchObject({ event: 'finished', session: { tool: 'claude', home }, result: { output: { verdict: 'approve' } } });
+      expect(end).toMatchObject({ event: 'finished', session: { tool, home }, result: { output: { verdict: 'approve' } } });
       expect(end).not.toHaveProperty('usage');
     } finally {
       fs.chmodSync(folder, 0o700);

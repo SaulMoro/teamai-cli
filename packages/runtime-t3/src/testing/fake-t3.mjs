@@ -303,7 +303,12 @@ function writeTranscript(thread) {
 function filesNamed(dir, suffix) {
   if (!fs.existsSync(dir)) return [];
 
-  return entriesUnder(dir).filter(({ entry }) => entry.isFile() && entry.name.endsWith(suffix)).map(({ relative }) => path.join(dir, relative));
+  try {
+    return entriesUnder(dir).filter(({ entry }) => entry.isFile() && entry.name.endsWith(suffix)).map(({ relative }) => path.join(dir, relative));
+  } catch {
+    // A folder of the store it cannot list, as another user's: the tool finds its session by its id, and writes on.
+    return [];
+  }
 }
 
 // Broadest first, as T3 ranks them.
