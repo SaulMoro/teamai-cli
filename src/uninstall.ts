@@ -58,6 +58,7 @@ import {
   type ManagedMcpManifest,
   installScopeName,
   getTeamaiHomeDir,
+  getTrustDir,
 } from './types.js';
 import { BUILTIN_RULE_NAMES, TEAMAI_CONTEXT_RULE_NAME } from './builtin-rules.js';
 import { isLegacyCursorRuleFile, keptLegacyCopiesWarning, ruleStemFromFilename, usesMdcRules, type InstructionBlock, type LegacyRuleDir } from './resources/rule-format.js';
@@ -3472,6 +3473,18 @@ async function sweepCreatedLeftovers(plan: RemovalPlan, hooksLeft: ReadonlyArray
     }
   } catch (e) {
     log.warn(`Could not remove ${runtimeState}: ${e instanceof Error ? e.message : String(e)}. Delete it by hand.`);
+  }
+
+  // The member's answers to running a team file's command: no install is left to ask them for.
+  const trust = getTrustDir();
+
+  try {
+    if (await pathExists(trust)) {
+      await remove(trust);
+      log.success(`Removed ${trust}/: the team tools and runtimes you accepted`);
+    }
+  } catch (e) {
+    log.warn(`Could not remove ${trust}: ${e instanceof Error ? e.message : String(e)}. Delete it by hand.`);
   }
 
   const dirs = [

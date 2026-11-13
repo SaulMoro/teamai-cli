@@ -542,6 +542,40 @@ describe('uninstall', () => {
     expect(await fse.pathExists(runtimeState), 'runtime state').toBe(false);
   });
 
+  // The member's answers to "run this team tool or runtime?" (docs/guide/reference.md, workflow-advanced.md), which
+  // no other install is left to read.
+  it('removes the record of the team tools and runtimes the member accepted with the last install', async () => {
+    const { homeDir, repoPath, teamaiHome } = await setupFixture(tmpDir);
+    vi.stubEnv('HOME', homeDir);
+    const trust = path.join(teamaiHome, 'trust');
+    await fse.outputJson(path.join(trust, 'tools.json'), { accepted: [] });
+    await fse.outputJson(path.join(trust, 'runtimes.json'), { accepted: [] });
+    mockAutoDetectInit.mockResolvedValue({
+      localConfig: makeLocalConfig(homeDir, repoPath, { scope: 'project', projectRoot: homeDir, dataHome: path.join(teamaiHome, 'projects', 'current') }),
+      teamConfig: makeTeamConfig(),
+    });
+
+    await uninstall({ force: true });
+
+    expect(await fse.pathExists(trust)).toBe(false);
+  });
+
+  it('keeps the record of accepted team tools and runtimes while another project on this machine still reads it', async () => {
+    const { homeDir, repoPath, teamaiHome } = await setupFixture(tmpDir);
+    vi.stubEnv('HOME', homeDir);
+    const accepted = path.join(teamaiHome, 'trust', 'tools.json');
+    await fse.outputJson(accepted, { accepted: [] });
+    await installAnotherProject(homeDir, tmpDir);
+    mockAutoDetectInit.mockResolvedValue({
+      localConfig: makeLocalConfig(homeDir, repoPath, { scope: 'project', projectRoot: homeDir, dataHome: path.join(teamaiHome, 'projects', 'current') }),
+      teamConfig: makeTeamConfig(),
+    });
+
+    await uninstall({ force: true });
+
+    expect(await fse.pathExists(accepted)).toBe(true);
+  });
+
   // The run's records are what `teamai workflow cancel` closes such a place with, and the runtime's state is what it
   // keeps of it: removing either leaves the place running with nothing to close it.
   it('refuses while a step runtime keeps a place of one of its runs open, and names the command that closes it', async () => {
