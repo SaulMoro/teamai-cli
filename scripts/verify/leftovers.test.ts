@@ -357,6 +357,8 @@ describe("the sbx row of section (f)", () => {
     ]);
     // A second removal of one answers as sbx 0.53.0 does for a template that is gone.
     fs.writeFileSync(path.join(bin, 'sbx'), `#!/bin/sh\n[ "$HOME" = '${dir}/home' ] || { printf '[]'; exit 0; }\ncase "$1 $2" in 'ls --json') printf '[]' ;; 'template ls') printf '%s' '${templates}' ;; 'template rm') if grep -qxF "$4" '${dir}/removed' 2>/dev/null; then echo "error: cannot remove template \\"$4\\": delete template: image not found: request failed: 404 Not Found: no image \\"$4\\"" >&2; exit 1; fi; printf '%s\\n' "$4" >> '${dir}/removed' ;; *) exit 1 ;; esac\n`, { mode: 0o755 });
+    // The world's sbx is the host's, as the world links it, so it answers from the HOME the world gives it.
+    vi.stubEnv('PATH', `${bin}:/usr/bin:/bin`);
     const world: World = {
       runId: SELF.runId, dir, project: `${dir}/project`, team: `${dir}/team.git`, home: `${dir}/home`, tmp: `${dir}/tmp`, logs: `${dir}/logs`, bin: `${dir}/bin`,
       build: { commit: 'c', dirty: false, version: '0.0.0', tarball: 't.tgz', sha256: 's', node: 'v20' },
@@ -407,6 +409,40 @@ describe("the sbx row of section (f)", () => {
       ['sbx template teamai-warm:kmine', 'ambiguous'],
       ["sbx template docker.io/library/sandbox-kit-assembled:2ba1c4db59226a62 (sbx's own, which teamai uninstall leaves)", 'unrelated'],
     ]);
+  });
+
+  it("takes no template for the world's, and removes none, when the world's sbx is not the host's, such as a shim that runs it in the person's HOME", async () => {
+    const dir = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-verify-sbx-')));
+    const personHome = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'person-home-')));
+    roots.push(dir, personHome);
+    const real = path.join(dir, 'real');
+    const tools = path.join(dir, 'tools');
+    fs.mkdirSync(real);
+    fs.mkdirSync(tools);
+    // The person's signed-in sbx keeps a kit template sbx assembled days before the world and a warm template their own
+    // teamai saved. The world's tools/sbx was replaced by a shim that runs it in the person's HOME.
+    fs.writeFileSync(path.join(real, 'sbx'), `#!/bin/sh\nprintf '%s\\n' "$*" >> '${dir}/calls'\n[ "$HOME" = '${personHome}' ] || { printf '[]'; exit 0; }\ncase "$1 $2" in 'ls --json') printf '[]' ;; 'template ls') printf '[{"repository":"docker.io/library/teamai-warm","tag":"kmine"},{"repository":"docker.io/library/sandbox-kit-assembled","tag":"2ba67192264a5ff7"}]' ;; *) exit 1 ;; esac\n`, { mode: 0o755 });
+    fs.writeFileSync(path.join(tools, 'sbx'), `#!/bin/sh\nHOME='${personHome}' exec '${real}/sbx' "$@"\n`, { mode: 0o755 });
+    vi.stubEnv('HOME', personHome);
+    vi.stubEnv('PATH', `${real}:/usr/bin:/bin`);
+    const world: World = {
+      runId: SELF.runId, dir, project: `${dir}/project`, team: `${dir}/team.git`, home: `${dir}/home`, tmp: `${dir}/tmp`, logs: `${dir}/logs`, bin: `${dir}/bin`,
+      build: { commit: 'c', dirty: false, version: '0.0.0', tarball: 't.tgz', sha256: 's', node: 'v20' },
+      createdAt: '2026-11-12T18:00:00.000Z',
+      baseline: { teamRefs: {}, checkoutStatus: [] },
+      env: { HOME: `${dir}/home`, PATH: `${tools}:/usr/bin:/bin` },
+    };
+    const { sbxLeftovers } = await import('./leftovers/sbx.js');
+
+    const observed = await sbxLeftovers.observe({ world, self: { ...SELF, paths: [dir] }, others: [], records: { files: [], runs: [], runtimeJournals: 0, placements: [] } });
+
+    expect(observed).toEqual([
+      { kind: 'observed', findings: [], notes: [] },
+      { kind: 'not_observed', what: 'sbx templates', why: `the install's PATH runs sbx as ${tools}/sbx, not as ${real}/sbx, the host's sbx a world links, so sbx may answer from a HOME that is not the install's (a shim that runs it with another HOME, say)` },
+    ]);
+    expect(cleanupPlan([{ onCleanup: sbxLeftovers.onCleanup, observed }])).toEqual({ kind: 'remove', removals: [], unobserved: [expect.stringMatching(/^sbx templates, /)] });
+    // Sandboxes are still asked for: a sandbox's name carries the world's journal. Templates are never asked for there.
+    expect(fs.readFileSync(path.join(dir, 'calls'), 'utf8')).toBe('ls --json\n');
   });
 });
 
