@@ -342,6 +342,14 @@ describe('dashboard workflow runs', () => {
         .toEqual([['build', 'succeeded'], ['skip-me', 'skipped']]);
     });
 
+    it('leaves out the tokens of a run none of whose passes reported any, rather than showing 0', async () => {
+      const config = scope('http');
+      publish(config, record('r0000000000000001', { steps: [{ step: 'tell', pass: 1, outcome: 'success' }, { step: 'ask', pass: 1, outcome: 'success' }] }));
+      const [row] = await listReportedRuns(config);
+      expect(row).toMatchObject({ source: 'reported', run: 'r0000000000000001' });
+      expect(row).not.toHaveProperty('tokens');
+    });
+
     it('names a record\'s driver by the driver definition it ran on, and by its kind when it ran on none', async () => {
       const config = scope('http');
       publish(config, record('r0000000000000001', { driver: { kind: 'local', definition: 'boxed' } }));
