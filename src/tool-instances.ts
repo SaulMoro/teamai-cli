@@ -10,7 +10,7 @@ import { isSessionPlatform } from './session-flow/adapters/platform-facts.js';
 import { homeEnvOf } from './tool-home.js';
 import { homeVariables, isToolId, TOOL_ORDER, useToolInstances } from './tool-registry.js';
 import type { ToolId } from './tools.js';
-import { DEFAULT_TOOL_PATHS, getTeamaiHomeDir, rerootToolPaths, ToolPathsSchema, type Scope, type TeamaiConfig } from './types.js';
+import { DEFAULT_TOOL_PATHS, getTeamaiHomeDir, rerootToolPaths, toolInstallRoot, ToolPathsSchema, type Scope, type TeamaiConfig } from './types.js';
 import { writeJsonAtomic } from './utils/fs.js';
 import { getUserHome } from '@teamai/shared/home';
 import { log } from '@teamai/shared/log';
@@ -321,6 +321,19 @@ export function defaultPathsOf(instance: ResolvedToolInstance): z.infer<typeof T
   const shipped = DEFAULT_TOOL_PATHS[instance.extends];
 
   return instance.home && instance.name !== instance.extends ? rerootToolPaths(shipped, instance.home.dir) : shipped;
+}
+
+/**
+ * Where `instance` reads a file the tool it extends reads at `relative`: under its own home when it has one, moved as
+ * its tool paths are (`defaultPathsOf`), so what teamai writes there is judged read. A path outside that tool's roots,
+ * such as a project file at the root, stays as it is.
+ */
+export function instanceReadPath(instance: ResolvedToolInstance, relative: string): string {
+  if (!instance.home || instance.name === instance.extends || !relative.includes('/')) return relative;
+  const roots = new Set(Object.values(DEFAULT_TOOL_PATHS[instance.extends]).flatMap((field) => (typeof field === 'string' && field.includes('/') ? [toolInstallRoot(field)] : [])));
+  const root = toolInstallRoot(relative);
+
+  return roots.has(root) ? instance.home.dir + relative.slice(root.length) : relative;
 }
 
 /**

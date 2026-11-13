@@ -14,7 +14,8 @@ import { MCP_SERVER_KEY } from './resources/mcp-format.js';
 import { SESSION_PLATFORM_FACTS, type SessionPlatform, type StoredSessionPlatform } from './session-flow/adapters/platform-facts.js';
 import { TOOLS, type ToolId } from './tools.js';
 import { type Activation, type BlocksFile, type BlocksHeader, type ChannelProbe, type FirstExistingRead, type HomeRead, type HookAdapter, type HookAdapterId, type HookFormat, type HookSettings, type McpProject, type McpUser, type ProjectRead, type ReadGateKind, type RunTime, type SkillReads, type RunTimeVia } from '@teamai/tool-core/definition';
-import { channelsOf, installGateOf, isToolId, hasDefaultHomeLeftovers, mcpScopeFor } from './tool-registry.js';
+import { channelsOf, installGateOf, isToolId, hasDefaultHomeLeftovers, mcpScopeFor, toolOf } from './tool-registry.js';
+import { instanceReadPath } from './tool-instances.js';
 import {
   CURSOR_CONFIG_TOOL_ID, CURSOR_DATA_TOOL_ID,
   DEFAULT_TOOL_PATHS, isAgentExcluded, isGitExcludeEnabled, isSelfMode, recordedToolHomeDir, resolveBaseDir, scopedToolPaths, toolGateRoot,
@@ -588,6 +589,7 @@ function rootsOf(tool: string, install: Install, host: Host): Roots {
   };
 
   const known = isToolId(tool) ? tool : undefined;
+  const instance = toolOf(tool)?.instance;
   const base = install.scope === 'user' ? host.home : install.projectRoot;
 
   const paths = install.scope === 'user'
@@ -638,7 +640,9 @@ function rootsOf(tool: string, install: Install, host: Host): Roots {
       // User-scope Copilot paths are relative to its home.
       return tool === 'copilot' && home ? join(home.dir, relative) : underHome(relative);
     },
-    declared: (from, relative) => {
+    declared: (from, declared) => {
+      const relative = instance === undefined ? declared : instanceReadPath(instance, declared);
+
       if (from === 'project') return join(base, relative);
 
       const live = install.scope === 'user' ? liveRelative(relative) : null;

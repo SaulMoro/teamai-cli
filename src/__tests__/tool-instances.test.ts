@@ -373,6 +373,25 @@ describe('the home of an instance', () => {
 
     expect(storeDirOf('acme-claude', { kind: 'recorded', toolRoots: undefined })).toBe(path.join(root, 'acme', 'projects'));
   });
+
+  it.each(['project', 'user'] as const)('reads, in %s scope, the rules, instruction blocks and agents teamai writes under its home, as the tool it extends reads its own', async (scope) => {
+    const repo = teamRepo({ 'tools/acme-claude.yaml': ACME_CLAUDE });
+    const { config } = await load(repo);
+    const { installOf, locate, unreadWrites, writesOf } = await import('../locate.js');
+    const project = path.join(root, 'project');
+    fs.mkdirSync(path.join(project, '.acme-claude'), { recursive: true });
+    fs.mkdirSync(path.join(home, '.acme-claude'), { recursive: true });
+    const install = installOf(config ?? { toolPaths: {} }, { repo: {}, scope, projectRoot: project });
+    const base = scope === 'project' ? project : home;
+    const session = scope === 'project' ? { kind: 'within', root: project } as const : { kind: 'anywhere' } as const;
+
+    for (const resource of ['rules', 'blocks', 'agents'] as const) {
+      const where = await locate('acme-claude', resource, install);
+
+      expect(writesOf(where).map((place) => place.path)[0], resource).toMatch(new RegExp(`^${base}/\\.acme-claude/`));
+      expect(unreadWrites(where, undefined, session), resource).toEqual([]);
+    }
+  });
 });
 
 describe('personal tool instances', () => {
