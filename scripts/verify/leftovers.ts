@@ -324,24 +324,34 @@ export async function tiesOnThisMachine(world: World | undefined): Promise<{ sel
   };
 }
 
-/** Ledger section (f): each row the world's tier asks, its LEAK lines and notes. A world that ran no step runtime gets one line. */
-export async function leftoversSection(world: World): Promise<{ leaks: string[]; notes: string[] }> {
+/**
+ * Ledger section (f), in two steps: what ties the world is read when it is made, before `teamai uninstall` removes the
+ * records that say which runtimes the world's runs used; `observe`, called after uninstall, gives each row the world's tier
+ * asks, its LEAK lines and notes, so what uninstall removes is no LEAK. A world that ran no step runtime gets one line.
+ */
+export async function leftoversSection(world: World): Promise<{ observe(): Promise<{ leaks: string[]; notes: string[] }> }> {
   const { context, tier } = await contextOf(world);
-  const { mask, unmasked } = ledgerRedactor({ passedNames: world.passed ?? [], harnessEnv: process.env });
-  const leaks: string[] = [];
-  const notes: string[] = unmasked.length === 0 ? [] : [`not masked: ${unmasked.join(', ')}, which this shell does not set; run the ledger with each exported to mask its value in these lines`];
+  const rows = await rowsFor(tier);
 
-  for (const row of await rowsFor(tier)) {
-    const lines = linesOf(row.title, await row.observe(context), mask);
-    leaks.push(...lines.leaks);
+  return {
+    async observe() {
+      const { mask, unmasked } = ledgerRedactor({ passedNames: world.passed ?? [], harnessEnv: process.env });
+      const leaks: string[] = [];
+      const notes: string[] = unmasked.length === 0 ? [] : [`not masked: ${unmasked.join(', ')}, which this shell does not set; run the ledger with each exported to mask its value in these lines`];
 
-    // A world that ran no step runtime keeps its section to one line, unless the process check found something.
-    if (tier !== 'basic' || lines.leaks.length > 0 || lines.notes.some((note) => note.startsWith('NOT OBSERVED'))) notes.push(...lines.notes);
-  }
+      for (const row of rows) {
+        const lines = linesOf(row.title, await row.observe(context), mask);
+        leaks.push(...lines.leaks);
 
-  if (tier === 'basic') notes.push('no step runtime used');
+        // A world that ran no step runtime keeps its section to one line, unless the process check found something.
+        if (tier !== 'basic' || lines.leaks.length > 0 || lines.notes.some((note) => note.startsWith('NOT OBSERVED'))) notes.push(...lines.notes);
+      }
 
-  return { leaks, notes };
+      if (tier === 'basic') notes.push('no step runtime used');
+
+      return { leaks, notes };
+    },
+  };
 }
 
 /**

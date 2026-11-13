@@ -206,6 +206,29 @@ describe("the container engines' row of section (f)", () => {
     expect(findings.map((finding) => removeLeftover({ command: finding.remove ?? [] }))).toEqual([{ ok: true, wasThere: true }, { ok: true, wasThere: true }]);
     expect(engine.images().map((image) => image.tags)).toEqual([['node:22-alpine']]);
   });
+
+  it('counts in the ledger only what is left once teamai uninstall ran, not the warm image uninstall removes', async () => {
+    const dir = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-verify-engine-')));
+    roots.push(dir);
+    const [{ journal }, { sandboxJournalRoot }] = await Promise.all([import('../../packages/runtime-sandbox/src/journal.js'), import('../../packages/runtime-sandbox/src/journal-root.js')]);
+    const owner = journal(sandboxJournalRoot(`${dir}/home`)).owner;
+    const engine = fakeDocker29(dir, [{ id: 'a'.repeat(64), tags: ['teamai-warm:kmine'], labels: { 'teamai.owner': owner } }]);
+    vi.stubEnv('PATH', `${engine.bin}:/usr/bin:/bin:/usr/sbin`);
+    const world: World = {
+      runId: SELF.runId, dir, project: `${dir}/project`, team: `${dir}/team.git`, home: `${dir}/home`, tmp: `${dir}/tmp`, logs: `${dir}/logs`, bin: engine.bin,
+      build: { commit: 'c', dirty: false, version: '0.0.0', tarball: 't.tgz', sha256: 's', node: 'v20' },
+      createdAt: '2026-11-12T18:00:00.000Z',
+      baseline: { teamRefs: {}, checkoutStatus: [] },
+      driverSeen: true,
+    };
+    const { leftoversSection } = await import('./leftovers.js');
+
+    const section = await leftoversSection(world);
+    // What uninstall does to the warm image it recorded making.
+    expect(removeLeftover({ command: ['docker', 'image', 'rm', 'teamai-warm:kmine'] })).toEqual({ ok: true, wasThere: true });
+
+    expect((await section.observe()).leaks).toEqual([]);
+  });
 });
 
 describe("the sbx row of section (f)", () => {
