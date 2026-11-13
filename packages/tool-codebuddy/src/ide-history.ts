@@ -22,7 +22,7 @@
  */
 
 import { assertSafeSessionFileId } from '@teamai/tool-core/sessions/ids';
-import { readRegularFileSync, writeRegularFileSync } from '@teamai/shared/regular-file';
+import { readRegularFileSync, writeNewFileSync, writeRegularFileSync } from '@teamai/shared/regular-file';
 import * as crypto from 'node:crypto';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
@@ -547,7 +547,20 @@ function writeIndex(historyDir: string, data: IdeIndex): void {
     }
   }
 
-  writeRegularFileSync(idxPath, JSON.stringify(data, null, 2));
+  replaceIndexSync(idxPath, JSON.stringify(data, null, 2));
+}
+
+/** Writes an index the IDE reads as a temporary sibling renamed over it, so the IDE never reads it half written. */
+function replaceIndexSync(file: string, body: string): void {
+  const temporary = `${file}.${process.pid}.tmp`;
+
+  try {
+    writeNewFileSync(temporary, body);
+    fs.renameSync(temporary, file);
+  } catch (error) {
+    fs.rmSync(temporary, { force: true });
+    throw error;
+  }
 }
 
 function upsertConversation(historyDir: string, conv: IdeConversation): void {
@@ -826,7 +839,7 @@ export function writeIdeSession(session: Session, cwd: string): IdeSyncResult {
         }
       }
 
-      writeRegularFileSync(convIdxPath, JSON.stringify({ messages: messageIndex, requests }, null, 2));
+      replaceIndexSync(convIdxPath, JSON.stringify({ messages: messageIndex, requests }, null, 2));
 
       upsertConversation(historyDir, conv);
       synced++;
