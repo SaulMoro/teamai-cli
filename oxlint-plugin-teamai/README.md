@@ -12,7 +12,7 @@ This repository's own lint rules. `npm run lint` loads them through `jsPlugins` 
 | `teamai/workflow-boundaries` | Workflow entry-point violations and transitive skill-to-local dependencies. |
 | `teamai/no-provider-merge` | Merge operations in providers and delivery, and forbidden delivery/snapshot dependencies. |
 | `teamai/windows-tests` | POSIX constructs in the current `WINDOWS_TESTS` selection. |
-| `teamai/launcher-conformance` | A `ToolLauncher` adapter (a function returning one, a constant typed as one, or one written into `runStepLaunch`) outside the adapters whose test runs `toolLauncherConformance`. |
+| `teamai/launcher-conformance` | A `ToolLauncher` adapter (a function returning one, directly or through a promise, a constant typed, `satisfies`-checked or cast as one, or a launcher written or built by the file's own function into `runStepLaunch` or `stepLauncher`) outside the adapters whose test runs `toolLauncherConformance`. |
 | `teamai/rules-locate` | MCP path lookups during rules activation. |
 | `teamai/workflow-failure-codes` | Unclassified failure producers and unexplained forwarded codes. |
 | `teamai/config-load-options` | Missing preview options at named `loadLocalConfig`, `loadLocalConfigForScope`, and `autoDetectInit` calls outside their owner. Forwarded options are accepted; wrapper behavior still needs tests. |

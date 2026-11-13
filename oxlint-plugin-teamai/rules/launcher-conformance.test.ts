@@ -4,6 +4,14 @@ rule.invalid('rejects a launcher a function returns outside the adapters that ru
 rule.invalid('rejects a launcher a constant holds outside them', `const start: ToolLauncher = (launch) => run(launch);`);
 rule.invalid('rejects a launcher an arrow returns outside them', `export const boxProcess = (): ToolLauncher => start;`);
 rule.invalid('rejects a launcher written inline into a launch, which no suite reaches', `await runStepLaunch({ tool, input, start: (launch) => run(launch) });`, undefined, { filename: 'packages/runtime-tools/src/step.ts' });
+rule.invalid('rejects a launcher a function returns through a promise outside them', `export async function boxProcess(): Promise<ToolLauncher> { return start; }`);
+rule.invalid('rejects a launcher checked with satisfies outside them', `export const start = ((launch) => run(launch)) satisfies ToolLauncher;`);
+rule.invalid('rejects a launcher cast to the port outside them', `export const start = ((launch) => run(launch)) as ToolLauncher;`);
+rule.invalid('rejects a launcher written inline into a step launcher', `stepLauncher(deps, { start: (launch) => run(launch) });`, undefined, { filename: 'src/workflow/steps/prompt.ts' });
+rule.invalid('rejects a launcher a factory this file declares builds in a launch outside them', `function boxProcess() { return (launch) => run(launch); }\nawait runStepLaunch({ tool, input, start: boxProcess() });`);
+rule.invalid('rejects a launcher this file declares with no type and passes to a launch', `const start = (launch) => run(launch);\nstepLauncher(deps, { start });`, undefined, { filename: 'src/workflow/steps/prompt.ts' });
+rule.valid('allows a launcher an adapter built, held in a constant and passed to a step launcher', `const start = runtimeLauncher(run, options);\nstepLauncher(deps, { start });`, { filename: 'src/workflow/steps/prompt.ts' });
+rule.valid('allows a launcher an imported adapter builds in a launch', `await runStepLaunch({ tool, input, start: runtimeLauncher(run, options) });`);
 rule.valid('allows an adapter the suite runs on', `export function hostProcess(): ToolLauncher { return start; }`, { filename: 'packages/runtime-tools/src/step.ts' });
 rule.valid('allows a launcher passed on by name', `export async function run({ start }: { start: ToolLauncher }) { return runStepLaunch({ tool, input, start }); }`);
 rule.valid('leaves tests alone', `const start: ToolLauncher = (launch) => run(launch);`, { filename: 'packages/runtime-box/src/step.test.ts' });
