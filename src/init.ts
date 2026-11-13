@@ -5,7 +5,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { readWorkspaceChildren } from './workspace-children.js';
 import { readSelfModeMarker } from './bootstrap.js';
-import { hasUserScopeInstall, loadMemberSettings, markMemberSettingsWritten, saveLocalConfig, loadTeamConfig, saveLocalConfigForScope, loadLocalConfigForScope, loadStateForScope, refreshRoleAssignment, saveStateForScope, resolveProjectDataHome } from './config.js';
+import { hasUserScopeInstall, loadMemberSettings, markMemberSettingsWritten, saveLocalConfig, loadTeamConfig, saveLocalConfigForScope, loadLocalConfigForScope, loadStateForScope, refreshRoleAssignment, saveStateForScope, resolveProjectDataHome, teamToolIds } from './config.js';
 import { codexTrustPolicy, deliveredHookFiles, describeUnappliedTeamHooks, hasTeamaiHooks, reconcileHooks, reconcileTeamHooksForConfig, reportCodexTrust, trustCodexForScope } from './hooks.js';
 import { configureGitUser, resolveAnchors, initRepo, isGitRepo, getRemoteUrl, getConfiguredRemoteUrl, remotesMatch, redactGitCredentials, pullRepoFastForward, DetachedTeamRepoError, pushRepoDirectly, autoPushViaMR, gitBlockTimeoutMs, createGitWithBlockTimeout } from './utils/git.js';
 import { withTimeout } from './utils/async.js';
@@ -232,41 +232,42 @@ import {
 import { descriptorOf, TOOL_ORDER } from './tool-registry.js';
 import { describeToolHomeChange, recordToolHomes } from './tool-home-record.js';
 
-function validAgentIds(teamConfig?: TeamaiConfig | null): string[] {
+function validAgentIds(teamToolIds: readonly string[]): string[] {
   return [...new Set([
     ...TOOL_ORDER,
     ...KNOWN_AGENTS.map((agent) => agent.id),
-    ...Object.keys(teamConfig?.toolPaths ?? {}),
+    ...teamToolIds,
   ])].sort();
 }
 
-function unknownAgentIds(agentIds: string[], teamConfig?: TeamaiConfig | null): string[] {
-  const known = new Set(validAgentIds(teamConfig));
+function unknownAgentIds(agentIds: string[], teamToolIds: readonly string[]): string[] {
+  const known = new Set(validAgentIds(teamToolIds));
 
   return agentIds.filter((id) => !known.has(id));
 }
 
-function validateGitInitAgentIds(agentIds: string[], teamConfig?: TeamaiConfig | null): boolean {
-  const unknown = unknownAgentIds(agentIds, teamConfig);
+/** Whether every id of `agentIds` is a tool teamai ships or one the team repo adds (`teamToolIds`); logs the others when not. */
+function validateGitInitAgentIds(agentIds: string[], teamToolIds: readonly string[]): boolean {
+  const unknown = unknownAgentIds(agentIds, teamToolIds);
 
   if (unknown.length === 0) return true;
 
   const subject = unknown.map((id) => '"' + id + '"').join(', ');
 
   const explanation = unknown.length === 1
-    ? subject + ' is neither a built-in agent nor a key in the team\'s toolPaths in teamai.yaml.'
-    : subject + ' are neither built-in agents nor keys in the team\'s toolPaths in teamai.yaml.';
+    ? subject + ' is neither a tool teamai ships nor one the team repo adds in tools/ or in teamai.yaml\'s toolPaths.'
+    : subject + ' are neither tools teamai ships nor ones the team repo adds in tools/ or in teamai.yaml\'s toolPaths.';
 
   log.error(
     'Unknown --agent id' + (unknown.length === 1 ? '' : 's') + ': ' + explanation +
-    ' Valid ids: ' + validAgentIds(teamConfig).join(', ') + '.',
+    ' Valid ids: ' + validAgentIds(teamToolIds).join(', ') + '.',
   );
 
   return false;
 }
 
 function warnAboutUncheckedHttpAgentIds(agentIds: string[]): void {
-  const unknown = unknownAgentIds(agentIds);
+  const unknown = unknownAgentIds(agentIds, []);
 
   if (unknown.length === 0) return;
   log.warn(
@@ -1709,7 +1710,7 @@ export async function initSelfMode(options: GlobalOptions & {
     return;
   }
 
-  if (!validateGitInitAgentIds(normalizeAgentList(options.agent), teamConfig)) {
+  if (!validateGitInitAgentIds(normalizeAgentList(options.agent), await teamToolIds(localPath, teamConfig))) {
     process.exit(1);
 
     return;
@@ -2532,7 +2533,7 @@ export async function init(options: GlobalOptions & {
   // is decided only by --scope / default (issue #250).
   const teamConfig = await loadTeamConfig(localPath, null);
 
-  if (!validateGitInitAgentIds(requestedAgents, teamConfig)) {
+  if (!validateGitInitAgentIds(requestedAgents, await teamToolIds(localPath, teamConfig))) {
     process.exit(1);
 
     return;

@@ -40,7 +40,7 @@ import { listRoleIds, loadRolesManifest, RolesManifestNotFoundError } from './ro
 import { loadRoleAssignmentsIfPresent, resolveAssignedRoles, ROLE_ASSIGNMENTS_FILE } from './role-assignments.js';
 import { warnOnce } from './utils/warn-once.js';
 import { AllowSchema } from './workflow/requirements.js';
-import { withToolInstances } from './tool-instances.js';
+import { personalToolInstances, teamToolInstances, withToolInstances } from './tool-instances.js';
 import { workflowNamespacesOf } from './resource-namespaces.js';
 
 /**
@@ -323,6 +323,21 @@ export async function loadTeamConfig(repoPath: string, member: LocalConfig | nul
 
     return null;
   }
+}
+
+/**
+ * The tools the team repo at `repoPath` adds to those teamai ships, for no member: the keys of `teamConfig`, its
+ * teamai.yaml as `loadTeamConfig(repoPath, null)` read it, which hold its tool instances. With no teamai.yaml yet, as
+ * on the first init of a new team repo, its tools/ instances and the member's own still count.
+ */
+export async function teamToolIds(repoPath: string, teamConfig: TeamaiConfig | null): Promise<string[]> {
+  if (teamConfig) return Object.keys(teamConfig.toolPaths);
+  const [team, own] = await Promise.all([
+    teamToolInstances({ root: repoPath, namespaces: () => memberNamespaces(repoPath, null) }),
+    personalToolInstances(),
+  ]);
+
+  return [...team, ...own].map((instance) => instance.name);
 }
 
 /**
