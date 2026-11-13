@@ -600,8 +600,9 @@ export async function preparedPlace(input: Parameters<typeof preparePlace>[0]): 
   const { config, lock, lease } = input;
   const run = await readRun(config, lock.run);
 
-  if (run === 'missing' || run === 'corrupt') return { kind: 'failed', failure: { code: 'run_unreadable', message: `Run ${lock.run} cannot be read, so attempt ${lease.attempt} has no place to run in` } };
-  const failure = await prepareCheckPlace({ config, run, attempt: lease.attempt, dir: prepared.dir });
+  const failure = run === 'missing' || run === 'corrupt'
+    ? { code: 'run_unreadable', message: `Run ${lock.run} cannot be read, so attempt ${lease.attempt} has no place to run in` } satisfies WorkflowFailure
+    : await prepareCheckPlace({ config, run, attempt: lease.attempt, dir: prepared.dir });
 
   if (!failure) return prepared;
   const unrestored = await abandonPlace({ config, lock, attempt: lease.attempt });
