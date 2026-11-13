@@ -1620,6 +1620,19 @@ describe('score subjects', () => {
     expect(await ScoreVerbs.subjects({ run: runId, step: 'outer' }, { env: attemptEnv(config, runId, other.attempt, 'unattended'), current: config, now: NOW })).toEqual({ ok: true, output: { list: [`run:${runId}:outer.fix:1`] } });
   });
 
+  it('reads --step as a path of its own when the attempt marker names more than one run and attempt', async () => {
+    const config = await team({ fixes: FIXES }, { quality: scorer() });
+    const runId = String(data(await startRun(config, 'fixes', {}, { secrets: await knownSecrets(config), checkout: config.projectRoot })).run);
+    const fix = LeaseSchema.parse(data(await leaseNext(config, runId, external)).lease);
+    plantSession(config.projectRoot ?? '', 'session-fix', 'Fix the change.');
+    data(await reportAttempt(config, runId, { attempt: fix.attempt, revision: fix.revision, outcome: 'success', driver: external, tool: 'claude', session: 'session-fix' }));
+    const lister = LeaseSchema.parse(data(await leaseNext(config, runId, external)).lease);
+    const marked = (marker: string) => ScoreVerbs.subjects({ run: runId, step: 'fix' }, { env: { TEAMAI_WORKFLOW_ATTEMPT: marker }, current: config, now: NOW });
+
+    expect(await marked(`${runId}/${lister.attempt}`)).toEqual({ ok: true, output: { list: [`run:${runId}:outer.fix:1`] } });
+    expect(await marked(`${runId}/${lister.attempt}/x`)).toEqual({ ok: true, output: { list: [] } });
+  });
+
   it.each<[string, SubjectsOptions]>([
     ['--lapsed with --run', { lapsed: true, run: 'r0000000000000001' }],
     ['--lapsed with --step', { lapsed: true, step: 'fix' }],

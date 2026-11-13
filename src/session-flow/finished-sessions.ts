@@ -6,7 +6,7 @@
 import { z } from 'zod';
 import { readContributeState } from '../contribute-check.js';
 import { detectProjectConfig, loadLocalConfig, loadTeamConfig } from '../config.js';
-import { ATTEMPT_ENV, RUN_MODES, type RunMode } from '../launch-context.js';
+import { ATTEMPT_ENV, attemptMarker, RUN_MODES, type RunMode } from '../launch-context.js';
 import { pinScorers } from '../scorers/cache.js';
 import { scoringUnavailable } from '../scorers/home.js';
 import { FINISHED_WORKFLOW } from '../scorers/judging-workflows.js';
@@ -25,6 +25,7 @@ import { runDeadline } from '../workflow/limits.js';
 import { durationMs } from '../utils/duration.js';
 import { startAsCli } from '../workflow/cli-start.js';
 import type { WorkflowClient } from '../workflow/protocol.js';
+import { markedAttempt } from '../workflow/attempt-marker.js';
 import { findRunConfig } from '../workflow/run-location.js';
 import { wasLeased } from '../workflow/step-state.js';
 import { readRuns, RunIdSchema, type RunId } from '../workflow/store.js';
@@ -134,11 +135,13 @@ function requestOf({ idle, publish = 'policy', scorers = '[]' }: ListOptions): R
  * scope of the attempt's run, and only a run a person started may pass anything but `policy` and `[]`.
  */
 async function scopeOf(request: Request, ctx: ListContext): Promise<{ ok: true; config: LocalConfig } | Extract<Listed, { ok: false }>> {
-  const marker = ctx.env[ATTEMPT_ENV];
+  const marker = attemptMarker(ctx.env);
 
   if (!marker) return ctx.current ? { ok: true, config: ctx.current } : { ok: false, code: 'not_initialized', message: 'teamai is not set up in this directory, so it has no sessions to list. Run teamai init.' };
-  const [runId = ''] = marker.split('/');
-  const found = await findRunConfig(runId, ctx.current);
+  const marked = markedAttempt(ctx.env);
+
+  if (!marked) return { ok: false, code: 'invalid_arguments', message: `${ATTEMPT_ENV} is "${marker}", not <run>/<attempt>, so this listing names no run whose scope to read. A workflow step sets it; unset it to list this scope's sessions.` };
+  const found = await findRunConfig(marked.run, ctx.current);
 
   if ('error' in found) return { ok: false, code: found.error.code, message: found.error.message };
   const overrides = request.publish !== 'policy' || request.scorers.length > 0;

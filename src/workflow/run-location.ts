@@ -7,6 +7,7 @@ import { LocalConfigSchema, getDataHome, type LocalConfig } from '../types.js';
 import { memberHome } from '@teamai/shared/home';
 import { projectsRootDir } from '../utils/partition.js';
 import type { LeasedStep } from './step-state.js';
+import { markedAttempt } from './attempt-marker.js';
 import { isRunId, readRun } from './store.js';
 import type { RunState, WorkflowFailure } from './types.js';
 import { readRegularFile } from '@teamai/shared/regular-file';
@@ -109,13 +110,13 @@ export async function findRunConfig(runId: string, current?: LocalConfig): Promi
  * this machine the run is: what a step's own command reads of the run it is part of, from the place the step runs in.
  */
 export async function findAttemptRun(env: NodeJS.ProcessEnv): Promise<{ config: LocalConfig; run: RunState; step: LeasedStep } | { error: WorkflowFailure }> {
-  const marker = env[ATTEMPT_ENV];
-  const [runId, attempt, ...rest] = marker?.split('/') ?? [];
+  const marked = markedAttempt(env);
 
-  if (runId === undefined || attempt === undefined || rest.length > 0) {
+  if (!marked) {
     return { error: { code: 'invalid_arguments', message: `${ATTEMPT_ENV} is not set to <run>/<attempt>, so this command runs as no step of a run. It runs only as a step of a workflow run, which sets it.` } };
   }
 
+  const { run: runId, attempt } = marked;
   const found = await findRunConfig(runId);
 
   if ('error' in found) return found;

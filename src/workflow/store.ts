@@ -196,18 +196,13 @@ export function attemptOutcomesPath(config: LocalConfig, run: RunId, attempt: At
 }
 
 /**
- * Append `outcome` to the outcome file of the attempt `marker` (`ATTEMPT_ENV`, `<run>/<attempt>`) names.
- * `unknown_run` when this scope holds no such run, since the engine that settles the attempt reads only its own scope.
+ * Append `outcome` to the outcome file of attempt `attempt` of run `run`, as the attempt marker names them
+ * (`markedAttempt`). `unknown_run` when this scope holds no such run, since the engine that settles the attempt reads
+ * only its own scope.
  */
-export async function appendAttemptOutcome(config: LocalConfig, marker: string, outcome: WorkOutcome): Promise<'appended' | 'bad_marker' | 'unknown_run'> {
-  const [runPart, attemptPart, ...rest] = marker.split('/');
-  const run = RunIdSchema.safeParse(runPart);
-  const attempt = AttemptIdSchema.safeParse(attemptPart);
-
-  if (!run.success || !attempt.success || rest.length > 0) return 'bad_marker';
-
-  if (await readRegularFile(runFilePath(config, run.data), 'utf8').catch(() => null) === null) return 'unknown_run';
-  const file = attemptOutcomesPath(config, run.data, attempt.data);
+export async function appendAttemptOutcome(config: LocalConfig, { run, attempt }: { run: RunId; attempt: AttemptId }, outcome: WorkOutcome): Promise<'appended' | 'unknown_run'> {
+  if (await readRegularFile(runFilePath(config, run), 'utf8').catch(() => null) === null) return 'unknown_run';
+  const file = attemptOutcomesPath(config, run, attempt);
   await fs.mkdir(path.dirname(file), { recursive: true });
   await appendRegularFile(file, `${JSON.stringify(outcome)}\n`);
 

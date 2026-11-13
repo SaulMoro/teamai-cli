@@ -9,12 +9,11 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { writeRegularFile } from '@teamai/shared/regular-file';
-import { ATTEMPT_ENV } from '../launch-context.js';
 import type { LocalConfig } from '../types.js';
 import { errnoCode } from '../utils/fs.js';
-import { isCommandStep } from './attempt-marker.js';
+import { isCommandStep, markedAttempt } from './attempt-marker.js';
 import { expire } from './limits.js';
-import { attemptDir, PartOfStepSchema, readRun, RunIdSchema, type PartOfStep, type RunId } from './store.js';
+import { attemptDir, readRun, RunIdSchema, type PartOfStep, type RunId } from './store.js';
 import type { RunState, WorkflowFailure } from './types.js';
 
 /** The directory under an attempt's own that lists, one empty file each, the runs part of that attempt. */
@@ -29,14 +28,12 @@ function partsDir(config: LocalConfig, { run, attempt }: PartOfStep): string {
  * another scope, such as one a run with no teamai init builds for itself, which ends with its process.
  */
 export async function commandStepPart(config: LocalConfig, env: NodeJS.ProcessEnv): Promise<PartOfStep | undefined> {
-  if (!isCommandStep(env)) return undefined;
-  const [run, attempt, ...rest] = (env[ATTEMPT_ENV] ?? '').split('/');
-  const parsed = PartOfStepSchema.safeParse({ run, attempt });
+  const marked = isCommandStep(env) ? markedAttempt(env) : undefined;
 
-  if (!parsed.success || rest.length > 0) return undefined;
-  const isHere = await fs.stat(attemptDir(config, parsed.data.run, parsed.data.attempt)).then((found) => found.isDirectory(), () => false);
+  if (!marked) return undefined;
+  const isHere = await fs.stat(attemptDir(config, marked.run, marked.attempt)).then((found) => found.isDirectory(), () => false);
 
-  return isHere ? parsed.data : undefined;
+  return isHere ? marked : undefined;
 }
 
 /** Lists run `run` under the attempt it is part of, so a driver that stops that attempt ends it (`partsOf`). */

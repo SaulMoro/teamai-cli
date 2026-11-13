@@ -81,6 +81,15 @@ export function resolveRunMode(env: NodeJS.ProcessEnv): RunMode {
 export const ATTEMPT_ENV = 'TEAMAI_WORKFLOW_ATTEMPT';
 
 /**
+ * The attempt marker `env` carries as it is set, parsed or not, for a presence check or a message; undefined when unset
+ * or empty. `markedAttempt` in `workflow/attempt-marker.ts` parses it. Here, so the CLI entry checks it without loading
+ * the workflow store.
+ */
+export function attemptMarker(env: NodeJS.ProcessEnv): string | undefined {
+  return env[ATTEMPT_ENV] || undefined;
+}
+
+/**
  * The variable set only in the process of a `command` step that the local driver, a skill driver's runner or a fleet
  * member runs on its own machine (`commandStepEnv`), to the same `<run>/<attempt>` as {@link ATTEMPT_ENV}: the one
  * process of an attempt whose shortcut command may run its own run as part of the step.

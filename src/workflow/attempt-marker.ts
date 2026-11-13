@@ -1,10 +1,25 @@
 import { RUN_DIR_ENV } from '@teamai/runtime-protocol';
+import { z } from 'zod';
 import { ATTEMPT_ENV, EPHEMERAL_CONFIG_ENV, RUN_MODE_ENV, STEP_COMMAND_ENV, type RunMode } from '../launch-context.js';
 import type { LocalConfig } from '../types.js';
 import { AGENT_SESSION_ENV } from '../utils/session-id.js';
-import { isRunId, runScratchDir } from './store.js';
+import { AttemptIdSchema, isRunId, RunIdSchema, runScratchDir } from './store.js';
 import type { WorkflowFailure } from './types.js';
 import { git, gitAnswer, worktreeCheckout } from './worktree.js';
+
+/** The attempt marker's value: `<run>/<attempt>`, one run id and one attempt id, and nothing more. */
+const MarkedAttemptSchema = z.string().transform((marker) => marker.split('/')).pipe(z.tuple([RunIdSchema, AttemptIdSchema])).transform(([run, attempt]) => ({ run, attempt }));
+
+/** The run and the attempt of it that an attempt marker names. */
+export type MarkedAttempt = z.output<typeof MarkedAttemptSchema>;
+
+/**
+ * The attempt `env`'s attempt marker names: undefined when the marker is unset, or names anything but exactly one run
+ * and one attempt of it. The one parser of the marker; a caller that needs only the run takes `.run`.
+ */
+export function markedAttempt(env: NodeJS.ProcessEnv): MarkedAttempt | undefined {
+  return MarkedAttemptSchema.safeParse(env[ATTEMPT_ENV]).data;
+}
 
 /**
  * What every process of an attempt of `run` gets: the attempt marker, the run's mode, and the run's directory, and the
