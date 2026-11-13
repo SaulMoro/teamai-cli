@@ -1469,4 +1469,16 @@ finally:
 
     expect(await capture(() => workflowNext(runId, { json: JSON.stringify({ driver: leasing }) }))).toMatchObject({ data: { lease: { step: 'tidy' } } });
   });
+
+  it('leaves the finally steps to the driver that holds the lease when a local driver here only waited on it', async () => {
+    const { config, runId } = await startTidied();
+    const own = driverIdentity('local', '/ci');
+    expect(await leaseNext(config, runId, own)).toMatchObject({ data: { lease: { step: 'work' } } });
+    // A local driver resumed here while that lease is open is told to wait, and stops.
+    expect(await takeRunLock(config, RunIdSchema.parse(runId), (lock) => leaseNext(config, runId, driverIdentity('local', process.cwd()), { drivesUnder: lock }), { waitMs: 0 })).toMatchObject({ value: { data: { wait: {} } } });
+
+    expect(await capture(() => workflowCancel(runId))).toMatchObject({ data: { run: { status: 'running', finalizing: { outcome: 'cancelled' } } } });
+
+    expect(await capture(() => workflowNext(runId, { json: JSON.stringify({ driver: own }) }))).toMatchObject({ data: { lease: { step: 'tidy' } } });
+  });
 });

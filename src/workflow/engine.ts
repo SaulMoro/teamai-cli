@@ -2391,8 +2391,6 @@ export async function leaseNext(config: LocalConfig, runId: string, driver: Driv
     restartQueued(run, driver, unstarted, now);
     run.takesWhole = options.can?.workflow === true || options.alone?.offers.some((offer) => offer.can.workflow === true) === true;
 
-    if (options.drivesUnder?.run === run.id) run.isLeasedUnderLock = true;
-    else delete run.isLeasedUnderLock;
     let reconciled = reconcileRun(run, now);
 
     // A workflow a step produced is known only now: refused as a start refuses one it knows, the run settles again, and a
@@ -2522,7 +2520,11 @@ export async function leaseNext(config: LocalConfig, runId: string, driver: Driv
       const other = run.steps.find((step): step is LeasedStep => step.status === 'leased' && !sameDriver(step.lease.driver, driver));
 
       if (other) return wait(other);
+      // Set with the driver it describes, so a driver told to wait never speaks for the one that holds the lease.
       run.driver = driver;
+
+      if (options.drivesUnder?.run === run.id) run.isLeasedUnderLock = true;
+      else delete run.isLeasedUnderLock;
 
       // A driver with HITL answers optional gates itself unless the person chose auto-approve for this run; it never
       // follows workflows.auto_approve. One that relays them follows it, as a driver without HITL would.
