@@ -2027,7 +2027,7 @@ const BenchmarkDoneSchema = z.object({
  * starts the workflow `teamai-benchmark`, the team's or teamai's default, with the suite as its input and the suite's timeout as
  * the run's, on the driver `--driver` names, else the one `workflows.driver` names, else local. Exits as `workflow start` does for the run's outcome,
  * and also 1 when a `finally` step failed or was cancelled: the report; the checks gate, which fails when a check
- * could not run; or the regression gate, which with `--fail-on-regression` fails when an arm dropped against the
+ * could not run; the results gate, which fails when no trial produced a result; or the regression gate, which with `--fail-on-regression` fails when an arm dropped against the
  * newest earlier comparable record on teamai-reports. A record still pending never changes it.
  */
 export async function benchmarkRun(suite: string, options: { driver?: string; sandbox?: boolean; memberAliases?: boolean; task?: string[]; arm?: string[]; failOnRegression?: boolean }): Promise<void> {

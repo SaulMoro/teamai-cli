@@ -12,7 +12,7 @@ import { decideCheckReport } from '../benchmark/trial.js';
 import { planBenchmark } from '../benchmark/start.js';
 import { ScoreVerbs } from '../score-verbs.js';
 import { attemptEnv } from '../workflow/attempt-marker.js';
-import { benchmarkRecord, uncheckedChecks, type BenchmarkRecord } from '../benchmark/result.js';
+import { benchmarkRecord, uncheckedChecks, unmeasuredTrials, type BenchmarkRecord } from '../benchmark/result.js';
 import { planOfRun } from '../benchmark/run-plan.js';
 import { TrialVerdicts } from '../benchmark/verdicts.js';
 import { LabelStore } from '../scorers/label-store.js';
@@ -83,6 +83,13 @@ function uncheckedOf(run: RunState): string[] {
   const planned = planOfRun(run);
   if ('failure' in planned) throw new Error(planned.failure.message);
   return uncheckedChecks(run, planned.found);
+}
+
+/** The trials of `run` the run's report names as having ended in an error when no trial produced a result. */
+function unmeasuredOf(run: RunState): string[] {
+  const planned = planOfRun(run);
+  if ('failure' in planned) throw new Error(planned.failure.message);
+  return unmeasuredTrials(run, planned.found);
 }
 
 /** The benchmark record the run's report would write, from the plan its plan step printed and no verdict. */
@@ -475,6 +482,54 @@ describe('benchmark plan run', () => {
       tasks: [{ id: 't01', baseline: 'could_not_run' }, { id: 't02', baseline: 'valid' }],
       trials: [{ task: 't01', result: 'not_run' }, { task: 't02', result: 'error' }],
     });
+  });
+
+  it('names each trial whose work ended in an error, with why, when no trial produced a result', async () => {
+    const { config, runId } = await startFix({ tasks: 2 });
+    await settleBaselines(config, runId, driver, can, { t01: 'passed' });
+    const lease = LeaseSchema.parse(await leaseNext(config, runId, driver, { can, prepare: true })).data.lease;
+    await reportAttempt(config, runId, { ...lease, outcome: 'failed', driver, failure: { code: 'sandbox_failed', message: 'The attempt socket is too long.' } });
+
+    const next = await leaseNext(config, runId, driver, { can, prepare: true });
+
+    const run = await readRun(config, runId);
+    if (typeof run !== 'object') throw new Error(`run ${runId} is ${run}`);
+    expect(next).toMatchObject({ data: { done: { outcome: 'succeeded' } } });
+    expect(recordOf(run).trials).toEqual([expect.objectContaining({ task: 't01', result: 'not_run' }), expect.objectContaining({ task: 't02', result: 'error' })]);
+    expect(unmeasuredOf(run)).toEqual(['Trial 2/2 t02 a01: sandbox_failed: The attempt socket is too long.']);
+  });
+
+  it('names no errored trial once another trial produced a result', async () => {
+    const { config, runId } = await startFix({ arms: 2 });
+    const failed = await leasePrompt(config, runId);
+    await reportAttempt(config, runId, { ...failed, outcome: 'failed', driver, failure: { code: 'sandbox_failed', message: 'The attempt socket is too long.' } });
+    const prompt = LeaseSchema.parse(await leaseNext(config, runId, driver, { can, prepare: true })).data.lease;
+    await reportAttempt(config, runId, { ...prompt, outcome: 'success', driver });
+    const check = LeaseSchema.parse(await leaseNext(config, runId, driver, { can, prepare: true })).data.lease;
+    await reportAttempt(config, runId, { ...check, outcome: 'success', exitCode: 0, outputs: await trialCheckOutput(config, runId, { checkStep: check.step, result: 'failed' }), driver });
+
+    await leaseNext(config, runId, driver, { can, prepare: true });
+
+    const run = await readRun(config, runId);
+    if (typeof run !== 'object') throw new Error(`run ${runId} is ${run}`);
+    expect(recordOf(run).trials.map(({ result }) => result)).toEqual(['error', 'unscored']);
+    expect(unmeasuredOf(run)).toEqual([]);
+  });
+
+  it('leaves a trial whose work succeeded and whose check could not run to the unchecked checks, though no trial produced a result', async () => {
+    const { config, runId } = await startFix();
+    const prompt = await leasePrompt(config, runId);
+    await reportAttempt(config, runId, { ...prompt, outcome: 'success', driver });
+    const check = LeaseSchema.parse(await leaseNext(config, runId, driver, { can, prepare: true })).data.lease;
+    await reportAttempt(config, runId, { ...check, outcome: 'success', exitCode: 0, outputs: await trialCheckOutput(config, runId, { checkStep: check.step, result: 'could_not_run' }), driver });
+
+    await leaseNext(config, runId, driver, { can, prepare: true });
+
+    const run = await readRun(config, runId);
+    if (typeof run !== 'object') throw new Error(`run ${runId} is ${run}`);
+    expect(recordOf(run).trials).toEqual([expect.objectContaining({ result: 'error' })]);
+    expect(uncheckedOf(run)).toEqual(['Trial 1/1 t01 a01: not_found']);
+    expect(unmeasuredOf(run)).toEqual([]);
   });
 
   it('holds every baseline and trial from its only driver when that driver is not a sandbox, rather than settling them', async () => {

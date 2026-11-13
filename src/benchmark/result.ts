@@ -454,6 +454,43 @@ export function uncheckedChecks(run: RunState, { plan, prefix }: RunPlan): strin
   return [...baselines, ...trials];
 }
 
+/** The results that measured a trial: its work ran to an end that a check, a judge or no judge decided. */
+const MEASURED: ReadonlySet<TrialResult> = new Set(['passed', 'failed', 'unscored']);
+
+/**
+ * A line for each trial of `run` whose work ended in an error, with why, when no trial produced a result: every trial is
+ * `error` or `not_run`, so the run measured nothing. A trial whose work succeeded and whose check could not run is left
+ * to `uncheckedChecks`. Empty once any trial passed, failed or is unscored. teamai's benchmark workflow fails its
+ * `results` gate on them.
+ */
+export function unmeasuredTrials(run: RunState, { plan, prefix }: RunPlan): string[] {
+  const stateOf = (step: string): StepState | undefined => run.steps.find((state) => state.id === `${prefix}${step}`);
+
+  const ended = plan.trials.map((trial) => {
+    const work = workOf(run, `${prefix}${trial.step}`);
+
+    return { trial, work, result: trialResultOf({ prompt: stateOf(trial.step), work, check: checkOutputOf(stateOf(checkStepOf(trial))), verdicts: [] }, plan, trial) };
+  });
+
+  if (ended.some(({ result }) => MEASURED.has(result))) return [];
+
+  return ended.flatMap(({ trial, work, result }) => (result === 'error' && stateOf(trial.step)?.status !== 'succeeded'
+    ? [`Trial ${trial.order}/${plan.trials.length} ${trial.task} ${trial.arm}: ${whyErrored(work, stateOf(trial.step))}`]
+    : []));
+}
+
+/**
+ * Why `work`, whose work step is `step`, ended in an error: the failure of its deepest step that has one, as
+ * `code: message`, else how its work step stands.
+ */
+function whyErrored({ states }: TrialWork, step: StepState | undefined): string {
+  const [failure] = states.toSorted((left, right) => right.id.length - left.id.length).flatMap((state) => ((state.status === 'failed' || state.status === 'cancelled') && state.failure ? [state.failure] : []));
+
+  if (failure) return `${failure.code}: ${failure.message}`;
+
+  return step ? `its step is ${step.status}` : 'its step never ran';
+}
+
 /** `unlaunched` of the trial whose work step is `step`. */
 export function unlaunchedTrial(run: RunState, step: string): boolean {
   return unlaunched(workOf(run, step));
