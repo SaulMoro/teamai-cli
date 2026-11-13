@@ -19,14 +19,16 @@ import { spentTokens, startLimits } from './limits.js';
 import { publishRunRecords, removeQueuedEndRecord } from './records.js';
 import { resolveRetention, runRetainedUntil, type ResolvedRetention } from './retention.js';
 import { contextOf, localId, locateStep, statesIn, type Scope } from './scope.js';
-import { attemptDir, AttemptIdSchema, isRunId, readRun, RunIdSchema, runScratchDir, withCleanupLock, type RunId, type RunLock } from './store.js';
+import { attemptDir, AttemptIdSchema, isRunId, readRun, RunIdSchema, runnerAlive, runRemovalRefusal, runScratchDir, takeRunLock, withCleanupLock, type PartOfStep, type RunId, type RunLock } from './store.js';
 import { answerHitl, cancel, cancellable, redeliver, repend, resetIteration, resetPending, settled, start, stopAttempt, stopWhere, stopped, type HitlAnswer, type StepState } from './step-state.js';
 import { parseTemplate, templatePaths, templatedTexts } from './template.js';
 import type { DriverIdentity, RunState, WorkflowEnvelope, WorkflowFailure } from './types.js';
 import { isIsolated } from './workspace.js';
 import { driverIdentity } from '../driver-identity.js';
 import { retryCommand } from './runtimes/retry-command.js';
-import { stopLeftInProcess } from './runtimes/cancelled.js';
+import { stopCancelledAttempts, stopLeftInProcess } from './runtimes/cancelled.js';
+import { isPartOf, partsOf, stoppedFailure } from './part-of-step.js';
+import { knownSecrets } from '../env-resolution.js';
 import { LOGIN_TOOLS, loginHolder } from './runtimes/login.js';
 import { stopRecordedGroup } from '@teamai/shared/process-group';
 
@@ -338,6 +340,28 @@ export async function cancelRun(
 
     return ok({ cancelled: { steps: changed, attempts: run.cancelledAttempts?.slice(attemptsBefore) ?? [] }, run: runData(run) });
   });
+}
+
+/**
+ * Ends each run part of attempt `partOf` that still runs, which a driver calls once it stopped that attempt, however the
+ * attempt ended: each is cancelled under its lock, named for the step the attempt ran. With no live driver of it here,
+ * as when the attempt's own process drove it and is gone, what its attempts left is stopped too, their process groups
+ * first, as `teamai workflow cancel` stops them; a live driver of it stops its own attempts once it sees the cancel.
+ */
+export async function endRunsPartOf(config: LocalConfig, partOf: PartOfStep): Promise<void> {
+  for (const part of await partsOf(config, partOf)) {
+    const state = await readRun(config, part);
+
+    if (state === 'missing' || state === 'corrupt' || state.status !== 'running' || !isPartOf(state.partOf, partOf)) continue;
+    const [failure, secrets] = await Promise.all([stoppedFailure(config, partOf, new Date().toISOString()), knownSecrets(config)]);
+
+    const taken = await takeRunLock(config, part, async (lock) => {
+      await cancelRun(config, part, secrets, undefined, failure, { heldLock: lock });
+      await stopCancelledAttempts(config, lock, { isRunnerHolding: runnerAlive });
+    }, { waitMs: 0 }).catch(runRemovalRefusal);
+
+    if ('kind' in taken && taken.kind === 'busy') await cancelRun(config, part, secrets, undefined, failure);
+  }
 }
 
 interface RetryContainer {

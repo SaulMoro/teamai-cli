@@ -33,6 +33,7 @@ import type { Runners, SkillContext } from './skill-driver.js';
 import type { SkillAnswer } from './turn.js';
 import { retryCommand } from '../../runtimes/retry-command.js';
 import { stopLeftInProcess } from '../../runtimes/cancelled.js';
+import { endRunsPartOf } from '../../run-controls.js';
 
 /** Runners as detached teamai processes, alive while they hold their runner lock. */
 export function detachedRunners(config: LocalConfig): Runners {
@@ -457,6 +458,8 @@ async function setUp(context: SkillContext, run: RunId, attempt: AttemptId, prep
 async function runCommand(context: SkillContext, run: RunId, attempt: AttemptId, stage: Extract<Stage, { kind: 'run' }>): Promise<GroupedCommandExit> {
   const command = context.runners.command({ run, attempt, command: stage.command, cwd: stage.dir, env: { ...stage.env, ...commandStepEnv(context.config, run, attempt, stage.mode) } });
   const exited = (await whileOpen(context, run, attempt, { work: command.exit, stop: async () => { await command.stop(); }, phases: ['running'], expiresAt: stage.expiresAt })) ?? (await command.stop());
+  // However the command ended, a run its process started and drove is part of the attempt, and ends with it.
+  await endRunsPartOf(context.config, { run, attempt });
   const output = redact(exited.output, { envSecrets: context.env.secrets, patterns: false });
   await writeFileAtomic(path.join(attemptDir(context.config, run, attempt), 'output.log'), output);
 

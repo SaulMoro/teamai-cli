@@ -469,6 +469,15 @@ export function isRunState(value: unknown): value is RunState {
   return RunFileSchema.safeParse(value).success;
 }
 
+/**
+ * The attempt of another run's step a run is part of: the attempt a `command` step's process ran in when that process
+ * started the run and drove it, as the shortcut of `teamai score` or `recall maintenance --update-quality` does there.
+ * The run ends with that attempt (`part-of-step.ts`). A run file written before it has none: it is part of no step.
+ */
+export const PartOfStepSchema = z.object({ run: RunIdSchema, attempt: AttemptIdSchema }).strict();
+
+export type PartOfStep = z.infer<typeof PartOfStepSchema>;
+
 /** The parts of a run file the step union governs, with what a file written before them reads as. */
 const RunProgressSchema = z.object({
   steps: z.array(StepStateSchema),
@@ -487,6 +496,7 @@ const RunProgressSchema = z.object({
   }).optional(),
   /** The owner's run a fleet member runs this one for, whose id its steps read as `run.id`. */
   nestedIn: RunIdSchema.optional(),
+  partOf: PartOfStepSchema.optional(),
   timeout: z.number().int().positive().optional(),
   /** A workflow folder's sourceHash names its copy under the data home, so the run reads only one of those. */
   folder: z.string().regex(/^[0-9a-f]{64}$/).optional(),

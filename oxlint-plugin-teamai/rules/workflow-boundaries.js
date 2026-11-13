@@ -58,6 +58,8 @@ export const SKILL_IMPORTS = {
   'src/workflow/shell-command.ts': { names: ['startGroupedCommand', 'GroupedCommandExit'] },
   // How a stop reaches what a killed runner left, its process group and the login its judge held, as for a local driver.
   'src/workflow/runtimes/cancelled.ts': { names: ['stopLeftInProcess'] },
+  // How a runner that stopped its attempt ends the runs part of it, as every driver that stops an attempt does.
+  'src/workflow/run-controls.ts': { names: ['endRunsPartOf'] },
   // Whether the local driver launches the session's tool, so a local start or resume can name it.
   'src/launch-registry.ts': { names: ['isLaunchTool', 'LAUNCH_ORDER', 'LaunchTool'] },
   'src/builtin-hooks.ts': { names: ['resolveCliEntry'] },
