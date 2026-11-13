@@ -242,6 +242,29 @@ describe('the driver lock of a run whose data home is not there', () => {
     expect(fs.existsSync(dataHome)).toBe(false);
   });
 
+  // A fleet member holds a claimed run's attempts, and no record of the run: its owner's machine has that.
+  it("drives nothing of a fleet member's run an uninstall removed while it waited, and makes none of it again", async () => {
+    const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-member-home-')));
+    roots.push(root);
+    const dataHome = path.join(root, 'data');
+    const config: LocalConfig = { repo: { kind: 'self', localPath: path.join(root, 'knowledge'), remote: 'local' }, username: 'test', scope: 'project', additionalRoles: [], projectRoot: root, dataHome };
+    const run = RunIdSchema.parse('r0123456789abcdef');
+    const runDir = path.join(dataHome, 'workflows', 'runs', run);
+    fs.mkdirSync(path.join(runDir, 'attempts', 'a01234567'), { recursive: true });
+    const removal = runsRemovalLockIn(dataHome);
+    expect(await acquireLock(removal)).toBe(true);
+    const body = vi.fn(async () => 'drove');
+
+    const driving = takeRunLock(config, run, body, { waitMs: 0 });
+    await new Promise((resolve) => { setTimeout(resolve, 50); });
+    fs.rmSync(runDir, { recursive: true });
+    await releaseLock(removal);
+
+    await expect(driving).rejects.toThrow(`Run ${run} was removed from this machine while teamai waited to drive it`);
+    expect(body).not.toHaveBeenCalled();
+    expect(fs.existsSync(runDir)).toBe(false);
+  });
+
   // A taken removal lock is no driver of the run: a cancel that read it as one would cancel without the lock.
   it.each([
     { state: 'its data home removed', isTaken: false, code: 'run_not_found', says: 'is not on this machine' },
