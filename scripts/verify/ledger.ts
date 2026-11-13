@@ -203,6 +203,8 @@ const KNOWN_LEFTOVERS = new Map([
   ['home/.teamai/dashboard/session-owners.jsonl', 'any'],
   ['home/.teamai/dashboard/events.jsonl', 'any'],
   ['home/.teamai/dashboard/requests.jsonl', 'any'],
+  // The skills a session used, kept across log truncation (usage-tracker.ts `updateKnownSkills`).
+  ['home/.teamai/known-skills.json', 'any'],
   ['home/.teamai/state.json', 'any'],
   // teamai starts Codex's app-server to trust its hooks (#955), and Codex writes its own files where teamai writes:
   // its system skills, and the table of hook approvals that taking teamai's out leaves empty.
