@@ -12,7 +12,11 @@ const PACKAGE = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '.
 const FAKE_T3 = path.join(PACKAGE, 'testing', 'fake-t3.mjs');
 const TOKEN = 'fake-t3-token-scenarios';
 
+/** The tokens the toy's agent bills, as a tool's own end-of-run usage reports them. */
+export const ToyUsageSchema = z.object({ input: z.number().optional(), output: z.number().optional(), cachedInput: z.number().optional() });
+
 const ToyAgentSchema = z.object({
+  usage: ToyUsageSchema.optional(),
   output: z.json().optional(),
   fail: z.object({ code: z.string(), message: z.string() }).optional(),
   hold_ms: z.number().optional(),
@@ -85,7 +89,10 @@ export async function t3OnFakeServer(): Promise<{
         environment: { environmentId: 'env-fake-1', label: 'fake-laptop', serverVersion: '0.1.8-fake' },
         projects: [{ id: 'project-1', title: 'scenario', workspaceRoot: fs.realpathSync(worktree) }],
         providers: [{ providerInstanceId: 'claudeAgent', driverKind: 'claudeAgent', displayName: 'Claude', constraints: [], models: [{ id: 'claude-opus-5-5' }] }],
-        agent: { output: toy.output, fail: toy.fail !== undefined, hold: toy.hold_ms !== undefined, release: toy.release, result: toy.result },
+        agent: {
+          output: toy.output, fail: toy.fail !== undefined, hold: toy.hold_ms !== undefined, release: toy.release, result: toy.result,
+          ...(toy.usage && { usage: { input: toy.usage.input ?? 0, output: toy.usage.output ?? 0, cacheRead: toy.usage.cachedInput ?? 0 } }),
+        },
         ...(through && { wrappedHome: through.toolHome }),
       }));
 

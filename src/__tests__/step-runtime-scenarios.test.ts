@@ -18,7 +18,7 @@ import { newOpId, type ExecEnd, type ExecEvents, type ExecQuestion, type ExecReq
 import type { DriverCan } from '../workflow/requirements.js';
 import type { JsonValue } from '@teamai/shared/json';
 import { sandboxOnFake } from './helpers/sandbox-runtime.js';
-import { t3OnFakeServer } from './helpers/t3-runtime.js';
+import { t3OnFakeServer, ToyUsageSchema } from './helpers/t3-runtime.js';
 import { paseoOnFakeDaemon } from './helpers/paseo-runtime.js';
 import { TOY_RUNTIME } from './helpers/toy-runtime.js';
 import { expectNothingLeft } from '@teamai/runtime-testing/leaks';
@@ -454,8 +454,6 @@ interface PromptSubject {
   display?: RuntimeDisplay;
   /** `place`: it shows that display for the place alone, so a prompt's acceptance carries none. Absent: a prompt shows it too. */
   displays?: 'place';
-  /** Whether a finished prompt carries the tokens the agent billed; absent: it does. */
-  reportsUsage?: false;
   /** The failure a prompt ends with when its agent fails with `failure`; absent: that failure as it is. */
   failure?(failure: RuntimeFailure): RuntimeFailure;
   /**
@@ -487,6 +485,8 @@ interface PromptSubject {
    * that start, and the prompt has more than its end left to journal. Absent: the runtime on its own.
    */
   through?: { toolStarted(state: string): boolean };
+  /** The home the runtime names for the prompt's session, when it names one: the tool home the session is kept in. */
+  sessionHome?(state: string): string;
 }
 
 const T3 = await t3OnFakeServer();
@@ -510,7 +510,7 @@ function fakeClaudeAgent(bin: string, agent: JsonValue): void {
     const resultAt = [prompt, ...args].join(' ').match(/as JSON to (\\S+)\\.(?:\\s|$)/)[1];
     const written = told.result ?? (told.output === undefined ? undefined : { output: told.output });
     if (written !== undefined) fs.writeFileSync(resultAt, JSON.stringify(written));
-    const billed = { input_tokens: told.usage?.input ?? 0, output_tokens: told.usage?.output ?? 0 };
+    const billed = { input_tokens: told.usage?.input ?? 0, output_tokens: told.usage?.output ?? 0, ...(told.usage?.cachedInput !== undefined && { cache_read_input_tokens: told.usage.cachedInput }) };
     await say(JSON.stringify({ type: 'result', subtype: 'success', is_error: false, result: 'Done.', session_id: session, usage: billed }));
     process.exit(0);
   ` });
@@ -528,10 +528,23 @@ const t3Started = (state: string, runtime: StepRuntime<DriverCan>): StepRuntime<
 /** The Paseo runtime over `state`, which finds on its PATH the folder `wrappers` holds first, when given. */
 const paseoRuntime = (state: string, wrappers?: string): StepRuntime<DriverCan> => stdioStepRuntime({ name: 'paseo', command: '/usr/bin/env', args: [...wrappersFirst(wrappers), ...paseo.args(state)] });
 
-/** The Paseo runtime's options, with the toy's agent as the fake daemon's: a model it cannot run is one the daemon does not offer. */
-function paseoOptions(agent: JsonValue): RuntimeOptions {
-  const { fail, usage: _usage, ...behaviour } = typeof agent === 'object' && agent !== null && !Array.isArray(agent) ? agent : {};
-  paseo.behave({ ...behaviour, ...(fail !== undefined && { models: { claude: ['claude-sonnet-5-5'] } }) });
+/** The attempt's tool home over `state`, which a place through a sandbox names (`CLAUDE_CONFIG_DIR`). */
+const attemptToolHome = (state: string): string => path.join(path.dirname(state), 'tool-home');
+
+/** The home the fake daemon's Claude keeps its sessions in over `state`. */
+const daemonClaudeHome = (state: string): string => path.join(state, 'daemon-user', '.claude');
+
+/**
+ * The Paseo runtime's options, with the toy's agent as the fake daemon's: a model it cannot run is one the daemon does not
+ * offer. The daemon runs Claude alone, which keeps its sessions in `claudeHome`, so the runtime offers their tokens.
+ */
+function paseoOptions(claudeHome: string, agent: JsonValue): RuntimeOptions {
+  const { fail, usage, ...behaviour } = typeof agent === 'object' && agent !== null && !Array.isArray(agent) ? agent : {};
+  const billed = ToyUsageSchema.optional().parse(usage);
+  paseo.behave({
+    ...behaviour, claude_home: claudeHome, models: { claude: [fail === undefined ? 'claude-opus-5-5' : 'claude-sonnet-5-5'] },
+    ...(billed && { usage: { input: billed.input ?? 0, output: billed.output ?? 0, cache_read: billed.cachedInput ?? 0 } }),
+  });
 
   return { url: paseo.url };
 }
@@ -611,8 +624,7 @@ const PROMPT_SUBJECTS: PromptSubject[] = [
       label: 'review · teamai r0123abcd', url: expect.stringMatching(/^t3code:\/\/threads\/env-fake-1\/mcp%3Alaunch%3A[0-9a-f]+$/),
       fields: { thread: expect.stringMatching(/^mcp:launch:[0-9a-f]+$/), model: 'claude-opus-5-5', environment: 'fake-laptop' },
     },
-    // T3 reports no usage, and a thread whose run fails names T3's status, not the agent's own failure.
-    reportsUsage: false,
+    // A thread whose run fails names T3's status, not the agent's own failure.
     failure: () => ({ code: 'tool_failed', message: expect.stringContaining('ended failed before the step was done.') }),
     journal: (state) => [path.join(state, 'home', '.teamai', 'runtime-state', 't3')],
     stop: (state) => T3.stop(state),
@@ -622,9 +634,9 @@ const PROMPT_SUBJECTS: PromptSubject[] = [
   {
     name: 'paseo over stdio, on a fake Paseo daemon',
     start: (state) => paseoRuntime(state),
-    options: (_, agent) => paseoOptions(agent),
+    options: (state, agent) => paseoOptions(daemonClaudeHome(state), agent),
+    sessionHome: daemonClaudeHome,
     display: expect.objectContaining({ label: 'teamai review · r0123abcd', url: expect.stringMatching(/^paseo:\/\/h\/srv_fake0001\/agent\//) }),
-    reportsUsage: false,
     failure: (failure) => ({ ...failure, message: `The Paseo daemon at ${paseo.url} has no claude model claude-opus-5-5. It offers: claude-sonnet-5-5.` }),
     journal: (state) => [path.join(state, 'home', '.teamai', 'runtime-state', 'paseo')],
     forget: (_, op) => paseo.forget(op),
@@ -643,11 +655,11 @@ const PROMPT_SUBJECTS: PromptSubject[] = [
       label: 'review · teamai r0123abcd', url: expect.stringMatching(/^t3code:\/\/threads\/env-fake-1\/mcp%3Alaunch%3A[0-9a-f]+$/),
       fields: { thread: expect.stringMatching(/^mcp:launch:[0-9a-f]+$/), model: 'claude-opus-5-5', environment: 'fake-laptop' },
     },
-    reportsUsage: false,
     failure: () => ({ code: 'tool_failed', message: expect.stringContaining('ended failed before the step was done.') }),
     journal: (state) => [path.join(state, 'home', '.teamai', 'runtime-state', 'sandbox'), path.join(state, 'home', '.teamai', 'runtime-state', 't3')],
     stop: (state) => T3.stop(state),
     through: { toolStarted: (state) => fs.existsSync(claudeStarted(state)) },
+    sessionHome: attemptToolHome,
   },
   {
     name: 'paseo through a sandbox on a fake docker',
@@ -655,13 +667,14 @@ const PROMPT_SUBJECTS: PromptSubject[] = [
     options: (state, agent) => {
       claudeInImage(state);
 
-      return { sandbox: docker.options, paseo: paseoOptions(agent) };
+      // Through the sandbox, Claude keeps its sessions in the attempt's tool home.
+      return { sandbox: docker.options, paseo: paseoOptions(attemptToolHome(state), agent) };
     },
     display: expect.objectContaining({ label: 'teamai review · r0123abcd', url: expect.stringMatching(/^paseo:\/\/h\/srv_fake0001\/agent\//) }),
-    reportsUsage: false,
     failure: (failure) => ({ ...failure, message: `The Paseo daemon at ${paseo.url} has no claude model claude-opus-5-5. It offers: claude-sonnet-5-5.` }),
     journal: (state) => [path.join(state, 'home', '.teamai', 'runtime-state', 'sandbox'), path.join(state, 'home', '.teamai', 'runtime-state', 'paseo')],
     through: { toolStarted: (state) => fs.existsSync(claudeStarted(state)) },
+    sessionHome: attemptToolHome,
   },
 ];
 
@@ -671,11 +684,17 @@ describe.each(PROMPT_SUBJECTS)('StepRuntime prompt scenarios: $name', (subject) 
   let worktree: string;
   let state: string;
   const started: StepRuntime<DriverCan>[] = [];
+  /**
+   * Whether the runtime last started offers tokens: then every prompt it finishes carries the tokens its agent billed.
+   * One that does not may still report them, and then reports those.
+   */
+  let offersTokens = false;
 
   const start = async (agent: JsonValue = {}): Promise<StepRuntime<DriverCan>> => {
     const runtime = subject.start(state);
     started.push(runtime);
     const ready = await runtime.init({ options: subject.options(state, agent), mode: 'unattended' });
+    offersTokens = ready.ok && ready.can.tokens === true;
     expect(ready).toMatchObject({ ok: true, launchesAgents: true, ...(subject.execsOnToolHome ? { runsOnToolHome: true } : { can: subject.through ? { isolation: 'sandbox' } : { exec: false } }) });
     // Through a sandbox, the sandbox runs commands, which it offers by leaving `exec` unset.
     if (subject.through) expect(ready.ok && ready.can).not.toHaveProperty('exec');
@@ -746,7 +765,8 @@ describe.each(PROMPT_SUBJECTS)('StepRuntime prompt scenarios: $name', (subject) 
   });
 
   it('accepts a prompt, then ends finished with the tool\'s session, the result the agent wrote and its usage', async () => {
-    const runtime = await start({ output: { verdict: 'approve' }, usage: { input: 1200, output: 300 } });
+    const billed = { input: 1200, output: 300, cachedInput: 500 };
+    const runtime = await start({ output: { verdict: 'approve' }, usage: billed });
     const handle = await opened(runtime);
     const request = promptRequest(handle);
     let accepted = false;
@@ -754,7 +774,7 @@ describe.each(PROMPT_SUBJECTS)('StepRuntime prompt scenarios: $name', (subject) 
     const end = await runtime.prompt(request, { onAccepted: () => { accepted = true; } });
 
     expect(accepted).toBe(true);
-    expect(end).toEqual({ kind: 'finished', session: { tool: 'claude', id: expect.any(String), ...(subject.through && { home: toolHome() }) }, result: { output: { verdict: 'approve' } }, ...(subject.reportsUsage !== false && { usage: { input: 1200, output: 300 } }) });
+    expect(end).toEqual({ kind: 'finished', session: { tool: 'claude', id: expect.any(String), ...(subject.sessionHome && { home: subject.sessionHome(state) }) }, result: { output: { verdict: 'approve' } }, usage: offersTokens ? billed : expect.toBeOneOf([undefined, billed]) });
     expect(JSON.parse(fs.readFileSync(request.lease.result, 'utf8'))).toEqual({ output: { verdict: 'approve' } });
   });
 
