@@ -2082,6 +2082,10 @@ function strictlyUnmet(definition: WorkflowDefinition, workflows: Record<string,
   // A runtime named `sandbox` may still keep less than a sandbox, as bwrap's worktree does: each says what it keeps.
   const isolations = sole.offers.map((offer) => `${offer.runtime}: isolation ${offer.can.isolation ?? 'none'}`).join(', ');
 
+  if (first.key === 'isolation' && sole.offers.some((offer) => offer.runtime === 'sandbox')) {
+    return `Step "${first.step}" requires strict isolation, and no runtime of driver "${sole.driver}" is a sandbox (${isolations}). Run sandbox on a provider that is a sandbox here, or run the workflow in CI or a container with --sandbox.`;
+  }
+
   return first.key === 'isolation'
     ? `Step "${first.step}" requires strict isolation, and no runtime of driver "${sole.driver}" is a sandbox (${isolations}). Add a runtime that is one to the definition, such as sandbox, or run the workflow in CI or a container with --sandbox.`
     : `Step "${first.step}" strictly requires no network, which no runtime of driver "${sole.driver}" can deny (${runtimes}). Run it with a driver whose runtime declares can.network.`;
