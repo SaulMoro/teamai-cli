@@ -31,7 +31,7 @@ import { LOCAL_DRIVER, parseDriver, type Driver, type DriverName } from './workf
 import { checkDriver, disposeDriver, openDriver, type OpenedDriver } from './workflow/runtimes/sources.js';
 import { sessionAppOf } from './workflow/session-apps.js';
 import { resolveDriver } from './workflow/runtimes/definitions.js';
-import { releaseHeldPlaces, stopCancelledAttempts } from './workflow/runtimes/cancelled.js';
+import { closedForOffer, stopCancelledAttempts } from './workflow/runtimes/cancelled.js';
 import type { SoleDriver } from './workflow/engine.js';
 import { driverIdentity } from './driver-identity.js';
 import { getBusinessRoot, getDataHome, usesBranchWorktree, type LocalConfig, type TeamaiConfig } from './types.js';
@@ -1389,13 +1389,12 @@ export async function workflowPublish(runId: string, options: { sessions?: boole
 
   // A driver of the run running a step here answers driver_running, since a runner could take the offered run and run
   // that step a second time; and no driver of it starts here until the offer is up.
+  // The run goes on on another machine, which cannot reach a conversation a driver here held, so those places close
+  // before the offer is up; the run stays here while one does not.
   const taken = await whileNoDriverHere(loaded.config, run.data, async () => {
-    const offer = await publishRun(loaded.config, run.data, { checkout: process.cwd(), sessions: options.sessions ? resumableSessions : undefined });
+    const kept = await closedForOffer(loaded.config, run.data, { checkout: process.cwd() });
 
-    // The run goes on on another machine, which cannot reach a conversation a driver here held.
-    if (offer.ok && offer.value.offered) await releaseHeldPlaces(loaded.config, run.data, { checkout: process.cwd() });
-
-    return offer;
+    return kept === undefined ? { published: await publishRun(loaded.config, run.data, { checkout: process.cwd(), sessions: options.sessions ? resumableSessions : undefined }) } : { kept };
   });
 
   if (taken.kind === 'busy') {
@@ -1404,7 +1403,13 @@ export async function workflowPublish(runId: string, options: { sessions?: boole
     return;
   }
 
-  const published = taken.value;
+  if ('kept' in taken.value) {
+    writeEnvelope({ error: { code: 'place_kept', message: `Run ${run.data} is not published: ${taken.value.kept}. It stays on this machine: resume it here, or publish it again once its step runtime can close the place.` } }, secrets);
+
+    return;
+  }
+
+  const { published } = taken.value;
 
   if (published.ok && published.value.skipped) {
     const list = published.value.skipped.map((session) => `${session.tool} session ${session.id}`).join(', ');

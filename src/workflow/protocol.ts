@@ -8,7 +8,7 @@ import { driverIdentity, sameDriver } from '../driver-identity.js';
 import type { WorkflowEnv } from '../env-resolution.js';
 import { scoringUnavailable, startedByPasses, verifiedScorers } from '../scorers/engine-hooks.js';
 import { resolveRunMode, type RunMode } from '../launch-context.js';
-import { releaseHeldPlaces, stopLeftInProcess } from './runtimes/cancelled.js';
+import { closedForOffer, stopLeftInProcess } from './runtimes/cancelled.js';
 import type { LocalConfig } from '../types.js';
 import type { JsonValue } from '@teamai/shared/json';
 import { attemptEnv, nestedWorkflowError, type AgentEvidence } from './attempt-marker.js';
@@ -698,11 +698,9 @@ export function inProcessClient({ config, env }: { config: LocalConfig; env: Wor
       return version;
     },
     offer: async (runId, checkout) => {
-      const unoffered = await offerToPerson(config, runId, checkout);
       const run = RunIdSchema.safeParse(runId);
-
       // The run goes on on another machine, which cannot reach a conversation an earlier driver here held.
-      if (unoffered === undefined && run.success) await releaseHeldPlaces(config, run.data, { checkout });
+      const unoffered = (run.success ? await closedForOffer(config, run.data, { checkout }) : undefined) ?? await offerToPerson(config, runId, checkout);
 
       return unoffered === undefined ? { kind: 'offers' } : { kind: 'unoffered', reason: unoffered };
     },

@@ -272,21 +272,35 @@ async function endLeftLogin(config: LocalConfig, tool: LoginTool, { run, attempt
 /**
  * Closes each place of run `run` held open for a conversation (`HeldPlace`) that `continued` no longer names in its
  * workspace, or, without it, every one: on the runtime `live` gives for its record, else through the driver its record
- * names, as a killed teamai's are. A driver calls it as a step settles and at the run's end, and every offer of the run
- * on teamai-reports calls it, since the machine that takes the run cannot reach a conversation held here.
+ * names, as a killed teamai's are. Answers why each place it could not close stays open.
  */
 export async function releaseHeldPlaces(config: LocalConfig, run: RunId, { checkout, continued, live }: {
   checkout: string;
   continued?: Parameters<typeof HeldPlace.toRelease>[2];
   /** The runtime a driver still has open for the place `record` names, which closes it without opening the driver again. */
   live?: (record: AttemptRuntimeRecord) => StepRuntime<DriverCan> | undefined;
-}): Promise<void> {
+}): Promise<WorkflowFailure[]> {
+  const kept: WorkflowFailure[] = [];
+
   for (const { attempt, record } of await HeldPlace.toRelease(config, run, continued)) {
     const runtime = live?.(record);
     const notClosed = runtime ? await attemptRun({ config, run, attempt, runtime, driver: record.driver }).close() : await stopOnRecordedDriver(config, run, attempt, { checkout });
 
-    if (notClosed) log.warn(notClosed.message);
+    if (notClosed) kept.push(notClosed);
   }
+
+  return kept;
+}
+
+/**
+ * Closes every place of run `run` held here for a conversation before an offer of it, since the machine that takes the
+ * run cannot reach one. Answers, as a clause, why the run is not to be offered while one stays open, so it stays here,
+ * where a resume still reaches it; undefined once none is held.
+ */
+export async function closedForOffer(config: LocalConfig, run: RunId, options: { checkout: string; live?: Parameters<typeof releaseHeldPlaces>[2]['live'] }): Promise<string | undefined> {
+  const kept = await releaseHeldPlaces(config, run, options);
+
+  return kept.length === 0 ? undefined : `a place held here for a conversation could not be closed, and a machine that took the run could not reach it: ${kept.map((failure) => failure.message.replace(/\.$/u, '')).join('; ')}`;
 }
 
 /**

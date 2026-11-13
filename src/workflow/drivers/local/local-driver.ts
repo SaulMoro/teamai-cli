@@ -22,10 +22,10 @@ import { isRecord } from '../../expression.js';
 import { toolsStepRuntime, type StepLauncher } from '@teamai/runtime-tools';
 import { failureReport, launchToolFor, promptOfferOf, promptRuntimeOn, runPromptStep, type AskPerson, type StagedLease } from '../../steps/prompt.js';
 import { failedCommand, placeView, runtimeCommand, runtimeSetup, runtimeStepEnv, type StartedCommand } from '../../steps/runtime-steps.js';
-import { attemptRun, credentialSecrets, HeldPlace, isExecRuntimeTool, readAttemptPlacement, recordInProcessAttempt, attemptRuntimePath, maskAttemptResults, type AttemptRun, type RuntimeOrigin } from '../../runtimes/attempt.js';
+import { attemptRun, credentialSecrets, HeldPlace, isExecRuntimeTool, readAttemptPlacement, recordInProcessAttempt, attemptRuntimePath, maskAttemptResults, type AttemptRun, type AttemptRuntimeRecord, type RuntimeOrigin } from '../../runtimes/attempt.js';
 import { answerCallTool, hostStepRuntime } from '../../runtimes/host.js';
 import { writeHeldSteps, type HeldSteps } from '../../runtimes/held.js';
-import { closeAfterSweep, endLeftLogins, releaseHeldPlaces, stopLeftInProcess, stopOnRecordedDriver } from '../../runtimes/cancelled.js';
+import { closeAfterSweep, closedForOffer, endLeftLogins, releaseHeldPlaces, stopLeftInProcess, stopOnRecordedDriver } from '../../runtimes/cancelled.js';
 import { loginHolder } from '../../runtimes/login.js';
 import { toolsLaunchDeps, type EngineOptions, type OpenedDriver } from '../../runtimes/sources.js';
 import { newOpId, type ExecAnswer, type ExecQuestion, type StepRuntime } from '@teamai/runtime-protocol/step-runtime';
@@ -924,16 +924,20 @@ async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, given: 
     return state !== 'missing' && state !== 'corrupt' ? { continued: continuedConversations(state), workspace: sharedWorkspace(state, step) } : { continued: [], workspace: undefined };
   };
 
-  /** Closes the places held for a conversation that `continued` no longer names, or, without it, every one, on this driver's runtime where it has it. */
-  const releaseHeld = (continued?: ReturnType<typeof continuedConversations>): Promise<void> => releaseHeldPlaces(config, runId, {
-    checkout: root,
-    continued,
-    live: (record) => {
-      const slot = record.driver === defined.driver ? slots.find((candidate) => candidate.kind === 'external' && candidate.use === record.runtime) : undefined;
+  /** This driver's runtime of a held place's record, which closes it with no second open of the driver. */
+  const live = (record: AttemptRuntimeRecord): StepRuntime<DriverCan> | undefined => {
+    const slot = record.driver === defined.driver ? slots.find((candidate) => candidate.kind === 'external' && candidate.use === record.runtime) : undefined;
 
-      return slot?.kind === 'external' ? slot.runtime : undefined;
-    },
-  });
+    return slot?.kind === 'external' ? slot.runtime : undefined;
+  };
+
+  /** Closes the places held for a conversation that `continued` no longer names, or, without it, every one. */
+  const releaseHeld = async (continued?: ReturnType<typeof continuedConversations>): Promise<void> => {
+    for (const kept of await releaseHeldPlaces(config, runId, { checkout: root, continued, live })) log.warn(kept.message);
+  };
+
+  /** Offers the run to a person once no place stays held here for a conversation, or says, as a clause, why it did not. */
+  const offerHere = async (): Promise<string | undefined> => await closedForOffer(config, runId, { checkout: root, live }) ?? await offerToPerson(config, runId, cwd);
 
   const abandon = async (attempt: AttemptId): Promise<void> => {
     await abandonPlace({ config, lock, attempt });
@@ -1614,14 +1618,9 @@ async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, given: 
         const people = handoff?.kind === 'offers' ? [...new Set((offered.heldByAll ?? wait.held ?? []).filter(({ missing }) => missing.includes(HITL)).map(({ step }) => step))] : [];
 
         if (people.length > 0) {
-          const unoffered = await offerToPerson(config, runId, cwd);
+          const unoffered = await offerHere();
 
-          // The run goes on on another machine, which cannot reach a conversation held here.
-          if (unoffered === undefined) {
-            await releaseHeld();
-
-            return handedToPerson(runId, people);
-          }
+          if (unoffered === undefined) return handedToPerson(runId, people);
 
           handoff = { kind: 'unoffered', reason: unoffered };
           continue;
@@ -1634,10 +1633,9 @@ async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, given: 
 
         // The run is offered on teamai-reports, as for a step only a person can take, with the steps `tool`'s limit holds.
         const offerOnLimit = async ({ tool, offeredSaid, unofferedSaid }: { tool: string; offeredSaid: (resume: string) => string; unofferedSaid: (reason: string) => string }): Promise<WorkflowEnvelope> => {
-          const unoffered = await offerToPerson(config, runId, cwd);
+          const unoffered = await offerHere();
 
           if (unoffered !== undefined) return { error: { code: 'usage_limited', message: unofferedSaid(unoffered) } };
-          await releaseHeld();
           const resume = `teamai workflow resume ${runId} --claim`;
           log.info(offeredSaid(resume));
 
