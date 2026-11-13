@@ -187,9 +187,23 @@ describe('the tools launcher', () => {
     // On Windows the tool lookup searches the checkout first, where a step may have written acme-claude.cmd.
     const adapter = hostLauncher(spawnTool, (command) => `C:\\checkout\\${command}.cmd`, (command) => (command === 'acme-claude' ? 'C:\\Tools\\acme\\acme-claude.cmd' : null));
 
-    await adapter.run('claude', { prompt: 'Review.', expected, cwd: os.tmpdir(), resultPath, secrets: {}, command: 'acme-claude' });
+    await adapter.run('claude', { prompt: 'Review.', expected, cwd: os.tmpdir(), resultPath, secrets: {}, instance: { name: 'acme-claude', command: 'acme-claude' } });
 
     expect(spawnTool).toHaveBeenCalledWith('C:\\Tools\\acme\\acme-claude.cmd', expect.any(Array), expect.anything());
+  });
+
+  it.each([
+    ['its own command', { name: 'acme-claude', command: 'acme-claude' }],
+    ['the command of the tool it extends', { name: 'claude-work' }],
+  ])('names a tool instance that runs %s by the instance\'s name when the step fails', async (_case, instance) => {
+    const resultPath = path.join(os.tmpdir(), `teamai-workflow-instance-failed-${Date.now()}.json`);
+    files.push(resultPath);
+    const init = JSON.stringify({ type: 'system', subtype: 'init', session_id: 'session-1', model: 'claude-sonnet' });
+    const adapter = hostLauncher(() => child(`${init}\n`) as unknown as ReturnType<ToolSpawn>, () => 'claude', (command) => command);
+
+    const result = await adapter.run('claude', { prompt: 'Fix it.', expected, cwd: os.tmpdir(), resultPath, secrets: {}, instance });
+
+    expect(result.failure).toEqual({ code: 'tool_failed', message: `${instance.name} did not write a valid workflow result` });
   });
 
   // OpenCode works in PWD rather than its cwd, so a trial launched with the caller's PWD edits the caller's checkout.
