@@ -239,7 +239,7 @@ describe('a plan of an unknown schemaVersion', () => {
     const ran = await fixture.teamai(['benchmark', 'run', 'fix']);
     const refused = z.object({ code: z.string(), message: z.string() }).parse(envelope(ran).error);
     const runId = /^Run (r[0-9a-f]+) /.exec(refused.message)?.[1] ?? '';
-    const started = StepsSchema.parse(fixture.runFile(runId)).steps.filter((step) => step.status !== 'pending').map((step) => step.id);
+    const started = StepsSchema.parse(fixture.runFile(runId)).steps.filter((step) => !['pending', 'running'].includes(step.status)).map((step) => step.id);
 
     expect(pulled.code, said(pulled)).toBe(0);
     expect(ran.code, said(ran)).toBe(1);
