@@ -431,6 +431,28 @@ function withSkipReason(row: StepRow, state: RunState['steps'][number] | undefin
   return row;
 }
 
+/** Whether a step in `status` is still open in this machine's copy of its run. */
+function isOpen(status: RunState['steps'][number]['status']): boolean {
+  switch (status) {
+    case 'pending':
+    case 'waiting':
+    case 'leased':
+    case 'running':
+    case 'delivering':
+      return true;
+    case 'succeeded':
+    case 'failed':
+    case 'skipped':
+    case 'cancelled':
+      return false;
+    default: {
+      const unhandled: never = status;
+
+      return unhandled;
+    }
+  }
+}
+
 function localDetail(run: RunState, row: LocalRunRow, judging: Judging, scoring: ScoringTotal): Omit<RunDetail, 'benchmark'> {
   const live = new Map(run.steps.map((state) => [`${state.id}#${state.pass ?? 1}`, state]));
   const record = localRecord(run);
@@ -447,7 +469,10 @@ function localDetail(run: RunState, row: LocalRunRow, judging: Judging, scoring:
 
     if (answer) answered.answer = answer;
 
-    return withSkipReason(stepRow(answered, state?.status ?? (entry.outcome ? STATUS_OF_OUTCOME[entry.outcome] : 'skipped'), judging, gate), state);
+    // A step this copy keeps open goes on, or ended, where the other install took the run.
+    const status = state && row.elsewhere && isOpen(state.status) ? 'elsewhere' : state?.status ?? (entry.outcome ? STATUS_OF_OUTCOME[entry.outcome] : 'skipped');
+
+    return withSkipReason(stepRow(answered, status, judging, gate), state);
   });
 
   return { run: row, steps: withHarnessChanges(steps), scoring };
@@ -481,8 +506,10 @@ async function localRunDetail(config: LocalConfig, runId: string): Promise<RunDe
     standings(config, [run]),
   ]);
 
-  const detail = localDetail(run, localRow(run, records, stands.get(run.id)), judging?.passes ?? new Map(), await RunJudging.total(config, runId, judging));
-  const held = run.status === 'running' ? await readHeldSteps(config, RunIdSchema.parse(run.id)) : undefined;
+  const row = localRow(run, records, stands.get(run.id));
+  const detail = localDetail(run, row, judging?.passes ?? new Map(), await RunJudging.total(config, runId, judging));
+  // What this machine's runtimes held back is moot once another install drives the run.
+  const held = run.status === 'running' && !row.elsewhere ? await readHeldSteps(config, RunIdSchema.parse(run.id)) : undefined;
 
   return { ...detail, steps: await withRuntimes(config, run, detail.steps), ...benchmark, ...branches, ...held && { held } };
 }
@@ -507,7 +534,8 @@ async function withRuntimes(config: LocalConfig, run: RunState, steps: StepRow[]
   return Promise.all(steps.map(async (row) => {
     const attempt = AttemptIdSchema.safeParse(attempts.get(`${row.step}#${row.pass}`));
 
-    if (!attempt.success) return row;
+    // The attempt of a step another install took is this machine's no more, nor is the login it waited for.
+    if (!attempt.success || row.status === 'elsewhere') return row;
 
     const [placement, loginWait] = await Promise.all([readAttemptPlacement(config, runId.data, attempt.data), readLoginWait(attemptDir(config, runId.data, attempt.data))]);
     const waiting = loginWait ? { ...row, loginWait } : row;

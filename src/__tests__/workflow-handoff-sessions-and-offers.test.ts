@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it, onTestFinished, vi } from 'vitest';
-import { listHandoffs, listLocalRuns } from '../dashboard/workflow-runs.js';
+import { listHandoffs, listLocalRuns, workflowRunDetail } from '../dashboard/workflow-runs.js';
 import { getAdapter } from '../session-flow/adapters/index.js';
 import { AgentSession } from '../session-flow/agent-session.js';
 import type { LocalConfig } from '../types.js';
@@ -1272,6 +1272,9 @@ steps:
     expect(rows.get(held)).toMatchObject({ status: 'running', current: [], waiting: [], elsewhere: { kind: 'claimed', owner: { user: 'bob' }, isOffered: false } });
     expect(rows.get(reoffered)).toMatchObject({ current: [], waiting: [], elsewhere: { kind: 'claimed', owner: { user: 'bob' }, isOffered: true } });
     expect(rows.get(ended)).toMatchObject({ current: [], waiting: [], elsewhere: { kind: 'ended', owner: { user: 'bob' }, status: 'cancelled' } });
+    // Its details show no step as this copy last kept it open, and nothing this machine's runtimes held back.
+    const statuses = async (run: string) => new Set((await workflowRunDetail(alice.config, 'local', run))?.steps.map((step) => step.status));
+    expect([await statuses(local), await statuses(held), await statuses(ended)]).toEqual([new Set(['pending']), new Set(['elsewhere']), new Set(['elsewhere'])]);
   });
 
   it('shows the dashboard each run handed over, with what a runner would need, marking the ones this install published', async () => {
