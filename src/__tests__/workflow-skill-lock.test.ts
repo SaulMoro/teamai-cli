@@ -9,7 +9,7 @@ import type { LocalConfig } from '../types.js';
 import type { WorkflowClient } from '../workflow/protocol.js';
 import type { Runners, SkillContext } from '../workflow/drivers/skill/skill-driver.js';
 import { withDriverLock } from '../workflow/drivers/local/local-driver.js';
-import { RunIdSchema, skillStatePath, takeRunLock } from '../workflow/store.js';
+import { RunIdSchema, runsRemovalLockIn, skillStatePath, takeRunLock, withRunLock } from '../workflow/store.js';
 import { acquireLock, releaseLock } from '../update.js';
 import { skillHarness } from './helpers/skill-harness.js';
 
@@ -241,4 +241,30 @@ describe('the driver lock of a run whose data home is not there', () => {
     expect(body).not.toHaveBeenCalled();
     expect(fs.existsSync(dataHome)).toBe(false);
   });
+
+  // A taken removal lock is no driver of the run: a cancel that read it as one would cancel without the lock.
+  it.each([
+    { state: 'its data home removed', isTaken: false, code: 'run_not_found', says: 'is not on this machine' },
+    { state: "its data home's removal lock taken", isTaken: true, code: 'busy', says: `stays taken by process ${process.pid}, as an uninstall of this scope` },
+  ])('answers a body that answers an envelope with $code, with $state', async ({ isTaken, code, says }) => {
+    const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-no-home-')));
+    roots.push(root);
+    const dataHome = path.join(root, 'data');
+    const config: LocalConfig = { repo: { kind: 'self', localPath: path.join(root, 'knowledge'), remote: 'local' }, username: 'test', scope: 'project', additionalRoles: [], projectRoot: root, dataHome };
+    const run = RunIdSchema.parse('r0123456789abcdef');
+    const body = vi.fn(async () => ({ data: {} }));
+
+    if (isTaken) {
+      fs.mkdirSync(dataHome);
+      expect(await acquireLock(runsRemovalLockIn(dataHome))).toBe(true);
+    }
+
+    try {
+      expect(await withRunLock(config, run, body, { waitMs: 0 })).toEqual({ error: { code, message: expect.stringContaining(says) } });
+    } finally {
+      if (isTaken) await releaseLock(runsRemovalLockIn(dataHome));
+    }
+
+    expect(body).not.toHaveBeenCalled();
+  }, 30_000);
 });
