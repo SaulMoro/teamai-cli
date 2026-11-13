@@ -52,6 +52,18 @@ export function readsTokens(tool: PaseoTool): boolean {
 }
 
 /**
+ * The transcript of session `sessionId` in `toolHome`, or undefined when the store does not list it, or cannot be listed,
+ * as a folder the daemon's tool can write and teamai cannot read: the step it ran finished all the same.
+ */
+async function transcriptOf(format: Transcript, { toolHome, cwd, sessionId }: { toolHome: string; cwd: string; sessionId: string }): Promise<string | undefined> {
+  try {
+    return (await format.sessions(toolHome).listConversations(cwd)).find((session) => session.sessionId === sessionId)?.filePath;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
  * The tokens a step billed in session `sessionId` of `tool`, kept in `toolHome` for `cwd`, as the tool's own end-of-run
  * usage reports them: every request of the session for an agent the step created, and only those at or after
  * `turnSentAt` for a turn it sent to an agent that already ran, whose session holds an earlier step's requests too.
@@ -63,7 +75,7 @@ export async function stepUsage({ tool, toolHome, cwd, sessionId, turnSentAt }: 
   const format = TRANSCRIPTS[tool];
 
   if (format === undefined) return undefined;
-  const transcript = (await format.sessions(toolHome).listConversations(cwd)).find((session) => session.sessionId === sessionId)?.filePath;
+  const transcript = await transcriptOf(format, { toolHome, cwd, sessionId });
 
   if (transcript === undefined) return undefined;
   // A Codex turn's usage may land just after Paseo shows the agent idle, so the read waits for it as for a Stop hook.

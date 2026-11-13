@@ -2,6 +2,7 @@ import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { OpIdSchema, type PromptLeaseSchema, type RuntimeMessage } from '@teamai/runtime-protocol';
+import { encodeCwdClaude } from '@teamai/tool-core/sessions/fs';
 import { z } from 'zod';
 import { describe, expect, it } from 'vitest';
 import { agentIdOf } from './conversation.js';
@@ -168,6 +169,26 @@ describe('teamai-runtime-paseo', () => {
     runtime.send(promptRequest(await opened(runtime), 'op-0000000b', { tool, model: undefined }));
 
     expect(await runtime.next(isEnd('op-0000000b'))).toMatchObject({ event: 'finished', session: { tool }, usage });
+  });
+
+  it('finishes a step whose session it cannot list, reporting no tokens rather than failing the step', async () => {
+    const home = path.join(dir, 'daemon-user', '.claude');
+    // Claude can write its transcript there, and teamai cannot list the folder.
+    const folder = path.join(home, 'projects', encodeCwdClaude(worktree));
+    fs.mkdirSync(folder, { recursive: true });
+    fs.chmodSync(folder, 0o300);
+    behave({ output: { verdict: 'approve' }, claude_home: home, usage: { input: 1_200, output: 340, cache_read: 18_000 } });
+    const runtime = start();
+    await ready(runtime);
+    runtime.send(promptRequest(await opened(runtime), 'op-0000000b'));
+
+    try {
+      const end = await runtime.next(isEnd('op-0000000b'));
+      expect(end).toMatchObject({ event: 'finished', session: { tool: 'claude', home }, result: { output: { verdict: 'approve' } } });
+      expect(end).not.toHaveProperty('usage');
+    } finally {
+      fs.chmodSync(folder, 0o700);
+    }
   });
 
   it('reports no tokens from a daemon on another host, whose session home is not on this machine', async () => {
