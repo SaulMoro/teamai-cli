@@ -113,6 +113,8 @@ describe("a tool instance's home in a ledger's section (e)", () => {
     fs.mkdirSync(path.join(team, 'tools'), { recursive: true });
     fs.writeFileSync(path.join(team, 'tools', 'acme-claude.yaml'), 'schemaVersion: v1alpha1\nname: acme-claude\nextends: claude\nhome: { dir: .acme-claude, env: ACME_CLAUDE_CONFIG_DIR }\n');
     fs.writeFileSync(path.join(dataHome, 'config.yaml'), `repo:\n  localPath: ${team}\n  remote: https://teamai.test/team/repo.git\nscope: workspace\nenabledAgents:\n  - claude\n  - acme-claude\n`);
+    // A home written with a leading ./ and a trailing / is the same folder.
+    fs.writeFileSync(path.join(team, 'tools', 'beta-claude.yaml'), 'schemaVersion: v1alpha1\nname: beta-claude\nextends: claude\nhome: { dir: ./.beta/ }\n');
     fs.mkdirSync(path.join(home, '.teamai', 'tools', 'own-codex'), { recursive: true });
     fs.writeFileSync(path.join(home, '.teamai', 'tools', 'own-codex', 'TOOL.yaml'), 'schemaVersion: v1alpha1\nname: own-codex\nextends: codex\nhome: { dir: .own/codex }\n');
 
@@ -120,7 +122,7 @@ describe("a tool instance's home in a ledger's section (e)", () => {
   }
 
   it('reads the home of every instance the install declares, before uninstall removes the records', async () => {
-    expect([...await instanceHomesIn(homeWithInstances())].sort()).toEqual(['home/.acme-claude', 'home/.own', 'home/.own/codex']);
+    expect([...await instanceHomesIn(homeWithInstances())].sort()).toEqual(['home/.acme-claude', 'home/.beta', 'home/.own', 'home/.own/codex']);
   });
 
   it.each([

@@ -250,7 +250,10 @@ export async function instanceHomesIn(home: string): Promise<ReadonlySet<string>
     teamToolInstances({ root: path.join(home, '.teamai'), namespaces: async () => [] }),
   ]);
 
-  return new Set(instances.flat().flatMap((instance) => instance.home?.dir.split('/').map((_, i, parts) => `home/${parts.slice(0, i + 1).join('/')}`) ?? []));
+  // `.acme/`, `./.acme` and `.acme` name one folder, as teamai joins it to HOME.
+  const homeDirs = instances.flat().flatMap((instance) => (instance.home === undefined ? [] : [path.posix.normalize(instance.home.dir).replace(/\/+$/, '')]));
+
+  return new Set(homeDirs.flatMap((dir) => dir.split('/').map((_, i, parts) => `home/${parts.slice(0, i + 1).join('/')}`)));
 }
 
 /** Whether `entry`, left behind, is one of `homes` holding nothing but the empty instance homes below it. */
