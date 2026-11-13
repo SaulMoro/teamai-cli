@@ -276,7 +276,7 @@ function sandboxLacks(held: WorkflowDescription['facts']['held']): Lack[] {
 
   return [{
     reason: `${listOf(steps)} need${steps.length > 1 ? '' : 's'} a sandbox, which this machine does not declare`,
-    fix: 'pass --sandbox on a disposable host, such as a CI runner or a container, set workflows.sandbox: true, or take it with a --driver whose runtime is a sandbox',
+    fix: 'pass --sandbox on a disposable host, such as a CI runner or a container, set workflows.sandbox: true, or take it with teamai workflow resume --next --driver <a driver whose runtime is a sandbox>',
   }];
 }
 
