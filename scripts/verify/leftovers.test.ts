@@ -164,8 +164,9 @@ describe("the sbx row of section (f)", () => {
     roots.push(dir, harnessHome);
     const bin = path.join(dir, 'bin');
     fs.mkdirSync(bin);
-    // The maintainer's own sbx, in the harness's HOME, keeps a warm template teamai saved for them outside any world.
-    fs.writeFileSync(path.join(bin, 'sbx'), `#!/bin/sh\n[ "$HOME" = '${harnessHome}' ] || { printf '[]'; exit 0; }\ncase "$1 $2" in 'ls --json') printf '[]' ;; 'template ls') printf '[{"repository":"teamai-warm","tag":"kmine"}]' ;; *) exit 1 ;; esac\n`, { mode: 0o755 });
+    // The maintainer's own sbx, in the harness's HOME, keeps a warm template teamai saved for them outside any world, and
+    // a kit template sbx assembled for a sandbox of theirs, which is no teamai's.
+    fs.writeFileSync(path.join(bin, 'sbx'), `#!/bin/sh\n[ "$HOME" = '${harnessHome}' ] || { printf '[]'; exit 0; }\ncase "$1 $2" in 'ls --json') printf '[]' ;; 'template ls') printf '[{"repository":"teamai-warm","tag":"kmine"},{"repository":"docker.io/library/sandbox-kit-assembled","tag":"2ba1c4db59226a62"}]' ;; *) exit 1 ;; esac\n`, { mode: 0o755 });
     vi.stubEnv('HOME', harnessHome);
     vi.stubEnv('PATH', `${bin}:/usr/bin:/bin`);
     const world: World = {
@@ -179,7 +180,10 @@ describe("the sbx row of section (f)", () => {
     const observed = await sbxLeftovers.observe({ world, self: { ...SELF, paths: [dir] }, others: [], records: { files: [], runs: [], runtimeJournals: 0 } });
     const findings = observed.flatMap((seen) => (seen.kind === 'observed' ? seen.findings : []));
 
-    expect(findings.map((finding) => [finding.what, finding.attribution.kind])).toEqual([['sbx template teamai-warm:kmine', 'ambiguous']]);
+    expect(findings.map((finding) => [finding.what, finding.attribution.kind])).toEqual([
+      ['sbx template teamai-warm:kmine', 'ambiguous'],
+      ["sbx template docker.io/library/sandbox-kit-assembled:2ba1c4db59226a62 (sbx's own, which teamai uninstall leaves)", 'unrelated'],
+    ]);
   });
 });
 

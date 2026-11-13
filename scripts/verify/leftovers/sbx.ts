@@ -46,9 +46,10 @@ function templatesOn({ world, self, others }: LeftoverContext, { target, env, co
 
   return {
     kind: 'observed',
-    findings: [...saved.map(({ ref }) => ({ ref, what: `sbx template ${ref}` })), ...kits.map(({ ref }) => ({ ref, what: `sbx template ${ref} (sbx's own, which teamai uninstall leaves)` }))].map(({ ref, what }) => ({
+    // A kit template carries no mark of teamai's: one in no world's HOME is sbx's, never counted.
+    findings: [...saved.map(({ ref }) => ({ ref, what: `sbx template ${ref}`, isMarked: true })), ...kits.map(({ ref }) => ({ ref, what: `sbx template ${ref} (sbx's own, which teamai uninstall leaves)`, isMarked: false }))].map(({ ref, what, isMarked }) => ({
       what,
-      attribution: attributeLeftover({ paths: env.HOME === undefined ? [] : [env.HOME], journals: [], runs: [], marked: true }, self, others),
+      attribution: attributeLeftover({ paths: env.HOME === undefined ? [] : [env.HOME], journals: [], runs: [], marked: isMarked }, self, others),
       remove: commandLine([command, 'template', 'rm', '--force', ref]),
       gone: GONE,
     })),
