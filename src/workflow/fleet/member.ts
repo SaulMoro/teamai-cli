@@ -43,7 +43,7 @@ import { z } from 'zod';
 import { commandOutputs } from '../protocol.js';
 import { parseStepPath } from '../step-path.js';
 import { attemptEnv } from '../attempt-marker.js';
-import { attemptDir, attemptOutDir, attemptResultPath, keepAttemptStdout, readRun, runFilePath, RunIdSchema, takeRunLock, type AttemptId, type RunId, type RunLock } from '../store.js';
+import { attemptDir, attemptOutDir, attemptResultPath, keepAttemptStdout, readRun, runFilePath, RunIdSchema, runRemovalRefusal, takeRunLock, type AttemptId, type RunId, type RunLock } from '../store.js';
 import { isWorkflowFile, stepWorkflow, workflowRunBy, type RunState, type WorkflowDefinition, type WorkflowEnvelope, type WorkflowFailure, type WorkflowStep } from '../types.js';
 import { envAdvice, envScopeOf, lackedLabels, lacksTool, mergeRequirements, requiredEnvKeys, type EnvScope, type InEffect, type TurnLimits } from '../requirements.js';
 import { launchToolFor, promptOfferOf, promptRuntimeOn, runPromptStep, type PromptOffer, type StagedLease } from '../steps/prompt.js';
@@ -323,7 +323,9 @@ export async function takeFleetAttempt(config: LocalConfig, input: { pool: strin
       if (claimed.ok) return runClaim(config, { lock, claim: claimed.value, root, secrets, member, place });
 
       return claimed.error.code === 'state_moved' ? 'moved' : { error: fleetFailure(claimed.error) };
-    }, { waitMs: 0 });
+    }, { waitMs: 0 }).catch(runRemovalRefusal);
+
+    if (!('kind' in held)) return held;
 
     if (held.kind === 'busy') {
       log.info(`Left attempt ${offer.attempt} of run ${offer.run} for another member: ${held.error.message}`);

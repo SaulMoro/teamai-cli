@@ -17,7 +17,7 @@ import { attemptEnv } from '../../attempt-marker.js';
 import { runConfinedStep, type ConfinedStepEnd, type ConfinedStepLease } from '../../confined-step.js';
 import { STALE_WINDOW_MS } from '../../handoff.js';
 import { commandEnd, continuedAttempt, refuseDirtyAdoptedCommand, type WorkflowClient } from '../../protocol.js';
-import { attemptDir, RunRemovedError, runnerAlive, withRunnerLock, type AttemptId, type RunId, type RunLock } from '../../store.js';
+import { attemptDir, runnerAlive, withRunnerLock, type AttemptId, type RunId, type RunLock } from '../../store.js';
 import type { WorkflowFailure } from '../../types.js';
 import { SESSION_HOST_PROFILES } from './session-host-profiles.js';
 import { childTitle, writeSkillState, readSkillState, type AttemptState, type Dispatch, type ReportBody, type SkillState } from './skill-state.js';
@@ -412,7 +412,7 @@ async function check(context: SkillContext, lock: RunLock, attempt: AttemptId, {
  * Waits for `work`, which runs outside the run lock, checking the run every `RUNNER_POLL_MS` and at `expiresAt`, since
  * a cancel or a deadline reaches only the engine. Undefined once a check finds the attempt out of `phases`: stopped; with
  * `owned`, also once another install took the run over or the session called nothing for the stale window. A check that
- * finds the run removed from this machine stops `work` with `stop`, then throws, since nothing drives it here.
+ * throws, as one of a run an uninstall removes does, stops `work` with `stop` first, so nothing it started is left running.
  */
 async function whileOpen<T>(context: SkillContext, run: RunId, attempt: AttemptId, input: { work: Promise<T>; stop: () => Promise<unknown>; phases: readonly AttemptState['phase'][]; owned?: boolean; expiresAt?: string }): Promise<T | undefined> {
   for (;;) {
@@ -423,7 +423,7 @@ async function whileOpen<T>(context: SkillContext, run: RunId, attempt: AttemptI
     if (ended) return ended.value;
 
     const checked = await locked(context, run, (lock) => check(context, lock, attempt, { phases: input.phases, owned: input.owned === true })).catch(async (error: unknown) => {
-      if (error instanceof RunRemovedError) await input.stop();
+      await input.stop();
       throw error;
     });
 

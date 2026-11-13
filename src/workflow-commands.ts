@@ -36,7 +36,7 @@ import type { SoleDriver } from './workflow/engine.js';
 import { driverIdentity } from './driver-identity.js';
 import { getBusinessRoot, getDataHome, usesBranchWorktree, type LocalConfig, type TeamaiConfig } from './types.js';
 import type { JsonValue } from '@teamai/shared/json';
-import { AttemptIdSchema, installOwner, readRun, RunIdSchema, type RunId, takeRunLock } from './workflow/store.js';
+import { AttemptIdSchema, installOwner, readRun, RunIdSchema, runRemovalRefusal, type RunId, takeRunLock } from './workflow/store.js';
 import { startAsCli } from './workflow/cli-start.js';
 import { commandExitMessage, inProcessClient, isRefusal, resumeRefusal, workflowNotFound, type InvokeCaller, type NextPrepare, type StartedRun, invokeRefusal } from './workflow/protocol.js';
 import { isSkillRunnerHolding, parseInputsFlag, parseSkillCall, parseSkillResume, runSkillCall, sessionDrivesRun, skillContext, whileNoDriverHere } from './workflow/drivers/skill/skill-driver.js';
@@ -1355,7 +1355,9 @@ export async function workflowCancel(runId: string, step?: string, options: { re
       if (!isSettled || stopped === undefined || stopped.closed.length + stopped.released.length === 0) return cancelled;
 
       return { data: { run: { id: runId, status: stopped.status }, ...(stopped.closed.length > 0 && { closed: stopped.closed }), ...(stopped.released.length > 0 && { released: stopped.released }) } };
-    }, { waitMs: 0 });
+    }, { waitMs: 0 }).catch(runRemovalRefusal);
+
+    if (!('kind' in taken)) return taken;
 
     if (taken.kind === 'held') return taken.value;
 
@@ -1389,9 +1391,10 @@ export async function workflowPublish(runId: string, options: { sessions?: boole
 
   // A driver of the run running a step here answers driver_running, since a runner could take the offered run and run
   // that step a second time; and no driver of it starts here until the offer is up.
-  const taken = await whileNoDriverHere(loaded.config, run.data, async () => await publishRun(loaded.config, run.data, { checkout: process.cwd(), sessions: options.sessions ? resumableSessions : undefined }));
+  const taken = await whileNoDriverHere(loaded.config, run.data, async () => await publishRun(loaded.config, run.data, { checkout: process.cwd(), sessions: options.sessions ? resumableSessions : undefined }))
+    .catch(runRemovalRefusal);
 
-  if (taken.kind === 'busy') {
+  if (!('kind' in taken) || taken.kind === 'busy') {
     writeEnvelope({ error: taken.error }, secrets);
 
     return;

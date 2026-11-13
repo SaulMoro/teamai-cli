@@ -262,6 +262,33 @@ export class RunRemovedError extends Error {
 }
 
 /**
+ * The data home's removal lock (`runsRemovalLockIn`) stayed taken while teamai waited to drive `run`. An attempt and
+ * a driver hold it only for one write, and an uninstall of the scope while it removes the runs, so this is no driver
+ * of the run: the run may be gone once it ends.
+ */
+export class RunsRemovalLockTakenError extends Error {
+  constructor(readonly run: RunId, { lock, pid }: { lock: string; pid: number | undefined }) {
+    super(`Run ${run} cannot be driven now: ${lock} stays taken${pid === undefined ? '' : ` by process ${pid}`}, as an uninstall of this scope holds it while it removes the runs. Try again once that uninstall ends.`);
+    this.name = 'RunsRemovalLockTakenError';
+  }
+}
+
+/** The envelope error of a run lock not taken because an uninstall removes, or removed, the runs; rethrows anything else. */
+export function runRemovalRefusal(error: unknown): { error: { code: 'run_not_found' | 'busy'; message: string } } {
+  if (error instanceof RunRemovedError) return { error: { code: 'run_not_found', message: error.message } };
+
+  if (error instanceof RunsRemovalLockTakenError) return { error: { code: 'busy', message: error.message } };
+  throw error;
+}
+
+/** The pid lock file `lock` names, when it names one. */
+async function lockPid(lock: string): Promise<number | undefined> {
+  const owner = LockOwnerSchema.safeParse(parsedJson(await readRegularFile(lock, 'utf8').catch(() => null)));
+
+  return owner.success ? owner.data.pid : undefined;
+}
+
+/**
  * The runs of `runs`, a data home's `workflows/runs`, that a live process of this machine drives: those whose
  * `driver.lock` it holds, or the `runner.lock` of one of their attempts, which a skill driver's runner holds for its
  * whole life, with its pid when the lock names one. None when the folder is not there.
@@ -295,8 +322,7 @@ export async function runsDrivenIn(runs: string): Promise<Array<{ run: RunId; pi
 
     for (const lock of locks) {
       if (await lockState(lock) !== 'live') continue;
-      const owner = LockOwnerSchema.safeParse(parsedJson(await readRegularFile(lock, 'utf8').catch(() => null)));
-      driven.push({ run: run.data, pid: owner.success ? owner.data.pid : undefined });
+      driven.push({ run: run.data, pid: await lockPid(lock) });
       break;
     }
   }
@@ -308,20 +334,19 @@ export async function runsDrivenIn(runs: string): Promise<Array<{ run: RunId; pi
  * Runs `body` holding `runs/<run>/driver.lock`, the one lock every driver of `run` on this machine takes, or answers
  * `busy` when another live process still holds it after `waitMs`. `waitMs: 0` tries once. Each try is made under the
  * data home's removal lock (`runsRemovalLockIn`), so an uninstall sees this driver, or removed the run before it: then
- * it throws `RunRemovedError`, and makes no data home again.
+ * it throws `RunRemovedError`, and makes no data home again. A removal lock that stays taken throws
+ * `RunsRemovalLockTakenError`, never `busy`, which callers read as a live driver of the run.
  */
 export async function takeRunLock<T>(config: LocalConfig, run: RunId, body: (lock: RunLock) => Promise<T>, { waitMs }: { waitMs: number }): Promise<LockTaken<T>> {
   const lock = driverLockPath(config, run);
   const until = Date.now() + waitMs;
 
   for (let tried = await tryDriverLock(config, run); tried !== 'held'; tried = await tryDriverLock(config, run)) {
-    if (tried !== 'busy') return tried;
-
     if (Date.now() >= until) {
-      const owner = LockOwnerSchema.safeParse(parsedJson(await readRegularFile(lock, 'utf8').catch(() => null)));
+      const pid = await lockPid(lock);
 
-      return { kind: 'busy', error: { code: 'driver_running', message: owner.success
-        ? `Run ${run} is already driven by process ${owner.data.pid} on this machine. Stop that driver, or wait for it.`
+      return { kind: 'busy', error: { code: 'driver_running', message: pid !== undefined
+        ? `Run ${run} is already driven by process ${pid} on this machine. Stop that driver, or wait for it.`
         : `Run ${run} has a local driver lock whose process id is unknown. Stop that driver, or inspect its driver.lock file.` } };
     }
 
@@ -337,10 +362,10 @@ export async function takeRunLock<T>(config: LocalConfig, run: RunId, body: (loc
 
 /**
  * One try at run `run`'s `driver.lock`, made holding its data home's removal lock, which is taken without making the
- * data home: `held`, `busy` while a live process holds it, or busy with why while the removal lock stays taken.
- * Throws `RunRemovedError` when the run, or its data home, is gone.
+ * data home: `held`, or `busy` while a live process holds it. Throws `RunRemovedError` when the run, or its data home,
+ * is gone, and `RunsRemovalLockTakenError` when the removal lock stays taken.
  */
-async function tryDriverLock(config: LocalConfig, run: RunId): Promise<'held' | 'busy' | Extract<LockTaken<never>, { kind: 'busy' }>> {
+async function tryDriverLock(config: LocalConfig, run: RunId): Promise<'held' | 'busy'> {
   const dataHome = getDataHome(config);
   const removal = runsRemovalLockIn(dataHome);
   const isRecorded = async (): Promise<boolean> => (await fs.stat(runFilePath(config, run)).catch(() => undefined)) !== undefined;
@@ -356,17 +381,22 @@ async function tryDriverLock(config: LocalConfig, run: RunId): Promise<'held' | 
 
   if (tried.held && tried.value !== 'removed') return tried.value;
 
-  return { kind: 'busy', error: { code: 'driver_running', message: `Run ${run} cannot be driven now: ${removal} stays taken, as an uninstall of this scope holds it while it removes the runs. Try again once the uninstall ends.` } };
+  throw new RunsRemovalLockTakenError(run, { lock: removal, pid: await lockPid(removal) });
 }
 
-/** `takeRunLock` for a caller whose body answers an envelope: a busy lock answers as the `driver_running` error. */
+/**
+ * `takeRunLock` for a caller whose body answers an envelope: a busy lock answers as the `driver_running` error, and a
+ * lock an uninstall keeps from it as `runRemovalRefusal` does.
+ */
 export async function withRunLock<T>(
   config: LocalConfig,
   run: RunId,
   body: (lock: RunLock) => Promise<T>,
   options: { waitMs: number },
-): Promise<T | { error: { code: 'driver_running'; message: string } }> {
-  const taken = await takeRunLock(config, run, body, options);
+): Promise<T | { error: { code: 'driver_running' | 'run_not_found' | 'busy'; message: string } }> {
+  const taken = await takeRunLock(config, run, body, options).catch(runRemovalRefusal);
+
+  if (!('kind' in taken)) return taken;
 
   return taken.kind === 'held' ? taken.value : { error: taken.error };
 }
