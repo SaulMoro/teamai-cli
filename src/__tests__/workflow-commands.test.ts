@@ -25,7 +25,7 @@ import { acquireLock, releaseLock } from '../update.js';
 import { leaseNext, startRun } from '../workflow/engine.js';
 import { publishRun, resumeRun } from '../workflow/handoff.js';
 import { driverLockPath, readRun, runFilePath, runsDir } from '../workflow/store.js';
-import { benchmarkRun, runShortcut, workflowNext, workflowPublish, workflowReport, workflowRespond, workflowResume, workflowRetry, workflowStart } from '../workflow-commands.js';
+import { benchmarkRun, runShortcut, selfImprovementRun, workflowNext, workflowPublish, workflowReport, workflowRespond, workflowResume, workflowRetry, workflowStart } from '../workflow-commands.js';
 import { ATTEMPT_ENV } from '../launch-context.js';
 import { loadLocalConfigForScope } from '../config.js';
 import { knownSecrets } from '../env-resolution.js';
@@ -1329,9 +1329,10 @@ outputs: { text: steps.report.outputs.text }
 
   /**
    * A member who pulled a git team at its main, which the team remote has, with suite `fix`, whose task starts from the
-   * project checkout's commit, and the team's workflows/teamai-benchmark.yaml `workflow`; benchmark run runs in the checkout.
+   * project checkout's commit, the team's workflows/teamai-benchmark.yaml `workflow`, and `teamFiles` over those; benchmark
+   * run runs in the checkout.
    */
-  async function pulledTeam(workflow: string): Promise<void> {
+  async function pulledTeam(workflow: string, teamFiles: Record<string, string> = {}): Promise<void> {
     const { git, recordDelivery } = await import('./helpers/delivered-checkout.js');
     const { syncTeamDefinitions } = await import('../benchmark/suite-cache.js');
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-benchmark-run-'));
@@ -1353,6 +1354,7 @@ outputs: { text: steps.report.outputs.text }
       'benchmarks/fix/suite.yaml': 'schemaVersion: v1alpha1\nname: fix\nrepo: https://github.com/fixture/app.git\ndefaults:\n  tool: claude\narms:\n  - name: claude\nrepetitions: 1\ntimeout: 10m\n',
       'benchmarks/fix/tasks/fix.yaml': `schemaVersion: v1alpha1\ntitle: Fix it\nprompt: Fix.\nstartingCommit: ${startingCommit}\ncheck: { run: node test.js, protect: [test.js] }\n`,
       'workflows/teamai-benchmark.yaml': workflow,
+      ...teamFiles,
     });
     git(repo, 'update-ref', 'refs/remotes/origin/main', pulled);
     const config: LocalConfig = {
@@ -1384,5 +1386,27 @@ outputs: { text: steps.report.outputs.text }
 
     expect(answer).toEqual({ error: { code: 'invalid_inputs', message } });
     expect(fs.existsSync(runsDir(config)) ? fs.readdirSync(runsDir(config)) : []).toEqual([]);
+  });
+
+  const marked = (name: string, inputs: string): string => `schemaVersion: v1alpha1\nname: ${name}\ndescription: One command.\ninvoke: deny\ninputs: ${inputs}\nsteps:\n  - id: mark\n    command: echo marked\n`;
+
+  it.each([
+    { command: 'benchmark run', start: () => benchmarkRun('fix', {}) },
+    { command: 'self-improvement run', start: () => selfImprovementRun('quality', { suite: 'fix' }) },
+  ])('$command inside a workflow step drives its run in the step\'s process on the local driver, whatever workflows.driver names', async ({ start }) => {
+    await pulledTeam(marked('teamai-benchmark', '{ suite: string }'), {
+      'teamai.yaml': 'team: acme\nrepo: https://github.com/acme/team.git\nprovider: git\nworkflows: { driver: acme-sandbox }\n',
+      'workflows/teamai-self-improvement.yaml': marked('teamai-self-improvement', '{ scorer: string, suite: string }'),
+    });
+    const config = state.config;
+    if (config === undefined) throw new Error('no member');
+    vi.stubEnv('TEAMAI_WORKFLOW_ATTEMPT', 'r0123456789abcdef/a0123456789');
+
+    const answer = await capture(start);
+
+    expect(answer).toMatchObject({ data: { done: { outcome: 'succeeded' } } });
+    const run = await readRun(config, z.object({ run: z.string() }).parse(answer.data?.done).run);
+    expect(run).toMatchObject({ status: 'succeeded', startedBy: 'cli' });
+    expect(run).not.toHaveProperty('awaits');
   });
 });

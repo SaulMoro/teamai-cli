@@ -30,6 +30,7 @@ import {
   type StepExpression, type TemplateError,
 } from './template.js';
 import { stageSettledEvidence } from './place/place.js';
+import { outdatedBenchmarkPlan } from '../scorers/engine-hooks.js';
 import { parseStepPath } from './step-path.js';
 import type { ConfinedLease, LeaseWire } from './lease-wire.js';
 import { decideConfined, type ConfinedDecision } from './confined-place.js';
@@ -692,7 +693,8 @@ export async function finishRun(
   secrets: Record<string, string>,
   driver?: DriverIdentity,
 ): Promise<Finished> {
-  if (enterFinalizing(run, result, now)) return { kind: 'finalizing' };
+  // No driver here leases a step of a run whose plan another teamai froze, so it runs no finally step either.
+  if (!await outdatedBenchmarkPlan(run) && enterFinalizing(run, result, now)) return { kind: 'finalizing' };
   settleRun(run, now, result);
 
   // The first end only: a run a retry reopened has `limitsFrom`, and another install sweeps by what that end published.
@@ -2468,6 +2470,8 @@ export async function leaseNext(config: LocalConfig, runId: string, driver: Driv
     const older = missingNeeds(run);
 
     if (older) return { save: false, envelope: error('run_unreadable', older) };
+    // Every driver leases here, so a benchmark run frozen by a teamai before an upgrade runs no step on any of them.
+    const outdated = await outdatedBenchmarkPlan(run);
     // Made before any step it leases runs; a run a retry reopened gets it again.
     await fs.mkdir(runScratchDir(config, run.id), { recursive: true });
     const { handoff } = options;
@@ -2490,6 +2494,9 @@ export async function leaseNext(config: LocalConfig, runId: string, driver: Driv
         if (ended) return ended;
         continue;
       }
+
+      // After settling, so the run still ends at its deadlines.
+      if (outdated) return { save: JSON.stringify(run) !== before, envelope: { error: outdated } };
 
       const other = run.steps.find((step): step is LeasedStep => step.status === 'leased' && !sameDriver(step.lease.driver, driver));
 

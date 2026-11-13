@@ -68,6 +68,16 @@ async function startFix(shape?: Parameters<typeof suiteOf>[0]): Promise<{ config
   return { config, runId: String(started.data.run) };
 }
 
+/** A run of suite `fix`, of `body` when given, whose plan step printed the plan as a teamai of plan schemaVersion 2 froze it. */
+async function outdatedRun(body?: string): Promise<{ config: LocalConfig; runId: string }> {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-benchmark-plan-'));
+  dirs.push(root);
+  const config = benchmarkRunConfig(root);
+  const started = await startBenchmarkRun(config, suiteOf(), { ...(body !== undefined && { body }), outputsOf: (bundle, plan) => ({ definition: { ...bundle, workflows: {} }, plan: { ...plan, schemaVersion: 2 } }) });
+  if ('error' in started) throw new Error(started.error.message);
+  return { config, runId: String(started.data.run) };
+}
+
 /** The checks of `run` the run's report names as having not run. */
 function uncheckedOf(run: RunState): string[] {
   const planned = planOfRun(run);
@@ -125,6 +135,38 @@ describe('benchmark plan run', () => {
       step: 'trials.baselines.t01', command: 'node test.js',
       workspace: { mode: 'new', base: { commit: RUN_START }, clone: { commit: RUN_START, team: { treatment: 'none' } } },
     } } });
+  });
+
+  it('refuses a driver every step of a run whose plan a teamai before an upgrade froze, as resume refuses it, and leases none', async () => {
+    const { config, runId } = await outdatedRun();
+
+    const next = await leaseNext(config, runId, driver, { can, prepare: true });
+
+    expect(next).toEqual({ error: {
+      code: 'benchmark_plan_outdated',
+      message: `Run ${runId} measures a benchmark plan of schemaVersion 2, which the teamai that started it froze, and this teamai reads only schemaVersion 3, so the run cannot go on here. Run it with the teamai that started it, or start the suite again with teamai benchmark run fix.`,
+    } });
+    const run = await readRun(config, runId);
+    expect(typeof run === 'object' && run.steps.filter((step) => step.status === 'leased').map((step) => step.id)).toEqual([]);
+  });
+
+  it('ends a run whose plan a teamai before an upgrade froze at its timeout, on the next of any driver', async () => {
+    const { config, runId } = await outdatedRun();
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(Date.now() + 11 * 60_000);
+
+    const next = await leaseNext(config, runId, driver, { can, prepare: true });
+
+    expect(next).toMatchObject({ data: { done: { outcome: 'failed', failure: { code: 'timeout' } } } });
+  });
+
+  it('ends a run whose plan a teamai before an upgrade froze at one cancel, running none of its finally steps', async () => {
+    const { config, runId } = await outdatedRun(`${PLANNED_BENCHMARK}finally:\n  - id: report\n    command: teamai benchmark report\n`);
+
+    await cancelRun(config, runId, {});
+
+    const run = await readRun(config, runId);
+    expect(typeof run === 'object' && { status: run.status, report: run.steps.find((step) => step.id === 'report') }).toEqual({ status: 'cancelled', report: undefined });
   });
 
   it('leases a trial prompt in a clone of the starting commit with the arm\'s team once its task baseline fails there', async () => {

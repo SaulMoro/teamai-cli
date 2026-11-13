@@ -26,7 +26,7 @@ import { runDeadline } from '../workflow/limits.js';
 import { findAttemptRun } from '../workflow/run-location.js';
 import { judgeUnavailable } from '../scorers/judges-here.js';
 import { chooseJudgeModel } from '../scorers/judge-model.js';
-import type { RunState, WorkflowEnvelope, WorkflowFailure } from '../workflow/types.js';
+import type { WorkflowEnvelope, WorkflowFailure } from '../workflow/types.js';
 import { formatDiagnostic } from '../workflow/parse.js';
 import { git } from '../workflow/worktree.js';
 import { addedOf, compileBundle, freezePlan, trialScorersOf, type BenchmarkEstimate, type BenchmarkPlan, type CompiledBundle, type PinnedRubric, type PlannedArm } from './plan.js';
@@ -43,7 +43,7 @@ import { runCheckAt, type CheckRun } from '../scorers/check-run.js';
 import { commitCacheOf, firstUnreachable } from '../workflow/place/place.js';
 import { leavesOut, withoutRefusal } from './team-without.js';
 import { commitCheckFiles, trialBlocker, type CommittedSuite } from './trial.js';
-import { planOfRun, trialsUnattended } from './run-plan.js';
+import { trialsUnattended } from './run-plan.js';
 
 /** What planning reads besides the suite. */
 interface BenchmarkStart {
@@ -652,16 +652,6 @@ function selectionOf(config: LocalConfig): TeamSelection {
     subscribedTags: config.subscribedTags,
     excludedSkills: config.excludedSkills ?? [],
   });
-}
-
-/**
- * Why `teamai workflow resume` refuses `run`: a benchmark run whose plan a teamai before an upgrade froze in another
- * schemaVersion, which this one cannot measure. Undefined for any other run, which resume handles as it does every run.
- */
-export function outdatedBenchmarkPlan(run: RunState): WorkflowFailure | undefined {
-  const planned = planOfRun(run);
-
-  return 'failure' in planned && planned.failure.code === 'benchmark_plan_outdated' ? planned.failure : undefined;
 }
 
 /**

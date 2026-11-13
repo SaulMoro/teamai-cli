@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import type { PinnedArmWorkflow } from '../benchmark/arm-workflow.js';
 import { compileBundle, trialsOf, type BenchmarkPlan } from '../benchmark/plan.js';
 import { planOfRun } from '../benchmark/run-plan.js';
+import { outdatedBenchmarkPlan } from '../benchmark/trial.js';
 import type { LocalConfig } from '../types.js';
 import type { BenchmarkSuiteFiles } from '../workflow/conformance-interpreter.js';
 import { stepDefinitions } from '../workflow/scope.js';
@@ -207,6 +208,16 @@ describe('the workflow a benchmark plan prints', () => {
       code: 'run_unreadable',
       message: expect.stringMatching(new RegExp(`^Step "plan" of run ${run.id} printed a benchmark plan this teamai cannot read: .*arms: Invalid input: expected array, received undefined.*\\. Update teamai, or start the benchmark again\\.$`)),
     } });
+  });
+
+  it.each([
+    ['no schemaVersion', { trials: ['hello'] }],
+    ['a schemaVersion and no suite', { schemaVersion: 1, trials: ['hello'] }],
+  ])("takes a plan with %s, as a team's own workflow may print under that name, for no outdated plan", async (_, printed) => {
+    const { run } = await plannedRun(suiteOf(), { outputsOf: (bundle) => ({ definition: { ...bundle, workflows: {} }, plan: printed }) });
+
+    expect(outdatedBenchmarkPlan(run)).toBeUndefined();
+    expect(planOfRun(run, 'trials.r1.t01.a01.check')).toMatchObject({ failure: { code: 'run_unreadable' } });
   });
 
   it('is refused by report and check once its plan holds an arm model a record could not publish', async () => {

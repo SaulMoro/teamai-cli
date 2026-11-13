@@ -1222,6 +1222,40 @@ describe('teamai score of a subject the person names', () => {
     expect(await readRun(config, runId)).toMatchObject({ awaits: { driver: 'acme-sandbox' }, steps: expect.arrayContaining([expect.objectContaining({ id: 'plan', status: 'pending' })]) });
   });
 
+  it.each<[string, ScoreOptions]>([
+    ['with a scorer', { session: SESSION, source: 'claude-code', scorer: ['quality'] }],
+    ['with a scorer file', { session: SESSION, source: 'claude-code', scorer: ['./draft.md'] }],
+  ])('judges a session %s inside a workflow step, in the step\'s process on the local driver, whatever workflows.driver names', async (_case, options) => {
+    const { config } = await team({ 'teamai.yaml': 'team: acme\nrepo: https://example.com/acme/team.git\nworkflows: { driver: acme-sandbox }\n' });
+    await syncScorersThenWorkflows(config);
+    claudeSession(SESSION, 'Added the retries.');
+    fakeClaude();
+    fs.writeFileSync(path.join(root, 'app', 'draft.md'), SCORER);
+    vi.stubEnv(ATTEMPT_ENV, 'r0123456789abcdef/a0123456789');
+
+    const inStep = await scored(options);
+
+    // The command returns once its run is done, whatever the outcome: this PATH has no teamai for the run's own steps.
+    const [ran, ...others] = await readRuns(config);
+    expect(others).toEqual([]);
+    expect(ran, JSON.stringify(inStep.envelope)).toMatchObject({ startedBy: 'cli' });
+    expect(ran).not.toHaveProperty('awaits');
+    expect(inStep.envelope).toMatchObject({ data: { done: { run: ran?.id } } });
+  });
+
+  it('refuses the teamai score an agent runs inside a workflow step, as it refuses that agent anywhere', async () => {
+    const { config } = await team();
+    claudeSession(SESSION, 'Added the retries.');
+    vi.stubEnv(ATTEMPT_ENV, 'r0123456789abcdef/a0123456789');
+    vi.stubEnv('CLAUDE_CODE_SESSION_ID', 'agent-session');
+
+    expect(await scored({ session: SESSION, source: 'claude-code', scorer: ['quality'] })).toEqual({ envelope: { error: {
+      code: 'invoke_denied',
+      message: expect.stringMatching(new RegExp(`\\. The person runs teamai score --session ${SESSION} --source claude-code --scorer quality in their own terminal, and the agent judges this session with /teamai-share-session\\.$`, 'u')),
+    } }, code: 1 });
+    expect(await readRuns(config)).toEqual([]);
+  });
+
   it('says the run workflows.driver none leaves open is left to any driver, and how one takes it', async () => {
     const { config } = await team({ 'teamai.yaml': 'team: acme\nrepo: https://example.com/acme/team.git\nworkflows: { driver: none }\n' });
     await syncScorersThenWorkflows(config);

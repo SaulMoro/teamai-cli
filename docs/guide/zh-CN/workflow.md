@@ -79,7 +79,7 @@ steps:
 
 步骤可以带 `if` 表达式。表达式为假时跳过该步骤，这不会让运行失败。表达式可以读取 `steps.<id>.outcome`（`success`、`failed` 或 `skipped`）和 `steps.<id>.outputs.<field>`，且只能读取该步骤直接或间接依赖的步骤。可用 `==`、`!=`、`<`、`<=`、`>`、`>=`、`&&`、`||`、`!`、括号，以及字面量 `'text'`、数字、`true`、`false`、`null` 和 `[]`。路径可以用下标读取数组元素，例如 `steps.review.outputs.files[0]`。函数 `length`、`any`、`all` 和 `filter` 读取数组。不存在的值读作 `null`。`false`、`null`、`0` 和 `''` 为假，其他值都为真。`==` 是严格比较，并比较整个值：`'1' == 1` 和 `'Build' == 'build'` 都为假。
 
-依赖失败的步骤，如果 `if` 读取了每个失败的依赖，仍会运行。可以用它做补救：
+依赖失败的步骤，如果 `if` 通过 `outcome` 或 `outputs` 读取了每个失败的依赖，仍会运行。失败步骤没有给出的输出读作 `null`，此时 `steps.check.outputs.text != ''` 为真，该步骤会运行；只想在某个输出上运行时，把它和一个值比较，例如 `steps.check.outputs.text == 'done'`。可以用它做补救：
 
 ```yaml
   - id: label
@@ -1093,7 +1093,7 @@ steps:
 
 0.28.0 之前的 teamai 会丢弃设置了 `invoke` 或 `alias` 的工作流，所以成员和 CI 任务需要 0.28.0 或更高版本。`teamai review --branch` 会对每个新增这两个键之一的工作流给出警告。
 
-设置了 agent 的会话变量（如 `CLAUDE_CODE_SESSION_ID`）的进程，就算在 agent 会话内运行。在这样的进程中，`workflow start` 启动 `deny` 工作流时返回 `invoke_denied`。消息会给出本人在自己终端运行的命令，以及让 agent 能启动该工作流的 `invoke` 设置。启动 `ask` 工作流时，没有 `--confirmed` 就返回 `confirm_needed`；会话在本人同意后加上它。在无人值守的运行中（`TEAMAI_MODE=unattended` 或 `CI`），即使带 `--confirmed` 也返回 `unattended_denied`，因为没有人能同意。这些规则对所有驱动都成立，不指定驱动时也一样。`CI` 不豁免任何东西：CI 任务能启动任何工作流，是因为它不设置会话变量。`workflow start --driver skill` 即使会话宿主没有设置这类变量也算 agent 发起，因为只有编码 agent 会驱动 skill 驱动。替你启动默认工作流的命令不受这些判断，因为会话请求的是命令：在 agent 会话中，`teamai recall maintenance --update-quality` 可以运行，而 `teamai workflow start teamai-draft-learning-updates` 返回 `invoke_denied`。
+设置了 agent 的会话变量（如 `CLAUDE_CODE_SESSION_ID`）的进程，就算在 agent 会话内运行。在这样的进程中，`workflow start` 启动 `deny` 工作流时返回 `invoke_denied`。消息会给出本人在自己终端运行的命令，以及让 agent 能启动该工作流的 `invoke` 设置。启动 `ask` 工作流时，没有 `--confirmed` 就返回 `confirm_needed`；会话在本人同意后加上它。在无人值守的运行中（`TEAMAI_MODE=unattended` 或 `CI`），即使带 `--confirmed` 也返回 `unattended_denied`，因为没有人能同意。这些规则对所有驱动都成立，不指定驱动时也一样。`CI` 不豁免任何东西：CI 任务能启动任何工作流，是因为它不设置会话变量。`workflow start --driver skill` 即使会话宿主没有设置这类变量也算 agent 发起，因为只有编码 agent 会驱动 skill 驱动。替你启动默认工作流的命令不受这些判断，因为会话请求的是命令：在 agent 会话中，`teamai recall maintenance --update-quality` 可以运行，而 `teamai workflow start teamai-draft-learning-updates` 返回 `invoke_denied`。`teamai score`、`teamai benchmark run` 和 `teamai self-improvement run` 与 `workflow start` 受同样的判断，在步骤内也一样：那里看 agent 的会话变量，不看 `TEAMAI_WORKFLOW_ATTEMPT`。
 
 运行的步骤内不能启动或驱动另一次运行。步骤的进程带有 `TEAMAI_WORKFLOW_ATTEMPT`：本地驱动为它运行的命令和提示词步骤的工具设置它，skill 驱动为它的 runner 及其命令设置它，所有驱动都为 setup 设置它。设置了它时，每个会改变运行的 `workflow` 命令（`start`、`next`、`report`、`respond`、`retry`、`cancel`、`resume` 和 `publish`）都返回 `nested_workflow`，只有 skill 驱动的 runner 上报它自己的 attempt 除外。在 `.teamai/workflow-worktrees` 下的工作流 worktree 中，以及在 `teamai/<run>/...` 分支上的检出中，`start` 也返回 `nested_workflow`；作为工作流快捷方式的命令（如 `teamai recall maintenance --update-quality`）也一样，除非它在步骤内运行，那时它的运行是该步骤的一部分。其他命令在那里仍然可用，因为步骤的子 agent 从它的位置上报。要让另一个工作流成为运行的一部分，把它作为 `workflow` 步骤加入定义。
 
