@@ -191,6 +191,21 @@ describe("the container engines' row of section (f)", () => {
       ['docker image teamai-warm:ktheirs', 'other_world'],
     ]);
   });
+
+  it('removes on cleanup an image of the world that two tags name, one name at a time, where removal by id is refused', async () => {
+    const { engine, observed } = await observeContainers([
+      { id: 'a'.repeat(64), tags: ['teamai-warm:kmine', 'teamai-warm:kalias'], labels: { 'teamai.owner': SELF.journals[0] ?? '' } },
+      { id: 'c'.repeat(64), tags: ['node:22-alpine'], labels: {} },
+    ]);
+    const findings = observed.flatMap((seen) => (seen.kind === 'observed' ? seen.findings : []));
+
+    expect(findings.map((finding) => [finding.what, finding.attribution.kind])).toEqual([
+      ['docker image teamai-warm:kmine', 'own'],
+      ['docker image teamai-warm:kalias', 'own'],
+    ]);
+    expect(findings.map((finding) => removeLeftover({ command: finding.remove ?? [] }))).toEqual([{ ok: true, wasThere: true }, { ok: true, wasThere: true }]);
+    expect(engine.images().map((image) => image.tags)).toEqual([['node:22-alpine']]);
+  });
 });
 
 describe("the sbx row of section (f)", () => {
