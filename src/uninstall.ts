@@ -1904,26 +1904,20 @@ async function buildRemovalPlan(
       if (!agentFilter) {
         const { removeWorktreeSetup, runWorktreesOf, worktreeCheckout } = await import('./workflow/worktree.js');
 
-        // The checkouts of one repository list the same worktrees.
-        for (const checkout of plan.checkouts) {
-          const found = await runWorktreesOf(checkout);
+        // The member's checkouts: a run worktree goes, and self mode's side-branch worktrees go with the data home.
+        const memberCheckouts = plan.checkouts.filter((dir) => worktreeCheckout(dir) === undefined && !isWithin(dir, plan.teamaiHome));
+        const found = await runWorktreesOf(memberCheckouts);
+        plan.runWorktrees.push(...found.worktrees);
 
-          if ('error' in found) {
-            log.warn(`Could not list the workflow run worktrees of ${checkout} (${found.error}), so uninstall leaves them and what teamai set up for them there.`);
-            continue;
-          }
-
-          for (const worktree of found.worktrees) {
-            if (!plan.runWorktrees.some((planned) => planned.worktree.dir === worktree.dir)) plan.runWorktrees.push({ checkout, worktree });
-          }
+        for (const { checkout, error } of found.unread) {
+          log.warn(`Could not list the workflow run worktrees of ${checkout} (${error}), so uninstall leaves them and what teamai set up for them there.`);
         }
 
         const gone = plan.runWorktrees.flatMap(({ worktree }) => (worktree.kind === 'removable' ? [worktree.dir] : []));
         // The exclude block and the git config are the repository's: each checkout of it names them, so they are listed once.
         const listed = new Set<string>();
 
-        // A run worktree is no checkout of the member's: it goes above, and its setup is the project's.
-        for (const checkout of plan.checkouts.filter((dir) => worktreeCheckout(dir) === undefined)) {
+        for (const checkout of memberCheckouts) {
           const entries = (await removeWorktreeSetup(checkout, { dryRun: true, gone })).filter((entry) => !listed.has(entry));
 
           for (const entry of entries) listed.add(entry);

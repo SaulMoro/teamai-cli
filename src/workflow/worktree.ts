@@ -744,29 +744,47 @@ function holds(dir: string, other: string): boolean {
 }
 
 /**
- * Each worktree teamai made for a workflow run in the repository of `checkout`, innermost first, the order they can be
- * removed in, or why git could not list them. One holding a worktree that stays stays too: a run started in a run's
- * worktree puts its own inside, where teamai's exclude block hides it from the outer one's status.
+ * Each worktree teamai made for a workflow run in the repositories of `checkouts`, each with the first of them in its
+ * repository and innermost first, the order they can be removed in; and each checkout whose worktrees git could not list.
+ * A repository is read once, however many of its checkouts are named. One holding a worktree that stays stays too: a
+ * run started in a run's worktree puts its own inside, where teamai's exclude block hides it from the outer one's status.
  */
-export async function runWorktreesOf(checkout: string): Promise<{ worktrees: RunWorktree[] } | { error: string }> {
-  const listed = await listedWorktrees(checkout);
+export async function runWorktreesOf(checkouts: readonly string[]): Promise<{ worktrees: Array<{ checkout: string; worktree: RunWorktree }>; unread: Array<{ checkout: string; error: string }> }> {
+  const worktrees: Array<{ checkout: string; worktree: RunWorktree }> = [];
+  const unread: Array<{ checkout: string; error: string }> = [];
+  const read = new Set<string>();
 
-  if ('error' in listed) return listed;
-  const worktrees: RunWorktree[] = [];
+  for (const checkout of checkouts) {
+    const common = await git(checkout, ['rev-parse', '--git-common-dir']);
+    const repository = common.code === 0 ? path.resolve(checkout, common.stdout.trim()) : checkout;
 
-  for (const { dir, lines } of [...listed].sort((a, b) => b.dir.length - a.dir.length)) {
-    if (worktreeCheckout(dir) === undefined) continue;
-    const found = await runWorktreeAt(dir, lines);
-    // Innermost first, so each worktree inside this one is already sorted; one that is no run worktree stays.
-    const staying = listed.find((other) => holds(dir, other.dir) && !worktrees.some((sorted) => sorted.dir === other.dir && sorted.kind === 'removable'));
+    if (read.has(repository)) continue;
+    read.add(repository);
+    const listed = await listedWorktrees(checkout);
 
-    if (found.kind === 'removable' && staying !== undefined) {
-      const why = worktrees.find((sorted) => sorted.dir === staying.dir && sorted.kind === 'kept');
-      worktrees.push({ kind: 'kept', dir, why: `it holds the worktree ${staying.dir}, which stays${why?.kind === 'kept' ? ` (${why.why})` : ''}`, isLocked: false });
-    } else worktrees.push(found);
+    if ('error' in listed) {
+      unread.push({ checkout, error: listed.error });
+      continue;
+    }
+
+    const sorted: RunWorktree[] = [];
+
+    for (const { dir, lines } of [...listed].sort((a, b) => b.dir.length - a.dir.length)) {
+      if (worktreeCheckout(dir) === undefined) continue;
+      const found = await runWorktreeAt(dir, lines);
+      // Innermost first, so each worktree inside this one is already sorted; one that is no run worktree stays.
+      const staying = listed.find((other) => holds(dir, other.dir) && !sorted.some((done) => done.dir === other.dir && done.kind === 'removable'));
+
+      if (found.kind === 'removable' && staying !== undefined) {
+        const why = sorted.find((done) => done.dir === staying.dir && done.kind === 'kept');
+        sorted.push({ kind: 'kept', dir, why: `it holds the worktree ${staying.dir}, which stays${why?.kind === 'kept' ? ` (${why.why})` : ''}`, isLocked: false });
+      } else sorted.push(found);
+    }
+
+    worktrees.push(...sorted.map((worktree) => ({ checkout, worktree })));
   }
 
-  return { worktrees };
+  return { worktrees, unread };
 }
 
 /** Whether removing the run worktree `dir`, which `git worktree list --porcelain` described with `lines`, loses anything. */
