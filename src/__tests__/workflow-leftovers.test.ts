@@ -640,6 +640,29 @@ describe('doctor --fix past workflows.retention', () => {
     expect(fs.existsSync(dir)).toBe(true);
   });
 
+  it('keeps a worktree that holds the worktree of a run started inside it, naming both, and removes it once that one is gone', async () => {
+    const { config, cwd, runId } = await fixture(NO_DELIVERY.replace("writeFileSync('join.txt', 'J')", "writeFileSync('join.txt', 'J'); process.exit(1)"));
+    expect(await runLocalDriver(config, runId, cwd)).toMatchObject({ data: { done: { outcome: 'failed' } } });
+    const outer = git(cwd, ['worktree', 'list', '--porcelain']).split('\n').filter((line) => line.startsWith('worktree ')).map((line) => line.slice('worktree '.length)).find((at) => at !== cwd) ?? '';
+    // Where a run started in the outer worktree puts its own, hidden from the outer one's status.
+    const inner = path.join(outer, '.teamai', 'workflow-worktrees', 'teamai-rinner-step-p1-0123456789ab');
+    git(outer, ['worktree', 'add', '-q', '-b', 'teamai/rinner/step/p1', inner]);
+    fs.writeFileSync(path.join(inner, 'unsaved.txt'), 'work no commit holds');
+    vi.spyOn(log, 'warn');
+    const settled = Date.parse((await state(config, runId)).updatedAt);
+
+    const swept = await sweepLeftovers(config, null, { now: settled + 14 * DAY, checkout: cwd });
+
+    expect(fs.readFileSync(path.join(inner, 'unsaved.txt'), 'utf8')).toBe('work no commit holds');
+    expect(swept.swept).toEqual([expect.objectContaining({
+      run: runId, worktrees: [], failed: [{ branch: `teamai/${runId}/join/p1`, reason: expect.stringContaining(`worktree ${outer} was not removed (it holds the worktree ${inner}`) }],
+    })]);
+    git(cwd, ['worktree', 'remove', '--force', inner]);
+
+    expect((await sweepLeftovers(config, null, { now: settled + 15 * DAY, checkout: cwd })).swept).toEqual([expect.objectContaining({ run: runId, worktrees: [outer] })]);
+    expect(fs.existsSync(outer)).toBe(false);
+  });
+
   it('deletes again what a succeeded run could not delete as it settled', async () => {
     const { config, cwd, origin, runId } = await fixture(NO_DELIVERY);
     const hook = path.join(origin, 'hooks', 'pre-receive');

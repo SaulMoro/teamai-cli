@@ -737,9 +737,21 @@ async function listedWorktrees(checkout: string): Promise<{ dir: string; lines: 
   });
 }
 
-/** Whether `other` is a worktree inside `dir`, which removing `dir` deletes with it. */
+/** Whether `other` is a worktree inside `dir`, which removing `dir` deletes with it. git spells a path with `/` on Windows too. */
 function holds(dir: string, other: string): boolean {
-  return other.startsWith(dir + path.sep);
+  return path.resolve(other).startsWith(path.resolve(dir) + path.sep);
+}
+
+/**
+ * The first of the `listed` worktrees inside `dir`, which removing `dir` deletes with it; links resolved on both sides,
+ * since git records a worktree by its real path and a caller may name it through a link, such as macOS's `/var`.
+ */
+async function worktreeInside(dir: string, listed: ReadonlyArray<{ dir: string }>): Promise<string | undefined> {
+  const real = (at: string): Promise<string> => fs.realpath(at).catch(() => path.resolve(at));
+  const [outer, others] = await Promise.all([real(dir), Promise.all(listed.map((other) => real(other.dir)))]);
+  const at = others.findIndex((other) => holds(outer, other));
+
+  return at === -1 ? undefined : listed[at]?.dir;
 }
 
 /**
@@ -835,9 +847,9 @@ export async function removeRunWorktree(checkout: string, worktree: Extract<RunW
   const now = entry === undefined ? undefined : await runWorktreeAt(entry.dir, entry.lines);
 
   if (now?.kind === 'kept') return { ok: false, reason: now.why };
-  const inside = listed.find(({ dir }) => holds(worktree.dir, dir));
+  const inside = await worktreeInside(worktree.dir, listed);
 
-  if (inside !== undefined) return { ok: false, reason: `it holds the worktree ${inside.dir}, which stays` };
+  if (inside !== undefined) return { ok: false, reason: `it holds the worktree ${inside}, which stays` };
   const removed = now !== undefined && await pathExists(worktree.dir) ? await git(checkout, ['worktree', 'remove', '--force', worktree.dir]) : undefined;
   const pruned = await git(checkout, ['worktree', 'prune']);
 
@@ -1883,8 +1895,20 @@ async function removeBlockingSymlink(dir: string, relative: string): Promise<voi
   }
 }
 
-/** Removes worktree `dir` of `main`'s repository, or says why `git worktree remove` left it. */
+/**
+ * Removes worktree `dir` of `main`'s repository, or says why it stays. One holding another worktree stays: git would
+ * delete that one with it, uncommitted changes and all, such as the worktree of a run started inside `dir`, which
+ * teamai's exclude block hides from this one's status.
+ */
 export async function removeWorktree(main: string, dir: string): Promise<{ ok: true } | { ok: false; reason: string }> {
+  // A record whose directory is gone holds nothing.
+  await git(main, ['worktree', 'prune']);
+  const listed = await listedWorktrees(main);
+
+  if ('error' in listed) return { ok: false, reason: `git could not list the worktrees (${listed.error})` };
+  const inside = await worktreeInside(dir, listed);
+
+  if (inside !== undefined) return { ok: false, reason: `it holds the worktree ${inside}, which removing it would delete` };
   const removed = await git(main, ['worktree', 'remove', '--force', dir]);
 
   await git(main, ['worktree', 'prune']);

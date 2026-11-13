@@ -695,7 +695,7 @@ $ git branch --list 'teamai/*'          # 运行成功后
 ⚠ Branch teamai/<run>/build-1/p1 of run <run> was not deleted on origin: <reason>. teamai doctor --fix tries again.
 ```
 
-运行结算后超过 `workflows.retention`，`teamai doctor --fix` 会移除它留下的内容：本地和 origin 上的分支、worktree、teamai 保存在 `refs/teamai/kept/` 下的提交，以及基准固定分支 `teamai/<run>/base`。pull request 的分支会保留。它也会找到其他机器发布到 `teamai-reports` 的运行，在其所有者保留到的时间再过一周后，删除它们在 origin 上的分支，这样所有者在那之前刚开始的 retry 有时间完成。再次运行的运行，或被其他成员接手但尚未结束的运行，会保留全部内容。没能移除的内容，下一次 `doctor --fix` 会再试。默认值为 `14d`，`never` 表示全部保留。这是一个[成员设置](reference.md#成员设置)，机器或工作区可以设置自己的值：
+运行结算后超过 `workflows.retention`，`teamai doctor --fix` 会移除它留下的内容：本地和 origin 上的分支、worktree、teamai 保存在 `refs/teamai/kept/` 下的提交，以及基准固定分支 `teamai/<run>/base`。pull request 的分支会保留；包含另一个 worktree 的 worktree（例如在它里面启动的运行的 worktree）也会保留，直到那个 worktree 不在了。它也会找到其他机器发布到 `teamai-reports` 的运行，在其所有者保留到的时间再过一周后，删除它们在 origin 上的分支，这样所有者在那之前刚开始的 retry 有时间完成。再次运行的运行，或被其他成员接手但尚未结束的运行，会保留全部内容。没能移除的内容，下一次 `doctor --fix` 会再试。默认值为 `14d`，`never` 表示全部保留。这是一个[成员设置](reference.md#成员设置)，机器或工作区可以设置自己的值：
 
 ```yaml
 # teamai.yaml
