@@ -7,6 +7,7 @@ import {
 } from '@teamai/runtime-protocol';
 import type { OpEnd } from '@teamai/runtime-kit/ledger';
 import { registerThrough, type Registration } from '@teamai/runtime-kit/outer';
+import { cannotReadBecause, FsFailureSchema, isMissing } from '@teamai/shared/fs-failure';
 import { NotRegularFileError, readRegularFileSync } from '@teamai/shared/regular-file';
 import { isUsageLimitText } from '@teamai/tool-core/usage-limit';
 import { JsonValueSchema } from '@teamai/shared/json';
@@ -146,14 +147,27 @@ function usageLimitedReply(tool: string, said: string | null | undefined): Runti
   return said?.trim().includes('\n') ? undefined : usageLimited(tool, said);
 }
 
-/** The result the agent wrote; what it left there instead of a file; or undefined when it wrote none teamai can read. */
-function readResult(file: string): PromptResult | NotRegularFileError | undefined {
-  try {
-    const parsed = PromptResultSchema.safeParse(JSON.parse(readRegularFileSync(file, 'utf8')));
+/** The result the agent wrote; why teamai cannot read what it left at the result file; or none, when it wrote no workflow result. */
+function readResult(file: string): { kind: 'result'; result: PromptResult } | { kind: 'unreadable'; why: string } | { kind: 'none' } {
+  let text: string;
 
-    return parsed.success ? parsed.data : undefined;
+  try {
+    text = readRegularFileSync(file, 'utf8');
   } catch (error) {
-    return error instanceof NotRegularFileError ? error : undefined;
+    if (error instanceof NotRegularFileError) return { kind: 'unreadable', why: `left ${error.kind} at the result file ${file}, not a regular file, so teamai did not read it` };
+    const failure = FsFailureSchema.parse(error);
+
+    if (isMissing(failure)) return { kind: 'none' };
+
+    return { kind: 'unreadable', why: `wrote the result file ${file}, which teamai cannot read because ${cannotReadBecause(failure)}. Let the user teamai runs as read ${file}, then retry the step` };
+  }
+
+  try {
+    const parsed = PromptResultSchema.safeParse(JSON.parse(text));
+
+    return parsed.success ? { kind: 'result', result: parsed.data } : { kind: 'none' };
+  } catch {
+    return { kind: 'none' };
   }
 }
 
@@ -953,10 +967,8 @@ export function conversations(state: ProcessState, { ensureProvider }: { ensureP
           }
 
           const read = readResult(record.answer.file);
-          const notAFile = read instanceof NotRegularFileError ? read : undefined;
-          const result = read instanceof NotRegularFileError ? undefined : read;
 
-          if (end.final?.status === 'closed' && read === undefined) {
+          if (end.final?.status === 'closed' && read.kind === 'none') {
             settle(op, {
               op, state: 'failed',
               failure: { code: 'daemon_restarted', message: `The Paseo daemon at ${live.url} stopped while the ${record.tool} agent worked, before it wrote a workflow result. Its work is kept in the worktree.` },
@@ -967,15 +979,15 @@ export function conversations(state: ProcessState, { ensureProvider }: { ensureP
 
           // An interactive step ends once the person said it is done and the agent wrote the result; until then the agent
           // idles between their turns. A result file it wrote that is not a workflow result fails the step, as any step.
-          if (!result && record.answer.interactive && !fs.existsSync(record.answer.file)) {
+          if (read.kind === 'none' && record.answer.interactive && !fs.existsSync(record.answer.file)) {
             await Promise.race([delay(IDLE_POLL_MS), stopped]);
             continue;
           }
 
-          if (!result) {
+          if (read.kind !== 'result') {
             // A tool that stopped on its usage limit says so in its last message, and writes no result.
-            const failure = notAFile
-              ? { code: 'tool_failed' as const, message: `${record.tool} left ${notAFile.kind} at the result file ${record.answer.file}, not a regular file, so teamai did not read it` }
+            const failure = read.kind === 'unreadable'
+              ? { code: 'tool_failed' as const, message: `${record.tool} ${read.why}` }
               : usageLimitedReply(record.tool, end.lastMessage) ?? { code: 'tool_failed' as const, message: `${record.tool} did not write a valid workflow result` };
 
             settle(op, { op, state: 'failed', failure }, following);
@@ -989,7 +1001,7 @@ export function conversations(state: ProcessState, { ensureProvider }: { ensureP
             return;
           }
 
-          settle(op, { op, state: 'finished', ...(await finishedOf(live, op, record, { id: session, createdAt: end.final?.createdAt, through })), result, ...(record.turn && { resumed: true }) }, following);
+          settle(op, { op, state: 'finished', ...(await finishedOf(live, op, record, { id: session, createdAt: end.final?.createdAt, through })), result: read.result, ...(record.turn && { resumed: true }) }, following);
 
           return;
         }

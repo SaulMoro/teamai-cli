@@ -1115,17 +1115,32 @@ describe('teamai-runtime-paseo', () => {
     expect(await runtime.next(isEnd('op-0000000c'))).toEqual({ op: 'op-0000000c', event: 'failed', failure: { code: 'tool_failed', message: 'claude did not write a valid workflow result' } });
   });
 
-  it.skipIf(process.platform === 'win32')('fails at once a step whose agent left a FIFO at the result file, rather than waiting on it', async () => {
+  // A FIFO, which a plain read would wait on; a file the daemon's user wrote that the user teamai runs as cannot read.
+  it.skipIf(process.platform === 'win32').each([
+    {
+      left: 'a FIFO',
+      leave: (file: string) => execFileSync('mkfifo', [file]),
+      message: (file: string) => `claude left a pipe at the result file ${file}, not a regular file, so teamai did not read it`,
+    },
+    {
+      left: 'a file teamai cannot read',
+      leave: (file: string) => {
+        fs.writeFileSync(file, JSON.stringify({ output: { verdict: 'approve' } }));
+        fs.chmodSync(file, 0o200);
+      },
+      message: (file: string) => `claude wrote the result file ${file}, which teamai cannot read because it has no permission to read it. Let the user teamai runs as read ${file}, then retry the step`,
+    },
+  ])('fails at once a step whose agent left $left at the result file, saying why teamai did not read it', async ({ leave, message }) => {
     const runtime = start();
     await ready(runtime);
     const handle = await opened(runtime);
     const result = path.join(dir, 'out', 'result.json');
     fs.mkdirSync(path.dirname(result), { recursive: true });
-    execFileSync('mkfifo', [result]);
+    leave(result);
     behave({});
     runtime.send(promptRequest(handle, 'op-0000fe11'));
 
-    expect(await runtime.next(isEnd('op-0000fe11'))).toEqual({ op: 'op-0000fe11', event: 'failed', failure: { code: 'tool_failed', message: `claude left a pipe at the result file ${result}, not a regular file, so teamai did not read it` } });
+    expect(await runtime.next(isEnd('op-0000fe11'))).toEqual({ op: 'op-0000fe11', event: 'failed', failure: { code: 'tool_failed', message: message(result) } });
   });
 
   it.each([

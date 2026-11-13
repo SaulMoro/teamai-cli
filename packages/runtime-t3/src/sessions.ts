@@ -6,7 +6,7 @@ import { HOST_PROCESSES } from '@teamai/shared/exec';
 import { getUserHome } from '@teamai/shared/home';
 import type { SessionHost } from '@teamai/tool-core/sessions/platform';
 import type { AgentAdapter, SessionMeta } from '@teamai/tool-core/sessions/base';
-import { cannotReadBecause, FsFailureSchema } from './fs-failure.js';
+import { cannotReadBecause, FsFailureSchema } from '@teamai/shared/fs-failure';
 
 // ─── The tool session a T3 thread ran ───
 //

@@ -461,6 +461,14 @@ OpenCode 智能体也可以写这两处：运行时通过 OpenCode 的 `external
 
 步骤的环境变量里，智能体只拿到 `TEAMAI_RUN_DIR`，工作流目录的步骤还拿到 `TEAMAI_WORKFLOW_DIR`，所以提示词写明这两个目录中的某个文件时，它的效果与在本机相同。
 
+智能体以其 daemon 运行所用的用户身份写结果文件。运行 teamai 的用户无法读取这个文件时，步骤失败，并写明是哪个文件：
+
+```text
+✖ Step "review" failed with tool_failed: claude wrote the result file <result file>, which teamai cannot read because it has no permission to read it. Let the user teamai runs as read <result file>, then retry the step
+```
+
+让运行 teamai 的用户可以读取该文件，然后运行 `teamai workflow retry <run> <step>`。
+
 有人值守的运行里，其他权限请求在 Paseo 应用里等你回答，也可以在命令行回答：
 
 ```sh

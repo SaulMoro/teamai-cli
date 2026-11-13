@@ -9,7 +9,7 @@ import { WRAPPER_PREFIX } from '@teamai/runtime-kit/outer';
 import { NotRegularFileError, readRegularFileSync } from '@teamai/shared/regular-file';
 import { stepUsage } from '@teamai/tool-core/step-usage';
 import type { InstanceAdder } from './instances.js';
-import { cannotReadBecause, FsFailureSchema, isMissing } from './fs-failure.js';
+import { cannotReadBecause, FsFailureSchema, isMissing } from '@teamai/shared/fs-failure';
 import { unreadableFailure, type LaunchRecord, type OpRecord, type PlaceRecord, type ThreadRecord } from './journal.js';
 import { JUDGE_KEPT, JudgeCopyFailed, JudgeReleased, judged, launchJudge } from './judge.js';
 import type { Reach, Reached, Serving, Session } from './runtime.js';

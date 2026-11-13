@@ -461,6 +461,14 @@ An OpenCode agent may write the same two places: the runtime allows them through
 
 Of the step's environment, the agent gets only `TEAMAI_RUN_DIR`, and `TEAMAI_WORKFLOW_DIR` for a step of a workflow folder, so a prompt that names a file in either directory works as it does on this machine.
 
+The agent writes the result file as the user its daemon runs as. When the user teamai runs as cannot read that file, the step fails and names it:
+
+```text
+✖ Step "review" failed with tool_failed: claude wrote the result file <result file>, which teamai cannot read because it has no permission to read it. Let the user teamai runs as read <result file>, then retry the step
+```
+
+Give the user teamai runs as read access to the file, then `teamai workflow retry <run> <step>`.
+
 In an attended run, any other permission prompt waits for you in the Paseo app, or on the command line:
 
 ```sh
