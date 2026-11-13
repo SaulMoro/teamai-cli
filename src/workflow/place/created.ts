@@ -51,7 +51,13 @@ export async function openWorktree({ root, run, step, workspace, setup }: {
     return { code: 'workspace_base', message: `Step "${step}" needs ${named.join(', ')}, which this checkout does not have, even after fetching the run's branches from origin.${said} Push each branch to origin from the machine that has its commit, then retry this step with ${retryCommand({ run, step })}.` };
   }
 
-  if (setup && await setupUnfinished(place)) await removeWorktree(root, place);
+  if (setup && await setupUnfinished(place)) {
+    const removed = await removeWorktree(root, place);
+
+    // Opened again, it would run the step in a place a setup cut short.
+    if (!removed.ok) return { code: 'workspace_base', message: `Worktree ${place}, whose setup was cut short, was not removed (${removed.reason}), so step "${step}" did not start in it. Fix that, then retry this step with ${retryCommand({ run, step })}.` };
+  }
+
   const opened = await ensureWorktree(root, workspace.branch, workspace.start.commit);
 
   if ('error' in opened) return { code: 'workspace_base', message: opened.error };

@@ -17,6 +17,7 @@ import { findRunConfig } from '../workflow/run-location.js';
 import { cancelRun } from '../workflow/run-controls.js';
 import { AttemptIdSchema, readRun, RunIdSchema, withRunLock } from '../workflow/store.js';
 import { finishPlace } from '../workflow/place/place.js';
+import { log } from '@teamai/shared/log';
 
 vi.mock('../pull.js', () => ({ pull: vi.fn() }));
 /** The git steps of a prepare to kill the process after, each once. */
@@ -103,6 +104,13 @@ steps:
   if ('error' in started) throw new Error(started.error.message);
   return { config, env, client, work, remote, runId: String(started.data.run), driver: { kind: 'skill', machine: 'fixture', workspace: work } };
 }
+/** Puts a worktree with an uncommitted file inside `dir`, where a run started in it puts its own; answers its path. */
+function holdWorktree(dir: string): string {
+  const inner = path.join(dir, '.teamai', 'workflow-worktrees', 'teamai-rinner-step-p1-0123456789ab');
+  git(dir, 'worktree', 'add', '-q', '-b', 'teamai/rinner/step/p1', inner);
+  fs.writeFileSync(path.join(inner, 'unsaved.txt'), 'work no commit holds');
+  return inner;
+}
 async function next(f: Awaited<ReturnType<typeof fixture>>) {
   const answer = await f.client.next(f.runId, { driver: { ...f.driver, can: { hitl: true, setup: true, workspace: ['read-only', 'new', 'continue'] } } }, { prepare: true });
   if ('error' in answer || !answer.data.lease) throw new Error(JSON.stringify({ answer, run: await readRun(f.config, f.runId) }));
@@ -138,6 +146,19 @@ describe('prepared places through the workflow client', () => {
     const attempts = path.join(f.config.dataHome ?? '', 'workflows', 'runs', f.runId, 'attempts');
     const stored = fs.readdirSync(attempts).map((attempt) => fs.readFileSync(path.join(attempts, attempt, 'place.json'), 'utf8')).join('\n');
     expect(stored).not.toContain('Edit the project.'); expect(stored).not.toContain('Untrusted branch instructions.');
+  });
+
+  it('keeps the place of a writer that holds another worktree after its success, and says so', async () => {
+    const f = await fixture();
+    const first = await next(f);
+    expect(await f.client.report(f.runId, { attempt: first.attempt, revision: first.revision, outcome: 'success', driver: f.driver })).toMatchObject({ data: { accepted: true } });
+    const second = await next(f);
+    const inner = holdWorktree(second.cwd);
+    const warn = vi.spyOn(log, 'warn');
+
+    expect(await f.client.report(f.runId, { attempt: second.attempt, revision: second.revision, outcome: 'success', driver: f.driver })).toMatchObject({ data: { accepted: true, cleanup: true } });
+    expect(fs.readFileSync(path.join(inner, 'unsaved.txt'), 'utf8')).toBe('work no commit holds');
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining(`Worktree ${second.cwd} of run ${f.runId} stays: it holds the worktree ${inner}`));
   });
 
   it.each([
@@ -216,6 +237,21 @@ steps:
       const lease = await next(f);
       expect(setupRan(lease.cwd)).toBe(true);
       expect(await f.client.report(f.runId, { attempt: lease.attempt, revision: lease.revision, outcome: 'success', driver: f.driver })).toMatchObject({ data: { accepted: true } });
+    });
+
+    it.each([
+      ['after a kill after markSetup', 'markSetup', 'killed after markSetup'],
+      ['while setup ran', 'recordGroup', 'killed while setup ran'],
+    ])('does not start over in a worktree whose setup was cut short %s while it holds another, which stays', async (_, kill, killed) => {
+      const f = await fixture(SETUP);
+      killAfter.add(kill);
+      await expect(next(f)).rejects.toThrow(killed);
+      const place = git(f.work, 'worktree', 'list', '--porcelain').split('\n').flatMap((line) => (line.startsWith('worktree ') ? [line.slice('worktree '.length)] : [])).find((dir) => dir !== f.work) ?? '';
+      const inner = holdWorktree(place);
+
+      expect(await f.client.next(f.runId, { driver: { ...f.driver, can: { hitl: true, setup: true, workspace: ['read-only', 'new', 'continue'] } } }, { prepare: true }))
+        .toMatchObject({ error: { code: 'workspace_base', message: expect.stringContaining(`it holds the worktree ${inner}`) } });
+      expect(fs.readFileSync(path.join(inner, 'unsaved.txt'), 'utf8')).toBe('work no commit holds');
     });
 
     it.each([

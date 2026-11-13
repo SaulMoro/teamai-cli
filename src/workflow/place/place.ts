@@ -7,6 +7,7 @@ import { observeCheckout, type PreparedAgent } from '../../agent-observation.js'
 import { detectProjectConfig } from '../../config.js';
 import type { RunMode } from '../../launch-context.js';
 import { isDataBranch, type LocalConfig } from '../../types.js';
+import { log } from '@teamai/shared/log';
 import { gitCommonDir } from '../../utils/git.js';
 import { redactJson } from '@teamai/shared/redact';
 import { parseJson } from '@teamai/shared/json';
@@ -739,12 +740,13 @@ async function setupFailed(config: LocalConfig, record: Extract<PlaceRecord, { p
 /**
  * Gives up the place of a setup that failed or was cut short: the worktree prepare created is removed, and a place
  * the session host made gets the branch agent files back. `unrestored` is the sentence a failure adds when they are
- * not back.
+ * not back, or when the worktree stays.
  */
 async function giveUpSetup(config: LocalConfig, record: Extract<PlaceRecord, { phase: 'staged' }> | SettingUp): Promise<{ abandoned: PlaceRecord; unrestored?: string }> {
   const { place, dir } = record;
   const { overlay } = placeFiles(config, record.run, record.attempt);
   let unrestored: string | undefined;
+  let kept: string | undefined;
 
   // A copy's role goes before the copy does, as its entry is keyed by the copy's real path. A clone's goes with its root.
   if (isWorktreeCopy(place)) await releaseWorktreeRole(dir);
@@ -755,10 +757,18 @@ async function giveUpSetup(config: LocalConfig, record: Extract<PlaceRecord, { p
   else if (record.adopted && place.role !== 'checkout') {
     unrestored = await restoreOverlay({ dir, configCommit: place.workspace.configCommit, saved: overlay, run: await copyGit(config, record) });
     await clearWorktreeHooks(dir);
-  } else await removeWorktree(record.root, dir);
+  } else {
+    const removed = await removeWorktree(record.root, dir);
+
+    // A prepare that started over would open this worktree again, setup half run.
+    if (!removed.ok) kept = `Worktree ${dir} was not removed (${removed.reason}), so the step cannot start over in a fresh one. Fix that, then retry the step.`;
+  }
+
   await fs.rm(overlay, { recursive: true, force: true });
   const abandoned: PlaceRecord = { ...baseOf(record), phase: 'abandoned', at: new Date().toISOString() };
   await writePlaceRecord(config, abandoned);
+
+  if (kept !== undefined) return { abandoned, unrestored: kept };
 
   return unrestored ? { abandoned, unrestored: unrestoredConfig(unrestored, dir) } : { abandoned };
 }
@@ -1304,7 +1314,10 @@ export async function releasePlace(input: { config: LocalConfig; lock: RunLock; 
   await releaseWorktreeRole(recorded.dir);
 
   if (recorded.adopted) return 'left';
-  await removeWorktree(recorded.root, recorded.dir);
+  const removed = await removeWorktree(recorded.root, recorded.dir);
 
-  return 'removed';
+  if (removed.ok) return 'removed';
+  log.warn(`Worktree ${recorded.dir} of run ${input.lock.run} stays: ${removed.reason}. teamai doctor --fix tries again.`);
+
+  return 'left';
 }
