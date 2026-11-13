@@ -579,7 +579,7 @@ const PROMPT_SUBJECTS: PromptSubject[] = [
   {
     name: 'tools on the fake claude',
     start: (state) => toolsStepRuntime<DriverCan>({
-      can: { exec: false, tools: ['claude'] },
+      can: { exec: false, tools: ['claude'], tokens: true },
       launch: toolsLaunchDeps(),
       launcher: stepLauncher(toolsLaunchDeps(), { resolveTool: () => path.join(state, 'bin', 'claude') }),
     }),
@@ -684,10 +684,7 @@ describe.each(PROMPT_SUBJECTS)('StepRuntime prompt scenarios: $name', (subject) 
   let worktree: string;
   let state: string;
   const started: StepRuntime<DriverCan>[] = [];
-  /**
-   * Whether the runtime last started offers tokens: then every prompt it finishes carries the tokens its agent billed.
-   * One that does not may still report them, and then reports those.
-   */
+  /** Whether the runtime last started offers tokens: then every prompt it finishes carries the tokens its agent billed. */
   let offersTokens = false;
 
   const start = async (agent: JsonValue = {}): Promise<StepRuntime<DriverCan>> => {
@@ -774,7 +771,9 @@ describe.each(PROMPT_SUBJECTS)('StepRuntime prompt scenarios: $name', (subject) 
     const end = await runtime.prompt(request, { onAccepted: () => { accepted = true; } });
 
     expect(accepted).toBe(true);
-    expect(end).toEqual({ kind: 'finished', session: { tool: 'claude', id: expect.any(String), ...(subject.sessionHome && { home: subject.sessionHome(state) }) }, result: { output: { verdict: 'approve' } }, usage: offersTokens ? billed : expect.toBeOneOf([undefined, billed]) });
+    // Each subject plays a runtime that offers tokens, as the real one does.
+    expect(offersTokens).toBe(true);
+    expect(end).toEqual({ kind: 'finished', session: { tool: 'claude', id: expect.any(String), ...(subject.sessionHome && { home: subject.sessionHome(state) }) }, result: { output: { verdict: 'approve' } }, usage: billed });
     expect(JSON.parse(fs.readFileSync(request.lease.result, 'utf8'))).toEqual({ output: { verdict: 'approve' } });
   });
 

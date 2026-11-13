@@ -262,7 +262,9 @@ function init(request) {
   // An agent the toy launches works in the place on the host: it takes no command, so it runs no setup either.
   const conversations = options.agent.conversations === false ? {} : { conversations: true };
   const toolHome = options.prompt_tool_home === true ? { toolHome: true } : {};
-  send({ type: 'init', ok: true, prompt: true, ...conversations, ...toolHome, ...judging, ...unavailable, ...permissions, ...ownLogins, ...wakes, can: { ...DEFAULT_CAN, tools, exec: false, setup: false, tokens: false, end_turn: false, ...(judge.confined && { confined: judge.confined }), ...options.can } });
+  // Its agent reports the tokens `agent.usage` names on every prompt it finishes, and none without it.
+  const tokens = options.agent.usage !== undefined;
+  send({ type: 'init', ok: true, prompt: true, ...conversations, ...toolHome, ...judging, ...unavailable, ...permissions, ...ownLogins, ...wakes, can: { ...DEFAULT_CAN, tools, exec: false, setup: false, tokens, end_turn: false, ...(judge.confined && { confined: judge.confined }), ...options.can } });
 }
 
 /** Notes which credentials a request brought, by name only: a value is never written. */
