@@ -10,9 +10,9 @@ import type { RuntimeMessage } from '@teamai/runtime-protocol';
 import type { ParsedOptions } from './options.js';
 import { unreachable, type Provider } from './provider.js';
 import { bwrap } from './providers/bwrap.js';
-import { containerProvider } from './providers/container.js';
+import { containerProvider, removeWarmImages } from './providers/container.js';
 import { nativeProvider } from './providers/native.js';
-import { sbxProvider } from './providers/sbx.js';
+import { removeWarmTemplates, sbxProvider } from './providers/sbx.js';
 import { seatbelt } from './providers/seatbelt.js';
 import { vercelProvider } from './providers/vercel.js';
 import { serve } from './runtime.js';
@@ -51,7 +51,21 @@ const wrapper = calledAs.startsWith(WRAPPER_PREFIX)
   ? { name: calledAs.slice(WRAPPER_PREFIX.length), args: process.argv.slice(2) }
   : mode === 'tool-exec' && wrapped !== undefined ? { name: wrapped, args: process.argv.slice(4) } : undefined;
 
-if (PLATFORM === 'win32' && (wrapper !== undefined || !isStartedByTeamai(process.env))) {
+if (wrapper === undefined && mode === 'remove-warm') {
+  // `teamai uninstall` runs it in the member's HOME: each warm image and template this journal's providers saved is
+  // removed, a line on stdout each, and one that stays is named on stderr with how to remove it. Windows runs none.
+  const removals = PLATFORM === 'win32' ? [] : await Promise.all([
+    removeWarmImages({ engine: 'docker', state: path.join(journalRoot, 'docker'), env: process.env }),
+    removeWarmImages({ engine: 'podman', state: path.join(journalRoot, 'podman'), env: process.env }),
+    removeWarmTemplates({ state: path.join(journalRoot, 'sbx'), env: process.env }),
+  ]);
+
+  for (const { removed, left } of removals) {
+    for (const line of removed) process.stdout.write(`${line}\n`);
+
+    for (const line of left) process.stderr.write(`${line}\n`);
+  }
+} else if (PLATFORM === 'win32' && (wrapper !== undefined || !isStartedByTeamai(process.env))) {
   // An app starts the wrapper through an npm .cmd shim that keeps no name of its own, with the tool's arguments or
   // none, so anything teamai did not start here is an app's.
   process.stderr.write(`teamai-sandbox${wrapper === undefined ? '' : `-${wrapper.name}`} (sandbox_unavailable): it does not run on Windows. ${NOT_ON_WINDOWS} Run the app and teamai inside WSL2, or give the app the plain tool.\n`);
@@ -84,7 +98,7 @@ function providerOf(options: ParsedOptions): Provider {
 
   switch (options.provider) {
     case 'sbx':
-      return sbxProvider({ agent: options.agent, owner: sandboxJournal.owner, env: process.env, warm: options.warm, ...(options.profile && { profile: options.profile }) });
+      return sbxProvider({ agent: options.agent, owner: sandboxJournal.owner, env: process.env, warm: options.warm, ...(options.profile && { profile: options.profile }), state: path.join(journalRoot, 'sbx') });
     case 'docker':
     case 'podman':
       return containerProvider({

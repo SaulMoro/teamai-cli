@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import type { RuntimeFailure } from '@teamai/runtime-protocol';
 import { mayBeRunning } from '@teamai/shared/process-group';
-import { readRegularFileSync, writeNewFileSync } from '@teamai/shared/regular-file';
+import { readRegularFileSync, writeNewFileSync, writeRegularFileSync } from '@teamai/shared/regular-file';
 import type { ProfileOption, WarmOptions } from './options.js';
 import type { Ran } from './providers/cli.js';
 
@@ -23,6 +23,9 @@ import type { Ran } from './providers/cli.js';
 //  The directory is a bind mount, which a saved image never holds, and is removed once the image is saved, so the image
 //  holds no file of the checkout. Opens of one key in this process wait on one build; another process that finds the tag
 //  saved reuses it.
+//
+//  A provider records each tag it saved in its journal's state, and `teamai uninstall` has the runtime remove those
+//  (main.ts `remove-warm`): never a tag this journal found saved, which another member's runtime may have made.
 //
 
 /** The repository part of every warm image's tag: `teamai-warm:<key>`. */
@@ -194,6 +197,28 @@ export function scratchOf(cache: WarmPlan['cache']) {
   }
 
   return { dir, remove: () => fs.rmSync(dir, { recursive: true, force: true }) };
+}
+
+/** What `remove-warm` did on one engine: a line for each warm image it removed, and for each one that stays. */
+export interface WarmRemoval {
+  removed: string[];
+  left: string[];
+}
+
+/** The tags of the warm images a provider saved, one empty file each in `dir`, its journal's. */
+export function savedWarm(dir: string) {
+  const fileOf = (tag: string): string => path.join(dir, encodeURIComponent(tag));
+
+  return {
+    record(tag: string): void {
+      fs.mkdirSync(dir, { recursive: true });
+      writeRegularFileSync(fileOf(tag), '');
+    },
+    tags: (): string[] => (fs.existsSync(dir) ? fs.readdirSync(dir).map(decodeURIComponent).sort() : []),
+    forget(tag: string): void {
+      fs.rmSync(fileOf(tag), { force: true });
+    },
+  };
 }
 
 /**

@@ -221,6 +221,7 @@ function saveImage(tag, base, home, context) {
   const staged = path.join(state, 'saving', `${encodeURIComponent(tag)}-${process.pid}`);
   fs.mkdirSync(staged, { recursive: true });
   fs.writeFileSync(path.join(staged, 'base'), base);
+  fs.writeFileSync(path.join(staged, 'engine'), engine);
 
   if (fs.existsSync(home)) fs.cpSync(home, path.join(staged, 'home'), { recursive: true, verbatimSymlinks: true });
 
@@ -232,6 +233,27 @@ function saveImage(tag, base, home, context) {
   fs.mkdirSync(path.join(state, 'saved'), { recursive: true });
   fs.rmSync(savedDir(tag), { recursive: true, force: true });
   fs.renameSync(staged, savedDir(tag));
+}
+
+/** The tags this engine saved: docker's, podman's and sbx's stores are their own. */
+function savedTags() {
+  const root = path.join(state, 'saved');
+
+  return (fs.existsSync(root) ? fs.readdirSync(root) : []).filter((name) => fs.readFileSync(path.join(root, name, 'engine'), 'utf8') === engine).map(decodeURIComponent);
+}
+
+/** Removes the image `tag` this engine saved; false when it saved none of that tag. */
+function removeSaved(tag) {
+  if (!savedTags().includes(tag)) return false;
+  fs.rmSync(savedDir(tag), { recursive: true, force: true });
+  fs.rmSync(path.join(state, 'pulled', encodeURIComponent(tag)), { force: true });
+
+  return true;
+}
+
+/** sbx 0.53's id of a template: `sha256:` and 64 hex. */
+function templateId(tag) {
+  return `sha256:${crypto.createHash('sha256').update(tag).digest('hex')}`;
 }
 
 /** The image whose tools `image` holds: itself, or a saved image's base. */
@@ -333,6 +355,14 @@ function docker() {
     }
 
     case 'image': {
+      if (rest[0] === 'rm') {
+        const [, tag] = rest;
+
+        if (!removeSaved(tag)) fail(engine === 'podman' ? `Error: ${tag}: image not known` : `Error response from daemon: No such image: ${tag}`);
+        process.stdout.write(`Untagged: ${tag}\n`);
+        break;
+      }
+
       const [, , , image] = rest;
 
       if (rest[0] !== 'inspect' || !pulled(image)) fail(`Error: No such image: ${image}`);
@@ -600,16 +630,35 @@ function sbx() {
     case 'template': {
       const [action, ...more] = rest;
 
+      // sbx 0.53 lists a template under docker.io/library/<name>, and keeps a kit's base it assembled as
+      // sandbox-kit-assembled:<hash>, which a template saved from a sandbox of it shares its id with.
+      const kits = path.join(state, 'kits');
+
+      const listed = (ref, id) => {
+        const at = ref.lastIndexOf(':');
+
+        return { id, repository: ref.slice(0, at), tag: ref.slice(at + 1), digest: id, flavor: 'shell', created_at: '2026-11-13T10:58:00Z', size: 214908963 };
+      };
+
       if (action === 'ls') {
-        const saved = fs.existsSync(path.join(state, 'saved')) ? fs.readdirSync(path.join(state, 'saved')).map(decodeURIComponent) : [];
-        process.stdout.write(`${JSON.stringify([{ id: '4a94d9144a70', repository: 'docker.io/docker/sandbox-templates', tag: 'claude-code-docker' }, ...saved.map((tag) => ({ id: crypto.createHash('sha256').update(tag).digest('hex').slice(0, 12), repository: tag.split(':')[0], tag: tag.split(':')[1] }))])}\n`);
+        const assembled = fs.existsSync(kits) ? fs.readdirSync(kits).map((name) => listed(decodeURIComponent(name), fs.readFileSync(path.join(kits, name), 'utf8'))) : [];
+        process.stdout.write(`${JSON.stringify([listed('docker.io/docker/sandbox-templates:claude-code-docker', templateId('claude-code-docker')), ...savedTags().map((tag) => listed(`docker.io/library/${tag}`, templateId(tag))), ...assembled])}\n`);
       } else if (action === 'save') {
         const [name, tag] = more;
         const sandbox = readContainer(name);
 
         if (!sandbox) sbxFail(`sandbox '${name}' not found`, 'sbx ls');
         saveImage(tag, sandbox.image, path.join(containers, sandbox.id, 'home'));
+        fs.mkdirSync(kits, { recursive: true });
+        fs.writeFileSync(path.join(kits, encodeURIComponent(`docker.io/library/sandbox-kit-assembled:${crypto.createHash('sha256').update(sandbox.image).digest('hex').slice(0, 16)}`)), templateId(tag));
         process.stdout.write(`Saved sandbox ${name} as ${tag}\n`);
+      } else if (action === 'rm') {
+        const ref = more.find((arg) => arg !== '--force' && arg !== '-f') ?? '';
+        const kit = path.join(kits, encodeURIComponent(ref));
+
+        if (fs.existsSync(kit)) fs.rmSync(kit);
+        else if (!removeSaved(ref.replace(/^docker\.io\/library\//, ''))) fail(`error: cannot remove template "${ref}": delete template: image not found: request failed: 404 Not Found: no image "${ref}"`);
+        process.stdout.write(`Removed template ${ref}\n`);
       } else {
         fail(`fake sbx: unsupported template command ${action}`, 125);
       }

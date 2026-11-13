@@ -11,7 +11,7 @@ import type { Can, ConfinedOffer, RuntimeFailure } from '@teamai/runtime-protoco
 import { ANY_HOST, EVIDENCE_DIR, FILTER_PORT, FILTER_SCRIPT, judgeTool, thisMachineFileRule, thisMachineRule } from '../judge.js';
 import { COMMAND_MS, handleOf, placeKeyOfHandle, type ExecEnd, type ExecSpec, type HostRoute, type PlaceKey, type Provider, type WarmedImage } from '../provider.js';
 import { offerSignedIn } from '../sign-in.js';
-import { isLeftBehind, oneBuildPerKey, planWarm, scratchOf, WARM_BY, warmFailed, type WarmPlan } from '../warm.js';
+import { isLeftBehind, oneBuildPerKey, planWarm, savedWarm, scratchOf, WARM_BY, warmFailed, type WarmPlan, type WarmRemoval } from '../warm.js';
 import { cliOf, commandsOf, definedOnly, heldProbe, signalled, LAUNCHABLE, mountsOf, unmountable, WORKSPACES, type Ran } from './cli.js';
 
 // ─── docker and podman ───────────────────────────────────
@@ -291,6 +291,8 @@ export function containerProvider({ engine, image, owner, host, warm, profile, s
   };
 
   /** Makes the warm image of `plan` from `image` with its `cache` files, in a scratch container or build. */
+  const records = savedWarm(warmRecords(state));
+
   const makeWarm = async (plan: WarmPlan): Promise<{ ok: true } | { ok: false; failure: RuntimeFailure }> => {
     const scratch = scratchOf(plan.cache);
 
@@ -357,7 +359,15 @@ export function containerProvider({ engine, image, owner, host, warm, profile, s
 
     if (!planned.ok) return planned;
     const { plan } = planned;
-    const made = await once(plan.key, async () => (await isPresent(plan.tag) ? { ok: true } : makeWarm(plan)));
+
+    const made = await once(plan.key, async () => {
+      if (await isPresent(plan.tag)) return { ok: true };
+      const built = await makeWarm(plan);
+
+      if (built.ok) records.record(plan.tag);
+
+      return built;
+    });
 
     return made.ok ? { ok: true, image: plan.tag } : made;
   };
@@ -623,4 +633,35 @@ export function containerProvider({ engine, image, owner, host, warm, profile, s
       ? `remove it with \`${engine} rm --force ${handleOf(place)} ${filterOf(place)}\` and \`${engine} network rm ${networkOf(place)}\``
       : `remove it with \`${engine} rm --force ${handleOf(place)}\`, and its network filter, if it has one, with \`${engine} rm --force ${filterOf(place)}\` and \`${engine} network rm ${networkOf(place)}\``),
   };
+}
+
+/** Where the container provider of the journal state `state` records the warm images it saved. */
+function warmRecords(state: string): string {
+  return path.join(state, 'warm');
+}
+
+/**
+ * Removes each warm image `engine`'s provider recorded in `state` as one it saved, as `teamai uninstall` has the runtime
+ * do in the member's HOME; one already gone is forgotten. Nothing recorded, it runs no engine command.
+ */
+export async function removeWarmImages({ engine, state, env }: { engine: ContainerEngine; state: string; env: NodeJS.ProcessEnv }): Promise<WarmRemoval> {
+  const records = savedWarm(warmRecords(state));
+  const outcome: WarmRemoval = { removed: [], left: [] };
+  const tags = records.tags();
+
+  if (tags.length === 0) return outcome;
+  const { run: cli, why } = cliOf({ name: PROVIDER_COMMANDS[engine], env, notInstalled: `${engine} is not installed here, or not on PATH` });
+
+  for (const tag of tags) {
+    const ran = await cli(['image', 'rm', tag], { timeoutMs: COMMAND_MS });
+    // podman says `image not known`.
+    const isGone = ran.kind === 'ran' && (ran.code === 0 || /no such image|image not known/i.test(ran.stderr));
+
+    if (isGone) records.forget(tag);
+
+    if (isGone && ran.code === 0) outcome.removed.push(`Removed ${engine} image ${tag}, a warm image teamai's sandbox made.`);
+    else if (!isGone) outcome.left.push(`Could not remove ${engine} image ${tag}, a warm image teamai's sandbox made (${why(ran)}). Remove it with \`${engine} image rm ${tag}\` once ${engine} runs and no container uses it.`);
+  }
+
+  return outcome;
 }

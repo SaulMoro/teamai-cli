@@ -1,4 +1,5 @@
 import { execFileSync, spawnSync } from 'node:child_process';
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -3177,6 +3178,92 @@ describe('a warm image', () => {
     });
     expect(engine.containers()).toEqual([]);
     expect(engine.savedImages()).toEqual([]);
+  });
+
+  /** What `teamai uninstall` has the runtime remove, run in the member's HOME. */
+  const removeWarm = (): { status: number | null; stdout: string; stderr: string } => {
+    const ran = spawnSync(process.execPath, [executable, 'remove-warm'], { env: { ...engine.env(), HOME: path.join(dir, 'home') }, encoding: 'utf8', timeout: 60_000 });
+
+    return { status: ran.status, stdout: ran.stdout, stderr: ran.stderr };
+  };
+
+  /** Opens an attempt on `options` with a warm image, and closes it, as a finished step does. */
+  async function warmedAndClosed(options: Message): Promise<string> {
+    const connection = start();
+    await init(connection, { ...options, warm: WARM });
+    expect(await openAttempt(connection, checkout(), ATTEMPT)).toMatchObject({ event: 'ready' });
+    connection.send({ type: 'close', handle: HANDLE });
+    expect(await connection.next((message) => message.handle === HANDLE && (message.event === 'closed' || message.event === 'close_failed'))).toEqual({ event: 'closed', handle: HANDLE });
+    await connection.end();
+    const [tag = ''] = engine.savedImages();
+
+    return tag;
+  }
+
+  /** The templates the fake sbx keeps, by reference. */
+  const sbxTemplates = (): string[] => z.array(z.object({ repository: z.string(), tag: z.string() }).loose()).parse(JSON.parse(execFileSync(path.join(engine.bin, 'sbx'), ['template', 'ls', '--json'], { env: engine.env(), encoding: 'utf8' }))).map(({ repository, tag }) => `${repository}:${tag}`);
+
+  /** The sbx kit template a warm template saved from a sandbox of agent claude shares its image with. */
+  const KIT = 'docker.io/library/sandbox-kit-assembled:' + crypto.createHash('sha256').update('claude').digest('hex').slice(0, 16);
+
+  it.each<{ options: Message; removed: (tag: string) => string; left: (tag: string) => string }>([
+    { options: { provider: 'docker', image: IMAGE }, removed: (tag) => `Removed docker image ${tag}, a warm image teamai's sandbox made.\n`, left: () => '' },
+    { options: { provider: 'podman', image: IMAGE }, removed: (tag) => `Removed podman image ${tag}, a warm image teamai's sandbox made.\n`, left: () => '' },
+    {
+      options: { provider: 'sbx', agent: 'claude' },
+      removed: (tag) => `Removed sbx template docker.io/library/${tag}, a warm template teamai's sandbox saved.\n`,
+      left: (tag) => `sbx keeps the image of docker.io/library/${tag} as its template ${KIT} too, so removing it freed no disk. Remove that one with \`sbx template rm --force ${KIT}\` if no sandbox of yours starts from it.\n`,
+    },
+  ])('removes on $options.provider, as teamai is uninstalled, the warm image it made, naming it, and asks the engine nothing once none is left', async ({ options, removed, left }) => {
+    const tag = await warmedAndClosed(options);
+
+    expect(removeWarm()).toEqual({ status: 0, stdout: removed(tag), stderr: left(tag) });
+    expect(engine.savedImages()).toEqual([]);
+
+    if (options.provider === 'sbx') expect(sbxTemplates()).toContain(KIT);
+    const before = engine.calls().length;
+    expect(removeWarm()).toEqual({ status: 0, stdout: '', stderr: '' });
+    expect(engine.calls().slice(before)).toEqual([]);
+  });
+
+  it.each<{ options: Message; left: (tag: string) => string }>([
+    { options: { provider: 'docker', image: IMAGE }, left: (tag) => `Could not remove docker image ${tag}, a warm image teamai's sandbox made (Cannot connect to the Docker daemon. Is the daemon running?). Remove it with \`docker image rm ${tag}\` once docker runs and no container uses it.\n` },
+    { options: { provider: 'sbx', agent: 'claude' }, left: (tag) => `Could not look for sbx template ${tag}, a warm template teamai's sandbox saved (error: cannot connect to sandboxd: connection refused; try: sbx daemon start). Once \`sbx template ls\` answers, remove it with \`sbx template rm --force ${tag}\`.\n` },
+  ])('names on $options.provider the warm image it cannot remove and how to, and removes it once the engine answers', async ({ options, left }) => {
+    const tag = await warmedAndClosed(options);
+    engine.daemon(false);
+
+    expect(removeWarm()).toEqual({ status: 0, stdout: '', stderr: left(tag) });
+    expect(engine.savedImages()).toEqual([tag]);
+    engine.daemon(true);
+    expect(removeWarm()).toMatchObject({ status: 0, stdout: expect.stringContaining(tag) });
+    expect(engine.savedImages()).toEqual([]);
+  });
+
+  it.each(PROVIDERS)('says nothing on $options.provider of a warm image removed by hand, and forgets it', async ({ options }) => {
+    const tag = await warmedAndClosed(options);
+    const [command, removal] = options.provider === 'sbx' ? ['sbx', ['template', 'rm', '--force', `docker.io/library/${tag}`]] : [String(options.provider), ['image', 'rm', tag]];
+    execFileSync(path.join(engine.bin, command), removal, { env: engine.env() });
+
+    expect(removeWarm()).toEqual({ status: 0, stdout: '', stderr: '' });
+    const before = engine.calls().length;
+    removeWarm();
+    expect(engine.calls().slice(before)).toEqual([]);
+  });
+
+  it('takes an sbx template that sbx lists but answers is not found as one removed meanwhile, and says nothing of it', async () => {
+    const tag = await warmedAndClosed({ provider: 'sbx', agent: 'claude' });
+    // sbx 0.53.0's answer to a template removed between its listing and the removal.
+    const listing = execFileSync(path.join(engine.bin, 'sbx'), ['template', 'ls', '--json'], { env: engine.env(), encoding: 'utf8' });
+    const stale = path.join(dir, 'stale-sbx');
+    fs.mkdirSync(stale);
+    fs.writeFileSync(path.join(stale, 'sbx'), `#!/bin/sh\nif [ "$1" = template ] && [ "$2" = ls ]; then printf '%s' '${listing.trim()}'; exit 0; fi\necho 'error: cannot remove template "docker.io/library/${tag}": delete template: image not found: request failed: 404 Not Found: no image "docker.io/library/${tag}"' >&2\nexit 1\n`, { mode: 0o755 });
+    const ran = spawnSync(process.execPath, [executable, 'remove-warm'], { env: { ...engine.env(), PATH: `${stale}${path.delimiter}${engine.env().PATH ?? ''}`, HOME: path.join(dir, 'home') }, encoding: 'utf8', timeout: 60_000 });
+
+    expect({ status: ran.status, stdout: ran.stdout, stderr: ran.stderr }).toEqual({ status: 0, stdout: '', stderr: '' });
+    const before = engine.calls().length;
+    expect(removeWarm()).toEqual({ status: 0, stdout: '', stderr: '' });
+    expect(engine.calls().slice(before)).toEqual([]);
   });
 
   it('builds a warm image on docker from a Containerfile whose context holds only the cache files', async () => {
