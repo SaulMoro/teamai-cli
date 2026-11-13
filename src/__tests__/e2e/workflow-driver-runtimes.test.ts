@@ -1710,9 +1710,12 @@ steps:
       expect(sends()).toHaveLength(1);
     });
 
-    it('closes a place held for a conversation once the run is published to go on elsewhere, after its teamai stopped with it held', async () => {
+    it.each([
+      { closes: true, case: 'closes the place as it offers the run' },
+      { closes: false, case: 'offers nothing while the place cannot be closed, so the run stays here with it' },
+    ])('publishing a run its teamai stopped with a place held for a conversation $case', async ({ closes: isClosable }) => {
       const waiting = path.join(state, 'waiting');
-      writeDefinition('heldpub', [{ use: 'toy', options: { state, agent: { release: path.join(state, 'release-{step}'), output: { ok: true } } } }, { use: 'local' }]);
+      writeDefinition('heldpub', [{ use: 'toy', options: { state, ...(!isClosable && { close_fails: true }), agent: { release: path.join(state, 'release-{step}'), output: { ok: true } } } }, { use: 'local' }]);
       writeFlow('heldpair', `  - id: change
     workspace: new
     workflow:
@@ -1749,9 +1752,18 @@ steps:
 
       const published = await runCLI(['workflow', 'publish', runId], repo, env());
 
-      expect(envelope(published), published.stderr).toMatchObject({ data: { run: runId, offered: true } });
-      expect(closes()).toContain(`"handle":"toy-${runId}-${one}"`);
-      expect(runtimeRecord(runId, one)).toMatchObject({ phase: 'closed' });
+      if (isClosable) {
+        expect(envelope(published), published.stderr).toMatchObject({ data: { run: runId, offered: true } });
+        expect(closes()).toContain(`"handle":"toy-${runId}-${one}"`);
+        expect(runtimeRecord(runId, one)).toMatchObject({ phase: 'closed' });
+        return;
+      }
+
+      expect(envelope(published), published.stderr).toMatchObject({ error: { code: 'place_kept', message: expect.stringContaining(`attempt ${one}`) } });
+      expect(runtimeRecord(runId, one)).toMatchObject({ heldFor: { conversation: { tool: 'claude' } } });
+      expect(runtimeRecord(runId, one)).not.toMatchObject({ phase: 'closed' });
+      // Nothing of the run reached teamai-reports, so no other machine can claim it.
+      expect(spawnSync('git', ['ls-tree', '-r', '--name-only', 'teamai-reports'], { cwd: path.join(sandbox, 'origin.git'), encoding: 'utf8' }).stdout).not.toContain(runId);
     });
 
     it('keeps the display the runtime gives with the prompt\'s acceptance while the prompt runs, for the run\'s details', async () => {
