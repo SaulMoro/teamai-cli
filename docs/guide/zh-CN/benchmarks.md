@@ -1313,7 +1313,7 @@ teamai workflow report <run> --json '{..., "tool":"claude", "durationMs":84000, 
 
 - **`driver.can`**: 每次 `next` 都带：`workspace` 中的 `clone`、`isolation: "sandbox"`、`env: true`、`setup: true`、`tools` 中列出各 arm 的工具、`unattended: true`，以及在租约的限制处结束一轮时带 `end_turn: true`。驱动缺少其中任何一项时，trial 会被扣住，`wait.held[].missing` 会指明缺的是哪项。
 - **`--prepare`**: teamai 在本机创建每个克隆、安装其团队资源并运行 setup，然后返回带 `cwd` 的租约。
-- **每个进程**: 运行时不带 `lease.envScope.withhold` 中的名字，带 `lease.env` 和 `TEAMAI_WORKFLOW_ATTEMPT=<run>/<attempt>`，所以从中调用的 `teamai` 不会改变任何运行。命令步骤把它的输出以 JSON 打印到 stdout；把它们作为 `outputs` 报告，并把它的退出状态作为 `exitCode` 报告。check 步骤运行任务自己的 check，不需要 `teamai`：teamai 根据 `exitCode` 判定它的输出，没有 `exitCode` 的 check 报告以 `invalid_report` 失败。
+- **每个进程**: 运行时不带 `lease.envScope.withhold` 中的名字，带 `lease.env` 和 `TEAMAI_WORKFLOW_ATTEMPT=<run>/<attempt>`，所以从中调用的 `teamai` 不会改变任何运行。命令步骤在 stdout 上打印 JSON 时，把它作为 `outputs` 报告；始终把它的退出状态作为 `exitCode` 报告。check 步骤运行任务自己的 check，不需要 `teamai`：teamai 根据 `exitCode` 判定它的输出，没有 `exitCode` 的 check 报告以 `invalid_report` 失败。
 - **`report`**: 对 prompt：`tool`、只围绕工具启动测得的 `durationMs`，以及仅在工具给出时才带的 `cost`。
 - **限制**: 让工具遵守 `lease.limits`。某个限制停止了工具时，报告 `outcome: "success"` 并带 `limit`：`timeout`、`budget` 或 `max_turns`；无法让工具遵守的 `budget` 或 `max_turns` 列在 `unenforced` 中。
 - **超时**: `benchmark run` 把套件的 `timeout` 作为 `--timeout` 传入；直接执行 `workflow start teamai-benchmark` 时也必须传入它，否则 `plan` 会失败。
