@@ -263,7 +263,8 @@ export class RunRemovedError extends Error {
 
 /**
  * The runs of `runs`, a data home's `workflows/runs`, that a live process of this machine drives: those whose
- * `driver.lock` it holds, with its pid when the lock names one. None when the folder is not there.
+ * `driver.lock` it holds, or the `runner.lock` of one of their attempts, which a skill driver's runner holds for its
+ * whole life, with its pid when the lock names one. None when the folder is not there.
  */
 export async function runsDrivenIn(runs: string): Promise<Array<{ run: RunId; pid: number | undefined }>> {
   let names: string[];
@@ -281,11 +282,23 @@ export async function runsDrivenIn(runs: string): Promise<Array<{ run: RunId; pi
     const run = RunIdSchema.safeParse(name);
 
     if (!run.success) continue;
-    const lock = path.join(runs, run.data, 'driver.lock');
+    const attempts = await fs.readdir(attemptsDirIn(runs, run.data)).catch((error: unknown) => {
+      if (errnoCode(error) === 'ENOENT') return [];
+      throw error;
+    });
+    const runners = attempts.sort().flatMap((name) => {
+      const attempt = AttemptIdSchema.safeParse(name);
 
-    if (await lockState(lock) !== 'live') continue;
-    const owner = LockOwnerSchema.safeParse(parsedJson(await readRegularFile(lock, 'utf8').catch(() => null)));
-    driven.push({ run: run.data, pid: owner.success ? owner.data.pid : undefined });
+      return attempt.success ? [runnerLockIn(runs, run.data, attempt.data)] : [];
+    });
+    const locks = [path.join(runs, run.data, 'driver.lock'), ...runners];
+
+    for (const lock of locks) {
+      if (await lockState(lock) !== 'live') continue;
+      const owner = LockOwnerSchema.safeParse(parsedJson(await readRegularFile(lock, 'utf8').catch(() => null)));
+      driven.push({ run: run.data, pid: owner.success ? owner.data.pid : undefined });
+      break;
+    }
   }
 
   return driven;
@@ -359,7 +372,11 @@ export async function withRunLock<T>(
 }
 
 function runnerLockPath(config: LocalConfig, run: RunId, attempt: AttemptId): string {
-  return path.join(attemptDir(config, run, attempt), 'runner.lock');
+  return runnerLockIn(runsDir(config), run, attempt);
+}
+
+function runnerLockIn(runs: string, run: RunId, attempt: AttemptId): string {
+  return path.join(attemptsDirIn(runs, run), attempt, 'runner.lock');
 }
 
 /**
