@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { settleGitLocks } from '../workflow/steps/git-locks.js';
+import { keptLocksNotice, settleGitLocks } from '../workflow/steps/git-locks.js';
 import { worktreePath } from '../workflow/worktree.js';
 
 const dirs: string[] = [];
@@ -59,9 +59,25 @@ describe('settleGitLocks', () => {
     fs.writeFileSync(path.join(elsewhere, 'index.lock'), '');
     fs.writeFileSync(path.join(worktree, '.git'), `gitdir: ${elsewhere}\n`);
     fs.writeFileSync(path.join(checkout, '.git', 'index.lock'), '');
+    fs.writeFileSync(path.join(checkout, '.git', 'packed-refs.lock'), '');
 
-    expect(await settleGitLocks({ cwd: worktree, place: 'worktree' })).toEqual([path.join(checkout, '.git', 'index.lock')]);
+    expect(await settleGitLocks({ cwd: worktree, place: 'worktree' })).toEqual([path.join(checkout, '.git', 'packed-refs.lock')]);
     expect([fs.existsSync(path.join(elsewhere, 'index.lock')), fs.existsSync(path.join(checkout, '.git', 'index.lock'))]).toEqual([true, true]);
+  });
+
+  it('removes the own locks of a worktree made from a member checkout that is itself a linked worktree, and names the repository\'s', async () => {
+    const { root, checkout } = repo();
+    const linked = path.join(root, 'linked');
+    execFileSync('git', ['worktree', 'add', '-q', '-b', 'mine', linked], { cwd: checkout });
+    const worktree = worktreePath(linked, 'teamai/run/step');
+    execFileSync('git', ['worktree', 'add', '-q', '-b', 'teamai/run/step', worktree], { cwd: linked });
+    const own = path.join(execFileSync('git', ['rev-parse', '--absolute-git-dir'], { cwd: worktree, encoding: 'utf8' }).trim(), 'index.lock');
+    const ref = path.join(checkout, '.git', 'refs', 'heads', 'teamai', 'run', 'step.lock');
+    fs.writeFileSync(own, '');
+    fs.writeFileSync(ref, '');
+
+    expect(await settleGitLocks({ cwd: worktree, place: 'worktree' })).toEqual([ref]);
+    expect(fs.existsSync(own)).toBe(false);
   });
 
   it('names the locks of a member\'s linked worktree and of its repository, and removes none', async () => {
@@ -75,5 +91,34 @@ describe('settleGitLocks', () => {
 
     expect((await settleGitLocks({ cwd: linked, place: 'member' })).sort()).toEqual([own, ref].sort());
     expect([fs.existsSync(own), fs.existsSync(ref)]).toEqual([true, true]);
+  });
+
+  it('names the locks of a member\'s checkout a step started from a folder inside of', async () => {
+    const { checkout } = repo();
+    const inside = path.join(checkout, 'packages', 'app');
+    fs.mkdirSync(inside, { recursive: true });
+    const lock = path.join(checkout, '.git', 'index.lock');
+    fs.writeFileSync(lock, '');
+
+    expect(await settleGitLocks({ cwd: inside, place: 'member' })).toEqual([lock]);
+  });
+});
+
+describe('keptLocksNotice', () => {
+  it.each([
+    { platform: 'darwin', command: "rm '/repo/.git/index.lock' '/repo/.git/it'\\''s.lock'" },
+    { platform: 'win32', command: "Remove-Item -LiteralPath '/repo/.git/index.lock','/repo/.git/it''s.lock'" },
+  ])('gives the command that removes the locks it kept on $platform', ({ platform, command }) => {
+    const original = process.platform;
+    Object.defineProperty(process, 'platform', { value: platform, configurable: true });
+    let notice: string;
+
+    try {
+      notice = keptLocksNotice(['/repo/.git/index.lock', "/repo/.git/it's.lock"], 'claude');
+    } finally {
+      Object.defineProperty(process, 'platform', { value: original, configurable: true });
+    }
+
+    expect(notice.endsWith(`remove it: ${command}`)).toBe(true);
   });
 });

@@ -27,11 +27,16 @@ export async function settleGitLocks({ cwd, place }: { cwd: string; place: GitLo
       const checkout = worktreeCheckout(cwd);
 
       if (checkout === undefined) return membersLocks(cwd);
-      const own = await worktreeGitDir(cwd, checkout);
+      const common = await commonGitDir(checkout);
+
+      if (common === undefined) return [];
+      const own = await worktreeGitDir(cwd, common);
 
       if (own !== undefined) await removeLocks(await gitLocksIn(own));
 
-      return gitLocksIn(path.join(checkout, '.git'));
+      // A step in a linked worktree writes its own index and HEAD in its own git directory: the repository's are the
+      // member's, which their git may hold now.
+      return (await gitLocksIn(common)).filter((lock) => path.dirname(lock) !== common || !isPerWorktreeLock(path.basename(lock)));
     }
 
     case 'member':
@@ -46,25 +51,63 @@ export async function settleGitLocks({ cwd, place }: { cwd: string; place: GitLo
 
 /** What a member runs to remove `locks`, which teamai kept in their checkout. */
 export function keptLocksNotice(locks: string[], tool: string): string {
-  const files = locks.map((lock) => `'${lock.replaceAll("'", "'\\''")}'`).join(' ');
+  const command = process.platform === 'win32'
+    ? `Remove-Item -LiteralPath ${locks.map((lock) => `'${lock.replaceAll("'", "''")}'`).join(',')}`
+    : `rm ${locks.map((lock) => `'${lock.replaceAll("'", "'\\''")}'`).join(' ')}`;
 
-  return `Git left ${locks.join(', ')} in your checkout when teamai stopped ${tool}, and teamai deletes nothing there. Once no git runs in that checkout, remove it: rm ${files}`;
+  return `Git left ${locks.join(', ')} in your checkout when teamai stopped ${tool}, and teamai deletes nothing there. Once no git runs in that checkout, remove it: ${command}`;
 }
 
-/** The locks of the member's checkout at `cwd`: its own git directory's and, for a linked worktree, its repository's. */
+/**
+ * The locks of the member's checkout holding `cwd`, a folder inside it a step may start from: its own git directory's
+ * and, for a linked worktree, its repository's.
+ */
 async function membersLocks(cwd: string): Promise<string[]> {
-  const dotGit = path.join(cwd, '.git');
+  const checkout = await checkoutHolding(cwd);
+
+  if (checkout === undefined) return [];
+  const [own, common] = await Promise.all([ownGitDir(checkout), commonGitDir(checkout)]);
+
+  if (own === undefined || common === undefined) return [];
+
+  return own === common ? gitLocksIn(own) : [...await gitLocksIn(own), ...await gitLocksIn(common)];
+}
+
+/** The nearest folder from `cwd` up that has a `.git`, or undefined when none has. */
+async function checkoutHolding(cwd: string): Promise<string | undefined> {
+  for (let dir = path.resolve(cwd); ; dir = path.dirname(dir)) {
+    if (await fs.lstat(path.join(dir, '.git')).catch(() => undefined)) return dir;
+
+    if (path.dirname(dir) === dir) return undefined;
+  }
+}
+
+/** The git directory of the checkout at `checkout`: its `.git` folder, or the one its `.git` file names. */
+async function ownGitDir(checkout: string): Promise<string | undefined> {
+  const dotGit = path.join(checkout, '.git');
   const entry = await fs.lstat(dotGit).catch(() => undefined);
 
-  if (entry?.isDirectory()) return gitLocksIn(dotGit);
+  if (entry?.isDirectory()) return dotGit;
 
-  if (!entry?.isFile()) return [];
-  const own = await linkedGitDir(cwd);
+  return entry?.isFile() ? linkedGitDir(checkout) : undefined;
+}
 
-  if (own === undefined) return [];
+/**
+ * The git directory the checkout at `checkout` shares its refs in: its own, or for a linked worktree the one its
+ * `commondir` names. A submodule's git directory has none, and is its own.
+ */
+async function commonGitDir(checkout: string): Promise<string | undefined> {
+  const own = await ownGitDir(checkout);
+
+  if (own === undefined) return undefined;
   const common = (await readRegularFile(path.join(own, 'commondir'), 'utf8').catch(() => '')).trim();
 
-  return [...await gitLocksIn(own), ...common === '' ? [] : await gitLocksIn(path.resolve(own, common))];
+  return common === '' ? own : path.resolve(own, common);
+}
+
+/** A lock git takes in each worktree's own git directory: the index's, and a pseudo-ref's such as `HEAD.lock`. */
+function isPerWorktreeLock(name: string): boolean {
+  return name === 'index.lock' || /^[A-Z_]+\.lock$/u.test(name);
 }
 
 /** The git directory a linked worktree's `.git` file at `cwd` names, or undefined when it names none. */
@@ -76,15 +119,16 @@ async function linkedGitDir(cwd: string): Promise<string | undefined> {
 
 /**
  * The git directory of teamai's worktree at `cwd`, or undefined when its `.git` names one that is not under the
- * checkout's `.git/worktrees`: the agent shaped the worktree, and a link out of it would lose a lock elsewhere.
+ * `worktrees` of its repository's git directory `common`: the agent shaped the worktree, and a link out of it would
+ * lose a lock elsewhere.
  */
-async function worktreeGitDir(cwd: string, checkout: string): Promise<string | undefined> {
+async function worktreeGitDir(cwd: string, common: string): Promise<string | undefined> {
   const parts = path.resolve(cwd).split(path.sep);
   const root = parts.slice(0, parts.lastIndexOf('workflow-worktrees') + 2).join(path.sep);
   const named = await linkedGitDir(root);
 
   if (named === undefined) return undefined;
-  const [real, worktrees] = await Promise.all([fs.realpath(named).catch(() => undefined), fs.realpath(path.join(checkout, '.git', 'worktrees')).catch(() => undefined)]);
+  const [real, worktrees] = await Promise.all([fs.realpath(named).catch(() => undefined), fs.realpath(path.join(common, 'worktrees')).catch(() => undefined)]);
 
   return real !== undefined && worktrees !== undefined && path.dirname(real) === worktrees ? real : undefined;
 }
