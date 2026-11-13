@@ -434,6 +434,26 @@ describe('the home of an instance', () => {
   });
 });
 
+describe('the agents of an instance', () => {
+  it('gets teamai\'s own agents in the format of the tool it extends, and recall off takes them back', async () => {
+    const repo = teamRepo({ 'tools/acme-codex.yaml': 'schemaVersion: v1alpha1\nname: acme-codex\nextends: codex\nhome: { dir: .acme-codex }\n' });
+    const { config } = await load(repo);
+    fs.mkdirSync(path.join(home, '.acme-codex'), { recursive: true });
+    const { deployBuiltinAgents } = await import('../builtin-agents.js');
+    const { removeRecallAgentAndRule } = await import('../recall-toggle.js');
+    const local: LocalConfig = { repo: { localPath: repo, remote: 'https://example.com/acme/team.git' }, username: 'member', additionalRoles: [], scope: 'user', enabledAgents: ['acme-codex'] };
+
+    if (!config) throw new Error('the team config did not load');
+    await deployBuiltinAgents(config, local);
+
+    expect(fs.readdirSync(path.join(home, '.acme-codex', 'agents'))).toEqual(['teamai-recall.toml']);
+
+    await removeRecallAgentAndRule(config, local);
+
+    expect(fs.readdirSync(path.join(home, '.acme-codex', 'agents'))).toEqual([]);
+  });
+});
+
 describe('personal tool instances', () => {
   it('lets a member\'s own instance replace the team\'s of the same name', async () => {
     personal('acme-claude', ACME_CLAUDE.replace('command: acme-claude', 'command: my-acme-build'));
