@@ -10,7 +10,7 @@ import { isSessionPlatform } from './session-flow/adapters/platform-facts.js';
 import { homeEnvOf } from './tool-home.js';
 import { homeVariables, isToolId, TOOL_ORDER, useToolInstances } from './tool-registry.js';
 import type { ToolId } from './tools.js';
-import { DEFAULT_TOOL_PATHS, getTeamaiHomeDir, rerootToolPaths, toolInstallRoot, toolPathRoots, ToolPathsSchema, type Scope, type TeamaiConfig } from './types.js';
+import { DEFAULT_TOOL_PATHS, getTeamaiHomeDir, getTrustDir, rerootToolPaths, toolInstallRoot, toolPathRoots, ToolPathsSchema, type Scope, type TeamaiConfig } from './types.js';
 import { writeJsonAtomic } from './utils/fs.js';
 import { getUserHome } from '@teamai/shared/home';
 import { log } from '@teamai/shared/log';
@@ -386,7 +386,7 @@ const TrustFileSchema = z.object({
 });
 
 function trustFile(): string {
-  return path.join(getTeamaiHomeDir(), 'trust', 'tools.json');
+  return path.join(getTrustDir(), 'tools.json');
 }
 
 async function readTrust(): Promise<z.infer<typeof TrustFileSchema>> {

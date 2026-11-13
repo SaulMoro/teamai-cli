@@ -1958,6 +1958,14 @@ export function getTeamaiHomeDir(): string {
   return path.join(getUserHome(), '.teamai');
 }
 
+/**
+ * `~/.teamai/trust`: the member's answers to running a team file's command (tool instances, step runtimes), which every
+ * install on the machine reads, so only the last uninstall removes it. Evaluated at call time.
+ */
+export function getTrustDir(): string {
+  return path.join(getTeamaiHomeDir(), 'trust');
+}
+
 /** User-scope global config path, `~/.teamai/config.yaml`. Evaluated at call time. */
 export function getUserConfigPath(): string {
   return path.join(getTeamaiHomeDir(), 'config.yaml');

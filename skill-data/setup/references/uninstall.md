@@ -123,6 +123,13 @@ and give it your team repo URL."*
   `uninstall --agent <tool>` keeps them. The built-ins in a tool's home
   settings stay on the same terms, but go with `--agent` when nothing else
   runs the tool.
+- In a project, uninstall removes the worktrees failed or cancelled workflow
+  runs kept when nothing in one is left out of its branch, and keeps the
+  branches (`teamai/<run>/…`): they are the user's. A worktree with uncommitted
+  changes, a file git ignores (an `.env`), or a HEAD on no branch stays, named with the
+  `git -C <checkout> worktree remove --force <dir>` command that removes it;
+  tell the user to save what they need first. teamai's worktree setup (its
+  exclude block and `extensions.worktreeConfig`) stays while one is left.
 - In self mode, uninstall keeps a `teamai-learnings` or `teamai-reports` branch
   that holds commits origin does not have, such as a publish that could not
   push, and names it: have the user push it or delete it with `git branch -D`.

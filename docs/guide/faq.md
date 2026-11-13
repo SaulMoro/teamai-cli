@@ -8,6 +8,8 @@
 
 `teamai uninstall` removes the agent resources TeamAI installed. Files you created stay, unless taking teamai's part out of one leaves it empty. A user-scope uninstall removes `~/.teamai` but your own `drivers/`, `runtimes/`, `sandboxes/` and `tools/` in it, and its preview and output name what it keeps. It also keeps data for projects still registered on this machine. Uninstall each project first. Then run `teamai uninstall` outside any project to remove the remaining shared data.
 
+In a project, uninstall also removes the worktrees that failed or cancelled workflow runs kept, when nothing in one is left out of its branch: no uncommitted change, and no file git ignores. The branches stay, with the runs' commits. Once no run worktree is left, it removes what teamai set up for them: its block in `.git/info/exclude`, the `extensions.worktreeConfig` it turned on, and an empty `.teamai/`. Any other worktree stays, such as one with uncommitted changes, an ignored `.env`, or a HEAD on no branch. The preview and the output name it with the `git worktree remove --force` command that removes it, and that setup stays with it.
+
 An uninstall that removes the shared data refuses while a workflow run still holds a place on a step runtime, such as a sandbox, a T3 thread or a Paseo agent: removing teamai's records would leave nothing to close it. Let the run end, or stop it with `teamai workflow cancel <run>`, then uninstall again. It also refuses while teamai drives a workflow run on this machine:
 
 ```text

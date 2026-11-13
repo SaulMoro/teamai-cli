@@ -639,35 +639,37 @@ async function hideTeamaiWorktrees(main: string): Promise<void> {
   await appendRegularFile(exclude, `${current.endsWith('\n') || current === '' ? '' : '\n'}${EXCLUDE_BLOCK}`);
 }
 
-async function removeEmptyDir(dir: string, dryRun: boolean): Promise<boolean> {
+/** Removes `dir` when empty; a dry run counts it empty when it holds only the worktrees in `gone`, which go first. */
+async function removeEmptyDir(dir: string, dryRun: boolean, gone: readonly string[] = []): Promise<boolean> {
   const entries = await fs.readdir(dir).catch(() => null);
 
-  if (entries === null || entries.length > 0) return false;
+  if (entries === null || entries.some((name) => !(dryRun && gone.includes(path.join(dir, name))))) return false;
 
   if (!dryRun) await fs.rmdir(dir);
 
   return true;
 }
 
+/** Marks `extensions.worktreeConfig` as one teamai turned on, holding the member's value before (`unset` when none). */
+const WORKTREE_CONFIG_OWNED = 'teamai.worktreeconfig';
+
 /**
  * Undoes in `checkout` what its workflow worktrees set up: the directories that held them, the exclude block that hid
  * them, and `extensions.worktreeConfig` when teamai turned it on and no worktree has a configuration of its own. Nothing while a TeamAI worktree
  * of the repository is left, since it still needs them. Returns what it removed, or with `dryRun` what it would.
  */
-/** Marks `extensions.worktreeConfig` as one teamai turned on, holding the member's value before (`unset` when none). */
-const WORKTREE_CONFIG_OWNED = 'teamai.worktreeconfig';
-
-export async function removeWorktreeSetup(checkout: string, { dryRun = false } = {}): Promise<string[]> {
+export async function removeWorktreeSetup(checkout: string, { dryRun = false, gone = [] }: { dryRun?: boolean; gone?: readonly string[] } = {}): Promise<string[]> {
   const listed = await git(checkout, ['worktree', 'list', '--porcelain']);
 
   if (listed.code !== 0) return [];
-  const worktrees = listed.stdout.split('\n').flatMap((line) => (line.startsWith('worktree ') ? [line.slice('worktree '.length)] : []));
+  // `gone`: the worktrees a dry run counts as removed already, as the removal before it will have removed them.
+  const worktrees = listed.stdout.split('\n').flatMap((line) => (line.startsWith('worktree ') ? [line.slice('worktree '.length)] : [])).filter((dir) => !gone.includes(dir));
 
   if (worktrees.some((dir) => worktreeCheckout(dir) !== undefined)) return [];
   const removed: string[] = [];
 
   for (const dir of [path.join(checkout, '.teamai', 'workflow-worktrees'), hooksPath(checkout)]) {
-    if (await removeEmptyDir(dir, dryRun)) removed.push(dir);
+    if (await removeEmptyDir(dir, dryRun, gone)) removed.push(dir);
   }
 
   const excludePath = await gitPath(checkout, 'info/exclude');
@@ -711,6 +713,137 @@ export async function removeWorktreeSetup(checkout: string, { dryRun = false } =
   if (removed.length > 0) await removeEmptyDir(path.join(checkout, '.teamai'), dryRun);
 
   return removed;
+}
+
+/**
+ * A worktree teamai made for a workflow run (see `worktreePath`), as an uninstall finds it: `removable` when nothing in it
+ * is lost with it (its commits are on `branch`, which stays, or git's record outlived the directory), else `kept` with why.
+ */
+export type RunWorktree =
+  | { kind: 'removable'; dir: string; branch?: string }
+  | { kind: 'kept'; dir: string; why: string; isLocked: boolean };
+
+/** Every worktree of the repository of `checkout`, each with the lines `git worktree list --porcelain` gave it. */
+async function listedWorktrees(checkout: string): Promise<{ dir: string; lines: string[] }[] | { error: string }> {
+  const listed = await git(checkout, ['worktree', 'list', '--porcelain']);
+
+  if (listed.code !== 0) return { error: listed.stderr.trim() || 'git worktree list failed' };
+
+  return listed.stdout.split('\n\n').flatMap((entry) => {
+    const lines = entry.split('\n');
+    const dir = lines.find((line) => line.startsWith('worktree '))?.slice('worktree '.length);
+
+    return dir === undefined ? [] : [{ dir, lines }];
+  });
+}
+
+/** Whether `other` is a worktree inside `dir`, which removing `dir` deletes with it. */
+function holds(dir: string, other: string): boolean {
+  return other.startsWith(dir + path.sep);
+}
+
+/**
+ * Each worktree teamai made for a workflow run in the repositories of `checkouts`, each with the first of them in its
+ * repository and innermost first, the order they can be removed in; and each checkout whose worktrees git could not list.
+ * A repository is read once, however many of its checkouts are named. One holding a worktree that stays stays too: a
+ * run started in a run's worktree puts its own inside, where teamai's exclude block hides it from the outer one's status.
+ */
+export async function runWorktreesOf(checkouts: readonly string[]): Promise<{ worktrees: Array<{ checkout: string; worktree: RunWorktree }>; unread: Array<{ checkout: string; error: string }> }> {
+  const worktrees: Array<{ checkout: string; worktree: RunWorktree }> = [];
+  const unread: Array<{ checkout: string; error: string }> = [];
+  const read = new Set<string>();
+
+  for (const checkout of checkouts) {
+    const common = await git(checkout, ['rev-parse', '--git-common-dir']);
+    const repository = common.code === 0 ? path.resolve(checkout, common.stdout.trim()) : checkout;
+
+    if (read.has(repository)) continue;
+    read.add(repository);
+    const listed = await listedWorktrees(checkout);
+
+    if ('error' in listed) {
+      unread.push({ checkout, error: listed.error });
+      continue;
+    }
+
+    const sorted: RunWorktree[] = [];
+
+    for (const { dir, lines } of [...listed].sort((a, b) => b.dir.length - a.dir.length)) {
+      if (worktreeCheckout(dir) === undefined) continue;
+      const found = await runWorktreeAt(dir, lines);
+      // Innermost first, so each worktree inside this one is already sorted; one that is no run worktree stays.
+      const staying = listed.find((other) => holds(dir, other.dir) && !sorted.some((done) => done.dir === other.dir && done.kind === 'removable'));
+
+      if (found.kind === 'removable' && staying !== undefined) {
+        const why = sorted.find((done) => done.dir === staying.dir && done.kind === 'kept');
+        sorted.push({ kind: 'kept', dir, why: `it holds the worktree ${staying.dir}, which stays${why?.kind === 'kept' ? ` (${why.why})` : ''}`, isLocked: false });
+      } else sorted.push(found);
+    }
+
+    worktrees.push(...sorted.map((worktree) => ({ checkout, worktree })));
+  }
+
+  return { worktrees, unread };
+}
+
+/** Whether removing the run worktree `dir`, which `git worktree list --porcelain` described with `lines`, loses anything. */
+async function runWorktreeAt(dir: string, lines: readonly string[]): Promise<RunWorktree> {
+  const branch = lines.find((line) => line.startsWith('branch refs/heads/'))?.slice('branch refs/heads/'.length);
+
+  if (!await pathExists(dir)) return { kind: 'removable', dir, ...branch !== undefined && { branch } };
+  const locked = lines.find((line) => line === 'locked' || line.startsWith('locked '));
+
+  if (locked !== undefined) return { kind: 'kept', dir, why: `git keeps it locked${locked === 'locked' ? '' : ` (${locked.slice('locked '.length)})`}`, isLocked: true };
+  const kept = (why: string): RunWorktree => ({ kind: 'kept', dir, why, isLocked: false });
+
+  if (branch === undefined) return kept('its HEAD is detached, so no branch holds its commits');
+  // A step may have planted a program in its worktree's config: read it as `unrestoredCopy` does.
+  const runGit = untrustedGit(hostGitEnv());
+  const status = await copyStatus(dir, runGit);
+
+  if ('error' in status) return kept(`git could not tell what changed in it (${status.error})`);
+
+  if (status.lines.length > 0) return kept(`it has changes no commit holds: ${listedPaths(status.lines)}`);
+  // Files git ignores are in no commit either, such as an .env the member copied in. `traditional` names an ignored
+  // directory once, rather than each file in a node_modules. teamai's own .teamai/ in it is not the member's.
+  const ignored = await runGit(dir, ['status', '--porcelain', '--ignored=traditional', '--untracked-files=normal', '--ignore-submodules=none']);
+
+  if (ignored.code !== 0) return kept(`git could not tell which files it ignores in it (${ignored.stderr.trim() || 'git status failed'})`);
+  const theirs = ignored.stdout.split('\n').filter((line) => line.startsWith('!! ') && !line.startsWith('!! .teamai/'));
+
+  if (theirs.length > 0) return kept(`it holds files git ignores, which no commit holds: ${listedPaths(theirs)}`);
+
+  return { kind: 'removable', dir, branch };
+}
+
+/** The first five of `git status --porcelain` `lines`, for a message. */
+function listedPaths(lines: readonly string[]): string {
+  return `${lines.slice(0, 5).map((line) => line.trim()).join(', ')}${lines.length > 5 ? `, and ${lines.length - 5} more` : ''}`;
+}
+
+/**
+ * Removes the run worktree `worktree` of `checkout`'s repository with git's own records of it, once it is read again as
+ * `runWorktreesOf` reads it: one that gained a change since stays, with why. One whose directory is gone loses only
+ * git's record. Forced, since git's own check would run a status in the worktree, and with it a program a step planted
+ * in the worktree's config; the read before it is the check, through untrusted git.
+ */
+export async function removeRunWorktree(checkout: string, worktree: Extract<RunWorktree, { kind: 'removable' }>): Promise<{ ok: true } | { ok: false; reason: string }> {
+  const listed = await listedWorktrees(checkout);
+
+  if ('error' in listed) return { ok: false, reason: `git could not list the worktrees (${listed.error})` };
+  const entry = listed.find(({ dir }) => dir === worktree.dir);
+  const now = entry === undefined ? undefined : await runWorktreeAt(entry.dir, entry.lines);
+
+  if (now?.kind === 'kept') return { ok: false, reason: now.why };
+  const inside = listed.find(({ dir }) => holds(worktree.dir, dir));
+
+  if (inside !== undefined) return { ok: false, reason: `it holds the worktree ${inside.dir}, which stays` };
+  const removed = now !== undefined && await pathExists(worktree.dir) ? await git(checkout, ['worktree', 'remove', '--force', worktree.dir]) : undefined;
+  const pruned = await git(checkout, ['worktree', 'prune']);
+
+  if (removed !== undefined && removed.code !== 0) return { ok: false, reason: `git did not remove it (${removed.stderr.trim() || 'git worktree remove failed'})` };
+
+  return pruned.code === 0 ? { ok: true } : { ok: false, reason: `git did not forget it (${pruned.stderr.trim() || 'git worktree prune failed'})` };
 }
 
 export function hooksPath(main: string): string {

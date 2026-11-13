@@ -59,6 +59,7 @@ import {
   type ManagedMcpManifest,
   installScopeName,
   getTeamaiHomeDir,
+  getTrustDir,
 } from './types.js';
 import { BUILTIN_RULE_NAMES, TEAMAI_CONTEXT_RULE_NAME } from './builtin-rules.js';
 import { isLegacyCursorRuleFile, keptLegacyCopiesWarning, ruleStemFromFilename, usesMdcRules, type InstructionBlock, type LegacyRuleDir } from './resources/rule-format.js';
@@ -105,6 +106,7 @@ import { log } from '@teamai/shared/log';
 import { askConfirmation } from './utils/prompt.js';
 import { getUserHome, expandHome } from '@teamai/shared/home';
 import { runtimeStateRoot } from '@teamai/runtime-protocol/state-root';
+import type { RunWorktree } from './workflow/worktree.js';
 import { createGit, gitCommonDir, listWorktrees } from './utils/git.js';
 import {
   envLoaderProfiles,
@@ -167,8 +169,8 @@ interface RemovalPlan {
   ruleDirs: string[];
   /** Every tool's agents directories, read as `ruleDirs` are. */
   agentDirs: string[];
-  /** In self mode, the agents directories of the tools this removes, which init makes before anything is in them: each goes once empty. */
-  seededAgentDirs: string[];
+  /** In self mode, the rules and agents directories of the tools this removes, which init makes before anything is in them: each goes once empty. */
+  seededDirs: string[];
   /** The folders the tool instances this removes take teamai's resources in, from their resolved paths, up to the instance's home: each goes once empty. */
   instanceFolders: string[];
   /** The rules globs teamai owns in OpenCode's opencode.json `instructions`, per file (#946). */
@@ -209,6 +211,11 @@ interface RemovalPlan {
   checkouts: string[];
   /** teamai's git hook in the project repository: config sections and hook scripts holding its block. */
   gitHook: { repoDir: string; entries: string[]; checkouts?: string[] } | null;
+  /**
+   * The worktrees workflow runs kept in this project's checkouts, a failed, cancelled or waiting one's, each with a checkout of its
+   * repository: a removable one goes, its branch staying; a kept one is named with the command that removes it.
+   */
+  runWorktrees: Array<{ checkout: string; worktree: RunWorktree }>;
   /** What workflow worktrees set up in each checkout, once none of them is left (`removeWorktreeSetup`). */
   worktreeSetups: Array<{ checkout: string; entries: string[] }>;
   /** The .teamai home directory path. */
@@ -945,6 +952,8 @@ async function keptForProjects(): Promise<KeptForProjects> {
     bridgedTeamHookDir(),
     // What the step runtimes keep for every project's runs, the journal of a place one still has open among it.
     runtimeStateRoot(getUserHome()),
+    // The member's answers to running a team file's command, which every project's runs read.
+    getTrustDir(),
     ...await secretsFor(readers),
     ...await sourceRecordsFor(readers),
   ];
@@ -1601,7 +1610,7 @@ async function buildRemovalPlan(
     keptFiles: [],
     ruleDirs: [...new Set([...rulesDirsByTool.values()].flat())],
     agentDirs: [...new Set([...agentDirsByTool.values()].flat())],
-    seededAgentDirs: isSelfMode(localConfig) ? [...new Set(toolsToMerge.flatMap((tool) => agentDirsByTool.get(tool) ?? []))] : [],
+    seededDirs: isSelfMode(localConfig) ? [...new Set(toolsToMerge.flatMap((tool) => [...rulesDirsByTool.get(tool) ?? [], ...agentDirsByTool.get(tool) ?? []]))] : [],
     instanceFolders: instanceFoldersOf(toolsToMerge, toolPaths, baseDir),
     opencodeOwnedGlobs: [],
     agentFiles: [],
@@ -1620,6 +1629,7 @@ async function buildRemovalPlan(
     localAgentWorkspacesDropped: null,
     checkouts: [],
     gitHook: null,
+    runWorktrees: [],
     worktreeSetups: [],
     teamaiHome,
     teamaiHomeExists: includeShared && await pathExists(teamaiHome),
@@ -1896,10 +1906,25 @@ async function buildRemovalPlan(
       }
 
       if (!agentFilter) {
-        const { removeWorktreeSetup } = await import('./workflow/worktree.js');
+        const { removeWorktreeSetup, runWorktreesOf, worktreeCheckout } = await import('./workflow/worktree.js');
 
-        for (const checkout of plan.checkouts) {
-          const entries = await removeWorktreeSetup(checkout, { dryRun: true });
+        // The member's checkouts: a run worktree goes, and self mode's side-branch worktrees go with the data home.
+        const memberCheckouts = plan.checkouts.filter((dir) => worktreeCheckout(dir) === undefined && !isWithin(dir, plan.teamaiHome));
+        const found = await runWorktreesOf(memberCheckouts);
+        plan.runWorktrees.push(...found.worktrees);
+
+        for (const { checkout, error } of found.unread) {
+          log.warn(`Could not list the workflow run worktrees of ${checkout} (${error}), so uninstall leaves them and what teamai set up for them there.`);
+        }
+
+        const gone = plan.runWorktrees.flatMap(({ worktree }) => (worktree.kind === 'removable' ? [worktree.dir] : []));
+        // The exclude block and the git config are the repository's: each checkout of it names them, so they are listed once.
+        const listed = new Set<string>();
+
+        for (const checkout of memberCheckouts) {
+          const entries = (await removeWorktreeSetup(checkout, { dryRun: true, gone })).filter((entry) => !listed.has(entry));
+
+          for (const entry of entries) listed.add(entry);
 
           if (entries.length > 0) plan.worktreeSetups.push({ checkout, entries });
         }
@@ -1971,6 +1996,7 @@ function isPlanEmpty(plan: RemovalPlan): boolean {
     plan.gitExcludeBlocks.length === 0 &&
     plan.gitHook === null &&
     plan.worktreeSetups.length === 0 &&
+    !plan.runWorktrees.some(({ worktree }) => worktree.kind === 'removable') &&
     !plan.teamaiHomeExists &&
     plan.syntheticManifestCleanup == null
   );
@@ -2170,6 +2196,15 @@ function printSummary(plan: RemovalPlan, agentFilter?: string): void {
     console.log(`   Git hook in ${(plan.gitHook.checkouts ?? [plan.gitHook.repoDir]).join(', ')} (teamai's entries and blocks):`);
 
     for (const entry of plan.gitHook.entries) console.log(`     ${entry}`);
+    console.log('');
+  }
+
+  const removableRunWorktrees = plan.runWorktrees.flatMap(({ worktree }) => (worktree.kind === 'removable' ? [worktree] : []));
+
+  if (removableRunWorktrees.length > 0) {
+    console.log(`   Worktrees teamai made for workflow runs (${removableRunWorktrees.length}), whose commits stay on their branches:`);
+
+    for (const { dir, branch } of removableRunWorktrees) console.log(`     ${dir}${branch === undefined ? '   (already gone: git\'s record of it)' : `   (branch ${branch} stays)`}`);
     console.log('');
   }
 
@@ -3290,6 +3325,8 @@ async function executeRemoval(
     }
   }
 
+  await removeRunWorktrees(plan.runWorktrees);
+
   if (plan.worktreeSetups.length > 0) {
     const { removeWorktreeSetup } = await import('./workflow/worktree.js');
 
@@ -3478,6 +3515,18 @@ async function sweepCreatedLeftovers(plan: RemovalPlan, hooksLeft: ReadonlyArray
     log.warn(`Could not remove ${runtimeState}: ${e instanceof Error ? e.message : String(e)}. Delete it by hand.`);
   }
 
+  // The member's answers to running a team file's command: no install is left to ask them for.
+  const trust = getTrustDir();
+
+  try {
+    if (await pathExists(trust)) {
+      await remove(trust);
+      log.success(`Removed ${trust}/: the team tools and runtimes you accepted`);
+    }
+  } catch (e) {
+    log.warn(`Could not remove ${trust}: ${e instanceof Error ? e.message : String(e)}. Delete it by hand.`);
+  }
+
   const dirs = [
     bin,
     path.join(root, 'dashboard'),
@@ -3524,7 +3573,7 @@ function instanceFoldersOf(tools: readonly string[], toolPaths: ReturnType<typeo
  * folder up to the tool's rules directory; never a directory outside one, so a tool's own root stays.
  */
 function emptiedDirs(plan: RemovalPlan): string[] {
-  const dirs = new Set([...plan.skillDirs.map(({ dir }) => path.dirname(dir)), ...plan.agentFiles.map((file) => path.dirname(file)), ...plan.seededAgentDirs, ...plan.instanceFolders]);
+  const dirs = new Set([...plan.skillDirs.map(({ dir }) => path.dirname(dir)), ...plan.agentFiles.map((file) => path.dirname(file)), ...plan.seededDirs, ...plan.instanceFolders]);
   const ownedRuleFiles = plan.claudeMdFiles.flatMap(({ path: file, owned }) => (owned ? [file] : []));
 
   for (const file of [...plan.ruleFiles, ...ownedRuleFiles]) {
@@ -3540,6 +3589,40 @@ function emptiedDirs(plan: RemovalPlan): string[] {
   }
 
   return [...dirs].sort((a, b) => b.length - a.length);
+}
+
+/**
+ * The line naming the run worktree `dir`, kept for `why`, with the command that removes it from `checkout`'s repository:
+ * git removes a locked one only when forced twice.
+ */
+function keptRunWorktreeLine({ checkout, dir, why, isLocked = false }: { checkout: string; dir: string; why: string; isLocked?: boolean }): string {
+  return `Kept the workflow run worktree ${dir}: ${why}. Save what you need, then remove it with \`git -C ${checkout} worktree remove --force ${isLocked ? '--force ' : ''}${dir}\`. `
+    + `While it is there, teamai's workflow worktree setup in ${checkout} stays with it: its block in the git exclude file and extensions.worktreeConfig.`;
+}
+
+function warnKeptRunWorktrees(runWorktrees: RemovalPlan['runWorktrees']): void {
+  for (const { checkout, worktree } of runWorktrees) {
+    if (worktree.kind === 'kept') log.warn(keptRunWorktreeLine({ checkout, ...worktree }));
+  }
+}
+
+/**
+ * Removes the run worktrees `runWorktrees` names removable, before the setup they needed goes, and names again the
+ * kept ones. Each branch stays: the run's commits are on it, the member's to keep.
+ */
+async function removeRunWorktrees(runWorktrees: RemovalPlan['runWorktrees']): Promise<void> {
+  const { removeRunWorktree } = await import('./workflow/worktree.js');
+
+  for (const { checkout, worktree } of runWorktrees) {
+    if (worktree.kind === 'kept') continue;
+    const removed = await removeRunWorktree(checkout, worktree);
+
+    if (!removed.ok) log.warn(keptRunWorktreeLine({ checkout, dir: worktree.dir, why: removed.reason }));
+    else if (worktree.branch === undefined) log.success(`Removed git's record of the workflow run worktree ${worktree.dir}, which was already gone`);
+    else log.success(`Removed the workflow run worktree ${worktree.dir}. Its branch ${worktree.branch} stays, with the run's commits: delete it with \`git branch -D ${worktree.branch}\` once you no longer need it.`);
+  }
+
+  warnKeptRunWorktrees(runWorktrees);
 }
 
 /** Self mode's side branches that hold a commit origin lacks; one git cannot read counts as holding one. */
@@ -3680,6 +3763,7 @@ export async function uninstall(opts: UninstallOptions): Promise<void> {
     }
 
     for (const line of [...plan.keptSkillDirs, ...plan.keptFiles]) log.warn(line);
+    warnKeptRunWorktrees(plan.runWorktrees);
 
     const exclusionOnly = isPlanEmpty(plan) && agentKey && localConfig.scope === 'project'
       && ((isToolId(agentKey) && descriptorOf(agentKey).projectFromHome) || plan.sharedRetentionOnly);

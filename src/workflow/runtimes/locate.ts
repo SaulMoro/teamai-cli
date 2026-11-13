@@ -13,7 +13,7 @@ import { teamaiBin } from '../../default-drivers.js';
 import type { RunMode } from '../../launch-context.js';
 import { isSymlink, RESOURCE_LAYOUTS } from '../../resources/resolver.js';
 import { acceptTeamCommand } from '../../tool-instances.js';
-import { getDataHome, getTeamaiHomeDir, type LocalConfig } from '../../types.js';
+import { getDataHome, getTrustDir, type LocalConfig } from '../../types.js';
 import { writeJsonAtomic } from '../../utils/fs.js';
 import type { WorkflowFailure } from '../types.js';
 import type { ResolvedDriver } from './definitions.js';
@@ -303,7 +303,7 @@ export async function locateRuntime(driver: ResolvedDriver, use: string): Promis
 const TrustFileSchema = z.object({ accepted: z.array(z.object({ dir: z.string(), revision: z.string(), acceptedAt: z.string() })) });
 
 function trustFile(): string {
-  return path.join(getTeamaiHomeDir(), 'trust', 'runtimes.json');
+  return path.join(getTrustDir(), 'runtimes.json');
 }
 
 async function readTrust(): Promise<z.infer<typeof TrustFileSchema>> {
