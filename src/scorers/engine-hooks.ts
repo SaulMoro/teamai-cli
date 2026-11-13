@@ -33,7 +33,8 @@ export async function prepareCheckPlace(input: Parameters<typeof BenchmarkChecks
 
 /** `outdatedBenchmarkPlan` of the benchmark's checks: why no driver may lease a step of a run whose plan teamai cannot read. */
 export async function outdatedBenchmarkPlan(run: RunState): Promise<ReturnType<typeof BenchmarkChecks.outdatedBenchmarkPlan>> {
-  return (await benchmarkChecks()).outdatedBenchmarkPlan(run);
+  // A plan is the output of a step the run admitted, so a run that admitted none loads no benchmark code.
+  return run.admitted === undefined ? undefined : (await benchmarkChecks()).outdatedBenchmarkPlan(run);
 }
 
 /** `decideCheckReport` of the benchmark's checks: a check step's output, decided from its exit code. */
