@@ -7,7 +7,8 @@ import { afterEach, describe, expect, it, onTestFinished, vi } from 'vitest';
 import { z } from 'zod';
 import type { LocalConfig } from '../types.js';
 import * as cliPaths from '@teamai/shared/cli-path';
-import { trialsOf } from '../benchmark/plan.js';
+import { compileBundle, trialsOf, type BenchmarkPlan } from '../benchmark/plan.js';
+import type { PinnedArmWorkflow } from '../benchmark/arm-workflow.js';
 import { decideCheckReport } from '../benchmark/trial.js';
 import { planBenchmark } from '../benchmark/start.js';
 import { ScoreVerbs } from '../score-verbs.js';
@@ -28,7 +29,7 @@ import { resolveWorkflowEnv } from '../env-resolution.js';
 import { benchmarkTable, formatBenchmarkTable } from '../benchmark/table.js';
 import { comparePair, type PairSide } from '../benchmark/pairing.js';
 import type { DriverIdentity, RunState } from '../workflow/types.js';
-import { benchmarkRunConfig, PLANNED_BENCHMARK, RUN_START, RUN_TEAM, settleBaselines, startBenchmarkRun, trialCheckOutput } from './helpers/benchmark-fixture.js';
+import { benchmarkRunConfig, frozenBenchmark, PLANNED_BENCHMARK, RUN_START, RUN_TEAM, settleBaselines, startBenchmarkRun, trialCheckOutput } from './helpers/benchmark-fixture.js';
 
 const driver: DriverIdentity = { kind: 'external', machine: 'ci', workspace: '/work' };
 const can: DriverCan = { workspace: ['read-only', 'new', 'continue', 'clone'], isolation: 'sandbox', env: true, tools: ['claude'], end_turn: true };
@@ -526,6 +527,43 @@ describe('benchmark plan run', () => {
     if (typeof run !== 'object') throw new Error(`run ${runId} is ${run}`);
     expect(recordOf(run).trials.map(({ result }) => result)).toEqual(['error', 'error']);
     expect(unmeasuredOf(run)).toEqual(['Trial 1/2 t01 a01: sandbox_failed: The attempt socket is too long.']);
+  });
+
+  it('names the step of a workflow arm that failed, not a sibling cancelled beside it', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-benchmark-plan-'));
+    dirs.push(root);
+    const config = benchmarkRunConfig(root);
+    const files = suiteOf({ armsYaml: '{ name: flow }' });
+    const frozen = await frozenBenchmark(config, files);
+    if (!('plan' in frozen)) throw new Error(JSON.stringify(frozen));
+    // fix runs after explore whatever explore did, as the plan chains its own steps, so cancelling explore leaves fix to run and fail.
+    const key = 'two-ways.0123456789ab';
+    const pinned: PinnedArmWorkflow = {
+      name: 'two-ways', sourceHash: 'c'.repeat(64), key,
+      files: { [key]: { schemaVersion: 'v1alpha1', name: key, description: 'Two ways.', inputs: { task: 'string' }, steps: [
+        { id: 'explore', prompt: 'Explore: {{ inputs.task }}', tool: 'claude' },
+        { id: 'fix', needs: ['explore'], if: 'steps.explore.outcome != null', prompt: 'Fix it.', tool: 'claude' },
+      ] } },
+    };
+    const arms = frozen.plan.arms.map((arm) => ({ ...arm, workflow: { name: pinned.name, sourceHash: pinned.sourceHash } }));
+    const plan: BenchmarkPlan = { ...frozen.plan, arms, trials: trialsOf(frozen.committed.suite.tasks, arms, 1) };
+    const { scorers: _generated, ...bundle } = compileBundle(plan, frozen.committed, { armWorkflows: new Map([['flow', pinned]]), unattended: false, correctnessRubric: frozen.correctnessRubric });
+    const started = await startBenchmarkRun(config, files, { outputsOf: () => ({ definition: bundle, plan }) });
+    if ('error' in started) throw new Error(started.error.message);
+    const runId = String(started.data.run);
+    await settleBaselines(config, runId, driver, can);
+    const explore = LeaseSchema.parse(await leaseNext(config, runId, driver, { can, prepare: true })).data.lease;
+    await cancelRun(config, runId, {}, explore.step);
+    const fix = LeaseSchema.parse(await leaseNext(config, runId, driver, { can, prepare: true })).data.lease;
+
+    await reportAttempt(config, runId, { ...fix, outcome: 'failed', driver, failure: { code: 'tool_failed', message: 'The tool exited 1.' } });
+
+    await leaseNext(config, runId, driver, { can, prepare: true });
+    const run = await readRun(config, runId);
+    if (typeof run !== 'object') throw new Error(`run ${runId} is ${run}`);
+    expect([explore.step, fix.step]).toEqual(['trials.r1.t01.flow.workflow.explore', 'trials.r1.t01.flow.workflow.fix']);
+    expect(recordOf(run).trials).toEqual([expect.objectContaining({ result: 'error' })]);
+    expect(unmeasuredOf(run)).toEqual(['Trial 1/1 t01 flow: tool_failed: The tool exited 1.']);
   });
 
   it('leaves a trial whose work succeeded and whose check could not run to the unchecked checks, though no trial produced a result', async () => {
