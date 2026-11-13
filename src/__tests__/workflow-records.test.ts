@@ -219,7 +219,7 @@ describe('#1083 workflow run records', () => {
   });
 
   // A step runtime's own refusal reaches the step as it is, so the record keeps it as it keeps the engine's codes.
-  it.each(['runtime_not_found', 'runtime_not_accepted', 'runtime_protocol', 'runtime_gone', 'runtime_exited', 'credential_missing', 'bad_option', 'exec_failed'])(
+  it.each(['runtime_not_found', 'runtime_not_accepted', 'runtime_protocol', 'runtime_gone', 'runtime_exited', 'credential_missing', 'bad_option', 'exec_failed', 'cancel_failed'])(
     'publishes the step runtime failure %s', (code) => {
       const failed = runState({
         status: 'failed',
