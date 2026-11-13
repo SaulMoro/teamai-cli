@@ -146,7 +146,7 @@ workflows:
 它接受 `auto`、`auto-accept-edits`、`approval-required` 或 `full-access`。其他值在调用 T3 之前就会失败：
 
 ```text
-{"error":{"code":"bad_option","message":"Runtime \"t3\" of driver definition …/drivers/teamai-t3.yaml refused option \"runtime_mode\": runtime_mode \"yolo\" is not one runtime t3 takes. A step thread runs in the member's T3 default mode, or auto, never full access unless runtime_mode says so; runtime_mode sets it to auto, auto-accept-edits, approval-required or full-access. Remove it, or set one of those four. Fix the option and start again."}}
+{"error":{"code":"bad_option","message":"Runtime \"t3\" of driver definition teamai's drivers/teamai-t3.yaml refused option \"runtime_mode\": runtime_mode \"yolo\" is not one runtime t3 takes. A step thread runs in the member's T3 default mode, or auto, never full access unless runtime_mode says so; runtime_mode sets it to auto, auto-accept-edits, approval-required or full-access. Remove it, or set one of those four. Fix the option and start again."}}
 ```
 
 teamai 的登录限定了模式的上限。如果它允许的比本次运行的模式窄，T3 会拒绝创建线程，步骤失败。例如，有人在 T3 的登录页面里以 Supervised 权限批准了 teamai，而这次运行用 Auto：
@@ -173,7 +173,7 @@ runtimes:
 运行开始时会提示一次，并把这些步骤的隔离级别记为 `none`：
 
 ```text
-⚠ Runtime t3 of driver t3-vm runs steps in full access on this machine, as /repo/.teamai/drivers/t3-vm.yaml sets: they run without asking for permission, an unattended run approves the runtime's own full-access sign-in where it asks for one, and teamai cannot prove any isolation. Their isolation is recorded as none.
+⚠ Runtime t3 of driver t3-vm runs steps in full access on this machine, as drivers/t3-vm.yaml in the team repo sets: they run without asking for permission, an unattended run approves the runtime's own full-access sign-in where it asks for one, and teamai cannot prove any isolation. Their isolation is recorded as none.
 ```
 
 teamai 会重新登录，这次以 Full access 登录（配对码还会申请 `settings:write` 和 `source-control:write`）。评审的线程仍以 Auto 运行。仍不提供 `permissions: unattended` 步骤。

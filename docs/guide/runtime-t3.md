@@ -146,7 +146,7 @@ workflows:
 It takes `auto`, `auto-accept-edits`, `approval-required` or `full-access`. Any other value fails before T3 is called:
 
 ```text
-{"error":{"code":"bad_option","message":"Runtime \"t3\" of driver definition …/drivers/teamai-t3.yaml refused option \"runtime_mode\": runtime_mode \"yolo\" is not one runtime t3 takes. A step thread runs in the member's T3 default mode, or auto, never full access unless runtime_mode says so; runtime_mode sets it to auto, auto-accept-edits, approval-required or full-access. Remove it, or set one of those four. Fix the option and start again."}}
+{"error":{"code":"bad_option","message":"Runtime \"t3\" of driver definition teamai's drivers/teamai-t3.yaml refused option \"runtime_mode\": runtime_mode \"yolo\" is not one runtime t3 takes. A step thread runs in the member's T3 default mode, or auto, never full access unless runtime_mode says so; runtime_mode sets it to auto, auto-accept-edits, approval-required or full-access. Remove it, or set one of those four. Fix the option and start again."}}
 ```
 
 teamai's sign-in caps the mode. If it allows less than the run's mode, T3 refuses the thread and the step fails. For example, someone approved teamai in T3's page with Supervised access, and this run uses Auto:
@@ -173,7 +173,7 @@ runtimes:
 The run says so once, as it starts, and records the steps' isolation as `none`:
 
 ```text
-⚠ Runtime t3 of driver t3-vm runs steps in full access on this machine, as /repo/.teamai/drivers/t3-vm.yaml sets: they run without asking for permission, an unattended run approves the runtime's own full-access sign-in where it asks for one, and teamai cannot prove any isolation. Their isolation is recorded as none.
+⚠ Runtime t3 of driver t3-vm runs steps in full access on this machine, as drivers/t3-vm.yaml in the team repo sets: they run without asking for permission, an unattended run approves the runtime's own full-access sign-in where it asks for one, and teamai cannot prove any isolation. Their isolation is recorded as none.
 ```
 
 teamai signs in again, this time with Full access (the pairing code also asks for `settings:write` and `source-control:write`). A judge's thread still runs in Auto. `permissions: unattended` steps are still not offered.
