@@ -7,7 +7,7 @@ import { readRegularFileSync, writeRegularFile } from '@teamai/shared/regular-fi
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { readVersion } from '@teamai/tool-core/detect';
 import type { ToolFamily } from '@teamai/tool-core/family';
-import { ACCESS_LEVELS, type CallInput, type LaunchAdapter } from '@teamai/tool-core/launch';
+import { ACCESS_LEVELS, ASSUMED_OPENCODE_MAJOR, type CallInput, type LaunchAdapter } from '@teamai/tool-core/launch';
 import type { AgentAdapter } from '@teamai/tool-core/sessions/base';
 import { locatesOwnStore, type SessionHost, type SessionPlatformDefinition } from '@teamai/tool-core/sessions/platform';
 import type { TokenUsage } from '@teamai/tool-core/tokens';
@@ -74,7 +74,7 @@ function scratch(label: string): string {
 
 function describeLaunch(id: string, profile: LaunchAdapter, call: RecordedCall): void {
   describe(`launch profile ${id}`, () => {
-    const input: CallInput = { prompt: PROMPT, promptFile: '/scratch/prompt.md', lastMessageFile: '/scratch/last-message.txt', opencodeMajor: 2 };
+    const input: CallInput = { prompt: PROMPT, promptFile: '/scratch/prompt.md', lastMessageFile: '/scratch/last-message.txt', opencodeMajor: ASSUMED_OPENCODE_MAJOR };
     const args = profile.call.args(input);
 
     it(`hands the prompt over on ${profile.call.prompt}`, () => {

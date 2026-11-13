@@ -143,6 +143,8 @@
     "teamai/family-facts": "error",
     // git worktree remove --force deletes every worktree inside the one it removes: only removeWorktree removes one, and refuses that.
     "teamai/worktree-removal": "error",
+    // V2 has priority over V1: the OpenCode major teamai takes where it reads none is ASSUMED_OPENCODE_MAJOR, decided once.
+    "teamai/opencode-major": "error",
     // A reducer that copies its accumulator each step is quadratic.
     "oxc/no-accumulating-spread": "error",
     // The generic rules of anti-slop (#828), vendored in
