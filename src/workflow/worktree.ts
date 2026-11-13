@@ -666,6 +666,15 @@ export async function removeWorktreeSetup(checkout: string, { dryRun = false, go
   const worktrees = listed.stdout.split('\n').flatMap((line) => (line.startsWith('worktree ') ? [line.slice('worktree '.length)] : [])).filter((dir) => !gone.includes(dir));
 
   if (worktrees.some((dir) => worktreeCheckout(dir) !== undefined)) return [];
+
+  // git's records of gone worktrees go with the setup: Docker makes a missing bind mount source, such as a sandbox's
+  // mount of a step worktree's git directory, as an empty directory when a container starts after the worktree went.
+  if (!dryRun) {
+    const forgot = await forgetGoneWorktrees(checkout);
+
+    if (!forgot.ok) throw new Error(forgot.reason);
+  }
+
   const removed: string[] = [];
 
   for (const dir of [path.join(checkout, '.teamai', 'workflow-worktrees'), hooksPath(checkout)]) {
@@ -802,10 +811,12 @@ export async function runWorktreesOf(checkouts: readonly string[]): Promise<{ wo
 async function runWorktreeAt(dir: string, lines: readonly string[]): Promise<RunWorktree> {
   const branch = lines.find((line) => line.startsWith('branch refs/heads/'))?.slice('branch refs/heads/'.length);
 
-  if (!await pathExists(dir)) return { kind: 'removable', dir, ...branch !== undefined && { branch } };
   const locked = lines.find((line) => line === 'locked' || line.startsWith('locked '));
 
+  // Before the directory: git keeps a locked one's record whose directory is gone, such as one on a disk not plugged in.
   if (locked !== undefined) return { kind: 'kept', dir, why: `git keeps it locked${locked === 'locked' ? '' : ` (${locked.slice('locked '.length)})`}`, isLocked: true };
+
+  if (!await pathExists(dir)) return { kind: 'removable', dir, ...branch !== undefined && { branch } };
   const kept = (why: string): RunWorktree => ({ kind: 'kept', dir, why, isLocked: false });
 
   if (branch === undefined) return kept('its HEAD is detached, so no branch holds its commits');
@@ -835,8 +846,8 @@ function listedPaths(lines: readonly string[]): string {
 
 /**
  * Removes the run worktree `worktree` of `checkout`'s repository with git's own records of it, once it is read again as
- * `runWorktreesOf` reads it: one that gained a change since stays, with why. One whose directory is gone loses only
- * git's record. Forced, since git's own check would run a status in the worktree, and with it a program a step planted
+ * `runWorktreesOf` reads it: one that gained a change since stays, with why, and so does one holding another worktree
+ * (`removeWorktree`). One whose directory is gone loses only git's record. Forced, since git's own check would run a status in the worktree, and with it a program a step planted
  * in the worktree's config; the read before it is the check, through untrusted git.
  */
 export async function removeRunWorktree(checkout: string, worktree: Extract<RunWorktree, { kind: 'removable' }>): Promise<{ ok: true } | { ok: false; reason: string }> {
@@ -847,15 +858,8 @@ export async function removeRunWorktree(checkout: string, worktree: Extract<RunW
   const now = entry === undefined ? undefined : await runWorktreeAt(entry.dir, entry.lines);
 
   if (now?.kind === 'kept') return { ok: false, reason: now.why };
-  const inside = await worktreeInside(worktree.dir, listed);
 
-  if (inside !== undefined) return { ok: false, reason: `it holds the worktree ${inside}, which stays` };
-  const removed = now !== undefined && await pathExists(worktree.dir) ? await git(checkout, ['worktree', 'remove', '--force', worktree.dir]) : undefined;
-  const pruned = await git(checkout, ['worktree', 'prune']);
-
-  if (removed !== undefined && removed.code !== 0) return { ok: false, reason: `git did not remove it (${removed.stderr.trim() || 'git worktree remove failed'})` };
-
-  return pruned.code === 0 ? { ok: true } : { ok: false, reason: `git did not forget it (${pruned.stderr.trim() || 'git worktree prune failed'})` };
+  return now !== undefined && await pathExists(worktree.dir) ? removeWorktree(checkout, worktree.dir) : forgetGoneWorktrees(checkout);
 }
 
 export function hooksPath(main: string): string {
@@ -891,7 +895,7 @@ export async function ensureWorktree(main: string, branch: string, start: string
   const present = await fs.stat(dir).then((stats) => stats.isDirectory(), () => false);
 
   // A deleted worktree stays registered, and `worktree add` refuses its path until it is pruned.
-  if (!present) await git(main, ['worktree', 'prune']);
+  if (!present) await forgetGoneWorktrees(main);
 
   if (present) {
     const prefix = await git(dir, ['rev-parse', '--show-prefix']);
@@ -1902,7 +1906,7 @@ async function removeBlockingSymlink(dir: string, relative: string): Promise<voi
  */
 export async function removeWorktree(main: string, dir: string): Promise<{ ok: true } | { ok: false; reason: string }> {
   // A record whose directory is gone holds nothing.
-  await git(main, ['worktree', 'prune']);
+  await forgetGoneWorktrees(main);
   const listed = await listedWorktrees(main);
 
   if ('error' in listed) return { ok: false, reason: `git could not list the worktrees (${listed.error})` };
@@ -1911,9 +1915,17 @@ export async function removeWorktree(main: string, dir: string): Promise<{ ok: t
   if (inside !== undefined) return { ok: false, reason: `it holds the worktree ${inside}, which removing it would delete; finish or remove that one first` };
   const removed = await git(main, ['worktree', 'remove', '--force', dir]);
 
-  await git(main, ['worktree', 'prune']);
+  await forgetGoneWorktrees(main);
 
   return removed.code === 0 ? { ok: true } : { ok: false, reason: removed.stderr.trim() || 'git worktree remove failed' };
+}
+
+/** Forgets git's record of each worktree of `main`'s repository whose directory is gone; a locked one stays. */
+export async function forgetGoneWorktrees(main: string): Promise<{ ok: true } | { ok: false; reason: string }> {
+  const pruned = await git(main, ['worktree', 'prune']);
+
+  // prune exits 0 on a record it could not delete, and says so only on stderr.
+  return pruned.code === 0 && pruned.stderr.trim() === '' ? { ok: true } : { ok: false, reason: `git did not forget the worktrees whose directory is gone (${pruned.stderr.trim() || 'git worktree prune failed'})` };
 }
 
 const UnrestoredMarker = z.object({ branch: z.string(), commit: z.string(), step: z.string(), reason: z.string(), found: z.array(z.string()) });
