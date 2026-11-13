@@ -976,7 +976,7 @@ Only a trial's `teamai:correctness:<task>` label decides `passed`, `failed` or `
 | exits non-zero | the lowest-scoring label | `failed` |
 | cannot run | none | `error`, `failure: { cause }` |
 
-`cause` is one of `not_found`, `not_executable` or `signal`. A record an older teamai wrote may also carry `timeout`, `spawn_failed` or `prepare_failed` (restoring `protect` or writing `check.add` failed).
+`cause` is one of `not_found`, `not_executable`, `signal`, `timeout` (the check ran past its step's or the run's timeout), `prepare_failed` (restoring `protect` or writing `check.add` failed). A record an older teamai wrote may also carry `spawn_failed`.
 
 Each recorded trial carries its verdicts:
 

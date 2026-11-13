@@ -17,7 +17,7 @@ import { stepDefinitions } from '../workflow/scope.js';
 import { LimitSchema } from '../workflow/requirements.js';
 import type { RunState } from '../workflow/types.js';
 import { definedFields } from '../utils/defined-fields.js';
-import { CHECK_CAUSES, CheckOutputSchema, type CheckOutput } from '../scorers/check.js';
+import { CHECK_CAUSES, CheckOutputSchema, type CheckCause, type CheckOutput } from '../scorers/check.js';
 import { compareAgent } from './agent-match.js';
 import { baselineStepOf, BenchmarkEstimateSchema, checkStepOf, correctnessScorerName, PlannedJudgeSchema, type BenchmarkPlan, type PlannedArm, type PlannedTask, type PlannedTrial } from './plan.js';
 import type { RunPlan } from './run-plan.js';
@@ -199,7 +199,8 @@ export function benchmarkRecord(run: RunState, { plan, prefix }: RunPlan, verdic
     trials: plan.trials.map((trial) => {
       const judged = verdictsOf(trial);
       const task = plan.tasks.find(({ id }) => id === trial.task);
-      const check = checkOutputOf(stateOf(checkStepOf(trial)));
+      const checkState = stateOf(checkStepOf(trial));
+      const check = checkOutputOf(checkState);
       const work = stateOf(trial.step);
       const result = trialResultOf({ prompt: work, work: workOf(run, `${prefix}${trial.step}`), check, verdicts: judged }, plan, trial);
       const arm = plan.arms.find(({ name }) => name === trial.arm);
@@ -225,7 +226,9 @@ export function benchmarkRecord(run: RunState, { plan, prefix }: RunPlan, verdic
         ...trial, step: `${prefix}${trial.step}`, result, verdicts: judged.map(({ scorer, outcome, decider, asPlanned }) => definedFields<TrialVerdict>({ scorer, outcome, decider, asPlanned })), ...entry,
       };
 
-      if (result === 'error' && check?.result === 'could_not_run') recorded.failure = { cause: check.cause };
+      const cause = result === 'error' ? (check?.result === 'could_not_run' ? check.cause : failedCheckCause(checkState)) : undefined;
+
+      if (cause !== undefined) recorded.failure = { cause };
       const calibration = calibrations.find((one) => one.step === recorded.step && one.pass === (work?.pass ?? 1));
 
       if (calibration) recorded.calibration = definedFields({ label: calibration.label, passed: calibration.passed, decider: calibration.decider, scoringCost: calibration.scoringCost });
@@ -513,6 +516,24 @@ function correctnessResult(verdict: EntryVerdict | undefined): TrialResult {
 
       return unhandled;
     }
+  }
+}
+
+/**
+ * Why a check step that ended before its command ran to an exit could not check: it ran out of time, its own or the
+ * run's, or teamai could not put back `protect` or write `check.add` in its place. The record's cause, as the check's
+ * output would carry it.
+ */
+function failedCheckCause(state: StepState | undefined): CheckCause | undefined {
+  if (state?.status !== 'failed' && state?.status !== 'cancelled') return undefined;
+
+  switch (state.failure?.code) {
+    case 'timeout':
+      return 'timeout';
+    case 'trial_prepare_failed':
+      return 'prepare_failed';
+    default:
+      return undefined;
   }
 }
 

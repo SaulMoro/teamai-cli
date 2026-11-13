@@ -976,7 +976,7 @@ These results hold for these tasks, this run and this machine.
 | 以非 0 退出 | 分数最低的标签 | `failed` |
 | 无法运行 | 无 | `error`，`failure: { cause }` |
 
-`cause` 是 `not_found`、`not_executable` 或 `signal` 之一。旧版 teamai 写下的记录还可能带有 `timeout`、`spawn_failed` 或 `prepare_failed`（恢复 `protect` 或写入 `check.add` 失败）。
+`cause` 是 `not_found`、`not_executable`、`signal`、`timeout`（check 运行超过其步骤或运行的超时时间）、`prepare_failed`（恢复 `protect` 或写入 `check.add` 失败）之一。旧版 teamai 写下的记录还可能带有 `spawn_failed`。
 
 每个记录下来的 trial 都带着它的结论：
 

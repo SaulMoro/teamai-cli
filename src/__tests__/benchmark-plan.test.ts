@@ -414,7 +414,7 @@ describe('benchmark plan run', () => {
     const run = await readRun(config, runId);
     if (typeof run !== 'object') throw new Error(`run ${runId} is ${run}`);
     expect(next).toMatchObject({ data: { done: { outcome: 'failed', failure: { code: 'timeout' } } } });
-    expect(recordOf(run)).toMatchObject({ tasks: [{ id: 't01', baseline: 'valid' }], trials: [{ step: 'trials.r1.t01.a01.prompt', result: 'error' }] });
+    expect(recordOf(run)).toMatchObject({ tasks: [{ id: 't01', baseline: 'valid' }], trials: [{ step: 'trials.r1.t01.a01.prompt', result: 'error', failure: { cause: 'timeout' } }] });
   });
 
   it("runs a task's trials whatever another task's baseline did, and ends the run succeeded with both scopes failed", async () => {
