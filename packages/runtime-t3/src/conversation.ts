@@ -9,6 +9,7 @@ import { WRAPPER_PREFIX } from '@teamai/runtime-kit/outer';
 import { NotRegularFileError, readRegularFileSync } from '@teamai/shared/regular-file';
 import { stepUsage } from '@teamai/tool-core/step-usage';
 import type { InstanceAdder } from './instances.js';
+import { cannotReadBecause, FsFailureSchema, isMissing } from './fs-failure.js';
 import { unreadableFailure, type LaunchRecord, type OpRecord, type PlaceRecord, type ThreadRecord } from './journal.js';
 import { JUDGE_KEPT, JudgeCopyFailed, JudgeReleased, judged, launchJudge } from './judge.js';
 import type { Reach, Reached, Serving, Session } from './runtime.js';
@@ -211,8 +212,11 @@ function readResult(file: string): { ok: true; result: PromptResult } | { ok: fa
     text = readRegularFileSync(file, 'utf8');
   } catch (error) {
     if (error instanceof NotRegularFileError) return { ok: false, why: `left ${error.kind} at the result file ${file}, not a regular file, so teamai did not read it` };
+    const failure = FsFailureSchema.parse(error);
 
-    return { ok: false, why: `ended without writing the result file ${file}` };
+    if (isMissing(failure)) return { ok: false, why: `ended without writing the result file ${file}` };
+
+    return { ok: false, why: `wrote the result file ${file}, which teamai cannot read because ${cannotReadBecause(failure)}. Let the user teamai runs as read ${file}, then retry the step` };
   }
 
   try {

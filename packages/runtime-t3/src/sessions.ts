@@ -4,9 +4,9 @@ import { CodexAdapter } from '@teamai/tool-core/formats/codex';
 import type { StepTokenFormat } from '@teamai/tool-core/step-usage';
 import { HOST_PROCESSES } from '@teamai/shared/exec';
 import { getUserHome } from '@teamai/shared/home';
-import { z } from 'zod';
 import type { SessionHost } from '@teamai/tool-core/sessions/platform';
 import type { AgentAdapter, SessionMeta } from '@teamai/tool-core/sessions/base';
+import { cannotReadBecause, FsFailureSchema } from './fs-failure.js';
 
 // ─── The tool session a T3 thread ran ───
 //
@@ -77,9 +77,6 @@ export type KeptSession = { id: string; transcript?: string };
  */
 export type SessionLookup = { kind: 'found'; session: KeptSession } | { kind: 'none' } | { kind: 'unlistable'; folder: string; reason: string };
 
-/** What Node's file system says of a folder it could not list. */
-const ListingError = z.object({ code: z.string().optional().catch(undefined), path: z.string().optional().catch(undefined), message: z.string().catch('') }).catch({ message: '' });
-
 /**
  * The first session the tool of `driver` started in `cwd` at or after `since`, in `toolHome`, other than `other`. A task
  * the thread delegates may start a later session in the same folder; that one is not the step's. `other` is a session the
@@ -92,10 +89,9 @@ export async function sessionSince({ driver, toolHome, cwd, since, other }: { dr
   try {
     sessions = await DRIVERS[driver].sessions(toolHome).listConversations(cwd);
   } catch (error) {
-    const { code, path: folder = toolHome, message } = ListingError.parse(error);
-    const reason = code === 'EACCES' || code === 'EPERM' ? 'it has no permission to read it' : `listing it failed (${message || 'teamai does not know why'})`;
+    const failure = FsFailureSchema.parse(error);
 
-    return { kind: 'unlistable', folder, reason };
+    return { kind: 'unlistable', folder: failure.path ?? toolHome, reason: cannotReadBecause(failure) };
   }
 
   const started = sessions.filter((session) => session.sessionId !== other && Date.parse(session.createdAt) >= since - CLOCK_SLACK_MS);

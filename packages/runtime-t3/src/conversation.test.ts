@@ -592,6 +592,22 @@ describe('teamai-runtime-t3', () => {
       expect(await ended(runtime, 'op-00000011')).toMatchObject({ event: 'failed', failure: { code: 'tool_failed', message: expect.stringContaining(`ended without writing the result file ${result}.`) } });
     });
 
+    it.skipIf(process.platform === 'win32')('fails a thread whose result file teamai cannot read, saying which file and how to let teamai read it', async () => {
+      t3.config({ agent: { output: { verdict: 'approve' } } });
+      // The agent can write its result there, and teamai cannot read it.
+      fs.writeFileSync(result, '');
+      fs.chmodSync(result, 0o200);
+      const { runtime, handle } = await opened();
+
+      runtime.send(prompt(handle, 'op-0000fe12'));
+
+      try {
+        expect(await ended(runtime, 'op-0000fe12')).toMatchObject({ event: 'failed', failure: { code: 'tool_failed', message: expect.stringContaining(`wrote the result file ${result}, which teamai cannot read because it has no permission to read it. Let the user teamai runs as read ${result}, then retry the step.`) } });
+      } finally {
+        fs.chmodSync(result, 0o600);
+      }
+    });
+
     it.skipIf(process.platform === 'win32')('fails at once a thread that left a FIFO at the result file, rather than waiting on it', async () => {
       t3.config({ agent: {} });
       const { runtime, handle } = await opened();
