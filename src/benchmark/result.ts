@@ -458,25 +458,21 @@ export function uncheckedChecks(run: RunState, { plan, prefix }: RunPlan): strin
 const MEASURED: ReadonlySet<TrialResult> = new Set(['passed', 'failed', 'unscored']);
 
 /**
- * A line for each trial of `run` whose work ended in an error, with why, when no trial produced a result: every trial is
- * `error` or `not_run`, so the run measured nothing. A trial whose work succeeded and whose check could not run is left
- * to `uncheckedChecks`. Empty once any trial passed, failed or is unscored. teamai's benchmark workflow fails its
- * `results` gate on them.
+ * A line for each of the record's `trials` whose work ended in an error, with why, when none produced a result: every
+ * trial is `error` or `not_run`, so the run measured nothing. A trial whose work succeeded and whose check could not run
+ * is left to `uncheckedChecks`. Empty once any trial passed, failed or is unscored. teamai's benchmark workflow fails
+ * its `results` gate on them.
  */
-export function unmeasuredTrials(run: RunState, { plan, prefix }: RunPlan): string[] {
-  const stateOf = (step: string): StepState | undefined => run.steps.find((state) => state.id === `${prefix}${step}`);
+export function unmeasuredTrials(run: RunState, trials: BenchmarkRecord['trials']): string[] {
+  if (trials.some(({ result }) => MEASURED.has(result))) return [];
 
-  const ended = plan.trials.map((trial) => {
-    const work = workOf(run, `${prefix}${trial.step}`);
+  return trials.flatMap((trial) => {
+    const work = run.steps.find((state) => state.id === trial.step);
 
-    return { trial, work, result: trialResultOf({ prompt: stateOf(trial.step), work, check: checkOutputOf(stateOf(checkStepOf(trial))), verdicts: [] }, plan, trial) };
+    if (trial.result !== 'error' || work?.status === 'succeeded') return [];
+
+    return [`Trial ${trial.order}/${trials.length} ${trial.task} ${trial.arm}: ${whyErrored(workOf(run, trial.step), work)}`];
   });
-
-  if (ended.some(({ result }) => MEASURED.has(result))) return [];
-
-  return ended.flatMap(({ trial, work, result }) => (result === 'error' && stateOf(trial.step)?.status !== 'succeeded'
-    ? [`Trial ${trial.order}/${plan.trials.length} ${trial.task} ${trial.arm}: ${whyErrored(work, stateOf(trial.step))}`]
-    : []));
 }
 
 /**
