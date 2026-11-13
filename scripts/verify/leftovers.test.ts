@@ -97,6 +97,8 @@ interface FakeImage {
   readonly id: string;
   readonly tags: string[];
   readonly labels: Record<string, string>;
+  /** Removed by someone else right after an `image ls` listed it. */
+  readonly goesAfterListing?: boolean;
 }
 
 /**
@@ -134,6 +136,7 @@ if (sub === 'ls') {
       process.stdout.write(render(option('--format'), { '.ID': image.id.slice(0, 12), '.Repository': repository, '.Tag': tag }, 'imageContext') + '\\n');
     }
   }
+  fs.writeFileSync(state, JSON.stringify(images.filter((one) => one.goesAfterListing !== true)));
   process.exit(0);
 }
 if (sub === 'inspect') {
@@ -189,6 +192,18 @@ describe("the container engines' row of section (f)", () => {
     expect(observed.flatMap((seen) => (seen.kind === 'observed' ? seen.findings : [])).map((finding) => [finding.what, finding.attribution.kind])).toEqual([
       ['docker image teamai-warm:kmine', 'own'],
       ['docker image teamai-warm:ktheirs', 'other_world'],
+    ]);
+  });
+
+  it("lists the world's images when another one goes between the listing and the look at its owner", async () => {
+    const { observed } = await observeContainers([
+      { id: 'a'.repeat(64), tags: ['teamai-warm:kmine'], labels: { 'teamai.owner': SELF.journals[0] ?? '' } },
+      { id: 'b'.repeat(64), tags: ['teamai-warm:ktheirs'], labels: { 'teamai.owner': OTHER.journals[0] ?? '' }, goesAfterListing: true },
+    ]);
+
+    expect(observed.filter((seen) => seen.kind === 'not_observed')).toEqual([]);
+    expect(observed.flatMap((seen) => (seen.kind === 'observed' ? seen.findings : [])).map((finding) => [finding.what, finding.attribution.kind])).toEqual([
+      ['docker image teamai-warm:kmine', 'own'],
     ]);
   });
 
@@ -454,7 +469,7 @@ describe("a probe of an engine's listing", () => {
     fs.writeFileSync(engine, '#!/bin/sh\ntrap "" TERM\nexec sleep 30\n', { mode: 0o755 });
     const started = Date.now();
 
-    expect(probeHere([engine, 'ps'], { timeoutMs: 300 })).toEqual({ kind: 'ran', code: null, stdout: '', why: `NOT OBSERVED: ${engine} ps did not answer within 0.3 s` });
+    expect(probeHere([engine, 'ps'], { timeoutMs: 300 })).toEqual({ kind: 'ran', code: null, stdout: '', stderr: '', why: `NOT OBSERVED: ${engine} ps did not answer within 0.3 s` });
     expect(Date.now() - started).toBeLessThan(5_000);
   });
 });

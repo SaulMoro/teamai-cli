@@ -128,13 +128,13 @@ export interface LeftoverKind {
  * of the world: `missing` when the command is not installed, `ran` with its exit code otherwise (null, and a NOT OBSERVED
  * reason, when it did not answer within `timeoutMs`).
  */
-export function probeHere(argv: readonly string[], { timeoutMs = 30_000 }: { timeoutMs?: number } = {}): { kind: 'missing' } | { kind: 'ran'; code: number | null; stdout: string; why: string } {
+export function probeHere(argv: readonly string[], { timeoutMs = 30_000 }: { timeoutMs?: number } = {}): { kind: 'missing' } | { kind: 'ran'; code: number | null; stdout: string; stderr: string; why: string } {
   const [command = 'true', ...args] = argv;
   const ran = runProbe({ command, args, cwd: os.tmpdir(), env: process.env, timeoutMs });
 
   if (ran.errno === 'ENOENT') return { kind: 'missing' };
 
-  return { kind: 'ran', code: ran.code, stdout: ran.stdout, why: ran.why };
+  return { kind: 'ran', code: ran.code, stdout: ran.stdout, stderr: ran.stderr, why: ran.why };
 }
 
 /** The data homes under `home` whose runs teamai keeps: user scope's ~/.teamai and each workspace's ~/.teamai/projects/<slug>, read with the product's own layout. */

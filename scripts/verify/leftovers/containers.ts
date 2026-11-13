@@ -48,10 +48,14 @@ function labelledImages(command: string): { kind: 'listed'; images: Array<{ id: 
   if (listed.length === 0) return { kind: 'listed', images: [] };
   const inspected = probeHere([command, 'image', 'inspect', '--format', `{{.Id}}\t{{index .Config.Labels "${OWNER}"}}`, ...new Set(listed.map((one) => one.id))]);
 
-  if (inspected.kind !== 'ran' || inspected.code !== 0) return { kind: 'failed', why: `\`${command} image inspect\` failed${inspected.kind === 'ran' ? `: ${inspected.why}` : ''}` };
-  const owners = new Map(inspected.stdout.split('\n').map((line) => line.split('\t')).map(([id = '', owner = '']) => [shortImageId(id), owner]));
+  // An image removed since the listing is gone, not unobserved: docker inspects the others and says only that of it.
+  const isOnlyGone = inspected.kind === 'ran' && inspected.code === 1 && inspected.stderr.trim().split('\n').every((line) => line.startsWith('Error response from daemon: No such image: '));
 
-  return { kind: 'listed', images: listed.map((one) => ({ id: one.id, name: one.name, owner: owners.get(shortImageId(one.id)) ?? '' })) };
+  if (inspected.kind !== 'ran' || (inspected.code !== 0 && !isOnlyGone)) return { kind: 'failed', why: `\`${command} image inspect\` failed${inspected.kind === 'ran' ? `: ${inspected.why}` : ''}` };
+  const owners = new Map(inspected.stdout.split('\n').map((line) => line.split('\t')).map(([id = '', owner = '']) => [shortImageId(id), owner]));
+  const present = isOnlyGone ? listed.filter((one) => owners.has(shortImageId(one.id))) : listed;
+
+  return { kind: 'listed', images: present.map((one) => ({ id: one.id, name: one.name, owner: owners.get(shortImageId(one.id)) ?? '' })) };
 }
 
 /** An image id as `image ls` shows it: docker's `inspect` prefixes `sha256:` and podman's does not; both list 12 hex digits. */
