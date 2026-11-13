@@ -587,7 +587,7 @@ steps:
     const message = 'error' in refused ? refused.error.message : '';
     expect(message).toContain('Step "review" requires strict isolation');
     expect(message).toContain('driver "nosandbox"');
-    expect(message).toContain('toy, local');
+    expect(message).toContain('(toy: isolation none, local: isolation none)');
     // No run was created.
     expect(runs()).toEqual(before);
   });

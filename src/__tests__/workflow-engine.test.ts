@@ -6141,6 +6141,19 @@ describe('strict requirements', () => {
     expect(fs.readdirSync(runsDir(config))).toHaveLength(1);
   });
 
+  it('refuses a strict sandbox step on a driver whose runtimes keep less, saying the isolation each keeps', async () => {
+    const { config } = testConfig();
+    fs.writeFileSync(path.join(config.repo.localPath, 'workflows', 'build.yaml'), graph(`  - id: sealed
+    requires: { isolation: sandbox, strict: true }
+    command: node sealed.js
+`));
+    await syncScorersThenWorkflows(config);
+    // A bwrap sandbox keeps each step in a worktree of its own; the host slot keeps none.
+    const alone: SoleDriver = { driver: 'bw', offers: [{ runtime: 'sandbox', can: { isolation: 'worktree', env: true } }, { runtime: 'host', inProcess: true, can: { isolation: 'none', env: true } }] };
+
+    expect(await startRun(config, 'build', {}, { secrets: await knownSecrets(config), alone })).toEqual({ error: { code: 'requirement_unmet', message: 'Step "sealed" requires strict isolation, and no runtime of driver "bw" is a sandbox (sandbox: isolation worktree, host: isolation none). Add a runtime that is one to the definition, such as sandbox, or run the workflow in CI or a container with --sandbox.' } });
+  });
+
   it('starts an unattended prompt only under a strict sandbox: its own, an enclosing step, defaults, or the step that runs its workflow', async () => {
     const { config } = testConfig();
     const files = {
