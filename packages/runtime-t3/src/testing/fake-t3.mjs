@@ -46,6 +46,7 @@ import path from 'node:path';
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
+import { entriesUnder } from '@teamai/shared/entries-under';
 import { encodeCwdClaude } from '@teamai/tool-core/sessions/fs';
 
 const STATE = process.env.FAKE_T3_STATE;
@@ -256,19 +257,31 @@ function toolHomeOf(thread) {
   return shared;
 }
 
-/** The transcript the thread's tool keeps, in its own layout in its tool home. */
+/**
+ * The transcript the thread's tool keeps, in its own layout in its tool home. A later run of the thread, a turn, goes on
+ * in the same file, as the tool continues its session. With `agent.usage`, each run bills those tokens in the tool's own
+ * usage lines: Claude's per assistant message, Codex's per response with the thread's running total.
+ */
 function writeTranscript(thread) {
   const sessionId = createHash('sha256').update(thread.threadId).digest('hex').replace(/^(.{8})(.{4})(.{4})(.{4})(.{12}).*$/, '$1-$2-$3-$4-$5');
   const cwd = fs.realpathSync(thread.worktreePath);
   const at = new Date().toISOString();
+  const usage = config().agent?.usage;
+  const run = thread.runCount ?? 1;
 
   if (thread.provider === 'codex') {
+    const sessions = path.join(toolHomeOf(thread), 'sessions');
     const day = at.slice(0, 10).split('-');
-    const dir = path.join(toolHomeOf(thread), 'sessions', ...day);
-    fs.mkdirSync(dir, { recursive: true });
-    fs.writeFileSync(path.join(dir, `rollout-${at.replace(/[:.]/g, '-')}-${sessionId}.jsonl`), [
-      JSON.stringify({ timestamp: at, type: 'session_meta', payload: { id: sessionId, timestamp: at, cwd, originator: 'codex_exec', cli_version: '0.50.0' } }),
+    const kept = filesNamed(sessions, `-${sessionId}.jsonl`)[0];
+    const file = kept ?? path.join(sessions, ...day, `rollout-${at.replace(/[:.]/g, '-')}-${sessionId}.jsonl`);
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    // Codex counts cached input inside input_tokens.
+    const counted = (times) => usage && ({ input_tokens: (usage.input + usage.cacheRead) * times, cached_input_tokens: usage.cacheRead * times, cache_write_input_tokens: 0, output_tokens: usage.output * times, reasoning_output_tokens: 0, total_tokens: (usage.input + usage.cacheRead + usage.output) * times });
+    fs.appendFileSync(file, [
+      ...(kept ? [] : [JSON.stringify({ timestamp: at, type: 'session_meta', payload: { id: sessionId, timestamp: at, cwd, originator: 'codex_exec', cli_version: '0.50.0' } })]),
+      JSON.stringify({ timestamp: at, type: 'turn_context', payload: { turn_id: `turn-${run}`, cwd, model: thread.model } }),
       JSON.stringify({ timestamp: at, type: 'response_item', payload: { type: 'message', role: 'user', content: [{ type: 'input_text', text: thread.message }] } }),
+      ...(usage ? [JSON.stringify({ timestamp: at, type: 'token_usage_record', payload: { thread_id: sessionId, session_id: sessionId, response_id: `resp_${run}`, usage: counted(1), thread_token_usage: counted(run) } })] : []),
     ].join('\n') + '\n');
 
     return;
@@ -276,10 +289,21 @@ function writeTranscript(thread) {
 
   const dir = path.join(toolHomeOf(thread), 'projects', encodeCwdClaude(cwd));
   fs.mkdirSync(dir, { recursive: true });
-  fs.writeFileSync(path.join(dir, `${sessionId}.jsonl`), [
+  const message = { role: 'assistant', model: thread.model, content: [{ type: 'text', text: 'Done.' }] };
+  fs.appendFileSync(path.join(dir, `${sessionId}.jsonl`), [
     JSON.stringify({ type: 'user', sessionId, cwd, timestamp: at, uuid: randomUUID(), message: { role: 'user', content: thread.message } }),
-    JSON.stringify({ type: 'assistant', sessionId, cwd, timestamp: at, uuid: randomUUID(), message: { role: 'assistant', model: thread.model, content: [{ type: 'text', text: 'Done.' }] } }),
+    JSON.stringify({
+      type: 'assistant', sessionId, cwd, timestamp: at, uuid: randomUUID(), requestId: `req_${run}`,
+      message: usage ? { id: `msg_${run}`, ...message, usage: { input_tokens: usage.input, output_tokens: usage.output, cache_read_input_tokens: usage.cacheRead, cache_creation_input_tokens: 0 } } : message,
+    }),
   ].join('\n') + '\n');
+}
+
+/** The files under `dir` whose name ends with `suffix`, at any depth. */
+function filesNamed(dir, suffix) {
+  if (!fs.existsSync(dir)) return [];
+
+  return entriesUnder(dir).filter(({ entry }) => entry.isFile() && entry.name.endsWith(suffix)).map(({ relative }) => path.join(dir, relative));
 }
 
 // Broadest first, as T3 ranks them.

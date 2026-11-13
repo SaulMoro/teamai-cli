@@ -49,6 +49,8 @@ export interface FakeAgent {
   delegates?: boolean;
   /** The agent writes no transcript. */
   noSession?: boolean;
+  /** The tokens each run of the agent bills, which its transcript records in the tool's own usage lines. */
+  usage?: { input: number; output: number; cacheRead: number };
   /** The agent's last message in the thread, which a judge's reply is. */
   reply?: string;
 }

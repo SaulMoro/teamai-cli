@@ -44,10 +44,12 @@ const ThreadSchema = z.object({
   /**
    * This op's turn of the conversation an earlier prompt launched the thread for: that prompt's place and op, how many
    * runs the thread had before the turn was sent, so a run that ended before it is not taken for the turn's, and the
-   * model selection set on the thread before the send when the turn asks for another model of its provider instance.
-   * The thread stays the earlier place's to settle while that place is open.
+   * model selection set on the thread before the send when the turn asks for another model of its provider instance,
+   * and when the turn was journaled, just before its send, from which on the session's requests are the turn's. Absent
+   * from a record kept before it was: such a turn reports no tokens. The thread stays the earlier place's to settle while
+   * that place is open.
    */
-  turnOf: z.object({ handle: RuntimeHandleSchema, op: z.string(), runsBefore: z.number().int().nonnegative(), configure: ModelSelectionSchema.optional() }).optional(),
+  turnOf: z.object({ handle: RuntimeHandleSchema, op: z.string(), runsBefore: z.number().int().nonnegative(), sentAt: z.number().optional(), configure: ModelSelectionSchema.optional() }).optional(),
   /**
    * The runtime saw the thread's run, and the work it delegated, settle, or a stop it asked for take effect. Until then
    * the thread is the runtime's to stop, whatever ended its op and whichever runtime process launched it: close stops it

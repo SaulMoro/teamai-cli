@@ -19,7 +19,7 @@ describe('the session a step thread kept', () => {
     write('dd5bedbf-0000-4000-8000-000000000002', '2026-11-06T10:00:30.000Z');
 
     try {
-      expect(await sessionSince({ driver: 'claudeAgent', toolHome, cwd, since: launchedAt })).toBe('5ab0c71a-0000-4000-8000-000000000001');
+      expect(await sessionSince({ driver: 'claudeAgent', toolHome, cwd, since: launchedAt })).toMatchObject({ id: '5ab0c71a-0000-4000-8000-000000000001' });
     } finally {
       fs.rmSync(toolHome, { recursive: true, force: true });
     }

@@ -277,6 +277,22 @@ describe('teamai-runtime-t3', () => {
       expect(t3.calls().find((call) => call.tool === 't3_thread_launch')?.args['modelSelection']).toEqual({ instanceId: 'codex', model: 'gpt-6.1-sol', options: [{ id: 'reasoningEffort', value: 'high' }] });
     });
 
+    // Each tool reports its tokens as its own end-of-run usage counts them: Claude's input leaves the cache out, Codex's
+    // counts cached input inside it.
+    it.each([
+      { tool: 'claude', model: 'claude-opus-5-5', usage: { input: 1_200, output: 340, cachedInput: 18_000 } },
+      { tool: 'codex', model: 'gpt-6.1-sol', usage: { input: 19_200, output: 340, cachedInput: 18_000 } },
+    ])('reports the tokens the $tool session\'s transcript records for the step', async ({ tool, model, usage }) => {
+      t3.config({ agent: { output: { verdict: 'approve' }, usage: { input: 1_200, output: 340, cacheRead: 18_000 } } });
+      const { runtime, handle } = await opened();
+
+      runtime.send(prompt(handle, 'op-0000000f', { tool, model: { name: model } }));
+
+      const end = await ended(runtime, 'op-0000000f');
+      expect(RuntimeMessageSchema.safeParse(end).success).toBe(true);
+      expect(end).toMatchObject({ event: 'finished', session: { tool }, usage });
+    });
+
     // T3 runs an instance's tool in the instance's own home, so scoring and resume read the session there.
     it.each([
       { tool: 'claude', instance: 'claudeAgent', model: 'claude-opus-5-5', where: '~/.claude-work', homePath: () => '~/.claude-work', home: () => path.join(t3.home, '.claude-work') },
@@ -1784,6 +1800,18 @@ describe('teamai-runtime-t3', () => {
       expect(t3.threads()[0]).toMatchObject({ runCount: 2, settled: false, message: expect.stringContaining('Fix what the review found.') });
       expect(t3.calls().filter((call) => call.tool === 't3_thread_send').map((call) => call.args['clientRequestId'])).toEqual(['op-000000b2']);
       expect(noticesOf(runtime)).toEqual([]);
+    });
+
+    it('reports only the tokens of its own turn, not those of the earlier steps in the same session', async () => {
+      t3.config({ agent: { output: { verdict: 'approve' }, usage: { input: 1_200, output: 340, cacheRead: 18_000 } } });
+      const { runtime, handle } = await opened();
+      runtime.send(prompt(handle, 'op-000000b1'));
+      expect(await ended(runtime, 'op-000000b1')).toMatchObject({ event: 'finished', usage: { input: 1_200, output: 340, cachedInput: 18_000 } });
+      const later = await openLater(runtime);
+
+      runtime.send(turn(later, 'op-000000b2', { handle, op: 'op-000000b1' }));
+
+      expect(await ended(runtime, 'op-000000b2')).toMatchObject({ event: 'finished', resumed: true, usage: { input: 1_200, output: 340, cachedInput: 18_000 } });
     });
 
     /** A first step that finished in the place `handle`, and the later step's place on `folder`. */

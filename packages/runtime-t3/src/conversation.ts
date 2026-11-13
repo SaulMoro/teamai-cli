@@ -11,7 +11,7 @@ import type { InstanceAdder } from './instances.js';
 import { unreadableFailure, type LaunchRecord, type OpRecord, type PlaceRecord, type ThreadRecord } from './journal.js';
 import { JUDGE_KEPT, JudgeCopyFailed, JudgeReleased, judged, launchJudge } from './judge.js';
 import type { Reach, Reached, Serving, Session } from './runtime.js';
-import { driverOf, isDefaultToolHome, sessionSince, DRIVERS } from './sessions.js';
+import { driverOf, isDefaultToolHome, sessionSince, stepUsage, DRIVERS } from './sessions.js';
 import { instanceToolHome, projectSettings, readSettings, type ModelSelection, type T3RuntimeMode } from './settings.js';
 import { driverOfProvider } from './tool-instances.js';
 import { T3Error, USAGE_LIMIT_TITLE, type Environment, type Launch, type ListedThread, type NewThread, type StepMode, type Provider, type T3, type ThreadShell, type Waited, isActive } from './t3.js';
@@ -595,9 +595,9 @@ export function conversations({ serving, adder }: { serving: Serving; adder: Ins
       // A new thread never resumes the session the lease names (T3 starts each with a new one), so that session, of an
       // earlier thread in this folder the step did not go on in, is not this one's.
       const other = thread.turnOf ? undefined : request.lease.resume;
-      const id = driver && toolHome !== undefined ? await sessionSince({ driver, toolHome, cwd, since: thread.launchedAt, ...(other !== undefined && { other }) }) : undefined;
+      const found = driver && toolHome !== undefined ? await sessionSince({ driver, toolHome, cwd, since: thread.launchedAt, ...(other !== undefined && { other }) }) : undefined;
 
-      if (!driver || toolHome === undefined || !id) {
+      if (!driver || toolHome === undefined || !found) {
         // T3 runs the tool in the instance's home path, else in the home its own server's environment names, which
         // teamai cannot read: only the setting makes the two agree.
         const named = driver && attemptHome === undefined && instanceId !== undefined && toolHome !== undefined
@@ -608,9 +608,12 @@ export function conversations({ serving, adder }: { serving: Serving; adder: Ins
       }
 
       // teamai reads a tool instance's session only in the home named here: it knows no default home for it.
-      const kept = { tool: thread.tool, id, ...((thread.tool !== DRIVERS[driver].tool || !isDefaultToolHome(driver, toolHome)) && { home: toolHome }) };
+      const kept = { tool: thread.tool, id: found.id, ...((thread.tool !== DRIVERS[driver].tool || !isDefaultToolHome(driver, toolHome)) && { home: toolHome }) };
+      // A turn journaled before it carried its send time cannot be told from the earlier steps' requests, so it reports none.
+      const sentAt = thread.turnOf?.sentAt;
+      const usage = !thread.turnOf ? await stepUsage({ driver, session: found }) : sentAt === undefined ? undefined : await stepUsage({ driver, session: found, turnSentAt: sentAt });
 
-      return stopped({ op: request.op, state: 'finished', session: kept, result: written.result, ...(request.confined && { confined: JUDGE_KEPT }), ...(thread.turnOf && { resumed: true }) });
+      return stopped({ op: request.op, state: 'finished', session: kept, result: written.result, ...(usage && { usage }), ...(request.confined && { confined: JUDGE_KEPT }), ...(thread.turnOf && { resumed: true }) });
     }
   };
 
@@ -820,7 +823,7 @@ export function conversations({ serving, adder }: { serving: Serving; adder: Ins
 
         const turn: ThreadRecord = {
           ...continued, ...(configure && { model: configure.model, conversation: { ...continued.conversation, cwd: request.cwd, modelSelection: configure } }),
-          turnOf: { handle: earlier.handle, op: earlier.op, runsBefore: continuing.runs, ...(configure && { configure }) },
+          turnOf: { handle: earlier.handle, op: earlier.op, runsBefore: continuing.runs, sentAt: Date.now(), ...(configure && { configure }) },
         };
 
         state.preparing = false;

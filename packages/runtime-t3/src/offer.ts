@@ -238,7 +238,9 @@ export function offer({ serving, adder, start, recover }: { serving: Serving; ad
         ...(parsed.options.runtime_mode === 'full-access' && tools.length > 0 && { permissions: Object.fromEntries(tools.map((tool) => [tool, 'full-access' as const])) }),
         ...(Object.keys(unavailable).length > 0 && { unavailable }),
         can: {
-          exec: false, setup: false, env: false, hitl: request.mode === 'attended', tokens: false, unattended: false, max_turns: false,
+          // tokens: every tool it runs is Claude or Codex, whose session transcript on this machine (T3 runs only in
+          // environment: local) records the tokens each step billed.
+          exec: false, setup: false, env: false, hitl: request.mode === 'attended', tokens: true, unattended: false, max_turns: false,
           // No role: a T3 thread runs its tool in the provider instance's own home, with the member's own resources, and
           // this runtime cannot point it at the tool home teamai delivers a role into.
           workspace: ['read-only', 'new', 'continue', 'clone', 'team'], tools, ...(defaultTool && { default_tool: defaultTool }),

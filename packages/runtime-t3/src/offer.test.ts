@@ -19,7 +19,7 @@ describe('teamai-runtime-t3', () => {
   useT3Runtime();
 
   describe('init', () => {
-    it('offers prompt steps for the tools the environment runs, and no command', async () => {
+    it('offers prompt steps for the tools the environment runs, reporting their tokens, and no command', async () => {
       signIn(t3);
       const runtime = start();
 
@@ -30,7 +30,7 @@ describe('teamai-runtime-t3', () => {
       expect(reply).toEqual({
         type: 'init', ok: true, prompt: true, conversations: true, confinedPrompt: true, wake: true,
         can: {
-          exec: false, setup: false, env: false, hitl: true, tokens: false, unattended: false, max_turns: false,
+          exec: false, setup: false, env: false, hitl: true, tokens: true, unattended: false, max_turns: false,
           workspace: ['read-only', 'new', 'continue', 'clone', 'team'], tools: ['claude', 'codex'],
           confined: [{ level: 'best-effort', access: 'read', tools: ['claude', 'codex'] }],
         },
