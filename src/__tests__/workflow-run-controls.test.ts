@@ -280,6 +280,19 @@ describe('a run part of a step', () => {
 
     expect(await readRun(outer.config, String(started.data.run))).toMatchObject({ status: 'cancelled' });
   }, 30_000);
+
+  it('is left to a warning that names the step when the runs part of it cannot be listed, so the step\'s own stop goes on', async () => {
+    const warn = vi.spyOn(log, 'warn').mockImplementation(() => {});
+    const outer = await fixture('  - id: work\n    command: echo work');
+    const lease = data(await outer.next()).lease;
+    const partOf = { run: RunIdSchema.parse(outer.id), attempt: AttemptIdSchema.parse(lease.attempt) };
+    fs.mkdirSync(attemptDir(outer.config, partOf.run, partOf.attempt), { recursive: true });
+    fs.writeFileSync(path.join(attemptDir(outer.config, partOf.run, partOf.attempt), 'parts'), '');
+
+    await endRunsPartOf(outer.config, partOf);
+
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining(`The runs part of attempt ${partOf.attempt} of run ${partOf.run} could not be listed, so none was ended (`));
+  });
 });
 
 describe('workflow retry', () => {

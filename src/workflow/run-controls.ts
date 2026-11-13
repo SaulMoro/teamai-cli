@@ -4,6 +4,7 @@ import { z } from 'zod';
 import { loadTeamConfig } from '../config.js';
 import { type LocalConfig } from '../types.js';
 import { isJsonObject, type JsonValue } from '@teamai/shared/json';
+import { log } from '@teamai/shared/log';
 import { shellQuoteValue } from '../utils/shell-profile.js';
 import { agentEvidence, type AgentEvidence } from './attempt-marker.js';
 import {
@@ -347,28 +348,42 @@ export async function cancelRun(
  * each that still runs is cancelled under its lock, named for the step the attempt ran. With no live driver of it here,
  * as when the attempt's own process drove it and is gone, what its attempts left is stopped too, their process groups
  * first, as `teamai workflow cancel` stops them; a live driver of it stops its own attempts once it sees the cancel.
+ * Never throws: a run it cannot end it names in a warning, so the stop of the attempt goes on.
  */
 export async function endRunsPartOf(config: LocalConfig, partOf: PartOfStep): Promise<void> {
-  for (const part of await partsOf(config, partOf)) {
-    const state = await readRun(config, part);
+  const parts = await partsOf(config, partOf).catch((cause: unknown) => {
+    log.warn(`The runs part of attempt ${partOf.attempt} of run ${partOf.run} could not be listed, so none was ended (${cause instanceof Error ? cause.message : String(cause)}). Cancel each with teamai workflow cancel <run>.`);
 
-    if (state === 'missing' || state === 'corrupt' || !isPartOf(state.partOf, partOf)) continue;
-    // One that settled is stopped again, as teamai workflow cancel stops one: its driver may have been killed first.
-    const cancel = state.status === 'running'
-      ? await Promise.all([stoppedFailure(config, partOf, new Date().toISOString()), knownSecrets(config)]).then(([failure, secrets]) => ({ failure, secrets }))
-      : undefined;
+    return [];
+  });
 
-    const taken = await takeRunLock(config, part, async (lock) => {
-      if (cancel) await cancelRun(config, part, cancel.secrets, undefined, cancel.failure, { heldLock: lock });
-      await stopCancelledAttempts(config, lock, { isRunnerHolding: runnerAlive });
-    }, { waitMs: 0 }).catch(runRemovalRefusal);
-
-    const isHeld = 'kind' in taken && taken.kind === 'held';
-    const isRemoved = 'error' in taken && taken.error.code === 'run_not_found';
-
-    // Its lock busy, or refused while runs are removed: cancelled without it, as teamai workflow cancel does.
-    if (cancel && !isHeld && !isRemoved) await cancelRun(config, part, cancel.secrets, undefined, cancel.failure);
+  for (const part of parts) {
+    await endRunPartOf(config, part, partOf).catch((cause: unknown) => {
+      log.warn(`Run ${part}, part of attempt ${partOf.attempt} of run ${partOf.run}, was not ended (${cause instanceof Error ? cause.message : String(cause)}). End it with: teamai workflow cancel ${part}`);
+    });
   }
+}
+
+async function endRunPartOf(config: LocalConfig, part: RunId, partOf: PartOfStep): Promise<void> {
+  const state = await readRun(config, part);
+
+  if (state === 'missing' || state === 'corrupt' || !isPartOf(state.partOf, partOf)) return;
+
+  // One that settled is stopped again, as teamai workflow cancel stops one: its driver may have been killed first.
+  const ending = state.status === 'running'
+    ? await Promise.all([stoppedFailure(config, partOf, new Date().toISOString()), knownSecrets(config)]).then(([failure, secrets]) => ({ failure, secrets }))
+    : undefined;
+
+  const taken = await takeRunLock(config, part, async (lock) => {
+    if (ending) await cancelRun(config, part, ending.secrets, undefined, ending.failure, { heldLock: lock });
+    await stopCancelledAttempts(config, lock, { isRunnerHolding: runnerAlive });
+  }, { waitMs: 0 }).catch(runRemovalRefusal);
+
+  const isHeld = 'kind' in taken && taken.kind === 'held';
+  const isRemoved = 'error' in taken && taken.error.code === 'run_not_found';
+
+  // Its lock busy, or refused while runs are removed: cancelled without it, as teamai workflow cancel does.
+  if (ending && !isHeld && !isRemoved) await cancelRun(config, part, ending.secrets, undefined, ending.failure);
 }
 
 interface RetryContainer {
