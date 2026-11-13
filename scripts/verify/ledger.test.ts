@@ -60,6 +60,10 @@ describe("another program's own state in a ledger's section (e)", () => {
     ['home/Library', 'dir', { owner: 'sbx', dir: 'home/Library/Application Support/com.docker.sandboxes' }],
     ['home/Library/Preferences', 'dir', undefined],
     ['home/Library/Preferences/com.example.plist', 'f'.repeat(64), undefined],
+    // What teamai's probe of OpenCode leaves (`opencode --version`) stays teamai's until teamai stops leaving it.
+    ['home/.cache/opencode/version', 'f'.repeat(64), undefined],
+    ['home/.local/share/opencode/log/x.log', 'f'.repeat(64), undefined],
+    ['home/.local/state/opencode', 'dir', undefined],
   ])('judges %s holding %s as the state of %o', (entry, value, own) => {
     expect(ownStateOf(entry, value)).toEqual(own);
   });
