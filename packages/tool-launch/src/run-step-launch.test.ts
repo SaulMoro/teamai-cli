@@ -6,7 +6,7 @@ import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { log } from '@teamai/shared/log';
 import { BUILT_IN_TOOLS } from '@teamai/tool-definitions';
-import { runStepLaunch, type StepLaunchHost, type ToolClosed, type ToolLauncher } from './run-step-launch.js';
+import { runStepLaunch, toolLauncher, type StepLaunchHost, type ToolClosed, type ToolLauncher } from './run-step-launch.js';
 
 const claude = { name: 'claude', family: 'claude', step: BUILT_IN_TOOLS.claude.launch.claude.step, executable: '/usr/bin/claude' } as const;
 
@@ -39,7 +39,7 @@ afterEach(async () => {
 function fakeLauncher(lines: readonly string[], { exitCode = 0, untilStopped = false } = {}): { start: ToolLauncher; stops: () => number } {
   let stops = 0;
 
-  const start: ToolLauncher = ({ onStart, onStdout }) => {
+  const start = toolLauncher(({ onStart, onStdout }) => {
     let end: (closed: ToolClosed) => void = () => {};
     const closed = new Promise<ToolClosed>((resolve) => { end = resolve; });
     const stdout = lines.map((line) => `${line}\n`).join('');
@@ -60,7 +60,7 @@ function fakeLauncher(lines: readonly string[], { exitCode = 0, untilStopped = f
         end({ exitCode: 143, stdout });
       },
     };
-  };
+  });
 
   return { start, stops: () => stops };
 }
@@ -87,11 +87,11 @@ describe('runStepLaunch', () => {
       JSON.stringify({ type: 'stream_event', event: { type: 'message_start', message: { id: 'm1', usage: { input_tokens: 200, output_tokens: 1 } } } }),
     ], { untilStopped: true });
 
-    const start: ToolLauncher = (launch) => {
+    const start = toolLauncher((launch) => {
       const run = fake(launch);
 
       return { ...run, stop: async (signal) => { await run.stop(signal); throw new Error('the sandbox did not answer'); } };
-    };
+    });
 
     try {
       const ran = await runStepLaunch({ tool: claude, input: { prompt: 'Fix it.', cwd: os.tmpdir(), resultPath: await resultPathIn(), secrets: {}, expected: 'a summary' }, start, limits: { budget: 100 }, interactive: false, host });
@@ -105,7 +105,7 @@ describe('runStepLaunch', () => {
   });
 
   it('marks a stop the port could not make, which ends the tool\'s run with a failure, as one it could not confirm', async () => {
-    const start: ToolLauncher = ({ onStart, onStdout }) => {
+    const start = toolLauncher(({ onStart, onStdout }) => {
       let end: (closed: ToolClosed) => void = () => {};
       const closed = new Promise<ToolClosed>((resolve) => { end = resolve; });
 
@@ -116,7 +116,7 @@ describe('runStepLaunch', () => {
 
       // As a sandbox's does: the stop settles, and the run ends naming what still runs.
       return { closed, started: () => true, stop: async () => { end({ failure: { code: 'cancel_failed', message: 'the tool reached a limit of its step and could not be stopped' } }); } };
-    };
+    });
 
     const ran = await runStepLaunch({ tool: claude, input: { prompt: 'Fix it.', cwd: os.tmpdir(), resultPath: await resultPathIn(), secrets: {}, expected: 'a summary' }, start, limits: { budget: 100 }, interactive: false, host });
 
@@ -131,7 +131,7 @@ describe('runStepLaunch', () => {
 
     const ran = await runStepLaunch({
       tool: claude, input: { prompt: 'Fix it.', cwd: os.tmpdir(), resultPath: await resultPathIn(), secrets: {}, expected: 'a summary' },
-      start: (launch) => { starts++; return fake(launch); }, signal: controller.signal, interactive: false, host,
+      start: toolLauncher((launch) => { starts++; return fake(launch); }), signal: controller.signal, interactive: false, host,
     });
 
     expect(starts).toBe(0);
@@ -143,7 +143,7 @@ describe('runStepLaunch', () => {
     let stops = 0;
 
     // A runtime's port: it opens the place and sets it up before the exec, and a stop there sends no exec.
-    const start: ToolLauncher = () => {
+    const start = toolLauncher(() => {
       let isStopRequested = false;
       const closed = (async (): Promise<ToolClosed> => {
         controller.abort();
@@ -153,7 +153,7 @@ describe('runStepLaunch', () => {
       })();
 
       return { closed, started: () => false, stop: async () => { stops++; isStopRequested = true; } };
-    };
+    });
 
     const ran = await runStepLaunch({ tool: claude, input: { prompt: 'Fix it.', cwd: os.tmpdir(), resultPath: await resultPathIn(), secrets: {}, expected: 'a summary' }, start, signal: controller.signal, interactive: false, host });
 
@@ -163,14 +163,14 @@ describe('runStepLaunch', () => {
 
   it('stops nothing at the timeout once the port\'s process end rejected', async () => {
     let stops = 0;
-    const start: ToolLauncher = ({ onStart }) => {
+    const start = toolLauncher(({ onStart }) => {
       const closed = Promise.resolve().then((): ToolClosed => {
         onStart();
         throw new Error('the port lost the process');
       });
 
       return { closed, started: () => true, stop: async () => { stops++; } };
-    };
+    });
 
     await expect(runStepLaunch({ tool: claude, input: { prompt: 'Fix it.', cwd: os.tmpdir(), resultPath: await resultPathIn(), secrets: {}, expected: 'a summary' }, start, limits: { timeoutMs: 20 }, interactive: false, host })).rejects.toThrow('the port lost the process');
     await new Promise((resolve) => { setTimeout(resolve, 60); });
@@ -199,7 +199,7 @@ describe('runStepLaunch', () => {
 
     await runStepLaunch({
       tool: opencode, input: { prompt: 'Fix it.', cwd: os.tmpdir(), resultPath: await resultPathIn(), secrets: {}, expected: undefined },
-      start: (launch) => { launched = launch.args; return start(launch); }, interactive: false, host: { ...host, opencodeMajor: async () => major },
+      start: toolLauncher((launch) => { launched = launch.args; return start(launch); }), interactive: false, host: { ...host, opencodeMajor: async () => major },
     });
 
     // `opencode run` of 2.2.5 without --standalone starts `opencode serve --service`, which outlives it with the step's env.

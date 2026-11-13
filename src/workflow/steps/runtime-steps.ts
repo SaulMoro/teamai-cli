@@ -16,7 +16,7 @@ import type { WorkflowFailure } from '../types.js';
 import { git } from '../worktree.js';
 import { UsageLimits } from '../usage-limits.js';
 import type { LocalConfig } from '../../types.js';
-import { stepPrompt, withoutPrompt, type ToolClosed, type ToolLauncher } from '@teamai/tool-launch/run-step-launch';
+import { stepPrompt, toolLauncher, withoutPrompt, type ToolClosed, type ToolLauncher } from '@teamai/tool-launch/run-step-launch';
 import type { StepLauncher, StepRun, StepRunResult } from '@teamai/runtime-tools';
 
 // ─── The local loop's steps on a step runtime ────────────
@@ -255,7 +255,7 @@ function interrupted(): WorkflowFailure {
 export function runtimeLauncher(run: AttemptRun, { view, tool, toolHome, unset, credentials, setUp }: { view: PlaceView; tool: string; toolHome: { tool: string; dir: string }; unset: string[]; credentials: Record<string, string>; setUp: SetUp }): ToolLauncher {
   const given = toolCredentials(credentials, unset);
 
-  return ({ executable, args, cwd, env, onStart, onStdout }) => {
+  return toolLauncher(({ executable, args, cwd, env, onStart, onStdout }) => {
     let accepted = false;
     let stdout = '';
     // A stop between setup and the exec finds no operation running there to cancel, so the exec is not sent.
@@ -316,7 +316,7 @@ export function runtimeLauncher(run: AttemptRun, { view, tool, toolHome, unset, 
         return run.cancel();
       },
     };
-  };
+  });
 }
 
 /**

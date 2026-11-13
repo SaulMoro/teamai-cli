@@ -2,7 +2,7 @@ import { PromptResultSchema, type PromptRequestSchema } from '@teamai/runtime-pr
 import { redact, redactJson } from '@teamai/shared/redact';
 import type { StepLaunch } from '@teamai/tool-core/launch';
 import { stepLaunchOf } from '@teamai/tool-definitions';
-import { runStepLaunch, type StepFamily, type StepLaunchHost, type StepLaunchInput, type StepLaunchResult, type StepStop, type ToolClosed, type ToolLauncher } from '@teamai/tool-launch/run-step-launch';
+import { runStepLaunch, toolLauncher, type StepFamily, type StepLaunchHost, type StepLaunchInput, type StepLaunchResult, type StepStop, type ToolClosed } from '@teamai/tool-launch/run-step-launch';
 import type { z } from 'zod';
 import { boundedTail, STDERR_CHARS } from './bounded-tail.js';
 import type { Outcome } from './journal.js';
@@ -63,7 +63,7 @@ export function sandboxProcess(provider: Provider, id: string, unset: string[]) 
   const stderr = boundedTail(STDERR_CHARS);
   let printed = 0;
 
-  const start: ToolLauncher = ({ executable, args, cwd, env, onStart, onStdout }) => {
+  const start = toolLauncher(({ executable, args, cwd, env, onStart, onStdout }) => {
     let started = false;
     /** Settles with a stop that failed: the tool then still runs, and the launch ends on that rather than waiting for it. */
     let unstoppable: (closed: ToolClosed) => void = () => {};
@@ -112,7 +112,7 @@ export function sandboxProcess(provider: Provider, id: string, unset: string[]) 
         if (!stopped.ok) unstoppable({ failure: { code: stopped.failure.code, message: `${executable} reached a limit of its step and could not be stopped: ${stopped.failure.message}` } });
       },
     };
-  };
+  });
 
   // A tail that cut what the tool printed starts inside a line, maybe inside a credential no mask then matches: its
   // first line goes.

@@ -109,9 +109,20 @@ export interface ToolProcess {
  * The port a launch starts its tool's process through: a spawn on this machine, or a step runtime's `exec`. `onStart`
  * is called once the process started, after any place and setup before it; `onStdout` gets each decoded chunk. An
  * adapter never calls `onStdout` before it returns, so the launch holds the process before a limit stops it. Every
- * adapter passes `toolLauncherConformance` (`@teamai/tool-launch/testing`).
+ * adapter passes `toolLauncherConformance` (`@teamai/tool-launch/testing`): only `toolLauncher` makes one, and the
+ * lint rule `teamai/launcher-conformance` keeps its calls in the adapters that suite runs on.
  */
-export type ToolLauncher = (launch: { executable: string; args: string[]; cwd: string; env: NodeJS.ProcessEnv; interactive: boolean; onStart: () => void; onStdout: (text: string) => void }) => ToolProcess;
+export type ToolLauncher = ToolStart & { readonly [conformantLauncher]: true };
+
+type ToolStart = (launch: { executable: string; args: string[]; cwd: string; env: NodeJS.ProcessEnv; interactive: boolean; onStart: () => void; onStdout: (text: string) => void }) => ToolProcess;
+
+declare const conformantLauncher: unique symbol;
+
+/** Makes `start` a `ToolLauncher`. Production code calls it only in an adapter `toolLauncherConformance` runs on. */
+export function toolLauncher(start: ToolStart): ToolLauncher {
+  // SAFETY: the brand is type-only, and this is the one place that adds it; the lint rule keeps its calls in adapters.
+  return start as ToolLauncher;
+}
 
 /**
  * What a launch gave. `started` is whether the tool's process started, so a pass that launched nothing records no

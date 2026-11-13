@@ -5,7 +5,7 @@ import { StringDecoder } from 'node:string_decoder';
 import { stopProcess } from '@teamai/shared/process-group';
 import { resolveCliPath, resolvePathCommand } from '@teamai/shared/cli-path';
 import { spawnCommand } from '@teamai/shared/exec';
-import { runStepLaunch, type StepLaunchHost, type StepLaunchInput, type StepLaunchResult, type StepLimits, type StepTool, type ToolClosed, type ToolLauncher } from '@teamai/tool-launch/run-step-launch';
+import { runStepLaunch, toolLauncher, type StepLaunchHost, type StepLaunchInput, type StepLaunchResult, type StepLimits, type StepTool, type ToolClosed, type ToolLauncher } from '@teamai/tool-launch/run-step-launch';
 
 /** A step's launch as the engine asks for it: what the launch takes, and its limits. */
 export interface StepRun extends StepLaunchInput, StepLimits {
@@ -41,7 +41,7 @@ export interface StepLaunchDeps {
  * the terminal. It never calls `onStdout` before it returns, so the launch holds the process before a limit stops it.
  */
 export function hostProcess(spawnTool: ToolSpawn = spawnCommand): ToolLauncher {
-  return ({ executable, args, cwd, env, interactive, onStart, onStdout }) => {
+  return toolLauncher(({ executable, args, cwd, env, interactive, onStart, onStdout }) => {
     let started = false;
     let childProcess: ChildProcess | undefined;
 
@@ -84,7 +84,7 @@ export function hostProcess(spawnTool: ToolSpawn = spawnCommand): ToolLauncher {
     const stop = childProcess && stopProcess(childProcess, closed, !interactive && process.platform !== 'win32');
 
     return { closed, started: () => started, stop: async (signal) => { await stop?.(signal); } };
-  };
+  });
 }
 
 /**

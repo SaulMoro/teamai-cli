@@ -1,6 +1,9 @@
 import { defineRule } from '@oxlint/plugins';
 import fs from 'node:fs';
-import { inProductionSource, lintedPath, scopedFiles } from '../utils.js';
+import { inProductionSource, isOneOf, scopedFiles } from '../utils.js';
+
+// A ToolLauncher is branded: only the mint `toolLauncher` makes one, so the type check refuses a launcher from anywhere
+// else. This rule keeps the mint's calls in the adapters below, one each, and refuses a cast that forges the brand.
 
 // Each ToolLauncher adapter, and the test that runs the launcher conformance suite (toolLauncherConformance) on it.
 const ADAPTERS = {
@@ -9,89 +12,76 @@ const ADAPTERS = {
   'src/workflow/steps/runtime-steps.ts': 'src/__tests__/workflow-runtime-launcher.test.ts',
 };
 
-scopedFiles([...Object.keys(ADAPTERS), ...Object.values(ADAPTERS)]);
+// The port's own file, where the mint casts.
+const PORT = 'packages/tool-launch/src/run-step-launch.ts';
 
-// A call on a line of its own: one in a comment or a string does not run the suite.
-const untested = Object.values(ADAPTERS).filter((test) => !/^\s*toolLauncherConformance\(/mu.test(fs.readFileSync(new URL(`../../${test}`, import.meta.url), 'utf8')));
+const MINT = 'toolLauncher';
 
-if (untested.length > 0) throw new Error(`teamai/launcher-conformance: ${untested.join(', ')} calls no toolLauncherConformance. Run the suite on its adapter again, or point ADAPTERS at the test that does.`);
+scopedFiles([PORT, ...Object.keys(ADAPTERS), ...Object.values(ADAPTERS)]);
 
-const MESSAGE = 'A ToolLauncher adapter runs the launcher conformance suite: call toolLauncherConformance on it in a test, and add this file and that test to ADAPTERS in oxlint-plugin-teamai/rules/launcher-conformance.js.';
+const readRepositoryFile = (/** @type {string} */ file) => fs.readFileSync(new URL(`../../${file}`, import.meta.url), 'utf8');
 
-// The calls that run a launcher, by the name of their option that takes it.
-const LAUNCHES = new Set(['runStepLaunch', 'stepLauncher']);
+// A call on a line of its own: one in a comment or a string does not run the suite. An adapter that no longer mints
+// leaves an entry that guards nothing.
+const unchecked = [
+  ...Object.values(ADAPTERS).filter((test) => !/^\s*toolLauncherConformance\(/mu.test(readRepositoryFile(test))).map((test) => `${test} calls no toolLauncherConformance`),
+  ...Object.keys(ADAPTERS).filter((adapter) => !new RegExp(`\\b${MINT}\\(`, 'u').test(readRepositoryFile(adapter))).map((adapter) => `${adapter} calls no ${MINT}`),
+];
 
-const isFunction = (/** @type {any} */ node) => node?.type === 'ArrowFunctionExpression' || node?.type === 'FunctionExpression' || node?.type === 'FunctionDeclaration';
+if (unchecked.length > 0) throw new Error(`teamai/launcher-conformance: ${unchecked.join('; ')}. Run the suite on the adapter again, or point ADAPTERS at the adapter and the test that runs it.`);
 
-/**
- * Whether a `ToolLauncher` type at `node` says what a value is, as a return type, an annotation, `satisfies` or `as`
- * do, rather than what a parameter or a property takes, or the port's own definition.
- */
-const isLauncherClaim = (/** @type {any} */ node) => {
-  for (let at = node.parent; at; at = at.parent) {
-    if (at.type === 'TSPropertySignature' || at.type === 'TSTypeAliasDeclaration' || at.type === 'TSInterfaceDeclaration' || at.type === 'TSFunctionType') return false;
+const OUTSIDE = `A ToolLauncher is made only in an adapter the launcher conformance suite runs on: call ${MINT} there, run toolLauncherConformance on it in a test, and add this file and that test to ADAPTERS in oxlint-plugin-teamai/rules/launcher-conformance.js.`;
 
-    if (at.type === 'TSSatisfiesExpression' || at.type === 'TSAsExpression') return true;
+const SECOND = `An adapter makes one ToolLauncher, the one its conformance test runs: build this launch on that one, or move this launcher to an adapter of its own with its own conformance test.`;
 
-    // A function's return type, or a constant's: a parameter's annotation takes a launcher.
-    if (at.type === 'TSTypeAnnotation') return isFunction(at.parent) || (at.parent?.type === 'Identifier' && at.parent.parent?.type === 'VariableDeclarator');
-  }
-
-  return false;
-};
+const CAST = `A cast to ToolLauncher forges a launcher the conformance suite never ran on: make it with ${MINT} in an adapter the suite runs on.`;
 
 export default defineRule({
   meta: { type: 'problem', docs: { description: 'Keep every ToolLauncher adapter under the launcher conformance suite.' } },
   create(context) {
     if (!inProductionSource(context)) return {};
-    const file = lintedPath(context);
-    const isAdapter = Object.keys(ADAPTERS).some((adapter) => file.endsWith(`/${adapter}`));
-    /** @type {Map<string, any>} what each name this file declares holds: its function, or its initial value */
-    const declared = new Map();
-    /** @type {any[]} the launchers this file passes to a launch */
-    const passed = [];
-
-    /**
-     * Whether `value`, a launch's launcher, is one this file makes: a function it writes, or one a function of its own builds.
-     * @returns {boolean}
-     */
-    const isMadeHere = (/** @type {any} */ value, depth = 0) => {
-      if (depth > 4 || value === undefined || value === null) return false;
-
-      if (isFunction(value)) return true;
-
-      if (value.type === 'Identifier') return declared.has(value.name) && isMadeHere(declared.get(value.name), depth + 1);
-
-      if (value.type === 'CallExpression' && value.callee.type === 'Identifier') return isFunction(declared.get(value.callee.name));
-
-      return value.type === 'TSAsExpression' || value.type === 'TSSatisfiesExpression' ? isMadeHere(value.expression, depth + 1) : false;
-    };
+    const isAdapter = isOneOf(context, Object.keys(ADAPTERS));
+    const isPort = isOneOf(context, [PORT]);
+    /** @type {Set<string>} the names the mint goes by in this file */
+    const mints = new Set([MINT]);
+    let minted = 0;
 
     return {
-      TSTypeReference(node) {
-        if (!isAdapter && node.typeName.type === 'Identifier' && node.typeName.name === 'ToolLauncher' && isLauncherClaim(node)) context.report({ node, message: MESSAGE });
-      },
-      FunctionDeclaration(node) {
-        if (node.id) declared.set(node.id.name, node);
-      },
-      VariableDeclarator(node) {
-        if (node.id.type === 'Identifier' && node.init) declared.set(node.id.name, node.init);
+      ImportSpecifier(node) {
+        if (node.imported.type === 'Identifier' && node.imported.name === MINT) mints.add(node.local.name);
       },
       CallExpression(node) {
-        if (node.callee.type !== 'Identifier' || !LAUNCHES.has(node.callee.name)) return;
+        const { callee } = node;
+        const isMint = (callee.type === 'Identifier' && mints.has(callee.name)) || (callee.type === 'MemberExpression' && !callee.computed && callee.property.type === 'Identifier' && callee.property.name === MINT);
 
-        for (const options of node.arguments) {
-          if (options.type !== 'ObjectExpression') continue;
+        if (!isMint || isPort) return;
 
-          for (const property of options.properties) {
-            if (property.type === 'Property' && property.key.type === 'Identifier' && property.key.name === 'start') passed.push(property);
+        minted++;
+
+        if (!isAdapter) context.report({ node, message: OUTSIDE });
+        else if (minted > 1) context.report({ node, message: SECOND });
+      },
+      // The mint held or exported under another name makes launchers no call above sees.
+      Identifier(node) {
+        const { parent } = node;
+
+        const isCalled = (/** @type {any} */ at) => at.parent?.type === 'CallExpression' && at.parent.callee === at;
+
+        if (isPort || !mints.has(node.name) || parent.type === 'ImportSpecifier' || isCalled(node) || (parent.type === 'MemberExpression' && parent.property === node && isCalled(parent))) return;
+
+        context.report({ node, message: OUTSIDE });
+      },
+      TSTypeReference(node) {
+        if (isPort || node.typeName.type !== 'Identifier' || node.typeName.name !== 'ToolLauncher') return;
+
+        // Up through the type's own nodes only: a launcher's return type inside a cast expression is no cast to the port.
+        for (let /** @type {any} */ at = node.parent; at?.type.startsWith('TS'); at = at.parent) {
+          if (at.type === 'TSAsExpression' || at.type === 'TSTypeAssertion') {
+            context.report({ node, message: CAST });
+
+            return;
           }
         }
-      },
-      'Program:exit'() {
-        // A launcher this file makes is an adapter no test runs the suite on; in an adapter's file, one written into the
-        // launch is not the one the suite runs.
-        for (const property of passed) if (isAdapter ? isFunction(property.value) : isMadeHere(property.value)) context.report({ node: property, message: MESSAGE });
       },
     };
   },
