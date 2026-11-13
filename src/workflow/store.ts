@@ -274,11 +274,11 @@ export class RunsRemovalLockTakenError extends Error {
 }
 
 /** The envelope error of a run lock not taken because an uninstall removes, or removed, the runs; rethrows anything else. */
-export function runRemovalRefusal(error: unknown): { error: { code: 'run_not_found' | 'busy'; message: string } } {
-  if (error instanceof RunRemovedError) return { error: { code: 'run_not_found', message: error.message } };
+export function runRemovalRefusal(cause: unknown) {
+  if (cause instanceof RunRemovedError) return { error: { code: 'run_not_found' as const, message: cause.message } };
 
-  if (error instanceof RunsRemovalLockTakenError) return { error: { code: 'busy', message: error.message } };
-  throw error;
+  if (cause instanceof RunsRemovalLockTakenError) return { error: { code: 'busy' as const, message: cause.message } };
+  throw cause;
 }
 
 /**
@@ -319,15 +319,18 @@ export async function runsDrivenIn(runs: string): Promise<Array<{ run: RunId; pi
     const run = RunIdSchema.safeParse(name);
 
     if (!run.success) continue;
-    const attempts = await fs.readdir(attemptsDirIn(runs, run.data)).catch((error: unknown) => {
-      if (errnoCode(error) === 'ENOENT') return [];
-      throw error;
+
+    const attempts = await fs.readdir(attemptsDirIn(runs, run.data)).catch((cause: unknown) => {
+      if (errnoCode(cause) === 'ENOENT') return [];
+      throw cause;
     });
-    const runners = attempts.sort().flatMap((name) => {
-      const attempt = AttemptIdSchema.safeParse(name);
+
+    const runners = attempts.sort().flatMap((entry) => {
+      const attempt = AttemptIdSchema.safeParse(entry);
 
       return attempt.success ? [runnerLockIn(runs, run.data, attempt.data)] : [];
     });
+
     const locks = [path.join(runs, run.data, 'driver.lock'), ...runners];
 
     for (const lock of locks) {

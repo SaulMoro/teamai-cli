@@ -414,7 +414,7 @@ async function check(context: SkillContext, lock: RunLock, attempt: AttemptId, {
  * `owned`, also once another install took the run over or the session called nothing for the stale window. A check that
  * throws, as one of a run an uninstall removes does, stops `work` with `stop` first, so nothing it started is left running.
  */
-async function whileOpen<T>(context: SkillContext, run: RunId, attempt: AttemptId, input: { work: Promise<T>; stop: () => Promise<unknown>; phases: readonly AttemptState['phase'][]; owned?: boolean; expiresAt?: string }): Promise<T | undefined> {
+async function whileOpen<T>(context: SkillContext, run: RunId, attempt: AttemptId, input: { work: Promise<T>; stop: () => Promise<void>; phases: readonly AttemptState['phase'][]; owned?: boolean; expiresAt?: string }): Promise<T | undefined> {
   for (;;) {
     const checking = new AbortController();
     const ended = await Promise.race([input.work.then((value) => ({ value })), context.runners.sleep(checkIn(context, input.expiresAt), checking.signal).then(() => undefined)]);
@@ -422,9 +422,9 @@ async function whileOpen<T>(context: SkillContext, run: RunId, attempt: AttemptI
 
     if (ended) return ended.value;
 
-    const checked = await locked(context, run, (lock) => check(context, lock, attempt, { phases: input.phases, owned: input.owned === true })).catch(async (error: unknown) => {
+    const checked = await locked(context, run, (lock) => check(context, lock, attempt, { phases: input.phases, owned: input.owned === true })).catch(async (cause: unknown) => {
       await input.stop();
-      throw error;
+      throw cause;
     });
 
     if (!checked.open) return undefined;
@@ -438,12 +438,14 @@ async function whileOpen<T>(context: SkillContext, run: RunId, attempt: AttemptI
 async function setUp(context: SkillContext, run: RunId, attempt: AttemptId, prepared: Extract<Stage, { kind: 'prepared' }>): Promise<WorkflowFailure | undefined> {
   const stop = new AbortController();
   const setup = context.client.setup(run, attempt, prepared.mode, stop.signal);
+
   const stopSetup = async (): Promise<WorkflowFailure | undefined> => {
     stop.abort();
 
     return await setup;
   };
-  const ended = await whileOpen(context, run, attempt, { work: setup.then((failure) => ({ failure })), stop: stopSetup, phases: ['preparing', 'running'], expiresAt: prepared.expiresAt });
+
+  const ended = await whileOpen(context, run, attempt, { work: setup.then((failure) => ({ failure })), stop: async () => { await stopSetup(); }, phases: ['preparing', 'running'], expiresAt: prepared.expiresAt });
 
   return ended ? ended.failure : await stopSetup();
 }
@@ -454,7 +456,7 @@ async function setUp(context: SkillContext, run: RunId, attempt: AttemptId, prep
  */
 async function runCommand(context: SkillContext, run: RunId, attempt: AttemptId, stage: Extract<Stage, { kind: 'run' }>): Promise<GroupedCommandExit> {
   const command = context.runners.command({ run, attempt, command: stage.command, cwd: stage.dir, env: { ...stage.env, ...attemptEnv(context.config, run, attempt, stage.mode) } });
-  const exited = (await whileOpen(context, run, attempt, { work: command.exit, stop: command.stop, phases: ['running'], expiresAt: stage.expiresAt })) ?? (await command.stop());
+  const exited = (await whileOpen(context, run, attempt, { work: command.exit, stop: async () => { await command.stop(); }, phases: ['running'], expiresAt: stage.expiresAt })) ?? (await command.stop());
   const output = redact(exited.output, { envSecrets: context.env.secrets, patterns: false });
   await writeFileAtomic(path.join(attemptDir(context.config, run, attempt), 'output.log'), output);
 
@@ -468,12 +470,14 @@ async function runCommand(context: SkillContext, run: RunId, attempt: AttemptId,
 async function runConfinedHere(context: SkillContext, run: RunId, attempt: AttemptId, stage: Extract<Stage, { kind: 'confined' }>): Promise<ConfinedStepEnd> {
   const stop = new AbortController();
   const work = runConfinedStep({ config: context.config, run, lease: stage.lease, signal: stop.signal, secrets: context.env.secrets });
+
   const stopStep = async (): Promise<ConfinedStepEnd> => {
     stop.abort();
 
     return await work;
   };
-  const ended = await whileOpen(context, run, attempt, { work, stop: stopStep, phases: ['running'], expiresAt: stage.expiresAt });
+
+  const ended = await whileOpen(context, run, attempt, { work, stop: async () => { await stopStep(); }, phases: ['running'], expiresAt: stage.expiresAt });
 
   return ended ?? await stopStep();
 }
