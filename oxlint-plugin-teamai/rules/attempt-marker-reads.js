@@ -1,7 +1,7 @@
 import { defineRule } from '@oxlint/plugins';
 import { isProductionSource, isTestSupportPath, repositoryPath, scopedFiles, stringLiteralValue } from '../utils.js';
 
-const MESSAGE = 'Read the attempt marker through markedAttempt in src/workflow/attempt-marker.ts, which parses <run>/<attempt> once, or attemptMarker there for its value as set. Setting or removing it stays allowed.';
+const MESSAGE = 'Read the attempt marker through markedAttempt in src/workflow/attempt-marker.ts, which parses <run>/<attempt> once, or attemptMarker in src/launch-context.ts for its value as set. Setting or removing it stays allowed.';
 const SPELLING = 'TEAMAI_WORKFLOW_ATTEMPT';
 const NAME = 'ATTEMPT_ENV';
 

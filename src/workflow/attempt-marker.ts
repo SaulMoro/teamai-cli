@@ -21,11 +21,6 @@ export function markedAttempt(env: NodeJS.ProcessEnv): MarkedAttempt | undefined
   return MarkedAttemptSchema.safeParse(env[ATTEMPT_ENV]).data;
 }
 
-/** The attempt marker `env` carries as it is set, parsed or not, for a presence check or a message; undefined when unset or empty. */
-export function attemptMarker(env: NodeJS.ProcessEnv): string | undefined {
-  return env[ATTEMPT_ENV] || undefined;
-}
-
 /**
  * What every process of an attempt of `run` gets: the attempt marker, the run's mode, and the run's directory, and the
  * config a run with no teamai init built, so the process loads it rather than one from its directory.

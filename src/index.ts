@@ -11,7 +11,7 @@ import type { PromotionCandidate } from './maintenance/promote.js';
 import type { ScoreOptions } from './score-commands.js';
 import type { EvidenceOptions, LabelOptions, PlanOptions, ReportOptions, StageOptions, SubjectsOptions, WriteOptions } from './score-verbs.js';
 import { GLOBAL_OPTIONS } from './global-options.js';
-import { attemptMarker } from './workflow/attempt-marker.js';
+import { attemptMarker } from './launch-context.js';
 import { useInstallHome } from '@teamai/shared/home';
 import { TEAMAI_HOOK_SUBCOMMANDS } from './hooks.js';
 import { dryRunRefusal } from './dry-run-guard.js';

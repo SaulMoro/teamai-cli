@@ -44,9 +44,9 @@ import { isSkillRunnerHolding, parseInputsFlag, parseSkillCall, parseSkillResume
 import { loadCachedWorkflow, namespaceConflictOf, resolveStart } from './workflow/cache.js';
 import { durationMs } from './utils/duration.js';
 import { findRunConfig } from './workflow/run-location.js';
-import { ATTEMPT_ENV, resolveRunMode } from './launch-context.js';
+import { ATTEMPT_ENV, attemptMarker, resolveRunMode } from './launch-context.js';
 import { memberTools } from './workflow/member-tools.js';
-import { agentEvidence, attemptMarker, isAttemptRunner, isCommandStep, nestedCall, nestedStart, nestedWorkflowError, type Nested } from './workflow/attempt-marker.js';
+import { agentEvidence, isAttemptRunner, isCommandStep, nestedCall, nestedStart, nestedWorkflowError, type Nested } from './workflow/attempt-marker.js';
 import { planBenchmark, planStep, tryBenchmarkTask } from './benchmark/start.js';
 import { outdatedBenchmarkPlan } from './benchmark/trial.js';
 import { reportBenchmark } from './benchmark/report.js';

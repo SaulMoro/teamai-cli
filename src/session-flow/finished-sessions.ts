@@ -6,7 +6,7 @@
 import { z } from 'zod';
 import { readContributeState } from '../contribute-check.js';
 import { detectProjectConfig, loadLocalConfig, loadTeamConfig } from '../config.js';
-import { ATTEMPT_ENV, RUN_MODES, type RunMode } from '../launch-context.js';
+import { ATTEMPT_ENV, attemptMarker, RUN_MODES, type RunMode } from '../launch-context.js';
 import { pinScorers } from '../scorers/cache.js';
 import { scoringUnavailable } from '../scorers/home.js';
 import { FINISHED_WORKFLOW } from '../scorers/judging-workflows.js';
@@ -25,7 +25,7 @@ import { runDeadline } from '../workflow/limits.js';
 import { durationMs } from '../utils/duration.js';
 import { startAsCli } from '../workflow/cli-start.js';
 import type { WorkflowClient } from '../workflow/protocol.js';
-import { attemptMarker, markedAttempt } from '../workflow/attempt-marker.js';
+import { markedAttempt } from '../workflow/attempt-marker.js';
 import { findRunConfig } from '../workflow/run-location.js';
 import { wasLeased } from '../workflow/step-state.js';
 import { readRuns, RunIdSchema, type RunId } from '../workflow/store.js';
