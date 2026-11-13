@@ -26,13 +26,37 @@ export function parseMounts(stdout: string): Map<string, string[]> {
   }));
 }
 
-/** `ls --format` lines of a network or an image: id, name and owner, tab-separated. */
+/** `ls --format` lines of a network (id, name and owner) or an image (id and name), tab-separated. */
 export function parseLabelled(stdout: string): Array<{ id: string; name: string; owner: string }> {
   return stdout.split('\n').flatMap((line) => {
     const [id = '', name = '', owner = ''] = line.split('\t');
 
     return id === '' ? [] : [{ id, name, owner }];
   });
+}
+
+/**
+ * The images teamai labelled, one per name an engine lists, with their owner. Docker 29's `image ls --format` has no
+ * `.Label`/`.Labels` (podman's has no `.Label`), so the listing gives ids and names and `image inspect` gives each owner.
+ */
+function labelledImages(command: string): { kind: 'listed'; images: Array<{ id: string; name: string; owner: string }> } | { kind: 'failed'; why: string } {
+  const ls = probeHere([command, 'image', 'ls', '--filter', `label=${OWNER}`, '--format', '{{.ID}}\t{{.Repository}}:{{.Tag}}']);
+
+  if (ls.kind !== 'ran' || ls.code !== 0) return { kind: 'failed', why: `\`${command} image ls\` failed${ls.kind === 'ran' ? `: ${ls.why}` : ''}` };
+  const listed = parseLabelled(ls.stdout);
+
+  if (listed.length === 0) return { kind: 'listed', images: [] };
+  const inspected = probeHere([command, 'image', 'inspect', '--format', `{{.Id}}\t{{index .Config.Labels "${OWNER}"}}`, ...new Set(listed.map((one) => one.id))]);
+
+  if (inspected.kind !== 'ran' || inspected.code !== 0) return { kind: 'failed', why: `\`${command} image inspect\` failed${inspected.kind === 'ran' ? `: ${inspected.why}` : ''}` };
+  const owners = new Map(inspected.stdout.split('\n').map((line) => line.split('\t')).map(([id = '', owner = '']) => [shortImageId(id), owner]));
+
+  return { kind: 'listed', images: listed.map((one) => ({ id: one.id, name: one.name, owner: owners.get(shortImageId(one.id)) ?? '' })) };
+}
+
+/** An image id as `image ls` shows it: docker's `inspect` prefixes `sha256:` and podman's does not; both list 12 hex digits. */
+function shortImageId(id: string): string {
+  return id.replace(/^sha256:/, '').slice(0, 12);
 }
 
 function onEngine(engine: (typeof CONTAINER_ENGINES)[number], self: WorldTies, others: readonly WorldTies[]): Observed[] {
@@ -57,16 +81,20 @@ function onEngine(engine: (typeof CONTAINER_ENGINES)[number], self: WorldTies, o
     remove: [command, 'rm', '-f', one.id],
   }));
 
-  for (const [kind, remove] of [['network', 'rm'], ['image', 'rm']] as const) {
-    const format = kind === 'network' ? `{{.ID}}\t{{.Name}}\t{{.Label "${OWNER}"}}` : `{{.ID}}\t{{.Repository}}:{{.Tag}}\t{{.Label "${OWNER}"}}`;
-    const ls = probeHere([command, kind === 'network' ? 'network' : 'image', 'ls', '--filter', `label=${OWNER}`, '--format', format]);
+  const networks = probeHere([command, 'network', 'ls', '--filter', `label=${OWNER}`, '--format', `{{.ID}}\t{{.Name}}\t{{.Label "${OWNER}"}}`]);
 
-    if (ls.kind !== 'ran' || ls.code !== 0) {
-      unobserved.push({ kind: 'not_observed', what: `${engine} ${kind}s`, why: `\`${engine} ${kind} ls\` failed` });
-      continue;
-    }
+  if (networks.kind === 'ran' && networks.code === 0) {
+    findings.push(...parseLabelled(networks.stdout).map((one) => ({ what: `${engine} network ${one.name}`, attribution: tie(one.owner, [], []), remove: [command, 'network', 'rm', one.id] })));
+  } else {
+    unobserved.push({ kind: 'not_observed', what: `${engine} networks`, why: `\`${engine} network ls\` failed${networks.kind === 'ran' ? `: ${networks.why}` : ''}` });
+  }
 
-    findings.push(...parseLabelled(ls.stdout).map((one) => ({ what: `${engine} ${kind} ${one.name}`, attribution: tie(one.owner, [], []), remove: [command, kind, remove, one.id] })));
+  const images = labelledImages(command);
+
+  if (images.kind === 'listed') {
+    findings.push(...images.images.map((one) => ({ what: `${engine} image ${one.name}`, attribution: tie(one.owner, [], []), remove: [command, 'image', 'rm', one.id] })));
+  } else {
+    unobserved.push({ kind: 'not_observed', what: `${engine} images`, why: images.why });
   }
 
   return [{ kind: 'observed', findings, notes: [] }, ...unobserved];

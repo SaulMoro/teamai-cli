@@ -92,6 +92,107 @@ describe('what each row reads from what an engine or the process table printed',
   });
 });
 
+/** An image the fake engine keeps: its full id (hex), its tags, and its labels. */
+interface FakeImage {
+  readonly id: string;
+  readonly tags: string[];
+  readonly labels: Record<string, string>;
+}
+
+/**
+ * A `docker` that answers `info`, `ps`, `network ls`, `image ls`, `image inspect` and `image rm` as Docker 29.4.3 does:
+ * its `image ls` template has no `.Label`/`.Labels` (it fails on the first row, as the real one printed
+ * `can't evaluate field Label in type *formatter.imageContext`), its `image inspect` gives `.Id` as `sha256:<hex>`, and it
+ * refuses to remove by id an image that more than one tag names.
+ */
+function fakeDocker29(dir: string, images: readonly FakeImage[]): { bin: string; images: () => FakeImage[] } {
+  const bin = path.join(dir, 'bin');
+  const state = path.join(dir, 'images.json');
+  fs.mkdirSync(bin, { recursive: true });
+  fs.writeFileSync(state, JSON.stringify(images));
+  fs.writeFileSync(path.join(bin, 'docker'), `#!${process.execPath}
+const fs = require('node:fs');
+const state = ${JSON.stringify(state)};
+const images = JSON.parse(fs.readFileSync(state, 'utf8'));
+const args = process.argv.slice(2);
+const option = (name) => { const at = args.indexOf(name); return at === -1 ? undefined : args[at + 1]; };
+const render = (template, fields, context) => template.replace(/{{\\s*(.*?)\\s*}}/g, (whole, key) => {
+  if (key in fields) return fields[key];
+  process.stderr.write('template parsing error: template: :1:' + (template.indexOf(whole) + 2) + ': executing "" at <' + key.split(' ')[0] + '>: can\\'t evaluate field ' + key.split(' ')[0].slice(1) + ' in type *formatter.' + context + '\\n');
+  process.exit(1);
+});
+const find = (ref) => images.find((image) => image.tags.includes(ref) || image.tags.includes(ref + ':latest') || ('sha256:' + image.id).startsWith(ref) || (ref.length >= 12 && image.id.startsWith(ref)));
+const [verb, sub] = args;
+if (verb === 'info') { process.stdout.write('29.4.3\\n'); process.exit(0); }
+if (verb === 'ps' || (verb === 'network' && sub === 'ls')) process.exit(0);
+if (verb !== 'image') process.exit(1);
+if (sub === 'ls') {
+  const label = (option('--filter') ?? '').replace(/^label=/, '');
+  for (const image of images.filter((one) => label === '' || label in one.labels)) {
+    for (const name of image.tags.length === 0 ? ['<none>:<none>'] : image.tags) {
+      const [repository, tag] = name.split(':');
+      process.stdout.write(render(option('--format'), { '.ID': image.id.slice(0, 12), '.Repository': repository, '.Tag': tag }, 'imageContext') + '\\n');
+    }
+  }
+  process.exit(0);
+}
+if (sub === 'inspect') {
+  let code = 0;
+  for (const ref of args.slice(4)) {
+    const image = find(ref);
+    if (image === undefined) { process.stderr.write('Error response from daemon: No such image: ' + ref + '\\n'); code = 1; continue; }
+    process.stdout.write(render(option('--format'), { '.Id': 'sha256:' + image.id, 'index .Config.Labels "teamai.owner"': image.labels['teamai.owner'] ?? '' }, 'imageInspect') + '\\n');
+  }
+  process.exit(code);
+}
+if (sub === 'rm') {
+  const ref = args[2];
+  const image = find(ref);
+  if (image === undefined) { process.stderr.write('Error response from daemon: No such image: ' + ref + '\\n'); process.exit(1); }
+  if (image.tags.includes(ref)) image.tags.splice(image.tags.indexOf(ref), 1);
+  else if (image.tags.length > 1) { process.stderr.write('Error response from daemon: conflict: unable to delete ' + ref + ' (must be forced) - image is referenced in multiple repositories\\n'); process.exit(1); }
+  else image.tags.length = 0;
+  fs.writeFileSync(state, JSON.stringify(image.tags.length === 0 ? images.filter((one) => one !== image) : images));
+  process.exit(0);
+}
+process.exit(1);
+`, { mode: 0o755 });
+
+  return { bin, images: () => JSON.parse(fs.readFileSync(state, 'utf8')) as FakeImage[] };
+}
+
+describe("the container engines' row of section (f)", () => {
+  async function observeContainers(images: readonly FakeImage[]) {
+    const dir = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-verify-engine-')));
+    roots.push(dir);
+    const engine = fakeDocker29(dir, images);
+    vi.stubEnv('PATH', `${engine.bin}:/usr/bin:/bin`);
+    const world: World = {
+      runId: SELF.runId, dir, project: `${dir}/project`, team: `${dir}/team.git`, home: `${dir}/home`, tmp: `${dir}/tmp`, logs: `${dir}/logs`, bin: engine.bin,
+      build: { commit: 'c', dirty: false, version: '0.0.0', tarball: 't.tgz', sha256: 's', node: 'v20' },
+      createdAt: '2026-11-12T18:00:00.000Z',
+      baseline: { teamRefs: {}, checkoutStatus: [] },
+    };
+    const { containers } = await import('./leftovers/containers.js');
+
+    return { engine, observed: await containers.observe({ world, self: SELF, others: [OTHER], records: { files: [], runs: [], runtimeJournals: 0 } }) };
+  }
+
+  it("lists on Docker 29 the images teamai labelled, each tied to the world whose journal owns it, and asks the engine nothing it cannot answer", async () => {
+    const { observed } = await observeContainers([
+      { id: 'a'.repeat(64), tags: ['teamai-warm:kmine'], labels: { 'teamai.owner': SELF.journals[0] ?? '' } },
+      { id: 'b'.repeat(64), tags: ['teamai-warm:ktheirs'], labels: { 'teamai.owner': OTHER.journals[0] ?? '' } },
+      { id: 'c'.repeat(64), tags: ['node:22-alpine'], labels: {} },
+    ]);
+
+    expect(observed.filter((seen) => seen.kind === 'not_observed')).toEqual([]);
+    expect(observed.flatMap((seen) => (seen.kind === 'observed' ? seen.findings : [])).map((finding) => [finding.what, finding.attribution.kind])).toEqual([
+      ['docker image teamai-warm:kmine', 'own'],
+      ['docker image teamai-warm:ktheirs', 'other_world'],
+    ]);
+  });
+});
+
 describe("the sbx row of section (f)", () => {
   it("lists a world's sbx sandboxes in its own HOME, where sbx keeps them, and removes them there", async () => {
     const dir = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-verify-sbx-')));
