@@ -61,7 +61,7 @@ describe('teamai-runtime-t3', () => {
       expect(RuntimeMessageSchema.safeParse(end).success).toBe(true);
       expect(end).toEqual({
         op, event: 'finished', session: { tool: 'claude', id: expect.stringMatching(/^[0-9a-f-]{36}$/) }, result: { output: REPLY },
-        confined: { level: 'best-effort', access: 'read' },
+        confined: { level: 'best-effort', access: 'read' }, unmeasured: expect.stringContaining('records no request since the step started'),
       });
 
       const [thread] = t3.threads();

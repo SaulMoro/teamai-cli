@@ -9,6 +9,7 @@ import type { OpEnd } from '@teamai/runtime-kit/ledger';
 import { registerThrough, type Registration } from '@teamai/runtime-kit/outer';
 import { cannotReadBecause, FsFailureSchema, isMissing } from '@teamai/shared/fs-failure';
 import { NotRegularFileError, readRegularFileSync } from '@teamai/shared/regular-file';
+import { UNTIMED_TURN } from '@teamai/tool-core/step-usage';
 import { isUsageLimitText } from '@teamai/tool-core/usage-limit';
 import { JsonValueSchema } from '@teamai/shared/json';
 import { extractReply } from '@teamai/tool-core/reply';
@@ -20,7 +21,7 @@ import { notOffered } from './offer.js';
 import type { Following, ProcessState } from './process-state.js';
 import { isPaseoTool, type EnsureProvider, type PaseoTool } from './providers.js';
 import { handOver, throughOf, type Through } from './sandbox.js';
-import { sessionUsage } from './usage.js';
+import { readsTokens, sessionUsage } from './usage.js';
 
 // ─── One Paseo agent's life ──────────────────────────────
 //
@@ -155,7 +156,10 @@ function readResult(file: string): { kind: 'result'; result: PromptResult } | { 
     text = readRegularFileSync(file, 'utf8');
   } catch (error) {
     if (error instanceof NotRegularFileError) return { kind: 'unreadable', why: `left ${error.kind} at the result file ${file}, not a regular file, so teamai did not read it` };
-    const failure = FsFailureSchema.parse(error);
+    const parsed = FsFailureSchema.safeParse(error);
+
+    if (!parsed.success) throw error;
+    const failure = parsed.data;
 
     if (isMissing(failure)) return { kind: 'none' };
 
@@ -415,16 +419,25 @@ export function conversations(state: ProcessState, { ensureProvider }: { ensureP
    * machine, where the session's home is. A turn sent to an agent that already ran counts from its send on, as journaled
    * just before the send; one journaled without that time cannot be told from the earlier steps' requests, and reports none.
    */
-  const finishedOf = async (live: Daemon, op: OpId, record: AgentPrompt, ended: { id: string; createdAt: string | undefined; through: Through | undefined }): Promise<{ session: z.infer<typeof PromptSessionSchema>; usage?: z.infer<typeof PromptUsageSchema> }> => {
+  const finishedOf = async (live: Daemon, op: OpId, record: AgentPrompt, ended: { id: string; createdAt: string | undefined; through: Through | undefined }): Promise<{ session: z.infer<typeof PromptSessionSchema>; usage?: z.infer<typeof PromptUsageSchema>; unmeasured?: string }> => {
     const session = sessionOf(live, { tool: record.tool, ...ended });
     const target = targets.get(record.tool);
     const kept = journal.prompt(op);
     const turn = kept?.kind === 'agent' ? kept.turn : record.turn;
 
-    if (!target || session.home === undefined || !isOnThisMachine(live.url) || (turn && turn.sentAt === undefined)) return { session };
-    const usage = await sessionUsage({ tool: target.tool, toolHome: session.home, cwd: record.cwd, sessionId: session.id, ...(turn?.sentAt !== undefined && { turnSentAt: turn.sentAt }) });
+    if (!target || !isOnThisMachine(live.url) || !readsTokens(target.tool)) return { session };
 
-    return { session, ...(usage && { usage }) };
+    const measured = session.home === undefined
+      ? { kind: 'unmeasured' as const, why: `teamai found no home of ${target.tool} on this machine that holds session ${session.id}, where it reads the step's tokens. Retry the step.` }
+      : turn && turn.sentAt === undefined
+        ? UNTIMED_TURN
+        : await sessionUsage({ tool: target.tool, toolHome: session.home, cwd: record.cwd, sessionId: session.id, ...(turn?.sentAt !== undefined && { turnSentAt: turn.sentAt }) });
+
+    if (measured === undefined) return { session };
+
+    if (measured.kind === 'measured') return { session, usage: measured.usage };
+
+    return state.offersTokens ? { session, unmeasured: measured.why } : { session };
   };
 
   /** What the run's details show of a prompt's agent: its title, a link that opens it in Paseo, and where it runs. */

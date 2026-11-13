@@ -39,6 +39,23 @@ describe('teamai-runtime-t3', () => {
       expect(declaredExec('t3')).toBe(z.object({ can: z.object({ exec: z.boolean() }) }).parse(reply).can.exec);
     });
 
+    it.skipIf(process.platform === 'win32')('offers no tokens when teamai cannot list the folder a tool keeps its sessions in, so a budgeted step goes where its tokens are counted', async () => {
+      signIn(t3);
+      // Codex's store, made by another user T3 Code runs as.
+      const store = path.join(t3.home, '.codex', 'sessions');
+      fs.mkdirSync(store, { recursive: true });
+      fs.chmodSync(store, 0o300);
+      const runtime = start();
+
+      runtime.send({ type: 'init', protocol: 1, mode: 'attended', options: { environment: 'local' } });
+
+      try {
+        expect(await runtime.next((line) => line['type'] === 'init')).toMatchObject({ ok: true, can: { tools: ['claude', 'codex'], tokens: false } });
+      } finally {
+        fs.chmodSync(store, 0o700);
+      }
+    });
+
     it.each([
       ['an older version', '0.1.7-nightly.20261103.4119', 'runs version 0.1.7-nightly.20261103.4119'],
       ['no version', undefined, 'did not say which version it runs'],

@@ -9,6 +9,7 @@ import type { LocalConfig } from '../../types.js';
 import path from 'node:path';
 import type { AgentAdapter } from '@teamai/tool-core/sessions/base';
 import { HOST_PROCESSES } from '@teamai/shared/exec';
+import { log } from '@teamai/shared/log';
 import type { ToolFamily } from '@teamai/tool-core/family';
 import { locatesOwnStore, type SessionHost, type StoredPlatformDefinition } from '@teamai/tool-core/sessions/platform';
 import { executablesOf } from '../../launch-registry.js';
@@ -23,8 +24,21 @@ import { instanceNames, instancePlatform } from '../../tool-registry.js';
  */
 export type AdapterFactory = (storeDir: string) => AgentAdapter;
 
-/** What every adapter this registry builds starts its processes through, and the executables of each tool installed here. */
-export const SESSION_HOST: SessionHost = { processes: HOST_PROCESSES, executablesOf };
+/** The folders of a store this process already warned it skipped, so a command that lists the store again warns once. */
+const warnedFolders = new Set<string>();
+
+/**
+ * What every adapter this registry builds starts its processes through, the executables of each tool installed here, and
+ * where it warns of a folder of its store it has no permission to read.
+ */
+export const SESSION_HOST: SessionHost = {
+  processes: HOST_PROCESSES, executablesOf,
+  skippedFolder(folder) {
+    if (warnedFolders.has(folder)) return;
+    warnedFolders.add(folder);
+    log.warn(`teamai has no permission to read ${folder}, so it lists none of the sessions in it. Let the user teamai runs as read ${folder} to list them.`);
+  },
+};
 
 function stored(definition: StoredPlatformDefinition): AdapterFactory {
   return (storeDir) => definition.adapter(storeDir, SESSION_HOST);

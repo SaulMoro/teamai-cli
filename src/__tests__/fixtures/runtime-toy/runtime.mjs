@@ -431,7 +431,8 @@ function agentOutcome(record) {
   const result = options.agent.result ?? { output: echoed ?? options.agent.output ?? {} };
   fs.mkdirSync(path.dirname(record.lease.result), { recursive: true });
   fs.writeFileSync(record.lease.result, JSON.stringify(result));
-  const usage = options.agent.usage === undefined ? {} : { usage: options.agent.usage };
+  // `agent.unmeasured` says why a runtime that offers tokens read none for the prompt.
+  const usage = options.agent.usage === undefined ? options.agent.unmeasured === undefined ? {} : { unmeasured: options.agent.unmeasured } : { usage: options.agent.usage };
   // `agent.stopped` names the limit of the lease at which it says it stopped its tool.
   const stopped = options.agent.stopped === undefined ? {} : { stopped: options.agent.stopped };
 

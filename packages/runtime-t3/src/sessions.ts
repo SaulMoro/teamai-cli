@@ -6,7 +6,7 @@ import { HOST_PROCESSES } from '@teamai/shared/exec';
 import { getUserHome } from '@teamai/shared/home';
 import type { SessionHost } from '@teamai/tool-core/sessions/platform';
 import type { AgentAdapter, SessionMeta } from '@teamai/tool-core/sessions/base';
-import { cannotReadBecause, FsFailureSchema } from '@teamai/shared/fs-failure';
+import { canList, FsFailureSchema, isPermissionDenied } from '@teamai/shared/fs-failure';
 
 // ─── The tool session a T3 thread ran ───
 //
@@ -18,25 +18,22 @@ import { cannotReadBecause, FsFailureSchema } from '@teamai/shared/fs-failure';
 //  session-store lookup once it exists.
 //
 
-// The runtime only reads sessions, and only writing one runs a tool's CLI, so each tool is its own command here.
-const SESSION_READER_HOST: SessionHost = { processes: HOST_PROCESSES, executablesOf: (tool) => [tool] };
-
 /**
  * The T3 provider drivers this runtime runs, each with the teamai tool it is, its name in T3, its tool's home under a
- * user's home, the variable that moves that home, the store its sessions are in under a tool home, and the format its
- * transcript records tokens in.
+ * user's home, the variable that moves that home, the folder of a tool home its sessions are in and their store there,
+ * and the format its transcript records tokens in.
  */
 export const DRIVERS = {
   claudeAgent: {
-    tool: 'claude', label: 'Claude', home: '.claude', homeEnv: 'CLAUDE_CONFIG_DIR', sessions: (toolHome: string) => new ClaudeCodeAdapter('claude-code', path.join(toolHome, 'projects')),
+    tool: 'claude', label: 'Claude', home: '.claude', homeEnv: 'CLAUDE_CONFIG_DIR', store: 'projects', sessions: (toolHome: string) => new ClaudeCodeAdapter('claude-code', path.join(toolHome, 'projects')),
     tokens: 'claude-jsonl',
   },
   codex: {
-    tool: 'codex', label: 'Codex', home: '.codex', homeEnv: 'CODEX_HOME', sessions: (toolHome: string) => new CodexAdapter('codex', path.join(toolHome, 'sessions'), SESSION_READER_HOST),
+    tool: 'codex', label: 'Codex', home: '.codex', homeEnv: 'CODEX_HOME', store: 'sessions', sessions: (toolHome: string, host: SessionHost) => new CodexAdapter('codex', path.join(toolHome, 'sessions'), host),
     tokens: 'codex-rollout',
   },
 } as const satisfies Record<string, {
-  tool: string; label: string; home: string; homeEnv: string; sessions(toolHome: string): AgentAdapter; tokens: StepTokenFormat;
+  tool: string; label: string; home: string; homeEnv: string; store: string; sessions(toolHome: string, host: SessionHost): AgentAdapter; tokens: StepTokenFormat;
 }>;
 
 export type Driver = keyof typeof DRIVERS;
@@ -63,6 +60,11 @@ export function toolOf(driver: string): ToolId | undefined {
 /** How much earlier than the launch a record the thread's work left (a transcript, a delegated task) may be stamped and still be its. */
 export const CLOCK_SLACK_MS = 5_000;
 
+/** Whether teamai can list the folder `driver` keeps its sessions in under `toolHome`, or will once the tool makes it. */
+export function canListStore(driver: Driver, toolHome: string): boolean {
+  return canList(path.join(toolHome, DRIVERS[driver].store));
+}
+
 /** Whether `toolHome` is the home teamai reads `driver`'s sessions in when a session names none: the tool's, in this HOME. */
 export function isDefaultToolHome(driver: Driver, toolHome: string): boolean {
   return path.resolve(toolHome) === path.join(getUserHome(), DRIVERS[driver].home);
@@ -72,10 +74,14 @@ export function isDefaultToolHome(driver: Driver, toolHome: string): boolean {
 export type KeptSession = { id: string; transcript?: string };
 
 /**
- * What the lookup of a step's session found: the session, none, or a folder of the tool's store that teamai cannot list,
- * as one the tool can write and teamai cannot read, with why.
+ * What the lookup of a step's session found: the session; none; folders of the tool's store teamai has no permission to
+ * list, as ones the tool can write and teamai cannot read, which may hold it; or why the lookup failed otherwise.
  */
-export type SessionLookup = { kind: 'found'; session: KeptSession } | { kind: 'none' } | { kind: 'unlistable'; folder: string; reason: string };
+export type SessionLookup =
+  | { kind: 'found'; session: KeptSession }
+  | { kind: 'none' }
+  | { kind: 'unlistable'; folders: [string, ...string[]] }
+  | { kind: 'failed'; why: string };
 
 /**
  * The first session the tool of `driver` started in `cwd` at or after `since`, in `toolHome`, other than `other`. A task
@@ -85,17 +91,26 @@ export type SessionLookup = { kind: 'found'; session: KeptSession } | { kind: 'n
  */
 export async function sessionSince({ driver, toolHome, cwd, since, other }: { driver: Driver; toolHome: string; cwd: string; since: number; other?: string }): Promise<SessionLookup> {
   let sessions: SessionMeta[];
+  const skipped: string[] = [];
+  // The runtime only reads sessions, and only writing one runs a tool's CLI, so each tool is its own command here.
+  const host: SessionHost = { processes: HOST_PROCESSES, executablesOf: (tool) => [tool], skippedFolder: (folder) => skipped.push(folder) };
 
   try {
-    sessions = await DRIVERS[driver].sessions(toolHome).listConversations(cwd);
+    sessions = await DRIVERS[driver].sessions(toolHome, host).listConversations(cwd);
   } catch (error) {
-    const failure = FsFailureSchema.parse(error);
+    const failure = FsFailureSchema.safeParse(error);
 
-    return { kind: 'unlistable', folder: failure.path ?? toolHome, reason: cannotReadBecause(failure) };
+    if (failure.success && isPermissionDenied(failure.data)) return { kind: 'unlistable', folders: [failure.data.path ?? toolHome] };
+
+    return { kind: 'failed', why: failure.success ? `reading ${failure.data.path ?? toolHome} failed (${failure.data.message})` : String(error instanceof Error ? error.message : error) };
   }
 
   const started = sessions.filter((session) => session.sessionId !== other && Date.parse(session.createdAt) >= since - CLOCK_SLACK_MS);
   const first = started.sort((a, b) => Date.parse(a.createdAt) - Date.parse(b.createdAt))[0];
 
-  return first ? { kind: 'found', session: { id: first.sessionId, ...(first.filePath !== undefined && { transcript: first.filePath }) } } : { kind: 'none' };
+  if (first) return { kind: 'found', session: { id: first.sessionId, ...(first.filePath !== undefined && { transcript: first.filePath }) } };
+  const [folder, ...more] = skipped;
+
+  // A folder teamai skipped may be the one that holds the session, as the day folder another user's tool made today.
+  return folder === undefined ? { kind: 'none' } : { kind: 'unlistable', folders: [folder, ...more] };
 }

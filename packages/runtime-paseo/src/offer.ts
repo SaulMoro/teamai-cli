@@ -1,7 +1,8 @@
 import path from 'node:path';
+import { canList } from '@teamai/shared/fs-failure';
 import { fitReason, type ConfinedKept, type InitInstance, type RuntimeFailure, type RuntimeMessage } from '@teamai/runtime-protocol';
 import { isOnThisMachine } from './daemon/address.js';
-import type { InstalledTool, Target } from './daemon/connect.js';
+import { codexHomes, type InstalledTool, type Target } from './daemon/connect.js';
 import { CONFINED_MODES, isPaseoTool, PASEO_TOOLS, type ProviderToAdd } from './providers.js';
 import { readsTokens } from './usage.js';
 
@@ -137,9 +138,32 @@ export function offerOf(found: Found & { mode: 'attended' | 'unattended' }): Off
 
   // A step reports the tokens its session's transcript records, which the runtime reads on a daemon on this machine, for
   // Claude in the home its diagnostic or its provider names, and for Codex in the home that holds the session's rollout.
-  // With any other tool offered, not every success report would carry its tokens.
+  // With any other tool offered, or a folder of those homes teamai cannot list, as one a daemon running as another user
+  // keeps, not every success report would carry its tokens.
+  const sessionFolders = (entry: (typeof tools)[number]): string[] | undefined => {
+    const providerHome = entry.kind === 'runs' ? entry.providerHome?.dir : undefined;
+
+    switch (entry.tool) {
+      case 'claude': {
+        const home = entry.kind === 'runs' ? entry.home ?? providerHome : undefined;
+
+        return home === undefined ? undefined : [path.join(home, 'projects')];
+      }
+
+      case 'codex':
+        return codexHomes({ providerHome, homeDir: homeDirs.get(entry.name) ?? '.codex' }).map((home) => path.join(home, 'sessions'));
+      case 'opencode':
+        return undefined;
+      default: {
+        const unhandled: never = entry.tool;
+
+        return unhandled;
+      }
+    }
+  };
+
   const reportsTokens = isOnThisMachine(url) && tools.length > 0
-    && tools.every((entry) => readsTokens(entry.tool) && (entry.tool !== 'claude' || (entry.kind === 'runs' && (entry.home !== undefined || entry.providerHome !== undefined))));
+    && tools.every((entry) => readsTokens(entry.tool) && (sessionFolders(entry)?.every(canList) ?? false));
 
   const init: Offered['init'] = {
     type: 'init', ok: true, prompt: true, conversations: true,

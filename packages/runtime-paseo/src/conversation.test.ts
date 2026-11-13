@@ -171,20 +171,24 @@ describe('teamai-runtime-paseo', () => {
     expect(await runtime.next(isEnd('op-0000000b'))).toMatchObject({ event: 'finished', session: { tool }, usage });
   });
 
-  it('finishes a step whose session it cannot list, reporting no tokens rather than failing the step', async () => {
+  it('finishes a step whose session it cannot list, reporting no tokens and why rather than failing the step', async () => {
     const home = path.join(dir, 'daemon-user', '.claude');
     // Claude can write its transcript there, and teamai cannot list the folder.
     const folder = path.join(home, 'projects', encodeCwdClaude(worktree));
     fs.mkdirSync(folder, { recursive: true });
     fs.chmodSync(folder, 0o300);
-    behave({ output: { verdict: 'approve' }, claude_home: home, usage: { input: 1_200, output: 340, cache_read: 18_000 } });
+    // A daemon that runs Claude alone, whose home it names, so the runtime offers tokens.
+    behave({ output: { verdict: 'approve' }, claude_home: home, models: { claude: ['claude-opus-5-5'] }, usage: { input: 1_200, output: 340, cache_read: 18_000 } });
     const runtime = start();
     await ready(runtime);
     runtime.send(promptRequest(await opened(runtime), 'op-0000000b'));
 
     try {
       const end = await runtime.next(isEnd('op-0000000b'));
-      expect(end).toMatchObject({ event: 'finished', session: { tool: 'claude', home }, result: { output: { verdict: 'approve' } } });
+      expect(end).toMatchObject({
+        event: 'finished', session: { tool: 'claude', home }, result: { output: { verdict: 'approve' } },
+        unmeasured: `teamai cannot list ${folder}, where claude keeps its sessions, because it has no permission to read it. Let the user teamai runs as read ${folder}, then retry the step.`,
+      });
       expect(end).not.toHaveProperty('usage');
     } finally {
       fs.chmodSync(folder, 0o700);
@@ -218,7 +222,9 @@ describe('teamai-runtime-paseo', () => {
     const end = await remote.next(isEnd('op-0000000b'));
 
     expect(end).toMatchObject({ event: 'finished', session: { tool: 'claude' } });
+    // It offers no tokens there, so it owes no reason for reporting none.
     expect(end).not.toHaveProperty('usage');
+    expect(end).not.toHaveProperty('unmeasured');
   });
 
   it('names as an OpenCode step\'s session home the data directory whose store the step wrote, over one that only held a store from before', async () => {

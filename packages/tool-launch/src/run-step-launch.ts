@@ -138,6 +138,8 @@ export type StepLaunchResult =
     model?: string;
     session?: string;
     tokens?: TokenUsage;
+    /** Without `tokens`, from a runtime that offers them: why it read none for the run, with the next step. */
+    unmeasured?: string;
     /** What the tool said the run cost, as it said it. */
     cost?: ToolReport['cost'];
     /**

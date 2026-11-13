@@ -1304,6 +1304,34 @@ steps:
     expect(run.steps[0]).not.toHaveProperty('unenforced');
   }, 30_000);
 
+  it('fails a budgeted step whose runtime offers tokens and read none for it, with the runtime\'s reason', async () => {
+    const { config, workspace, runId } = await workflowFixture(`schemaVersion: v1alpha1
+name: build
+description: One budgeted step.
+budget: { tokens: 1000 }
+steps:
+  - id: review
+    tool: claude
+    prompt: Review this project.
+    output:
+      ok: boolean
+`);
+    const state = path.join(path.dirname(workspace), 'toy-state');
+    const why = 'teamai cannot read /home/al/.claude/projects/-repo because it has no permission to read it. Let the user teamai runs as read it, then retry the step.';
+    const runtime = stdioStepRuntime({ name: 'toy', command: process.execPath, args: [TOY_RUNTIME] });
+    onTestFinished(() => runtime.dispose());
+    const ready = await runtime.init({ options: { state, agent: { output: { ok: true }, unmeasured: why, conversations: false }, prompt_tool_home: true, can: { tokens: true } }, mode: 'unattended' });
+    if (!ready.ok) throw new Error(ready.failure.message);
+    const runtimes: DriverRuntimes = {
+      driver: 'toy', asked: 'toy',
+      runtimes: [{ kind: 'external', use: 'toy', runtime, can: ready.can, launchesAgents: true, ...(ready.runsOnToolHome && { runsOnToolHome: true }), engine: { logins: [] }, credentials: {}, found: [], masks: {}, optionsFrom: 'test' }],
+    };
+
+    await runLocalDriver(config, runId, workspace, { runtimes });
+
+    expect(await readRun(config, runId)).toMatchObject({ steps: [{ id: 'review', status: 'failed', failure: { code: 'budget_unmeasured', message: expect.stringContaining(`read none for it, so the budget cannot count what it spent: ${why}`) } }] });
+  }, 30_000);
+
   it('sends an agent step the definition\'s instructions in its prompt and the definition\'s model, since the runtime starts the tool without --agent', async () => {
     const { config, workspace, runId } = await workflowFixture(`schemaVersion: v1alpha1
 name: build

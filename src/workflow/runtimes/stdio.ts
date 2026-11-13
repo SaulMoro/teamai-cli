@@ -601,6 +601,7 @@ export function stdioStepRuntime({ name, command, args = [], cwd, secrets = {} }
               const end: PromptEnd = { kind: 'finished', session: event.session, result: event.result };
 
               if (event.usage) end.usage = event.usage;
+              else if (event.unmeasured) end.unmeasured = event.unmeasured;
 
               if (event.model) end.model = event.model;
 

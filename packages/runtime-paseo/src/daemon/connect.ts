@@ -125,12 +125,12 @@ function holdsRollout(home: string, threadId: string): boolean {
 }
 
 /**
- * The Codex home on this machine that holds the rollout of thread `threadId`, or undefined when none it can see does.
- * Paseo reports no Codex home, so the homes the daemon's Codex likely writes are looked in: the one its Paseo provider's
- * env sets, then the runtime's `CODEX_HOME`, then a team instance's home as teamai resolved it (an absolute `homeDir`),
- * or `.codex` in the account's home, where a daemon the Paseo app started runs, then in `$HOME`.
+ * The homes on this machine the daemon's Codex likely writes, in the order to look in. Paseo reports no Codex home, so
+ * they are: the one its Paseo provider's env sets, then the runtime's `CODEX_HOME`, then a team instance's home as
+ * teamai resolved it (an absolute `homeDir`), or `.codex` in the account's home, where a daemon the Paseo app started
+ * runs, then in `$HOME`.
  */
-function codexHomeHolding(threadId: string, { providerHome, homeDir }: { providerHome: string | undefined; homeDir: string }): string | undefined {
+export function codexHomes({ providerHome, homeDir }: { providerHome: string | undefined; homeDir: string }): string[] {
   // The home a Paseo provider's env sets is the one its Codex writes.
   const homes: string[] = providerHome === undefined ? [] : [providerHome];
   // CODEX_HOME moves the Codex home, not a team instance's own.
@@ -150,7 +150,12 @@ function codexHomeHolding(threadId: string, { providerHome, homeDir }: { provide
     homes.push(path.join(getUserHome(), homeDir));
   }
 
-  return [...new Set(homes)].find((home) => holdsRollout(home, threadId));
+  return [...new Set(homes)];
+}
+
+/** The Codex home on this machine that holds the rollout of thread `threadId`, or undefined when none it can see does. */
+function codexHomeHolding(threadId: string, where: { providerHome: string | undefined; homeDir: string }): string | undefined {
+  return codexHomes(where).find((home) => holdsRollout(home, threadId));
 }
 
 /** When OpenCode's store in data directory `home` last changed, its write-ahead log included; undefined when it has none. */

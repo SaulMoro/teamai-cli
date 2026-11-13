@@ -15,7 +15,7 @@ import { fakeCli } from './fake-cli.js';
 import { replayTranscript, type RecordedTranscript } from './replay-transcript.js';
 
 // A replayed transcript is only read, and only writing a session runs a tool's CLI.
-const SESSION_HOST: SessionHost = { processes: HOST_PROCESSES, executablesOf: (tool) => [tool] };
+const SESSION_HOST: SessionHost = { processes: HOST_PROCESSES, executablesOf: (tool) => [tool], skippedFolder: (folder) => { throw new Error(`skipped ${folder}`); } };
 
 export type { RecordedTranscript, ReplayTarget } from './replay-transcript.js';
 

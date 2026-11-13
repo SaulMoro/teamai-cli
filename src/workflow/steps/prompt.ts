@@ -630,6 +630,7 @@ export async function runPromptStep({ config, lock, driver, lease, adapter = ste
   if (ran) body.durationMs = durationMs;
 
   if (ran?.tokens) body.tokens = ran.tokens;
+  else if (ran?.unmeasured) body.unmeasured = warnUnmeasured(lease.step, ran.unmeasured);
 
   if (ran?.cost) body.cost = ran.cost;
 
@@ -655,6 +656,13 @@ export async function runPromptStep({ config, lock, driver, lease, adapter = ste
   return body;
 }
 
+
+/** Why the runtime of `step`, which offers tokens, read none for it, said to the person as the step ends. */
+function warnUnmeasured(step: string, why: string): string {
+  log.warn(`teamai read no tokens for step "${step}": ${why}`);
+
+  return why;
+}
 
 /**
  * Prompt step `lease` on a runtime that picks its tool, model and login where it runs the step, and renders its prompt
@@ -703,6 +711,7 @@ async function promptPickedThere({ config, lock, driver, lease, onRuntime, signa
       if ('output' in end.result) body.outputs = end.result.output;
 
       if (end.usage) body.tokens = end.usage;
+      else if (end.unmeasured) body.unmeasured = warnUnmeasured(lease.step, end.unmeasured);
       const failure = uncollected ?? end.result.failure;
 
       return failure ? { ...body, ...failureReport(failure) } : body;

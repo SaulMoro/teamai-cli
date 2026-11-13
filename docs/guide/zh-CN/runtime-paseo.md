@@ -358,7 +358,7 @@ Judge whether the change does what the step asked. Read the diff and the session
 ✖ Step "classify" failed with model_unavailable: The Paseo daemon at ws://127.0.0.1:6767/ws has no claude model claude-opus-0-1. It offers: claude-opus-5-5, claude-opus-5, claude-fable-5-1, claude-fable-5, claude-opus-4-8[1m], claude-opus-4-8, claude-sonnet-5-5, claude-sonnet-5, claude-sonnet-5[1m], claude-opus-4-7[1m], claude-opus-4-7, claude-opus-4-6[1m], claude-opus-4-6, claude-sonnet-4-6[1m], claude-sonnet-4-6, claude-haiku-5-5, claude-haiku-4-5.
 ```
 
-智能体拿到步骤的提示词。延续前面某个步骤会话的步骤，能延续时会在那个步骤的智能体里继续，见[延续步骤的对话](#延续步骤的对话)。守护进程在本机时，Claude 或 Codex 步骤会报告其会话记录的 token 数，在评分读取该会话的地方读取。OpenCode 步骤，或在其他机器上的守护进程中运行的步骤，不报告 token 数；所以当守护进程提供 OpenCode 或在其他机器上运行时，有 token 预算的步骤交给下一个运行时。
+智能体拿到步骤的提示词。延续前面某个步骤会话的步骤，能延续时会在那个步骤的智能体里继续，见[延续步骤的对话](#延续步骤的对话)。守护进程在本机时，Claude 或 Codex 步骤会报告其会话记录的 token 数，在评分读取该会话的地方读取。只有守护进程提供的每个工具都报告 token 数时，有 token 预算的步骤才在这里运行：守护进程提供 OpenCode、在其他机器上运行、运行 Claude 却没有说明它的 home，或者把某个工具的会话保存在 teamai 无法读取的目录里（以其他用户身份运行的守护进程可能如此）时都不行。这时该步骤交给下一个运行时。teamai 仍然读不到 token 数的有预算步骤（例如会话记录超过 50 MiB）以 `budget_unmeasured` 失败，消息会说明原因和下一步。
 
 ## 团队工具实例
 

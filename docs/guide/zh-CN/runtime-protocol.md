@@ -250,7 +250,7 @@ teamai 随后把每个提示步骤作为一次 `prompt` 发送。`lease.prompt` 
 → {"type":"prompt",…,"env":{"TEAMAI_WORKFLOW_ATTEMPT":"r7a1…/a3f0…","TEAMAI_RUN_DIR":"/home/al/.teamai/projects/acme-web-3f9c/workflows/runs/r7a1…/scratch","NPM_TOKEN":"npm_…"},"provided":["NPM_TOKEN"],…}
 ```
 
-无法完成的提示以 `failed` 结束。希望步骤原样记录的原因，用 `model_unavailable`、`tool_unavailable`、`agent_unavailable`、`tool_failed` 或 `usage_limited`；其他代码 teamai 都记录为 `runtime_failed`，并在消息中带上你的代码和消息。收到 `cancel` 后，它以 `cancelled` 结束。`reattach` 把结束的提示报告为 `{"op":"…","state":"finished","session":{…},"result":{…},"usage":{…}}`，仍在运行的报告为 `running`；用同一个 `op` 再次发送 `prompt` 会重新连上它的智能体，不会再启动一个。步骤的 `timeout` 由 teamai 自己用 `cancel` 执行。`budget` 在提示结束后按 `usage` 检查。玩具运行时的 `agent` 选项就是这样运行的。
+无法完成的提示以 `failed` 结束。希望步骤原样记录的原因，用 `model_unavailable`、`tool_unavailable`、`agent_unavailable`、`tool_failed` 或 `usage_limited`；其他代码 teamai 都记录为 `runtime_failed`，并在消息中带上你的代码和消息。收到 `cancel` 后，它以 `cancelled` 结束。`reattach` 把结束的提示报告为 `{"op":"…","state":"finished","session":{…},"result":{…},"usage":{…}}`，仍在运行的报告为 `running`；用同一个 `op` 再次发送 `prompt` 会重新连上它的智能体，不会再启动一个。步骤的 `timeout` 由 teamai 自己用 `cancel` 执行。`budget` 在提示结束后按 `usage` 检查。你的 `can.tokens` 提供 token 数、却读不到某个提示的 token 数时，省略 `usage`，在 `unmeasured` 里说明原因和下一步，例如 `"unmeasured":"teamai cannot read <transcript> because it has no permission to read it. Let the user teamai runs as read it, then retry the step."`：有预算的步骤随后以 `budget_unmeasured` 失败，消息里就是你写的内容。玩具运行时的 `agent` 选项就是这样运行的。
 
 `open` 会写明 attempt 的提示运行的 `tool`，这样你可以为它准备位置，例如那个智能体的沙箱；命令步骤的 `open` 没有它。工具用完使用额度时，用 `usage_limited` 结束提示，写明工具，知道重置时间时也写上。不要写运行或步骤：
 

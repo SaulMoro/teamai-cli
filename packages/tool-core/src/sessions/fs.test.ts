@@ -1,8 +1,9 @@
 import fs from 'node:fs';
+import { syncBuiltinESMExports } from 'node:module';
 import os from 'node:os';
 import path from 'node:path';
 import vm from 'node:vm';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { claudeProjectDirName, scanFiles } from './fs.js';
 
 describe('claudeProjectDirName carried as its source', () => {
@@ -39,11 +40,13 @@ describe.skipIf(process.platform === 'win32')('scanFiles over a store with a fol
     };
   };
 
-  it('finds the files in the folders it can read, and skips the one it cannot', () => {
-    const { root, kept, done } = store();
+  it('finds the files in the folders it can read, and names the one it has no permission to read', () => {
+    const { root, kept, foreign, done } = store();
+    const skipped: string[] = [];
 
     try {
-      expect(scanFiles(root, /\.jsonl$/)).toEqual([kept]);
+      expect(scanFiles(root, /\.jsonl$/, (folder) => skipped.push(folder))).toEqual([kept]);
+      expect(skipped).toEqual([foreign]);
     } finally {
       done();
     }
@@ -54,8 +57,33 @@ describe.skipIf(process.platform === 'win32')('scanFiles over a store with a fol
     fs.chmodSync(root, 0o300);
 
     try {
-      expect(() => scanFiles(root, /\.jsonl$/)).toThrow(/EACCES/);
+      expect(() => scanFiles(root, /\.jsonl$/, () => {})).toThrow(/EACCES/);
     } finally {
+      done();
+    }
+  });
+
+  it('fails on a folder it cannot read for a reason other than permission, rather than leave its sessions out', () => {
+    const { root, foreign, done } = store();
+    // As when the process has no file handle left. Other folders list through opendir, which the spy leaves alone.
+    const spy = vi.spyOn(fs, 'readdirSync').mockImplementation(((dir: fs.PathLike, _options: { withFileTypes: true }) => {
+      if (dir === foreign) throw Object.assign(new Error(`EMFILE: too many open files, scandir '${foreign}'`), { code: 'EMFILE', path: foreign });
+      const listing = fs.opendirSync(dir.toString());
+      const entries: fs.Dirent[] = [];
+
+      for (let entry = listing.readSync(); entry !== null; entry = listing.readSync()) entries.push(entry);
+      listing.closeSync();
+
+      return entries;
+    }) as typeof fs.readdirSync);
+    // The module reads `node:fs` through its named exports, which follow the default object only once synced.
+    syncBuiltinESMExports();
+
+    try {
+      expect(() => scanFiles(root, /\.jsonl$/, () => {})).toThrow(/EMFILE/);
+    } finally {
+      spy.mockRestore();
+      syncBuiltinESMExports();
       done();
     }
   });

@@ -1002,6 +1002,7 @@ function attemptThrough({ config, run, attempt, sends, driver, sources, deadline
           const end: PromptEnd = { kind: 'finished', session: state.session, result: state.result };
 
           if (state.usage) end.usage = state.usage;
+          else if (state.unmeasured) end.unmeasured = state.unmeasured;
 
           if (state.model) end.model = state.model;
 

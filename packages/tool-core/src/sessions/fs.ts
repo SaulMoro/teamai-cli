@@ -10,6 +10,7 @@ import * as crypto from 'node:crypto';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { StringDecoder } from 'node:string_decoder';
+import { FsFailureSchema, isPermissionDenied } from '@teamai/shared/fs-failure';
 import { z } from 'zod';
 import { openRegularFileSync } from '@teamai/shared/regular-file';
 import { JsonValueSchema, JsonObjectSchema, type JsonlRecord } from '@teamai/shared/json';
@@ -283,10 +284,11 @@ export function dirExists(p: string): boolean {
 }
 
 /**
- * Recursively scan a directory for matching files, sorted by modification time descending. A subfolder it cannot read, as
- * one another user left in the store, is skipped; a root it cannot read fails, so the caller can say which folder.
+ * Recursively scan a directory for matching files, sorted by modification time descending. A subfolder it has no
+ * permission to read, as one another user left in the store, is skipped and handed to `skipped`; any other failure, and
+ * a root it cannot read, fails, so the caller can say which folder.
  */
-export function scanFiles(rootDir: string, pattern: RegExp): string[] {
+export function scanFiles(rootDir: string, pattern: RegExp, skipped: (folder: string) => void): string[] {
   if (!dirExists(rootDir)) return [];
   const results: string[] = [];
 
@@ -296,7 +298,10 @@ export function scanFiles(rootDir: string, pattern: RegExp): string[] {
     try {
       entries = fs.readdirSync(dir, { withFileTypes: true });
     } catch (error) {
-      if (dir === rootDir) throw error;
+      const failure = FsFailureSchema.safeParse(error);
+
+      if (dir === rootDir || !failure.success || !isPermissionDenied(failure.data)) throw error;
+      skipped(dir);
 
       return;
     }

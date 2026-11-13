@@ -21,6 +21,7 @@
 import type { Command } from 'commander';
 import { z } from 'zod';
 import { readRegularFileSync } from '@teamai/shared/regular-file';
+import { setStderrOnly } from '@teamai/shared/log';
 import path from 'node:path';
 import { listAvailablePlatforms, listInstalledPlatforms } from './adapters/index.js';
 import { resumeCommand } from './adapters/platform-facts.js';
@@ -790,6 +791,9 @@ export function registerSessionFlowCommands(sessionCmd: Command): void {
     .option('--sizes <spec>', 'With --suite: the largest S, M and L changes as lines,files, such as "S=40,3 M=200,10 L=800,30"; adds size, the smallest whose limits both fit the change, else XL')
     .option('--json', 'With --finished: print {"list":[{"session","source","publish","scorers","demand"}]}; with --all, {"list":[{"session","source","ended","prompt"}]}; with --suite, {"list":[{...,"start","solution","files","lines","size"}],"leftOut":[{"reason","sessions"}]}, a pushed session\'s entry naming its teamSession and author')
     .action(async (opts) => {
+      // stdout carries the JSON alone: a warning, as of a folder of a session store teamai cannot read, goes to stderr.
+      if (opts.json) setStderrOnly(true);
+
       if (opts.finished) {
         await listFinished(opts);
 

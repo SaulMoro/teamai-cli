@@ -453,6 +453,7 @@ export function runtimePrompter(run: AttemptRun, { view, runId, step, tool, prov
         if (end.result.failure) ran.failure = { code: end.result.failure.code, message: withoutPrompt(end.result.failure.message, input) };
 
         if (end.usage) ran.tokens = end.usage;
+        else if (end.unmeasured) ran.unmeasured = end.unmeasured;
 
         if (end.model) ran.model = end.model;
 

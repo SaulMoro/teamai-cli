@@ -47,6 +47,8 @@ export interface SessionPlatformFacts<TTool extends string = string> {
 export interface SessionHost {
   readonly processes: Processes;
   executablesOf(tool: string): readonly string[];
+  /** A folder of the store the adapter has no permission to read, which it skipped: the sessions in it are not listed. */
+  skippedFolder(folder: string): void;
 }
 
 /** A platform whose store teamai resolves (`sessionStoreDir`) and hands to its adapter. */

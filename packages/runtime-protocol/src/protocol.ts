@@ -598,6 +598,12 @@ const finishedPrompt = {
   session: PromptSessionSchema,
   result: PromptResultSchema,
   usage: PromptUsageSchema.optional(),
+  /**
+   * Without `usage`, from a runtime that offers `tokens`: why it read none for this prompt, as a sentence that names the
+   * cause and the next step, such as a transcript teamai has no permission to read. A budget that cannot count the step
+   * names it.
+   */
+  unmeasured: z.string().min(1).optional(),
   /** The model the tool ran on, as the tool named it. */
   model: z.string().min(1).optional(),
   /** What the tool said the run cost, as it said it. */

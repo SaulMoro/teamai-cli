@@ -95,7 +95,11 @@ describe('teamai-runtime-t3', () => {
       });
       const end = await ended(runtime, op);
       expect(RuntimeMessageSchema.safeParse(end).success).toBe(true);
-      expect(end).toEqual({ op, event: 'finished', session: { tool: 'claude', id: expect.stringMatching(/^[0-9a-f-]{36}$/) }, result: { output: { verdict: 'approve' } } });
+      // The fake agent bills no request, so the runtime, which offers tokens, says why it reports none.
+      expect(end).toEqual({
+        op, event: 'finished', session: { tool: 'claude', id: expect.stringMatching(/^[0-9a-f-]{36}$/) }, result: { output: { verdict: 'approve' } },
+        unmeasured: expect.stringContaining('records no request since the step started'),
+      });
 
       const [thread] = t3.threads();
       expect(thread).toMatchObject({
@@ -627,10 +631,12 @@ describe('teamai-runtime-t3', () => {
       expect(await ended(runtime, 'op-00000012')).toMatchObject({ event: 'failed', failure: { code: 'tool_failed', message: expect.stringContaining(`claude kept no session for ${worktree} in ${path.join(t3.home, '.claude')}, so the step cannot be scored or resumed.`) } });
     });
 
-    // Claude's own project folder, which it writes its transcript into; Codex's store, which it writes its rollouts under.
+    // Claude's own project folder, which it writes its transcript into; Codex's store, which it writes its rollouts under,
+    // and the day folder of that store it writes today's rollout into, as one another user's Codex made.
     it.skipIf(process.platform === 'win32').each([
       { tool: 'claude', model: 'claude-opus-5-5', folder: () => path.join(t3.home, '.claude', 'projects', encodeCwdClaude(fs.realpathSync(worktree))) },
       { tool: 'codex', model: 'gpt-6.1-sol', folder: () => path.join(t3.home, '.codex', 'sessions') },
+      { tool: 'codex', model: 'gpt-6.1-sol', folder: () => path.join(t3.home, '.codex', 'sessions', ...new Date().toISOString().slice(0, 10).split('-')) },
     ])('fails a $tool thread whose session folder teamai cannot list, saying which folder and how to let teamai read it', async ({ tool, model, folder: folderOf }) => {
       t3.config({ agent: { output: { verdict: 'approve' } } });
       // The tool can write there, and teamai cannot list the folder.

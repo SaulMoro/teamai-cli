@@ -113,6 +113,8 @@ export interface Session extends Reached {
    * none when they are that default, which T3 applies itself, or when this runtime does not offer that instance.
    */
   threadModel: ModelSelection | undefined;
+  /** Whether init offered `tokens`: then a finished prompt whose tokens the runtime cannot read says why. */
+  offersTokens: boolean;
 }
 
 export type Reach = { ok: true; reached: Reached } | { ok: false; failure: RuntimeFailure };

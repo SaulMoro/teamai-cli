@@ -107,6 +107,11 @@ export interface ReportInput {
   /** The lease's `session`, echoed when the attempt continued it, by that id or in a copy, rather than starting a new one. */
   resumed?: SessionRef;
   tokens?: TokenUsage;
+  /**
+   * Process-only, without `tokens`: why a driver that reports tokens read none for this attempt, as a runtime that reads
+   * them from the tool's transcript says it, with the next step. A budget that cannot count the attempt names it.
+   */
+  unmeasured?: string;
   /** Milliseconds around the tool launch only, as the driver measured it. */
   durationMs?: number;
   /** What the tool stated the attempt cost, in its own unit. Never estimated. */
@@ -2876,7 +2881,7 @@ const REPORT_FIELD_SOURCES = {
   attempt: 'payload', revision: 'payload', outcome: 'payload', driver: 'payload', outputs: 'payload', exitCode: 'payload', message: 'payload',
   tool: 'payload', model: 'payload', session: 'payload', resumed: 'payload', tokens: 'payload', durationMs: 'payload', cost: 'payload',
   failure: 'payload', changes: 'payload', read: 'payload', agent: 'payload', used: 'payload', unenforced: 'payload', limit: 'payload',
-  confined: 'payload', progress: 'payload', queued: 'payload', prUrl: 'changes.pr_url', end: 'process', launched: 'process',
+  confined: 'payload', progress: 'payload', queued: 'payload', prUrl: 'changes.pr_url', end: 'process', launched: 'process', unmeasured: 'process',
 } as const satisfies Record<keyof ReportInput, 'payload' | 'changes.pr_url' | 'process'>;
 
 /** The top-level payload fields `parseReport` reads. */
@@ -3600,9 +3605,11 @@ export async function reportAttempt(config: LocalConfig, runId: string, report: 
 
     if (unmeasured && !uncounted) {
       outcome = 'failed';
-      message = limits?.budget !== undefined
-        ? `Step "${step.id}" ends its turn at a token budget, and its report has no tokens, so the budget cannot count what it spent. Run its tool with a driver that reports its tokens, then retry the step.`
-        : `Step "${step.id}" runs under a token budget, and its report has no tokens, so the budget cannot count what it spent. Run it with a driver that reports tokens (driver.can.tokens), then retry the step.`;
+      message = report.unmeasured !== undefined
+        ? `Step "${step.id}" runs under a token budget, and its driver, which reports tokens, read none for it, so the budget cannot count what it spent: ${report.unmeasured}`
+        : limits?.budget !== undefined
+          ? `Step "${step.id}" ends its turn at a token budget, and its report has no tokens, so the budget cannot count what it spent. Run its tool with a driver that reports its tokens, then retry the step.`
+          : `Step "${step.id}" runs under a token budget, and its report has no tokens, so the budget cannot count what it spent. Run it with a driver that reports tokens (driver.can.tokens), then retry the step.`;
       failure = { code: 'budget_unmeasured', message };
     }
 

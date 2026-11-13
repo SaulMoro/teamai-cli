@@ -1,9 +1,11 @@
 import path from 'node:path';
 import { HOST_PROCESSES } from '@teamai/shared/exec';
+import { FsFailureSchema, isPermissionDenied } from '@teamai/shared/fs-failure';
 import { ClaudeCodeAdapter } from '@teamai/tool-core/formats/claude-code';
 import { CodexAdapter } from '@teamai/tool-core/formats/codex';
 import type { AgentAdapter } from '@teamai/tool-core/sessions/base';
-import { stepUsage, type StepTokenFormat } from '@teamai/tool-core/step-usage';
+import type { SessionHost } from '@teamai/tool-core/sessions/platform';
+import { stepUsage, type StepTokenFormat, type StepUsage } from '@teamai/tool-core/step-usage';
 import type { PaseoTool } from './providers.js';
 
 // ─── The tokens a step's agent billed ────────────────────
@@ -13,16 +15,13 @@ import type { PaseoTool } from './providers.js';
 //  machine. OpenCode's steps report none.
 //
 
-// The runtime only reads sessions, and only writing one runs a tool's CLI, so each tool is its own command here.
-const SESSION_READER_HOST = { processes: HOST_PROCESSES, executablesOf: (tool: string) => [tool] };
-
 /** Where a tool's session transcripts are under a tool home, and the format they record tokens in. */
-type Transcript = { sessions(toolHome: string): AgentAdapter; tokens: StepTokenFormat };
+type Transcript = { sessions(toolHome: string, host: SessionHost): AgentAdapter; tokens: StepTokenFormat };
 
 /** The transcript each tool's sessions record their tokens in, or undefined when the runtime reads none. */
 const TRANSCRIPTS: Record<PaseoTool, Transcript | undefined> = {
   claude: { sessions: (toolHome) => new ClaudeCodeAdapter('claude-code', path.join(toolHome, 'projects')), tokens: 'claude-jsonl' },
-  codex: { sessions: (toolHome) => new CodexAdapter('codex', path.join(toolHome, 'sessions'), SESSION_READER_HOST), tokens: 'codex-rollout' },
+  codex: { sessions: (toolHome, host) => new CodexAdapter('codex', path.join(toolHome, 'sessions'), host), tokens: 'codex-rollout' },
   // OpenCode keeps its sessions in a database only its tool family reads.
   opencode: undefined,
 };
@@ -32,28 +31,50 @@ export function readsTokens(tool: PaseoTool): boolean {
   return TRANSCRIPTS[tool] !== undefined;
 }
 
+/** Why teamai cannot read the step's tokens in `folders` of `tool`'s store, which it has no permission to list. */
+function unlistable(tool: PaseoTool, folders: readonly string[]): string {
+  const named = folders.join(', ');
+
+  return `teamai cannot list ${named}, where ${tool} keeps its sessions, because it has no permission to read ${folders.length > 1 ? 'them' : 'it'}. Let the user teamai runs as read ${named}, then retry the step.`;
+}
+
 /**
- * The transcript of session `sessionId` in `toolHome`, or undefined when the store does not list it, or cannot be listed,
- * as a folder the daemon's tool can write and teamai cannot read: the step it ran finished all the same.
+ * The transcript of session `sessionId` of `tool` in `toolHome`, or why teamai cannot find it, as a folder the daemon's
+ * tool can write and teamai cannot read: the step it ran finished all the same.
  */
-async function transcriptOf(format: Transcript, { toolHome, cwd, sessionId }: { toolHome: string; cwd: string; sessionId: string }): Promise<string | undefined> {
+async function transcriptOf(format: Transcript, { tool, toolHome, cwd, sessionId }: { tool: PaseoTool; toolHome: string; cwd: string; sessionId: string }): Promise<{ kind: 'found'; transcript: string } | { kind: 'unmeasured'; why: string }> {
+  const skipped: string[] = [];
+  // The runtime only reads sessions, and only writing one runs a tool's CLI, so each tool is its own command here.
+  const host: SessionHost = { processes: HOST_PROCESSES, executablesOf: (name) => [name], skippedFolder: (folder) => skipped.push(folder) };
+  let transcript: string | undefined;
+
   try {
-    return (await format.sessions(toolHome).listConversations(cwd)).find((session) => session.sessionId === sessionId)?.filePath;
-  } catch {
-    return undefined;
+    transcript = (await format.sessions(toolHome, host).listConversations(cwd)).find((session) => session.sessionId === sessionId)?.filePath;
+  } catch (error) {
+    const failure = FsFailureSchema.safeParse(error);
+
+    if (failure.success && isPermissionDenied(failure.data)) return { kind: 'unmeasured', why: unlistable(tool, [failure.data.path ?? toolHome]) };
+
+    return { kind: 'unmeasured', why: `Listing the ${tool} sessions in ${toolHome} failed (${failure.success ? failure.data.message : String(error instanceof Error ? error.message : error)}). Retry the step.` };
   }
+
+  if (transcript !== undefined) return { kind: 'found', transcript };
+
+  if (skipped.length > 0) return { kind: 'unmeasured', why: unlistable(tool, skipped) };
+
+  return { kind: 'unmeasured', why: `${tool} lists no session ${sessionId} for ${cwd} in ${toolHome}, where teamai reads the step's tokens. Retry the step.` };
 }
 
 /**
  * The tokens a step billed in session `sessionId` of `tool`, kept in `toolHome` for `cwd`, as `stepUsage` reads them
- * (`turnSentAt` for a turn sent to an agent that already ran). Undefined when the tool's transcript records no tokens or
- * cannot be found: the step then reports no usage, never zero.
+ * (`turnSentAt` for a turn sent to an agent that already ran), or why teamai read none: the step then reports no usage,
+ * never zero. Undefined for a tool whose transcript records no tokens.
  */
-export async function sessionUsage({ tool, toolHome, cwd, sessionId, turnSentAt }: { tool: PaseoTool; toolHome: string; cwd: string; sessionId: string; turnSentAt?: number }) {
+export async function sessionUsage({ tool, toolHome, cwd, sessionId, turnSentAt }: { tool: PaseoTool; toolHome: string; cwd: string; sessionId: string; turnSentAt?: number }): Promise<StepUsage | undefined> {
   const format = TRANSCRIPTS[tool];
 
   if (format === undefined) return undefined;
-  const transcriptPath = await transcriptOf(format, { toolHome, cwd, sessionId });
+  const found = await transcriptOf(format, { tool, toolHome, cwd, sessionId });
 
-  return transcriptPath === undefined ? undefined : stepUsage({ format: format.tokens, transcriptPath, sessionId, ...(turnSentAt !== undefined && { turnSentAt }) });
+  return found.kind === 'found' ? stepUsage({ format: format.tokens, transcriptPath: found.transcript, sessionId, ...(turnSentAt !== undefined && { turnSentAt }) }) : found;
 }

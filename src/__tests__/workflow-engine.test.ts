@@ -5713,6 +5713,21 @@ describe('token budgets', () => {
     expect(await readRun(config, runId)).toMatchObject({ steps: [{ id: 'work', status: 'failed', failure: { code: 'loop_exhausted' } }] });
   });
 
+  it('fails a budgeted prompt whose driver offers tokens and read none for it, with the driver\'s reason rather than a call for another driver', async () => {
+    const { config, runId } = await startBuild(graph(`  - id: plan
+    prompt: Plan it.
+`, 'budget: { tokens: 100 }\n'));
+    const plan = leaseIn(await leaseNext(config, runId, driverA, reports));
+    const why = 'teamai cannot read /home/al/.codex/sessions/2026/11/13 because it has no permission to read it. Let the user teamai runs as read it, then retry the step.';
+
+    await reportAttempt(config, runId, { attempt: plan.attempt, revision: plan.revision, outcome: 'success', driver: driverA, unmeasured: why });
+
+    expect(await readRun(config, runId)).toMatchObject({ steps: [{ id: 'plan', status: 'failed', failure: {
+      code: 'budget_unmeasured',
+      message: `Step "plan" runs under a token budget, and its driver, which reports tokens, read none for it, so the budget cannot count what it spent: ${why}`,
+    } }] });
+  });
+
   it('gives a budgeted interactive prompt to a driver that cannot meter it, and records its spend as not counted', async () => {
     const { config, runId } = await startBuild(graph(`  - id: pair
     interactive: true

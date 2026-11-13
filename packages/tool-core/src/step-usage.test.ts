@@ -43,11 +43,11 @@ const twoClaudeTurns = () => transcript([
 
 describe('stepUsage', () => {
   it('reports every request of the session of a step that started it, as Claude Code reports its own usage', async () => {
-    expect(await stepUsage({ format: 'claude-jsonl', transcriptPath: twoClaudeTurns(), sessionId: 'session-1' })).toEqual({ input: 9, output: 450, cachedInput: 42_000 });
+    expect(await stepUsage({ format: 'claude-jsonl', transcriptPath: twoClaudeTurns(), sessionId: 'session-1' })).toEqual({ kind: 'measured', usage: { input: 9, output: 450, cachedInput: 42_000 } });
   });
 
   it('reports only the requests at or after a turn was sent, not those of the earlier steps in the same session', async () => {
-    expect(await stepUsage({ format: 'claude-jsonl', transcriptPath: twoClaudeTurns(), sessionId: 'session-1', turnSentAt: Date.parse(SECOND_TURN) })).toEqual({ input: 3, output: 50, cachedInput: 20_000 });
+    expect(await stepUsage({ format: 'claude-jsonl', transcriptPath: twoClaudeTurns(), sessionId: 'session-1', turnSentAt: Date.parse(SECOND_TURN) })).toEqual({ kind: 'measured', usage: { input: 3, output: 50, cachedInput: 20_000 } });
   });
 
   it('reports a Codex session as Codex reports its own usage, counting cached input inside input', async () => {
@@ -57,14 +57,49 @@ describe('stepUsage', () => {
       codexRecord(FIRST_TURN, 'resp_1', { input: 1_200, cached: 1_000, output: 40 }, { input: 1_200, cached: 1_000, output: 40 }),
     ]);
 
-    expect(await stepUsage({ format: 'codex-rollout', transcriptPath: rollout, sessionId: 'session-1' })).toEqual({ input: 1_200, output: 40, cachedInput: 1_000 });
+    expect(await stepUsage({ format: 'codex-rollout', transcriptPath: rollout, sessionId: 'session-1' })).toEqual({ kind: 'measured', usage: { input: 1_200, output: 40, cachedInput: 1_000 } });
   });
 
+  const unreadable = (): string => {
+    const file = twoClaudeTurns();
+    fs.chmodSync(file, 0o200);
+
+    return file;
+  };
+
+  const oversized = (): string => {
+    const file = twoClaudeTurns();
+    fs.truncateSync(file, 50 * 1024 * 1024 + 1);
+
+    return file;
+  };
+
   it.each([
-    ['the transcript is missing', () => path.join(os.tmpdir(), 'teamai-step-usage-missing', 'session.jsonl'), undefined],
-    ['no request falls in the turn', twoClaudeTurns, Date.parse('2026-11-13T11:00:00.000Z')],
-    ['a request records no time that would place it in or out of the turn', () => transcript([claudeRequest('msg_1', undefined, { input: 4, output: 300, cacheRead: 0, cacheCreation: 0 }), claudeRequest('msg_2', SECOND_TURN, { input: 3, output: 50, cacheRead: 0, cacheCreation: 0 })]), Date.parse(SECOND_TURN)],
-  ])('reports no usage, never zero, when %s', async (_case, file, turnSentAt) => {
-    expect(await stepUsage({ format: 'claude-jsonl', transcriptPath: file(), sessionId: 'session-1', ...(turnSentAt !== undefined && { turnSentAt }) })).toBeUndefined();
+    {
+      when: 'the transcript is missing', file: () => path.join(os.tmpdir(), 'teamai-step-usage-missing', 'session.jsonl'), turnSentAt: undefined,
+      why: (file: string) => `teamai found no transcript at ${file}, where the tool keeps the step's session. Retry the step.`,
+    },
+    {
+      when: 'no request falls in the turn', file: twoClaudeTurns, turnSentAt: Date.parse('2026-11-13T11:00:00.000Z'),
+      why: (file: string) => `${file}, the transcript of the step's session, records no request since the step sent its turn, as when the tool writes a turn's usage only after it ends. Retry the step.`,
+    },
+    {
+      when: 'a request records no time that would place it in or out of the turn',
+      file: () => transcript([claudeRequest('msg_1', undefined, { input: 4, output: 300, cacheRead: 0, cacheCreation: 0 }), claudeRequest('msg_2', SECOND_TURN, { input: 3, output: 50, cacheRead: 0, cacheCreation: 0 })]),
+      turnSentAt: Date.parse(SECOND_TURN),
+      why: (file: string) => `${file}, the transcript of the step's session, records a request with no time, so teamai cannot tell this turn's requests from the earlier steps'. Run the step in a new session rather than continue this one.`,
+    },
+    {
+      when: 'the transcript is over the size teamai reads', file: oversized, turnSentAt: undefined,
+      why: (file: string) => `${file}, the transcript of the step's session, is over the 50 MiB teamai reads. Run the step in a new session rather than continue one this long.`,
+    },
+    ...(process.platform === 'win32' ? [] : [{
+      when: 'teamai has no permission to read the transcript', file: unreadable, turnSentAt: undefined,
+      why: (file: string) => `teamai cannot read ${file}, the transcript of the step's session, because it has no permission to read it. Let the user teamai runs as read ${file}, then retry the step.`,
+    }]),
+  ])('reports no usage, never zero, and says why, when $when', async ({ file: fileOf, turnSentAt, why }) => {
+    const file = fileOf();
+
+    expect(await stepUsage({ format: 'claude-jsonl', transcriptPath: file, sessionId: 'session-1', ...(turnSentAt !== undefined && { turnSentAt }) })).toEqual({ kind: 'unmeasured', why: why(file) });
   });
 });

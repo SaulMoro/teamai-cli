@@ -52,6 +52,8 @@ export interface ProcessState {
    * prompt on it names that home, so teamai reads the session there whatever HOME or tool root it runs with.
    */
   sessionHomes: Map<string, string>;
+  /** Whether init offered `tokens`: then a finished prompt whose tokens the runtime cannot read says why. */
+  offersTokens: boolean;
   /** The home each team instance keeps its sessions in, as teamai resolved it, by its name. */
   homeDirs: Map<string, string>;
   /** The tool home each offered tool or instance runs in when its Paseo provider's env sets one, by its name. */

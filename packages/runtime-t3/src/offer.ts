@@ -1,10 +1,11 @@
+import path from 'node:path';
 import type { InitInstance, RuntimeFailure, RuntimeRequest } from '@teamai/runtime-protocol';
 import { type InstanceAdder } from './instances.js';
 import { JUDGE_KEPT } from './judge.js';
 import { parseOptions } from './options.js';
 import { projectAt } from './place.js';
 import type { Serving, Session } from './runtime.js';
-import { DRIVER_NAMES, DRIVERS, driverOf, toolOf, type Driver, type ToolId } from './sessions.js';
+import { canListStore, DRIVER_NAMES, DRIVERS, driverOf, toolOf, type Driver, type ToolId } from './sessions.js';
 import { instanceToolHome, projectSettings, readSettings, type ModelSelection, type ProjectSettings } from './settings.js';
 import { driverOfProvider, runsOwnBinary, servedInstances, teamaiToolHome, tilde } from './tool-instances.js';
 import { canWake } from './wake.js';
@@ -221,7 +222,21 @@ export function offer({ serving, adder, start, recover }: { serving: Serving; ad
 
       // A tool `instances` maps to an instance that cannot run it is not offered on its default instance instead.
       const runs = new Map<string, Provider>([...instances.instances, ...served.served].filter(([tool]) => unavailable[tool] === undefined));
-      start({ t3: connected.t3, mode: request.mode, environment, instances: runs, pending: toAdd.pending, runtimeMode: parsed.options.runtime_mode, signIn: connected.signIn, checkout, threadModel });
+
+      // Every tool it runs is Claude or Codex, whose transcript on this machine (T3 runs only in environment: local)
+      // records the tokens each step billed, in a folder of the home T3 runs it in. One teamai cannot list, as the store of
+      // a T3 Code that runs as another user, would leave a step without its tokens.
+      const sessionHomes = [
+        ...[...runs.values()].flatMap((provider) => {
+          const driver = driverOfProvider(provider);
+
+          return driver ? [{ driver, home: homeOf(provider, driver) }] : [];
+        }),
+        ...[...toAdd.pending.values()].map(({ driver, homePath }) => ({ driver, home: homePath ?? path.join(options.t3UserHome, DRIVERS[driver].home) })),
+      ];
+
+      const offersTokens = sessionHomes.every(({ driver, home }) => canListStore(driver, home));
+      start({ t3: connected.t3, mode: request.mode, environment, instances: runs, pending: toAdd.pending, runtimeMode: parsed.options.runtime_mode, signIn: connected.signIn, checkout, threadModel, offersTokens });
       // An instance teamai adds on its first open is offered as well: the open adds it, or fails saying why.
       const tools = [...runs.keys(), ...toAdd.pending.keys()];
       // A step that names no tool runs on the member's effective T3 default, or the started-from thread's, when its instance is the one offered.
@@ -238,9 +253,7 @@ export function offer({ serving, adder, start, recover }: { serving: Serving; ad
         ...(parsed.options.runtime_mode === 'full-access' && tools.length > 0 && { permissions: Object.fromEntries(tools.map((tool) => [tool, 'full-access' as const])) }),
         ...(Object.keys(unavailable).length > 0 && { unavailable }),
         can: {
-          // tokens: every tool it runs is Claude or Codex, whose session transcript on this machine (T3 runs only in
-          // environment: local) records the tokens each step billed.
-          exec: false, setup: false, env: false, hitl: request.mode === 'attended', tokens: true, unattended: false, max_turns: false,
+          exec: false, setup: false, env: false, hitl: request.mode === 'attended', tokens: offersTokens, unattended: false, max_turns: false,
           // No role: a T3 thread runs its tool in the provider instance's own home, with the member's own resources, and
           // this runtime cannot point it at the tool home teamai delivers a role into.
           workspace: ['read-only', 'new', 'continue', 'clone', 'team'], tools, ...(defaultTool && { default_tool: defaultTool }),

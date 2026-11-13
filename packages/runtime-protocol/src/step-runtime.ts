@@ -70,7 +70,7 @@ export type PromptStopped = NonNullable<FinishedState['stopped']>;
  * session the lease asked to resume and, for a confined prompt, what the runtime kept; cancelled; or failed.
  */
 export type PromptEnd =
-  | { kind: 'finished'; session: z.infer<typeof PromptSessionSchema>; result: PromptResult; usage?: z.infer<typeof PromptUsageSchema>; model?: FinishedState['model']; cost?: FinishedState['cost']; confined?: ConfinedKept; resumed?: true; stopped?: PromptStopped }
+  | { kind: 'finished'; session: z.infer<typeof PromptSessionSchema>; result: PromptResult; usage?: z.infer<typeof PromptUsageSchema>; unmeasured?: FinishedState['unmeasured']; model?: FinishedState['model']; cost?: FinishedState['cost']; confined?: ConfinedKept; resumed?: true; stopped?: PromptStopped }
   | { kind: 'cancelled' }
   | { kind: 'failed'; failure: RuntimeFailure }
   | Lost;

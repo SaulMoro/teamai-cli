@@ -7,7 +7,7 @@ import {
 import type { OpEnd } from '@teamai/runtime-kit/ledger';
 import { WRAPPER_PREFIX } from '@teamai/runtime-kit/outer';
 import { NotRegularFileError, readRegularFileSync } from '@teamai/shared/regular-file';
-import { stepUsage } from '@teamai/tool-core/step-usage';
+import { stepUsage, UNTIMED_TURN, type StepUsage } from '@teamai/tool-core/step-usage';
 import type { InstanceAdder } from './instances.js';
 import { cannotReadBecause, FsFailureSchema, isMissing } from '@teamai/shared/fs-failure';
 import { unreadableFailure, type LaunchRecord, type OpRecord, type PlaceRecord, type ThreadRecord } from './journal.js';
@@ -212,7 +212,10 @@ function readResult(file: string): { ok: true; result: PromptResult } | { ok: fa
     text = readRegularFileSync(file, 'utf8');
   } catch (error) {
     if (error instanceof NotRegularFileError) return { ok: false, why: `left ${error.kind} at the result file ${file}, not a regular file, so teamai did not read it` };
-    const failure = FsFailureSchema.parse(error);
+    const parsed = FsFailureSchema.safeParse(error);
+
+    if (!parsed.success) throw error;
+    const failure = parsed.data;
 
     if (isMissing(failure)) return { ok: false, why: `ended without writing the result file ${file}` };
 
@@ -602,11 +605,7 @@ export function conversations({ serving, adder }: { serving: Serving; adder: Ins
       const other = thread.turnOf ? undefined : request.lease.resume;
       const lookup = driver && toolHome !== undefined ? await sessionSince({ driver, toolHome, cwd, since: thread.launchedAt, ...(other !== undefined && { other }) }) : undefined;
 
-      if (lookup?.kind === 'unlistable') {
-        return stopped({ op: request.op, state: 'failed', failure: { code: 'tool_failed', message: `${where} finished, but teamai cannot list ${lookup.folder}, where ${thread.tool} keeps the step's session, because ${lookup.reason}, so the step cannot be scored or resumed. Let the user teamai runs as read ${lookup.folder}, then retry the step.` } });
-      }
-
-      if (!driver || toolHome === undefined || lookup?.kind !== 'found') {
+      const keptNone = () => {
         // T3 runs the tool in the instance's home path, else in the home its own server's environment names, which
         // teamai cannot read: only the setting makes the two agree.
         const named = driver && attemptHome === undefined && instanceId !== undefined && toolHome !== undefined
@@ -614,17 +613,45 @@ export function conversations({ serving, adder }: { serving: Serving; adder: Ins
           : '';
 
         return stopped({ op: request.op, state: 'failed', failure: { code: 'tool_failed', message: `${where} finished, but ${thread.tool} kept no session for ${cwd}${toolHome === undefined ? '' : ` in ${toolHome}`}, so the step cannot be scored or resumed.${named}` } });
+      };
+
+      if (!driver || toolHome === undefined || lookup === undefined) return keptNone();
+
+      switch (lookup.kind) {
+        case 'found':
+          break;
+        case 'none':
+          return keptNone();
+        case 'unlistable': {
+          const folders = lookup.folders.join(', ');
+
+          return stopped({ op: request.op, state: 'failed', failure: { code: 'tool_failed', message: `${where} finished, but teamai cannot list ${folders}, where ${thread.tool} keeps the step's session, because it has no permission to read ${lookup.folders.length > 1 ? 'them' : 'it'}, so the step cannot be scored or resumed. Let the user teamai runs as read ${folders}, then retry the step.` } });
+        }
+
+        case 'failed':
+          return stopped({ op: request.op, state: 'failed', failure: { code: 'tool_failed', message: `${where} finished, but teamai could not look for ${thread.tool}'s session in ${toolHome}: ${lookup.why}. So the step cannot be scored or resumed; retry it.` } });
+        default: {
+          const unhandled: never = lookup;
+
+          return unhandled;
+        }
       }
 
       const found = lookup.session;
       // teamai reads a tool instance's session only in the home named here: it knows no default home for it.
       const kept = { tool: thread.tool, id: found.id, ...((thread.tool !== DRIVERS[driver].tool || !isDefaultToolHome(driver, toolHome)) && { home: toolHome }) };
-      // A turn journaled before it carried its send time cannot be told from the earlier steps' requests, so it reports none.
       const turnSentAt = thread.turnOf?.sentAt;
       const { transcript } = found;
-      const usage = transcript !== undefined && (!thread.turnOf || turnSentAt !== undefined) ? await stepUsage({ format: DRIVERS[driver].tokens, transcriptPath: transcript, sessionId: found.id, ...(turnSentAt !== undefined && { turnSentAt }) }) : undefined;
 
-      return stopped({ op: request.op, state: 'finished', session: kept, result: written.result, ...(usage && { usage }), ...(request.confined && { confined: JUDGE_KEPT }), ...(thread.turnOf && { resumed: true }) });
+      const measured: StepUsage = transcript === undefined
+        ? { kind: 'unmeasured', why: `${thread.tool}'s store names no transcript of session ${found.id}, which teamai reads the step's tokens from. Retry the step.` }
+        : thread.turnOf && turnSentAt === undefined
+          ? UNTIMED_TURN
+          : await stepUsage({ format: DRIVERS[driver].tokens, transcriptPath: transcript, sessionId: found.id, ...(turnSentAt !== undefined && { turnSentAt }) });
+
+      const usage = measured.kind === 'measured' ? { usage: measured.usage } : s.offersTokens ? { unmeasured: measured.why } : {};
+
+      return stopped({ op: request.op, state: 'finished', session: kept, result: written.result, ...usage, ...(request.confined && { confined: JUDGE_KEPT }), ...(thread.turnOf && { resumed: true }) });
     }
   };
 
