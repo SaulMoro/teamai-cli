@@ -596,9 +596,13 @@ export function conversations({ serving, adder }: { serving: Serving; adder: Ins
       // A new thread never resumes the session the lease names (T3 starts each with a new one), so that session, of an
       // earlier thread in this folder the step did not go on in, is not this one's.
       const other = thread.turnOf ? undefined : request.lease.resume;
-      const found = driver && toolHome !== undefined ? await sessionSince({ driver, toolHome, cwd, since: thread.launchedAt, ...(other !== undefined && { other }) }) : undefined;
+      const lookup = driver && toolHome !== undefined ? await sessionSince({ driver, toolHome, cwd, since: thread.launchedAt, ...(other !== undefined && { other }) }) : undefined;
 
-      if (!driver || toolHome === undefined || !found) {
+      if (lookup?.kind === 'unlistable') {
+        return stopped({ op: request.op, state: 'failed', failure: { code: 'tool_failed', message: `${where} finished, but teamai cannot list ${lookup.folder}, where ${thread.tool} keeps the step's session, because ${lookup.reason}, so the step cannot be scored or resumed. Let the user teamai runs as read ${lookup.folder}, then retry the step.` } });
+      }
+
+      if (!driver || toolHome === undefined || lookup?.kind !== 'found') {
         // T3 runs the tool in the instance's home path, else in the home its own server's environment names, which
         // teamai cannot read: only the setting makes the two agree.
         const named = driver && attemptHome === undefined && instanceId !== undefined && toolHome !== undefined
@@ -608,6 +612,7 @@ export function conversations({ serving, adder }: { serving: Serving; adder: Ins
         return stopped({ op: request.op, state: 'failed', failure: { code: 'tool_failed', message: `${where} finished, but ${thread.tool} kept no session for ${cwd}${toolHome === undefined ? '' : ` in ${toolHome}`}, so the step cannot be scored or resumed.${named}` } });
       }
 
+      const found = lookup.session;
       // teamai reads a tool instance's session only in the home named here: it knows no default home for it.
       const kept = { tool: thread.tool, id: found.id, ...((thread.tool !== DRIVERS[driver].tool || !isDefaultToolHome(driver, toolHome)) && { home: toolHome }) };
       // A turn journaled before it carried its send time cannot be told from the earlier steps' requests, so it reports none.

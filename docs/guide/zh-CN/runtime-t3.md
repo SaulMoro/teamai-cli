@@ -411,6 +411,7 @@ No machine linked to T3 Code has https://github.com/acme/acme-app.git as a proje
 | `… launch_unconfirmed: teamai launched the T3 thread "review · teamai r70d…" in the T3 project "acme-app" under an earlier T3 Code sign-in …` | 某个步骤的启动请求没有得到回复，而你之后重新登录了 T3，所以 teamai 无法查找那个线程。 | 如果消息里提到的线程还在运行，在 T3 Code 里停止它，删除消息里提到的文件，然后再次运行 `teamai workflow cancel <run>`。 |
 | `… journal_unreadable: Runtime t3 cannot read its record of t3-r70d…, ~/.teamai/runtime-state/t3/places/….json …` | teamai 记录步骤线程的文件已损坏，所以它不知道该停止哪些线程，并保留这个位置。 | 在 T3 Code 里停止这次运行的线程，删除消息里提到的文件，然后再次运行 `teamai workflow cancel <run>`。 |
 | `… kept no session for <worktree> in <home> …` | 工具没有在 teamai 查找的目录里为这个 worktree 保存会话记录：该目录是实例在 T3 里设置的 home path，否则是运行 T3 Code 的用户的 `~/.claude` 或 `~/.codex`。T3 服务器自身运行时带的 `CLAUDE_CONFIG_DIR` 或 `CODEX_HOME`，teamai 看不到。所以步骤无法评分。 | 在 T3 Code 的 Settings → Providers 里把实例的 home path 设为工具实际使用的目录（即 T3 的 `userdata/settings.json` 中的 `providerInstances.<instance>.config.homePath`），然后重试该步骤。 |
+| `… teamai cannot list <folder>, where claude keeps the step's session, because it has no permission to read it …` | 工具把会话记录写进了运行 teamai 的用户无法读取的目录，所以 teamai 找不到这个步骤的会话，步骤无法评分，也无法恢复。 | 让运行 teamai 的用户可以读取消息里提到的目录，然后重试该步骤。 |
 | `⚠ Step "review" stopped: claude reached its usage limit on T3 Code provider instance "claudeAgent" (Claude): …` | 实例达到了提供方的用量上限。T3 知道重置时间时，冒号后的 T3 消息会写明。 | 无需操作：额度重置后 teamai 会再运行该步骤。想现在继续，就换一个 `instance`。 |
 
 ## 目前还不支持

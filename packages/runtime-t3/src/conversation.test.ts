@@ -2,6 +2,7 @@ import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { RUN_DIR_ENV, RuntimeMessageSchema, WORKFLOW_DIR_ENV } from '@teamai/runtime-protocol';
+import { encodeCwdClaude } from '@teamai/tool-core/sessions/fs';
 import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
 import { CLAUDE, CODEX, credentialsFile, fakeT3, signIn, type Connection, type FakeT3Config, type Line } from './testing/harness.js';
@@ -608,6 +609,23 @@ describe('teamai-runtime-t3', () => {
       runtime.send(prompt(handle, 'op-00000012'));
 
       expect(await ended(runtime, 'op-00000012')).toMatchObject({ event: 'failed', failure: { code: 'tool_failed', message: expect.stringContaining(`claude kept no session for ${worktree} in ${path.join(t3.home, '.claude')}, so the step cannot be scored or resumed.`) } });
+    });
+
+    it.skipIf(process.platform === 'win32')('fails a thread whose session folder teamai cannot list, saying which folder and how to let teamai read it', async () => {
+      t3.config({ agent: { output: { verdict: 'approve' } } });
+      // Claude can write its transcript there, and teamai cannot list the folder.
+      const folder = path.join(t3.home, '.claude', 'projects', encodeCwdClaude(fs.realpathSync(worktree)));
+      fs.mkdirSync(folder, { recursive: true });
+      fs.chmodSync(folder, 0o300);
+      const { runtime, handle } = await opened();
+
+      runtime.send(prompt(handle, 'op-0000fe11'));
+
+      try {
+        expect(await ended(runtime, 'op-0000fe11')).toMatchObject({ event: 'failed', failure: { code: 'tool_failed', message: expect.stringContaining(`finished, but teamai cannot list ${folder}, where claude keeps the step's session, because it has no permission to read it, so the step cannot be scored or resumed. Let the user teamai runs as read ${folder}, then retry the step.`) } });
+      } finally {
+        fs.chmodSync(folder, 0o700);
+      }
     });
 
     it('says where it looked for the session, and the T3 setting that names another home, when the tool kept none there', async () => {

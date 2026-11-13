@@ -4,8 +4,9 @@ import { CodexAdapter } from '@teamai/tool-core/formats/codex';
 import type { StepTokenFormat } from '@teamai/tool-core/step-usage';
 import { HOST_PROCESSES } from '@teamai/shared/exec';
 import { getUserHome } from '@teamai/shared/home';
+import { z } from 'zod';
 import type { SessionHost } from '@teamai/tool-core/sessions/platform';
-import type { AgentAdapter } from '@teamai/tool-core/sessions/base';
+import type { AgentAdapter, SessionMeta } from '@teamai/tool-core/sessions/base';
 
 // ─── The tool session a T3 thread ran ───
 //
@@ -71,15 +72,34 @@ export function isDefaultToolHome(driver: Driver, toolHome: string): boolean {
 export type KeptSession = { id: string; transcript?: string };
 
 /**
- * The first session the tool of `driver` started in `cwd` at or after `since`, in `toolHome`, other than `other`, or
- * undefined when it kept none. A task the thread delegates may start a later session in the same folder; that one is
- * not the step's. `other` is a session the thread cannot have, such as that of an earlier thread in the folder whose
- * conversation the step did not go on in, which may have started within the clock's slack.
+ * What the lookup of a step's session found: the session, none, or a folder of the tool's store that teamai cannot list,
+ * as one the tool can write and teamai cannot read, with why.
  */
-export async function sessionSince({ driver, toolHome, cwd, since, other }: { driver: Driver; toolHome: string; cwd: string; since: number; other?: string }): Promise<KeptSession | undefined> {
-  const sessions = await DRIVERS[driver].sessions(toolHome).listConversations(cwd);
+export type SessionLookup = { kind: 'found'; session: KeptSession } | { kind: 'none' } | { kind: 'unlistable'; folder: string; reason: string };
+
+/** What Node's file system says of a folder it could not list. */
+const ListingError = z.object({ code: z.string().optional().catch(undefined), path: z.string().optional().catch(undefined), message: z.string().catch('') }).catch({ message: '' });
+
+/**
+ * The first session the tool of `driver` started in `cwd` at or after `since`, in `toolHome`, other than `other`. A task
+ * the thread delegates may start a later session in the same folder; that one is not the step's. `other` is a session the
+ * thread cannot have, such as that of an earlier thread in the folder whose conversation the step did not go on in, which
+ * may have started within the clock's slack.
+ */
+export async function sessionSince({ driver, toolHome, cwd, since, other }: { driver: Driver; toolHome: string; cwd: string; since: number; other?: string }): Promise<SessionLookup> {
+  let sessions: SessionMeta[];
+
+  try {
+    sessions = await DRIVERS[driver].sessions(toolHome).listConversations(cwd);
+  } catch (error) {
+    const { code, path: folder = toolHome, message } = ListingError.parse(error);
+    const reason = code === 'EACCES' || code === 'EPERM' ? 'it has no permission to read it' : `listing it failed (${message || 'teamai does not know why'})`;
+
+    return { kind: 'unlistable', folder, reason };
+  }
+
   const started = sessions.filter((session) => session.sessionId !== other && Date.parse(session.createdAt) >= since - CLOCK_SLACK_MS);
   const first = started.sort((a, b) => Date.parse(a.createdAt) - Date.parse(b.createdAt))[0];
 
-  return first && { id: first.sessionId, ...(first.filePath !== undefined && { transcript: first.filePath }) };
+  return first ? { kind: 'found', session: { id: first.sessionId, ...(first.filePath !== undefined && { transcript: first.filePath }) } } : { kind: 'none' };
 }
