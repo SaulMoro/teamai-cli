@@ -293,3 +293,17 @@ it('check refuses a DriverCan key the workflow engine page does not name, writte
   expect(checked.status).toBe(1);
   expect(checked.output).toContain('queue');
 });
+it('check refuses UTF-8 encoded twice in a page or a skill, naming the file and line, and leaves a correct one alone', () => {
+  const root = checkout();
+  // "…" written through a tool that read its UTF-8 bytes as Latin-1 and encoded them again: bytes c3 a2 c2 80 c2 a6.
+  fs.appendFileSync(path.join(root, 'docs/guide/workflow.md'), `\nIt waits${Buffer.from([0xc3, 0xa2, 0xc2, 0x80, 0xc2, 0xa6]).toString('utf8')}\n`);
+  fs.mkdirSync(path.join(root, 'skill-data/core'), { recursive: true });
+  fs.appendFileSync(path.join(root, 'skill-data/core/SKILL.md'), '\nCafÃ© is "Café" encoded again.\n');
+  fs.appendFileSync(path.join(root, 'docs/guide/sharing.md'), '\nIt waits… for the café, 中文 too.\n');
+  const checked = run(root, '--only=double-encoded-utf8');
+  expect(checked.status).toBe(1);
+  const lines = fs.readFileSync(path.join(root, 'docs/guide/workflow.md'), 'utf8').split('\n').length - 1;
+  expect(checked.output).toContain(`docs/guide/workflow.md:${lines}`);
+  expect(checked.output).toContain('skill-data/core/SKILL.md:');
+  expect(checked.output).not.toContain('docs/guide/sharing.md');
+});
