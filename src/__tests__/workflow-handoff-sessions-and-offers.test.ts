@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it, onTestFinished, vi } from 'vitest';
-import { listHandoffs } from '../dashboard/workflow-runs.js';
+import { listHandoffs, listLocalRuns } from '../dashboard/workflow-runs.js';
 import { getAdapter } from '../session-flow/adapters/index.js';
 import { AgentSession } from '../session-flow/agent-session.js';
 import type { LocalConfig } from '../types.js';
@@ -1248,6 +1248,30 @@ steps:
     ]);
     // `--next` takes no run in a checkout without an origin, so none is offered there.
     expect(await listed(undefined)).toEqual([['claimed', held, 'bob'], ['ended', ended, 'bob'], ['here', local, 'alice']]);
+  });
+
+  it('shows the dashboard each of this machine\'s runs another install took as that install holds or ended it, with nothing of it running or waiting here', async () => {
+    const acme = team();
+    const alice = await acme.member('alice');
+    const bob = await acme.member('bob');
+    const local = await start(alice);
+    const ended = await start(alice);
+    const held = await start(alice);
+    const reoffered = await start(alice);
+    for (const run of [ended, held, reoffered]) {
+      await publishRun(alice.config, run, { env: {}, checkout: alice.checkout });
+      await claimRun(bob.config, run, { checkout: bob.checkout });
+    }
+    await cancelRun(bob.config, ended, {});
+    await publishRun(bob.config, reoffered, { env: {}, checkout: bob.checkout });
+
+    await reportsBranch.readableReportsWorktree(alice.config);
+    const rows = new Map((await listLocalRuns(alice.config)).map((row) => [row.run, row]));
+
+    expect(rows.get(local)).not.toHaveProperty('elsewhere');
+    expect(rows.get(held)).toMatchObject({ status: 'running', current: [], waiting: [], elsewhere: { kind: 'claimed', owner: { user: 'bob' }, isOffered: false } });
+    expect(rows.get(reoffered)).toMatchObject({ current: [], waiting: [], elsewhere: { kind: 'claimed', owner: { user: 'bob' }, isOffered: true } });
+    expect(rows.get(ended)).toMatchObject({ current: [], waiting: [], elsewhere: { kind: 'ended', owner: { user: 'bob' }, status: 'cancelled' } });
   });
 
   it('shows the dashboard each run handed over, with what a runner would need, marking the ones this install published', async () => {

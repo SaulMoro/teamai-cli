@@ -432,6 +432,7 @@ export const dashboardMessages = {
   "Offered": "待接手",
   "Held": "持有中",
   "Held by": "持有者",
+  "Ended by": "结束者",
   "You": "你",
   "Needs a person now": "现在需要人工",
   "May need a person at": "可能需要人工的步骤",

@@ -32,7 +32,7 @@ import { settledBranches, type SettledBranches } from '../workflow/leftovers.js'
 import { ownRunSweptAt, resolveRetention, type ResolvedRetention } from '../workflow/retention.js';
 import { loadTeamConfig } from '../config.js';
 import { callerProvenance, respondProvenance, respondToHitl } from '../workflow/run-controls.js';
-import { PublishedRuns, type PublishedRun, type Taker } from '../workflow-published-runs.js';
+import { PublishedRuns, type LocalStanding, type PublishedRun, type Taker } from '../workflow-published-runs.js';
 import { readAttemptPlacement, type AttemptRuntimeRecord } from '../workflow/runtimes/attempt.js';
 import { readHeldSteps, type HeldSteps } from '../workflow/runtimes/held.js';
 import { loginWaitFile, LoginWaitSchema, type LoginWait } from '../workflow/runtimes/login.js';
@@ -136,6 +136,11 @@ export type LocalRunRow = RunRow & {
   waiting: string[];
   /** Whether the end record reached the team, for a settled run that queued one. */
   record?: RecordState;
+  /**
+   * The install that took a running run from this one on teamai-reports, as this machine last read it, and holds it
+   * since or ended it there. Such a run runs nothing and waits for nothing here, whatever its run file says.
+   */
+  elsewhere?: Exclude<LocalStanding, { kind: 'here' }>;
 };
 
 /** A run as a member published it on the reports branch. */
@@ -308,19 +313,32 @@ function localRecord(run: RunState): ReadRecord {
   return running;
 }
 
-function localRow(run: RunState, records: Map<string, RecordState>): LocalRunRow {
+function localRow(run: RunState, records: Map<string, RecordState>, stands: LocalStanding | undefined): LocalRunRow {
   const record = records.get(run.id);
+  const elsewhere = stands?.kind === 'here' ? undefined : stands;
 
   const row: LocalRunRow = {
     ...rowOf(localRecord(run)),
     source: 'local',
-    current: run.steps.filter((state) => state.status === 'leased' || state.status === 'delivering').map((state) => state.id),
-    waiting: run.steps.filter((state) => state.status === 'waiting').map((state) => state.id),
+    current: elsewhere ? [] : run.steps.filter((state) => state.status === 'leased' || state.status === 'delivering').map((state) => state.id),
+    waiting: elsewhere ? [] : run.steps.filter((state) => state.status === 'waiting').map((state) => state.id),
   };
 
   if (record) row.record = record;
 
+  if (elsewhere) row.elsewhere = elsewhere;
+
   return row;
+}
+
+/** Where each running run of `runs` stands on teamai-reports, by run id; a settled run is this machine's alone. */
+async function standings(config: LocalConfig, runs: readonly RunState[]): Promise<Map<string, LocalStanding>> {
+  const running = runs.filter((run) => run.status === 'running');
+
+  if (running.length === 0) return new Map();
+  const self = await installOwner(config);
+
+  return new Map(await Promise.all(running.map(async (run) => [run.id, await PublishedRuns.standing(config, run, self)] as const)));
 }
 
 function reportedRow(record: ReadRecord): ReportedRunRow {
@@ -343,9 +361,9 @@ export async function listedRuns(config: LocalConfig): Promise<RunState[]> {
 /** This machine's runs in the scope: every running one, then the newest settled ones. */
 export async function listLocalRuns(config: LocalConfig): Promise<LocalRunRow[]> {
   const runs = await listedRuns(config);
-  const records = await runRecordStates(config, runs.filter((run) => run.status !== 'running'));
+  const [records, stands] = await Promise.all([runRecordStates(config, runs.filter((run) => run.status !== 'running')), standings(config, runs)]);
 
-  return runs.map((run) => localRow(run, records));
+  return runs.map((run) => localRow(run, records, stands.get(run.id)));
 }
 
 function recordsDir(config: LocalConfig): string {
@@ -419,7 +437,8 @@ function localDetail(run: RunState, row: LocalRunRow, judging: Judging, scoring:
 
   const steps = (record.steps ?? []).map((entry) => {
     const state = live.get(`${entry.step}#${entry.pass}`);
-    const hitl = state?.status === 'waiting' ? locateStep(run, state.id)?.step.hitl : undefined;
+    // A run another install took asks nothing here.
+    const hitl = state?.status === 'waiting' && !row.elsewhere ? locateStep(run, state.id)?.step.hitl : undefined;
     const gate = hitl ? { kind: hitl.kind, options: hitl.options, required: hitl.required, respond: respondCommand(run.id, entry.step, '<option>', entry.pass) } : undefined;
     // A record entry keeps the answer only once its pass settles; an answered step still pending shows it too.
     const answer = entry.answer ?? state?.answer;
@@ -454,14 +473,15 @@ async function localRunDetail(config: LocalConfig, runId: string): Promise<RunDe
 
   if (run === 'missing' || run === 'corrupt') return undefined;
 
-  const [records, judging, benchmark, branches] = await Promise.all([
+  const [records, judging, benchmark, branches, stands] = await Promise.all([
     runRecordStates(config, run.status === 'running' ? [] : [run]),
     RunJudging.of(config, [run], new Date().toISOString()).then((byRun) => byRun.get(runId)),
     benchmarkOf(benchmarkRecordFile(runsDir(config), runId)),
     branchesOf(config, run),
+    standings(config, [run]),
   ]);
 
-  const detail = localDetail(run, localRow(run, records), judging?.passes ?? new Map(), await RunJudging.total(config, runId, judging));
+  const detail = localDetail(run, localRow(run, records, stands.get(run.id)), judging?.passes ?? new Map(), await RunJudging.total(config, runId, judging));
   const held = run.status === 'running' ? await readHeldSteps(config, RunIdSchema.parse(run.id)) : undefined;
 
   return { ...detail, steps: await withRuntimes(config, run, detail.steps), ...benchmark, ...branches, ...held && { held } };
