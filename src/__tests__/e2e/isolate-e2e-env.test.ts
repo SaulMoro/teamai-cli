@@ -28,4 +28,10 @@ describe('E2E OpenCode isolation', () => {
 
     expect({ status: asked.status, stdout: asked.stdout.trim() }).toEqual({ status: 0, stdout: 'opencode v2.0.29' });
   });
+
+  it('keeps every XDG folder under the sandbox HOME, where the stand-in and teamai look for OpenCode\'s', () => {
+    const set = ['XDG_CONFIG_HOME', 'XDG_DATA_HOME', 'XDG_CACHE_HOME', 'XDG_STATE_HOME'].filter((name) => process.env[name] !== undefined);
+
+    expect(set).toEqual([]);
+  });
 });

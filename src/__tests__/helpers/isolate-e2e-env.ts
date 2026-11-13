@@ -38,7 +38,8 @@ fs.writeFileSync(path.join(bin, 'teamai.cmd'), `@"${process.execPath}" "${cli}" 
 // OpenCode's version decides how teamai delivers to it and launches it, and the first `opencode` on PATH was the
 // machine's, or under `npm run` the opencode-ai devDependency (V1), so a case passed or failed by how the suite was
 // started. Every file meets a stand-in V2 first instead, `opencode v2.0.29` as CI installs, which answers `--version`
-// and fails any command it does not know. A case that means another version, or the real binary, puts its own first.
+// and the session commands as OpenCode 2 does, and fails any other. A case that means another version, or the real
+// binary, puts its own first.
 const opencode = installFakeOpencode();
 
 // The temporary directory too, as isolate-home gives unit tests theirs: no
@@ -50,14 +51,16 @@ const opencode = installFakeOpencode();
 // directory this one sits in (hook-shells-windows.test.ts).
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'e2e-'));
 
+const XDG = ['XDG_CONFIG_HOME', 'XDG_DATA_HOME', 'XDG_CACHE_HOME', 'XDG_STATE_HOME'];
 const saved = Object.fromEntries(
-  ['HOME', 'USERPROFILE', 'XDG_CONFIG_HOME', 'GIT_CONFIG_NOSYSTEM', 'PATH', 'TMPDIR', 'TMP', 'TEMP'].map((name) => [name, process.env[name]]),
+  ['HOME', 'USERPROFILE', ...XDG, 'GIT_CONFIG_NOSYSTEM', 'PATH', 'TMPDIR', 'TMP', 'TEMP'].map((name) => [name, process.env[name]]),
 );
 process.env.HOME = home;
 process.env.USERPROFILE = home;
 // Unset rather than pointed into the sandbox: XDG paths then follow HOME, so a
-// test that sets HOME for one spawn gets that home's ~/.config as well.
-delete process.env.XDG_CONFIG_HOME;
+// test that sets HOME for one spawn gets that home's ~/.config as well, and no
+// OpenCode, real or the stand-in, reads or writes the developer's data.
+for (const name of XDG) delete process.env[name];
 process.env.GIT_CONFIG_NOSYSTEM = '1';
 process.env.PATH = [bin, opencode, process.env.PATH ?? ''].join(path.delimiter);
 process.env.TMPDIR = tmp;
