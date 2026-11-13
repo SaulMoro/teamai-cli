@@ -4,7 +4,7 @@
 
 `teamai-runtime-paseo` runs each prompt step as an agent of a [Paseo](https://github.com/getpaseo/paseo) daemon, in a Paseo workspace on the directory teamai gives the step: your checkout for a read-only step, or a worktree, clone or team repo clone teamai prepares. You watch the agent and answer its permission prompts in the Paseo app. teamai still reads the result, commits, delivers, scores, and recovers the step.
 
-It runs prompt steps only. Commands and `setup` go to the next runtime in the definition, or to this machine. A prompt step that needs `permissions: unattended` goes to the next runtime that can run it. A step with a `role` runs here with the role teamai delivered into its copy: the runtime only opens that copy in Paseo, and Paseo runs a project's worktree setup only in a worktree it creates itself, so nothing delivers your own resources there instead. It also judges a scored pass, best-effort: see [Judge a scored pass](#judge-a-scored-pass).
+It runs prompt steps only. Commands go to the next runtime in the definition, or to this machine. A prompt step with `setup` goes to the next runtime that runs it; `teamai-paseo` lists none, so there it fails `requirement_unmet`. A prompt step that needs `permissions: unattended` goes to the next runtime that can run it. A step with a `role` runs here with the role teamai delivered into its copy: the runtime only opens that copy in Paseo, and Paseo runs a project's worktree setup only in a worktree it creates itself, so nothing delivers your own resources there instead. It also judges a scored pass, best-effort: see [Judge a scored pass](#judge-a-scored-pass).
 
 ## Quick start
 
@@ -69,7 +69,7 @@ teamai workflow start paseo-review --driver paseo
 ```
 
 ```text
-ℹ Run r0769801107010602 started. If it stops before it ends, continue it here with: teamai workflow resume r0769801107010602 --driver paseo, or hand it to another machine with: teamai workflow publish r0769801107010602
+ℹ Run r0769801107010602 started. If it stops before it ends, continue it here with: teamai workflow resume r0769801107010602, or hand it to another machine with: teamai workflow publish r0769801107010602
 {"data":{"done":{"run":"r0769801107010602","outcome":"succeeded","record":"published"},"cancelled":[]}}
 ```
 
@@ -365,7 +365,7 @@ The agent gets the step's prompt. A step that continues an earlier step's sessio
 A step on a team tool instance runs in Paseo on a Paseo custom provider of its own. When the daemon runs on this machine, teamai adds that provider at the first step that runs the instance, attended or not. The provider is named after the instance, extends the instance's tool, runs the instance's command from your `PATH`, and sets the tool's home variable when the instance has a home of its own. It stays for later runs, and the run says once how to remove it:
 
 ```text
-⚠ Step runtime "paseo": teamai added the Paseo provider acme-claude to the daemon at ws://127.0.0.1:6767/ws for its acme-claude steps: it extends claude and runs /Users/ana/.local/bin/acme-claude, with CLAUDE_CONFIG_DIR=/Users/ana/.claude-acme. It stays for later runs; to remove it, choose Remove provider on acme-claude in the Paseo app's provider settings, or delete agents.providers.acme-claude from /Users/ana/.paseo/config.json, then run `paseo daemon reload`. Paseo cannot show its agents' logs once it is gone, so read them first.
+⚠ Step runtime "paseo", operation op-2b7e91c4d0a3: teamai added the Paseo provider acme-claude to the daemon at ws://127.0.0.1:6767/ws for its acme-claude steps: it extends claude and runs /Users/ana/.local/bin/acme-claude, with CLAUDE_CONFIG_DIR=/Users/ana/.claude-acme. It stays for later runs; to remove it, choose Remove provider on acme-claude in the Paseo app's provider settings, or delete agents.providers.acme-claude from /Users/ana/.paseo/config.json, then run `paseo daemon reload`. Paseo cannot show its agents' logs once it is gone, so read them first.
 ```
 
 `paseo daemon config get agents.providers --json` then shows the entry it added, beside every one the daemon held:
@@ -429,9 +429,9 @@ runtimes:
 { "teamai-sandbox-claude": { "extends": "claude", "label": "teamai-sandbox-claude", "command": ["/usr/local/bin/teamai-sandbox-claude"] } }
 ```
 
-The step's agent is created with no prompt. teamai registers it on the attempt's socket, starts its tool, and sends the prompt only once the sandbox says that agent's wrapper connected. When the sandbox refuses the wrapper, or it does not connect within 30 s, teamai deletes the agent and the step fails `isolation_unproven`, so the prompt never reaches a tool outside the sandbox. A runtime started again after a crash registers the agent again. The step's session is read in the attempt's tool home.
+The step's agent is created with no prompt. teamai registers it on the attempt's socket, starts its tool, and sends the prompt only once the sandbox says that agent's wrapper connected. When the sandbox refuses the wrapper, or it does not connect within 30 s, teamai deletes the agent and the step fails `runtime_failed`, naming `isolation_unproven`, so the prompt never reaches a tool outside the sandbox. A runtime started again after a crash registers the agent again. The step's session is read in the attempt's tool home.
 
-The wrapper finds the attempt under the `HOME` the daemon starts it with, so the daemon must run with the `HOME` teamai runs with, as it does when you start both. A daemon started with another `HOME` fails every step `isolation_unproven`; set `HOME` to teamai's in the provider's `env`.
+The wrapper finds the attempt under the `HOME` the daemon starts it with, so the daemon must run with the `HOME` teamai runs with, as it does when you start both. A daemon started with another `HOME` fails every step `runtime_failed`, naming `isolation_unproven`; set `HOME` to teamai's in the provider's `env`.
 
 OpenCode does not run through a sandbox on Paseo: Paseo may serve several agents from one OpenCode server, so the sandbox cannot tell the step's agent from another.
 
@@ -493,7 +493,7 @@ A prompt step with `session.from` or `session: continue` goes on in the earlier 
 - the step runs the same provider, model, effort and Paseo mode;
 - neither step runs through a sandbox.
 
-When the step cannot go on in that agent, or the earlier step ran in no agent of this runtime, as when it ran on another driver or machine, teamai imports the session into a new agent instead, if Paseo lists that session in the step's worktree. The agent then runs as the step asks, and is told where the run's scratch directory and the workflow's folder are, since an imported agent gets no `TEAMAI_RUN_DIR` or `TEAMAI_WORKFLOW_DIR`.
+When the step cannot go on in that agent, or the earlier step ran in no agent of this runtime, as when it ran on another driver or machine, teamai imports the session into a new agent instead, if the step does not run through a sandbox and Paseo lists that session in the step's worktree. The agent then runs as the step asks, and is told where the run's scratch directory and the workflow's folder are, since an imported agent gets no `TEAMAI_RUN_DIR` or `TEAMAI_WORKFLOW_DIR`.
 
 Otherwise the step starts a new agent, and says why:
 
@@ -530,13 +530,13 @@ No Paseo host saved on this machine has a workspace of https://github.com/acme/a
 teamai workflow cancel r144a3913136e7b62
 ```
 
-Paseo may answer the cancel before the agent's turn ends, so the step ends `cancelled` only once Paseo reports the agent no longer running. An agent that still runs 10 s after the cancel, or a cancel Paseo does not answer in that time, fails the step `cancel_failed` instead, and teamai keeps the attempt and the login:
+Paseo may answer the cancel before the agent's turn ends, so the cancel counts the agent stopped only once Paseo reports it no longer running. An agent that still runs 10 s after the cancel, or a cancel Paseo does not answer in that time, leaves the stop unconfirmed (`cancel_failed`) instead, and teamai keeps the attempt and the login:
 
 ```text
 Paseo cancelled the claude agent 6f0d2c4e-8b1a-5c3f-9e7d-2a4b6c8d0e1f, but it still ran 10 s later. It may still change the worktree; stop it in the Paseo app.
 ```
 
-Once the agent can stop, run `teamai workflow cancel` again: the runtime tries the stop again, and the step ends `cancelled`.
+Once the agent can stop, run `teamai workflow cancel` again: the runtime tries the stop again, and closes the attempt's place.
 
 A teamai killed while an agent works leaves the agent running. `resume` reconnects to the same agent; it does not start a second one:
 
@@ -582,9 +582,9 @@ Paseo did not cancel the claude agent 6f0d2c4e-8b1a-5c3f-9e7d-2a4b6c8d0e1f: Agen
 
 A workspace you already had open in Paseo on that directory, as your checkout may be when a read-only step runs there, is never archived: the attempt cancels its own agents instead, and your workspace stays open. The same holds when you open that directory in Paseo while the step runs, which gives you the attempt's workspace, and start an agent there.
 
-An open whose question Paseo does not answer within 20 s, as when its daemon hangs, fails the step `workspace_failed`, and the next open of that worktree goes on. Paseo may still open the workspace later; the failure says to archive it in the Paseo app then.
+An open whose question Paseo does not answer within 20 s, as when its daemon hangs, fails the step `runtime_failed`, naming `workspace_failed`, and the next open of that worktree goes on. Paseo may still open the workspace later; the failure says to archive it in the Paseo app then.
 
-A runtime killed mid-step cannot archive; the step fails `runtime_lost`, and its workspace stays in Paseo until you archive it (`paseo workspace archive <id>`).
+A runtime killed mid-step cannot archive; the step fails `runtime_lost`, and its workspace stays in Paseo until a later `teamai workflow cancel` closes the attempt, or you archive it (`paseo workspace archive <id>`).
 
 `teamai workflow cancel` after a crash opens the runtime in recover mode. It checks no sign-in, so a tool signed out since does not keep it from stopping the agent, and it reaches the daemon only to cancel the agent and close the attempt. While the daemon is down, the cancel keeps the attempt and the login, and says why:
 
