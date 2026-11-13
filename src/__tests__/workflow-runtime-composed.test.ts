@@ -31,10 +31,15 @@ describe('the offer of a runtime through another', () => {
     expect(composedOffer(outer, inner)).toEqual({
       ok: true, launchesAgents: true, ownLogins: ['codex'], unavailable: { codex: 'no provider instance' },
       can: {
-        isolation: 'sandbox', env: true, setup: true, exec: true, unattended: true, fullAccess: ['claude'], network: false,
+        isolation: 'sandbox', env: true, setup: true, exec: true, unattended: false, fullAccess: ['claude'], network: false,
         tools: ['claude'], default_tool: 'claude', workspace: ['new', 'continue', 'clone', 'team'], hitl: false, tokens: false, max_turns: false, end_turn: false, role: true,
       },
     });
+  });
+
+  it('offers no unattended prompt when the inner runs none, as T3 and Paseo say, however the outer keeps the tool', () => {
+    expect(composedOffer(outer, inner).can.unattended).toBe(false);
+    expect(composedOffer(outer, { ...inner, can: { ...inner.can, unattended: true } }).can.unattended).toBe(true);
   });
 
   it('keeps the tools the inner runs in full access when the outer offers no unattended prompt, so the run still warns of them', () => {
@@ -47,7 +52,7 @@ describe('the offer of a runtime through another', () => {
   it('offers unattended for no tool when the inner runs none in full access', () => {
     const { fullAccess: _none, ...asks } = inner.can;
 
-    expect(composedOffer(outer, { ...inner, can: asks }).can).toMatchObject({ unattended: true, fullAccess: [] });
+    expect(composedOffer(outer, { ...inner, can: { ...asks, unattended: true } }).can).toMatchObject({ unattended: true, fullAccess: [] });
   });
 });
 
