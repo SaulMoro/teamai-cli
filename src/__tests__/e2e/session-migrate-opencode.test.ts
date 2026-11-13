@@ -9,7 +9,7 @@
  * installs is OpenCode 1 (OpenCode 2 is the separate `@opencode/cli`), and every E2E file meets
  * a stand-in `opencode` on PATH (helpers/isolate-e2e-env.ts), so this runs against the real
  * OpenCode 2 that `TEAMAI_OPENCODE_V2_BIN` names. Without it it is skipped, saying why, except
- * under CI, which installs OpenCode 2 and fails here when it is missing.
+ * on GitHub Actions, where CI installs OpenCode 2, and it fails here when it is missing.
  */
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { spawnSync } from 'node:child_process';
@@ -34,7 +34,8 @@ function opencode2Dir(): string | undefined {
 }
 
 const OPENCODE_DIR = opencode2Dir();
-if (!OPENCODE_DIR && process.env.CI) {
+// GITHUB_ACTIONS, not CI, which clear-agent-session-env.ts removes before this file loads.
+if (!OPENCODE_DIR && process.env.GITHUB_ACTIONS === 'true') {
   throw new Error(
     'TEAMAI_OPENCODE_V2_BIN is not set, so the session migrate E2E has no OpenCode 2 to run. CI sets it in the "Install OpenCode 2" step of .github/workflows/ci.yml; check that the step ran.',
   );
