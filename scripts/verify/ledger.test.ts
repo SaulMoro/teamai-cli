@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { environmentNotes, ledgerRules, toolInstancesIn } from './ledger.js';
+import { environmentNotes, ledgerRules, toolInstancesIn, unobservedEntries } from './ledger.js';
 
 const roots: string[] = [];
 
@@ -21,6 +21,29 @@ describe("a ledger's section (d)", () => {
 
     expect(notes).toEqual(['commands got only: HOME, PATH', "@carol's commands got only: HOME, PATH, SECRET_VALUE_NAME"]);
     expect(notes.join('\n')).not.toContain('v4lue');
+  });
+});
+
+describe("what a ledger's section (e) could not read", () => {
+  const sha = (c: string) => c.repeat(64);
+
+  it('is NOT OBSERVED with everything under it, never a match, and hides no change beside it', () => {
+    const before = { 'home/.codex/sessions/0000': 'dir', 'home/.codex/sessions/0000/rollout.jsonl': sha('a'), 'home/secret.txt': sha('b'), 'home/notes.txt': sha('c') };
+    const after = { 'home/.codex/sessions/0000': 'unreadable', 'home/secret.txt': 'unreadable', 'home/notes.txt': sha('d') };
+
+    const unobserved = unobservedEntries(before, after);
+
+    expect(unobserved.notes).toEqual([
+      "NOT OBSERVED: home/.codex/sessions/0000, which the harness has no permission to read, so whether uninstall left anything of teamai's in it is unknown",
+      "NOT OBSERVED: home/secret.txt, which the harness has no permission to read, so whether uninstall left anything of teamai's in it is unknown",
+    ]);
+    expect(['home/.codex/sessions/0000', 'home/.codex/sessions/0000/rollout.jsonl', 'home/secret.txt'].every(unobserved.covers)).toBe(true);
+    expect(unobserved.covers('home/notes.txt')).toBe(false);
+    expect(unobserved.covers('home/.codex/sessions/00000')).toBe(false);
+  });
+
+  it('is nothing when the harness read every entry', () => {
+    expect(unobservedEntries({ 'home/a': sha('a') }, { 'home/a': sha('b') }).notes).toEqual([]);
   });
 });
 

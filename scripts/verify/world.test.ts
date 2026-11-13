@@ -5,7 +5,7 @@ import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { socketPathOf } from '../../packages/runtime-sandbox/src/attempt-socket.js';
-import { packCheckout, REPO_ROOT, rewriteLocked, updateWorld, worldCommandNames, worldEnv, worldTmpDir, writeCommandLog, type World } from './world.js';
+import { packCheckout, REPO_ROOT, rewriteLocked, updateWorld, worldCommandNames, worldEnv, worldFiles, worldTmpDir, writeCommandLog, type World } from './world.js';
 
 const roots: string[] = [];
 
@@ -71,6 +71,63 @@ describe('the basic world', () => {
     expect(ran.status).toBe(0);
     expect(runtimes.filter((module) => !COMMAND_NAMES.has(module))).toEqual([]);
     expect(runtimes.length).toBeGreaterThan(0);
+  });
+});
+
+describe.skipIf(process.platform === 'win32')("a world's snapshot of its HOME and project", () => {
+  const layout = () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'world-files-'));
+    roots.push(root);
+    const home = path.join(root, 'home');
+    const project = path.join(root, 'project');
+    fs.mkdirSync(path.join(home, '.codex', 'sessions', '0000'), { recursive: true });
+    fs.mkdirSync(project);
+    fs.writeFileSync(path.join(home, '.codex', 'sessions', '0000', 'rollout.jsonl'), '{}\n');
+    fs.writeFileSync(path.join(home, 'secret.txt'), 'x');
+    fs.writeFileSync(path.join(home, 'notes.txt'), 'y');
+
+    return { home, project };
+  };
+
+  it('records a folder or file it has no permission to read as unreadable, and goes on with the rest', () => {
+    const { home, project } = layout();
+    const folder = path.join(home, '.codex', 'sessions', '0000');
+    const file = path.join(home, 'secret.txt');
+    // A folder another user's tool left: this user can write to it, and cannot list it.
+    fs.chmodSync(folder, 0o300);
+    fs.chmodSync(file, 0o200);
+
+    try {
+      const files = worldFiles({ home, project });
+
+      expect(files).toMatchObject({ 'home/.codex/sessions/0000': 'unreadable', 'home/secret.txt': 'unreadable', 'home/notes.txt': expect.stringMatching(/^[0-9a-f]{64}$/) });
+      expect(Object.keys(files).filter((entry) => entry.startsWith('home/.codex/sessions/0000/'))).toEqual([]);
+    } finally {
+      fs.chmodSync(folder, 0o700);
+      fs.chmodSync(file, 0o600);
+    }
+  });
+
+  it('fails on a folder it cannot list for a reason other than permission, rather than leave it out', () => {
+    const { home, project } = layout();
+    const folder = path.join(home, '.codex', 'sessions', '0000');
+    // As when the process has no file handle left. Other folders list through opendir, which the spy leaves alone.
+    vi.spyOn(fs, 'readdirSync').mockImplementation(((dir: fs.PathLike, _options: { withFileTypes: true }) => {
+      if (dir.toString() === folder) throw Object.assign(new Error(`EMFILE: too many open files, scandir '${folder}'`), { code: 'EMFILE', path: folder });
+      const listing = fs.opendirSync(dir.toString());
+      const entries: fs.Dirent[] = [];
+
+      for (let entry = listing.readSync(); entry !== null; entry = listing.readSync()) entries.push(entry);
+      listing.closeSync();
+
+      return entries;
+    }) as typeof fs.readdirSync);
+
+    try {
+      expect(() => worldFiles({ home, project })).toThrow(/EMFILE/);
+    } finally {
+      vi.restoreAllMocks();
+    }
   });
 });
 

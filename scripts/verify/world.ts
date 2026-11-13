@@ -96,12 +96,30 @@ function gitConfigSettings(entry: string, file: string): Record<string, string> 
   return Object.fromEntries([...values].map(([key, value]) => [`${entry}#${key}`, value.join('\0')]));
 }
 
-/** Every entry under the world's HOME and project: a file's sha256, `dir`, or a symlink's target; a git config file is `git config` and one entry per setting. */
+/** A `worldFiles` entry the harness has no permission to read, as a folder another user's tool left: what is in it is not observed. */
+export const UNREADABLE = 'unreadable';
+
+/** What `read` returns, or undefined when the harness has no permission to read what it names; any other failure is thrown. */
+function permitted<T>(read: () => T): T | undefined {
+  try {
+    return read();
+  } catch (error) {
+    const code = errnoCode(error);
+
+    if (code === 'EACCES' || code === 'EPERM') return undefined;
+    throw error;
+  }
+}
+
+/**
+ * Every entry under the world's HOME and project: a file's sha256, `dir`, or a symlink's target; a git config file is `git
+ * config` and one entry per setting. A folder or file the harness has no permission to read is `UNREADABLE`.
+ */
 export function worldFiles(world: Pick<World, 'home' | 'project'>) {
   const files: Record<string, string> = {};
 
-  const walk = (root: string, label: string, rel: string): void => {
-    for (const entry of fs.readdirSync(path.join(root, rel), { withFileTypes: true })) {
+  const walk = (root: string, label: string, rel: string, entries: readonly fs.Dirent[]): void => {
+    for (const entry of entries) {
       const child = path.posix.join(rel, entry.name);
       const full = path.join(root, child);
 
@@ -111,17 +129,22 @@ export function worldFiles(world: Pick<World, 'home' | 'project'>) {
 
       if (entry.isSymbolicLink()) files[`${label}/${child}`] = `-> ${fs.readlinkSync(full)}`;
       else if (entry.isDirectory()) {
-        files[`${label}/${child}`] = 'dir';
-        walk(root, label, child);
+        const inside = permitted(() => fs.readdirSync(full, { withFileTypes: true }));
+        files[`${label}/${child}`] = inside === undefined ? UNREADABLE : 'dir';
+
+        if (inside !== undefined) walk(root, label, child, inside);
       } else if (settings !== undefined) {
         files[`${label}/${child}`] = 'git config';
         Object.assign(files, settings);
-      } else files[`${label}/${child}`] = crypto.createHash('sha256').update(fs.readFileSync(full)).digest('hex');
+      } else {
+        const content = permitted(() => fs.readFileSync(full));
+        files[`${label}/${child}`] = content === undefined ? UNREADABLE : crypto.createHash('sha256').update(content).digest('hex');
+      }
     }
   };
 
-  walk(world.home, 'home', '');
-  walk(world.project, 'project', '');
+  walk(world.home, 'home', '', fs.readdirSync(world.home, { withFileTypes: true }));
+  walk(world.project, 'project', '', fs.readdirSync(world.project, { withFileTypes: true }));
 
   return files;
 }

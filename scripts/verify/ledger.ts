@@ -21,7 +21,7 @@ import { isJsonObject, parseJson, type JsonValue } from '@teamai/shared/json';
 import { PERSONAL_DIRS } from '../../src/workflow/runtimes/layers.js';
 import { leftoversSection } from './leftovers.js';
 import { runOn, type Target } from './target.js';
-import { checkoutStatus, git, loadWriters, REPO_ROOT, teamRefs, worldFiles, worldWritersFile, type World } from './world.js';
+import { checkoutStatus, git, loadWriters, REPO_ROOT, teamRefs, UNREADABLE, worldFiles, worldWritersFile, type World } from './world.js';
 
 interface Section {
   readonly title: string;
@@ -539,6 +539,19 @@ function entryPath(place: LedgerPlace, entry: string): string {
   return path.join(base === 'home' ? place.home : place.project, ...rest);
 }
 
+/**
+ * The entries of a snapshot the harness had no permission to read, before uninstall or after: each is NOT OBSERVED, and it
+ * and everything under it are never compared, so none passes as matching.
+ */
+export function unobservedEntries(before: Readonly<Record<string, string>>, after: Readonly<Record<string, string>>) {
+  const unread = [...new Set([...Object.keys(before), ...Object.keys(after)])].filter((entry) => before[entry] === UNREADABLE || after[entry] === UNREADABLE).sort();
+
+  return {
+    notes: unread.map((entry) => `NOT OBSERVED: ${entry}, which the harness has no permission to read, so whether uninstall left anything of teamai's in it is unknown`),
+    covers: (entry: string) => unread.some((dir) => entry === dir || entry.startsWith(`${dir}/`) || entry.startsWith(`${dir}#`)),
+  };
+}
+
 /** A way in has a way out: after `teamai uninstall` each install's HOME and project match the snapshot taken when it was made. */
 async function reverseState(world: World, instances: ReadonlyMap<string, readonly ResolvedToolInstance[]>): Promise<Section> {
   const title = '(e) After teamai uninstall';
@@ -574,7 +587,8 @@ async function reverseOf(world: World, place: LedgerPlace, rules: LedgerRules): 
   const leaks = status === 0 ? [] : [`teamai uninstall exited ${status}`];
 
   for (const dir of registered) if (fs.existsSync(dir)) leaks.push(`worktree ${dir} left behind after uninstall`);
-  const notes: string[] = [];
+  const unobserved = unobservedEntries(before, after);
+  const notes = [...unobserved.notes];
 
   const leaked: string[] = [];
   const writers = loadWriters(place.writers);
@@ -590,7 +604,7 @@ async function reverseOf(world: World, place: LedgerPlace, rules: LedgerRules): 
   const remoteTips = new Set(Object.entries(after).flatMap(([entry, value]) => (REMOTE_REF.test(entry) && value !== 'dir' ? [value] : [])));
 
   for (const entry of [...new Set([...Object.keys(before), ...Object.keys(after)])].sort()) {
-    if (before[entry] === after[entry] || under(entry, [...leaked, ...rules.knownLeftoverDirs])) continue;
+    if (before[entry] === after[entry] || unobserved.covers(entry) || under(entry, [...leaked, ...rules.knownLeftoverDirs])) continue;
     const change = before[entry] === undefined ? 'left behind' : after[entry] === undefined ? 'removed' : 'changed';
     const writer = writers[entry];
 
