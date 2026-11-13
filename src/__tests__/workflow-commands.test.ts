@@ -1357,6 +1357,36 @@ outputs: { text: steps.report.outputs.text }
     expect(run).not.toHaveProperty('awaits');
   });
 
+  it('refuses the self-improvement run that a command step of a run started from a step\'s command starts, as nested_workflow', async () => {
+    // A team's teamai-self-improvement whose command step would run teamai self-improvement run itself: what that
+    // step's process carries is what decides it.
+    const reportsMarkers = `schemaVersion: v1alpha1
+name: teamai-self-improvement
+description: Runs itself again.
+invoke: deny
+inputs: { scorer: string, suite: string }
+steps:
+  - id: again
+    command: |
+      node -e "process.stdout.write(JSON.stringify({ attempt: process.env.TEAMAI_WORKFLOW_ATTEMPT ?? '', step: process.env.TEAMAI_WORKFLOW_STEP_COMMAND ?? '' }))"
+    output: { attempt: string, step: string }
+outputs:
+  attempt: steps.again.outputs.attempt
+  step: steps.again.outputs.step
+`;
+    await pulledTeam(marked('teamai-benchmark', '{ suite: string }'), { 'workflows/teamai-self-improvement.yaml': reportsMarkers });
+    vi.stubEnv('TEAMAI_WORKFLOW_ATTEMPT', 'r0123456789abcdef/a0123456789');
+    vi.stubEnv('TEAMAI_WORKFLOW_STEP_COMMAND', 'r0123456789abcdef/a0123456789');
+    const outer = await capture(() => selfImprovementRun('quality', { suite: 'fix' }));
+    expect(outer).toMatchObject({ data: { done: { outcome: 'succeeded' } } });
+    const inner = z.object({ done: z.object({ outcome: z.literal('succeeded'), outputs: z.object({ attempt: z.string().min(1), step: z.string() }) }) }).parse(outer.data).done.outputs;
+
+    vi.stubEnv('TEAMAI_WORKFLOW_ATTEMPT', inner.attempt);
+    vi.stubEnv('TEAMAI_WORKFLOW_STEP_COMMAND', inner.step === '' ? undefined : inner.step);
+
+    expect(await capture(() => selfImprovementRun('quality', { suite: 'fix' }))).toMatchObject({ error: { code: 'nested_workflow' } });
+  });
+
   it.each([
     { command: 'benchmark run', start: () => benchmarkRun('fix', {}) },
     { command: 'self-improvement run', start: () => selfImprovementRun('quality', { suite: 'fix' }) },

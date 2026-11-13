@@ -19,12 +19,15 @@ export function attemptEnv(config: LocalConfig, run: string, attempt: string, mo
 /**
  * What the process of a `command` step gets: `attemptEnv`, and the command-step marker naming the same attempt. Every
  * driver launches a command step with it, and nothing else: a prompt step's tool, setup, or a step kind added later gets
- * `attemptEnv` alone, so `isCommandStep` holds for none of them.
+ * `attemptEnv` alone, so `isCommandStep` holds for none of them. A driver that itself runs inside another attempt, as
+ * the run a step's command started does, gives no marker either: that run is part of the step, one level deep.
  */
-export function commandStepEnv(config: LocalConfig, run: string, attempt: string, mode: RunMode): ReturnType<typeof attemptEnv> & Record<typeof STEP_COMMAND_ENV, string> {
+export function commandStepEnv(config: LocalConfig, run: string, attempt: string, mode: RunMode): ReturnType<typeof attemptEnv> & Partial<Record<typeof STEP_COMMAND_ENV, string>> {
   const marked = attemptEnv(config, run, attempt, mode);
+  const outer = process.env[ATTEMPT_ENV];
 
-  return { ...marked, [STEP_COMMAND_ENV]: marked[ATTEMPT_ENV] };
+  // A skill driver's runner runs inside the attempt it launches, which is no other one.
+  return outer !== undefined && outer !== '' && outer !== marked[ATTEMPT_ENV] ? marked : { ...marked, [STEP_COMMAND_ENV]: marked[ATTEMPT_ENV] };
 }
 
 /** Whether `env` is the process of a `command` step: its command-step marker names the attempt its attempt marker names. */
