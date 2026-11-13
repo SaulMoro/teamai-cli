@@ -188,6 +188,25 @@ describe('CodeBuddyIdeAdapter', () => {
     expect(fs.existsSync(path.join(instanceHistory(tmpHome), md5(cwdA), sourceId))).toBe(true);
   });
 
+  it.skipIf(process.platform === 'win32')('replaces a history index that is a link with the index it writes, and leaves the linked file alone', async () => {
+    seed();
+    const adapter = new CodeBuddyIdeAdapter();
+    const targetCwd = path.join(tmpHome, 'ws-linked');
+    fs.mkdirSync(targetCwd, { recursive: true });
+    const wsDir = path.join(instanceHistory(tmpHome), workspaceFolderOf(targetCwd));
+    const linked = path.join(tmpHome, 'dotfiles-index.json');
+    fs.mkdirSync(wsDir, { recursive: true });
+    fs.writeFileSync(linked, JSON.stringify({ conversations: [] }));
+    fs.symlinkSync(linked, path.join(wsDir, 'index.json'));
+
+    const source = await adapter.readSession({ sessionId: '33333333333333333333333333333333', projectPath: cwdA });
+    const writtenId = await adapter.writeSession({ ...source, title: 'linked' }, targetCwd);
+
+    expect(fs.lstatSync(path.join(wsDir, 'index.json')).isFile()).toBe(true);
+    expect(fs.readFileSync(path.join(wsDir, 'index.json'), 'utf-8')).toContain(writtenId);
+    expect(JSON.parse(fs.readFileSync(linked, 'utf-8'))).toEqual({ conversations: [] });
+  });
+
   it('refuses to write when the target cwd is not an absolute path', async () => {
     seed();
     const adapter = new CodeBuddyIdeAdapter();
