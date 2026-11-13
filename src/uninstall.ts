@@ -168,7 +168,7 @@ interface RemovalPlan {
   agentDirs: string[];
   /** In self mode, the agents directories of the tools this removes, which init makes before anything is in them: each goes once empty. */
   seededAgentDirs: string[];
-  /** The folders the tool instances this removes take teamai's resources in, from their resolved paths: each goes once empty. */
+  /** The folders the tool instances this removes take teamai's resources in, from their resolved paths, up to the instance's home: each goes once empty. */
   instanceFolders: string[];
   /** The rules globs teamai owns in OpenCode's opencode.json `instructions`, per file (#946). */
   opencodeOwnedGlobs: OpencodeRuleGlobEntries[];
@@ -3495,19 +3495,27 @@ const FOLDER_FIELDS: ReadonlySet<string> = new Set(['skills', 'rules', 'agents']
 
 /**
  * The folders under `baseDir` the tool instances among `tools` take teamai's resources in, from their resolved
- * `toolPaths`, which init makes before anything is in them. An instance named like a shipped tool adjusts that tool, and
- * keeps its folders as it does.
+ * `toolPaths`: each folder a path names, and those above it up to its root, the instance's home there (`.acme-claude`).
+ * Init makes them before anything is in them. Only a dotted root is taken, as init makes no other. An instance named
+ * like a shipped tool adjusts that tool, and keeps its folders as it does.
  */
 function instanceFoldersOf(tools: readonly string[], toolPaths: ReturnType<typeof scopedToolPaths>, baseDir: string): string[] {
-  const inside = (relative: string): boolean => !path.isAbsolute(relative) && !relative.split('/').some((segment) => ['', '.', '..', '~'].includes(segment));
+  const foldersOf = (field: string, relative: string): string[] => {
+    const segments = relative.split('/');
+
+    if (path.isAbsolute(relative) || !segments[0]?.startsWith('.') || segments.some((segment) => ['', '.', '..'].includes(segment))) return [];
+    const root = toolInstallRoot(relative).split('/').length;
+    const deepest = FOLDER_FIELDS.has(field) ? segments.length : segments.length - 1;
+
+    return Array.from({ length: Math.max(0, deepest - root + 1) }, (_, at) => path.join(baseDir, ...segments.slice(0, root + at)));
+  };
 
   return [...new Set(tools.flatMap((tool) => {
     const instance = toolOf(tool)?.instance;
 
     if (instance === undefined || instance.name === instance.extends) return [];
 
-    return Object.entries(toolPaths[tool] ?? {}).flatMap(([field, relative]) =>
-      (typeof relative === 'string' && FOLDER_FIELDS.has(field) && inside(relative) ? [path.join(baseDir, ...relative.split('/'))] : []));
+    return Object.entries(toolPaths[tool] ?? {}).flatMap(([field, relative]) => (typeof relative === 'string' ? foldersOf(field, relative) : []));
   }))];
 }
 

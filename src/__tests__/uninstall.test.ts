@@ -4582,6 +4582,21 @@ describe('uninstall', () => {
 
       expect([await fse.pathExists(path.join(folder, 'agents')), await fse.pathExists(path.join(folder, 'rules'))]).toEqual([false, false]);
     });
+
+    it('removes the instance\'s home folder in the workspace when nothing of the member\'s is in it, and keeps it with what is', async () => {
+      const { folder } = await setupInstance();
+
+      await uninstall({ force: true });
+
+      expect(await fse.pathExists(folder)).toBe(false);
+
+      const kept = await setupInstance();
+      await fse.outputFile(path.join(kept.folder, 'notes.md'), 'mine\n');
+
+      await uninstall({ force: true });
+
+      expect(await fse.readdir(kept.folder)).toEqual(['notes.md']);
+    });
   });
 
   describe('with two workspaces and no user scope', () => {
