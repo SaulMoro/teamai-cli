@@ -1102,7 +1102,7 @@ steps:
 - `teamai score`、`teamai benchmark run` 和 `teamai self-improvement run` 只有在本地驱动、skill 驱动或[集群](workflow-advanced.md#在其他成员的机器上运行步骤fleet)成员在自己机器上（而不是在[步骤运行时](workflow-advanced.md#驱动定义和步骤运行时)中）运行的 `command` 步骤进程里，才把它们的运行作为该步骤的一部分。在那里它们可以不带 `--driver` 或带 `--driver local` 运行，其他 `--driver` 返回 `nested_workflow`。在那里 `invoke` 仍会判断它们：agent 的会话变量到达步骤时（例如 skill 驱动在设置了它的会话中运行的步骤），teamai 自带的这些命令的工作流返回 `invoke_denied`。这只支持一层：它们启动的运行中，`command` 步骤再次运行其中任一命令时返回 `nested_workflow`。在步骤的其他进程中，例如提示词步骤的工具、setup、步骤运行时中的命令步骤，或你自己的驱动通过 `workflow next` 运行的命令步骤，它们返回 `nested_workflow`。
 - 其他命令，例如 `teamai recall maintenance --update-quality`，在步骤的任何进程中都会运行自己的运行。
 
-`command` 步骤的进程以这种方式启动并驱动的运行属于该步骤的 attempt，并随它一起结束。attempt 结束时（因为超时、`workflow cancel` 或步骤自身结束）若该运行仍在运行，teamai 会取消它，并停止它的步骤仍在运行的内容。它取消的每个步骤都会说明原因，例如 `Ended: step work of run r1a2b3c4d5e6f7a8b stopped (timeout)`。如果步骤的驱动是被强制终止的，该运行会在它自己的下一次 `workflow next` 时结束，或在 `teamai workflow cancel` 取消该步骤所属的运行时结束。在步骤的其他进程中（例如提示词步骤的工具）由这类命令启动的运行不属于该步骤。对属于某个步骤的运行执行 `teamai workflow retry` 后，它会单独再次运行，不再属于该步骤。
+`command` 步骤的进程以这种方式启动并驱动的运行属于该步骤的 attempt，并随它一起结束。attempt 结束时（因为超时、`workflow cancel` 或步骤自身结束）若该运行仍在运行，teamai 会取消它，并停止它的步骤仍在运行的内容。它取消的每个步骤都会说明原因，例如 `Ended: step work of run r1a2b3c4d5e6f7a8b stopped (timeout)`。如果步骤的驱动是被强制终止的，该运行会在步骤超过它的 `timeout` 后结束，或在 `teamai workflow cancel` 取消该步骤所属的运行时结束。在步骤的其他进程中（例如提示词步骤的工具）由这类命令启动的运行不属于该步骤。对属于某个步骤的运行执行 `teamai workflow retry` 后，它会单独再次运行，不再属于该步骤。
 
 ```yaml
 # workflows/weekly-quality.yaml in the team repo
