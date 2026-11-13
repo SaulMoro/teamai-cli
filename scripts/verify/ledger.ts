@@ -10,9 +10,9 @@ import path from 'node:path';
 import { descriptorOf, TOOL_ORDER } from '../../src/tool-registry.js';
 import type { ToolId } from '../../src/tools.js';
 import { z } from 'zod';
-import { defaultToolHome, envToolHome, toolHome } from '../../src/tool-home.js';
+import { defaultToolHome, envToolHome, instanceHomeDir, toolHome } from '../../src/tool-home.js';
 import { detectToolRoot, LocalConfigSchema, RELOCATABLE_TOOLS, TeamaiConfigBaseSchema, type ToolPathsSchema } from '../../src/types.js';
-import { defaultPathsOf, instanceHomeDir, instanceReadPath, teamToolInstances, type ResolvedToolInstance } from '../../src/tool-instances.js';
+import { defaultPathsOf, instanceReadPath, teamToolInstances, type ResolvedToolInstance } from '../../src/tool-instances.js';
 import { projectsRootDir } from '../../src/utils/partition.js';
 import { FsFailureSchema, isPermissionDenied, type FsFailure } from '@teamai/shared/fs-failure';
 import { parseYaml } from '@teamai/shared/yaml';
@@ -193,7 +193,7 @@ function hostFiles(world: World, instances: readonly ResolvedToolInstance[]): Se
   const realHome = os.homedir();
   const since = Date.parse(world.createdAt);
   // Every tool home TOOLS knows: default, recorded, and moved by this shell's env (also a relocated tool root), so a new tool is checked without editing this list.
-  const homes = [...new Set([path.join(realHome, '.teamai'), ...TOOL_ORDER.flatMap((tool) => [defaultToolHome(tool, { home: realHome, path }), toolHome(tool), envToolHome(tool)?.dir ?? []].flat()), ...Object.keys(RELOCATABLE_TOOLS).flatMap((tool) => detectToolRoot(tool) ?? []), ...instances.flatMap((instance) => (instance.home === undefined ? [] : [path.join(realHome, instance.home.dir), instanceHomeDir(instance.home, instance.extends)]))])];
+  const homes = [...new Set([path.join(realHome, '.teamai'), ...TOOL_ORDER.flatMap((tool) => [defaultToolHome(tool, { home: realHome, path }), toolHome(tool), envToolHome(tool)?.dir ?? []].flat()), ...Object.keys(RELOCATABLE_TOOLS).flatMap((tool) => detectToolRoot(tool) ?? []), ...instances.flatMap((instance) => (instance.home === undefined ? [] : [path.join(realHome, instance.home.dir), instanceHomeDir(instance.home)]))])];
   const found: string[] = [];
   const unreadable: string[] = [];
 

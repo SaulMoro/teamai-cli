@@ -13,7 +13,8 @@ import { log } from '@teamai/shared/log';
 import { warnOnce } from '../../utils/warn-once.js';
 import { stdioStepRuntime } from './stdio.js';
 import { type InitInstance, type RuntimeFailure, type RuntimeOptions } from '@teamai/runtime-protocol';
-import { acceptToolCommand, instanceHomeDir } from '../../tool-instances.js';
+import { acceptToolCommand } from '../../tool-instances.js';
+import { instanceHomeDir } from '../../tool-home.js';
 import { baseToolOf, instanceNames, toolOf } from '../../tool-registry.js';
 import { type StepRuntime } from '@teamai/runtime-protocol/step-runtime';
 import { composedName, composedOffer, composedStepRuntime, nestedOptions } from './composed.js';
@@ -272,7 +273,7 @@ async function runnableInstances(): Promise<InitInstance[]> {
     name: instance.name, tool: instance.extends,
     ...(instance.command !== undefined && { command: instance.command }),
     // Resolved once, here, and absolute, a relative value from where teamai runs: a runtime uses this home and never resolves one of its own.
-    ...(instance.home && { home: { dir: path.resolve(instanceHomeDir(instance.home, instance.extends)), ...(instance.home.env !== undefined && { env: instance.home.env }) } }),
+    ...(instance.home && { home: { dir: path.resolve(instanceHomeDir(instance.home)), ...(instance.home.env !== undefined && { env: instance.home.env }) } }),
     ...(instance.paths && { paths: instance.paths }),
   }));
 }

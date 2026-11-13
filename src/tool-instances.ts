@@ -3,16 +3,14 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { z } from 'zod';
 import { isBareCommandName } from '@teamai/shared/cli-path';
-import { INSTANCE_KEYS, type ToolInstance, type ToolInstanceHome } from '@teamai/tool-core/instance';
+import { INSTANCE_KEYS, type ToolInstance } from '@teamai/tool-core/instance';
 import { FOLDER_MARKERS } from './folder-markers.js';
 import { isSymlink, RESOURCE_LAYOUTS, Resources, type TeamTree } from './resources/resolver.js';
 import { isSessionPlatform } from './session-flow/adapters/platform-facts.js';
-import { homeEnvOf } from './tool-home.js';
-import { homeVariables, isToolId, TOOL_ORDER, useToolInstances } from './tool-registry.js';
+import { isToolId, TOOL_ORDER, useToolInstances } from './tool-registry.js';
 import type { ToolId } from './tools.js';
 import { DEFAULT_TOOL_PATHS, getTeamaiHomeDir, getTrustDir, rerootToolPaths, toolInstallRoot, toolPathRoots, ToolPathsSchema, type Scope, type TeamaiConfig } from './types.js';
 import { writeJsonAtomic } from './utils/fs.js';
-import { getUserHome } from '@teamai/shared/home';
 import { log } from '@teamai/shared/log';
 import { errorOnce, warnOnce } from './utils/warn-once.js';
 import { parseYaml } from '@teamai/shared/yaml';
@@ -218,24 +216,6 @@ export async function teamToolInstances(team: TeamTree): Promise<ResolvedToolIns
   }));
 
   return read.flatMap(usable);
-}
-
-/**
- * Where an instance of `base` has its home on this machine: its variable's value when set, else its directory under
- * `$HOME`. A variable that moves `base`'s own home, or an XDG base directory, is set for that tool or for every tool, so
- * its value is never the instance's home: the instance's home is then its directory.
- */
-export function instanceHomeDir(home: ToolInstanceHome, base: string, env: NodeJS.ProcessEnv = process.env): string {
-  const moved = home.env === undefined || movesSharedHome(home.env, base) ? undefined : env[home.env];
-
-  return moved ? moved : path.join(getUserHome(), home.dir);
-}
-
-/** Whether `variable` moves the home of shipped tool `base` itself, or every XDG tool's. */
-function movesSharedHome(variable: string, base: string): boolean {
-  if (variable === 'XDG_CONFIG_HOME' || variable === 'XDG_DATA_HOME') return true;
-
-  return isToolId(base) && (homeEnvOf(base) === variable || homeVariables(base).includes(variable));
 }
 
 /** The name of the member's own instance directory in `~/.teamai/`. */

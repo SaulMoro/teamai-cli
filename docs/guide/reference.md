@@ -273,7 +273,7 @@ teamai workflow start review --tools default=acme-claude
 teamai score --session <id> --source acme-claude --scorer review-quality
 ```
 
-The step runs `acme-claude`, and its session is read from `$ACME_CLAUDE_CONFIG_DIR/projects/`, else `~/.acme-claude/projects/`. It is recorded, resumed and scored as `acme-claude`'s, never as Claude's.
+The step runs `acme-claude`, and its session is read from `$ACME_CLAUDE_CONFIG_DIR/projects/`, else `~/.acme-claude/projects/`, and a user-scope pull writes to that same home. It is recorded, resumed and scored as `acme-claude`'s, never as Claude's.
 
 teamai ignores your value of `env` when the variable also moves the extended tool's home, such as `CLAUDE_CONFIG_DIR` for an instance of `claude`, or when it is `XDG_CONFIG_HOME` or `XDG_DATA_HOME`. That value belongs to the tool, so the instance's home is always `~/<dir>`.
 

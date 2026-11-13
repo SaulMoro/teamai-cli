@@ -36,8 +36,8 @@ import { storeDirOf } from '../../session-flow/adapters/index.js';
 import { attemptDir, attemptResultPath, type RunLock } from '../store.js';
 import { abandonPlace, cloneDelivery, cloneHead, preparedClone, cloneRoleProblem, roleNotDeliveredFailure, runPlaceSetup, worktreeRoleProblem, type StepEnd } from '../place/place.js';
 import { memberTools, type MemberTool } from '../member-tools.js';
-import { acceptToolCommand, instanceHomeDir } from '../../tool-instances.js';
-import { toolHome as memberToolHome } from '../../tool-home.js';
+import { acceptToolCommand } from '../../tool-instances.js';
+import { instanceHomeDir, toolHome as memberToolHome } from '../../tool-home.js';
 import { LAUNCH_ORDER, LAUNCH_TOOLS, launchAdapterIdOf, launchTargetOf, type LaunchTarget, type LaunchTool } from '../../launch-registry.js';
 import { chooseStepModel, loadDeployedAgent, type StepModel } from '../step-model.js';
 import type { DriverIdentity, WorkflowFailure, WorkflowStep } from '../types.js';
@@ -390,7 +390,7 @@ export async function runPromptStep({ config, lock, driver, lease, adapter = ste
   const homed = onRuntime && (!onRuntime.launchesAgents || onRuntime.runsOnToolHome === true) ? onRuntime : undefined;
   const homeVariable = target.instance?.home?.env ?? toolHomeVariable(selected);
   const variable = homed ? homeVariable : undefined;
-  const memberHome = () => (target.instance?.home ? instanceHomeDir(target.instance.home, target.instance.extends) : memberToolHome(selected));
+  const memberHome = () => (target.instance?.home ? instanceHomeDir(target.instance.home) : memberToolHome(selected));
 
   if (homed && (variable === undefined || !isExecRuntimeTool(selected))) {
     return giveUp({

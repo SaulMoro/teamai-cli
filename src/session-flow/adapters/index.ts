@@ -15,7 +15,7 @@ import { locatesOwnStore, type SessionHost, type StoredPlatformDefinition } from
 import { executablesOf } from '../../launch-registry.js';
 import { isSessionPlatform, isStoredSessionPlatform, type SessionPlatform, type StoredSessionPlatform } from './platform-facts.js';
 import { sessionStoreDir, type SessionStoreRoot } from '../../locate.js';
-import { instanceHomeDir } from '../../tool-instances.js';
+import { instanceHomeDir } from '../../tool-home.js';
 import { instanceNames, instancePlatform } from '../../tool-registry.js';
 
 /**
@@ -101,7 +101,7 @@ function instanceStore(platform: string) {
 
   if (definition?.adapterAs === undefined || home === undefined) return undefined;
 
-  return { store: definition.store, adapterAs: definition.adapterAs, home, base: hosted.instance.extends };
+  return { store: definition.store, adapterAs: definition.adapterAs, home };
 }
 
 /** The factory of `platform`: a shipped platform's, or an instance's own, in its shipped platform's format. */
@@ -127,10 +127,10 @@ export function storeDirOf(platform: string, root: SessionStoreRoot): string {
   const instance = instanceStore(platform);
 
   if (!instance) return '';
-  const { store, home, base } = instance;
+  const { store, home } = instance;
   const dir = store.in === 'tool-home' ? store.dir : store.child;
 
-  return path.join(root.kind === 'tool-home' ? root.dir : instanceHomeDir(home, base), dir);
+  return path.join(root.kind === 'tool-home' ? root.dir : instanceHomeDir(home), dir);
 }
 
 /** `platform`'s adapter on `storeDir`, a store directory the caller already resolved (`storeDirOf`). */

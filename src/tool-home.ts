@@ -5,6 +5,7 @@ import { z } from 'zod';
 import { readRegularFileSync } from '@teamai/shared/regular-file';
 import { type ToolId, type ShippedDescriptor } from './tools.js';
 import { type HomeMove } from '@teamai/tool-core/definition';
+import type { ToolInstanceHome } from '@teamai/tool-core/instance';
 import { homeVariables, descriptorOf, TOOL_ORDER } from './tool-registry.js';
 import { pathExists, readFileSafe, readJsonObject, writeJsonAtomic, type JsonObjectRead } from './utils/fs.js';
 import { getUserHome, normalizeHomePath, usesInstallHome } from '@teamai/shared/home';
@@ -263,6 +264,20 @@ function absoluteEnv(host: Host, name: string): string | null {
 /** Where `tool`'s home sits on `host`: the recorded home, else the env's, else under `$HOME`. */
 export function toolHome(tool: ToolId, host: Host = realHost()): string {
   return movedToolHome(tool, host) ?? defaultToolHome(tool, host);
+}
+
+/** Variables that move every XDG tool's home at once, so a member's value of one is never one instance's home. */
+const SHARED_HOME_VARIABLES: ReadonlySet<string> = new Set(['XDG_CONFIG_HOME', 'XDG_DATA_HOME']);
+
+/**
+ * Where an instance's own home sits on `host`: its variable's value when set, resolved as a shipped tool's own variable
+ * is (`envToolHome`), else its directory under `$HOME`. An XDG base directory is set for every tool, so its value is
+ * never the instance's home. Delivery and its sessions both read it, so the two never part.
+ */
+export function instanceHomeDir(home: ToolInstanceHome, host: Host = realHost()): string {
+  const moved = home.env === undefined || SHARED_HOME_VARIABLES.has(home.env) ? undefined : host.env[home.env]?.trim();
+
+  return moved ? absoluteOn(moved, host) : host.path.join(host.home, ...home.dir.split('/'));
 }
 
 /** The recorded home, else the env's, or null when nothing moves `tool`'s home. */

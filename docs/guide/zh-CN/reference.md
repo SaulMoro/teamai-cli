@@ -273,7 +273,7 @@ teamai workflow start review --tools default=acme-claude
 teamai score --session <id> --source acme-claude --scorer review-quality
 ```
 
-步骤运行 `acme-claude`，会话从 `$ACME_CLAUDE_CONFIG_DIR/projects/` 读取，未设置时从 `~/.acme-claude/projects/` 读取。记录、续跑和打分都算在 `acme-claude` 名下，不会算成 Claude 的。
+步骤运行 `acme-claude`，会话从 `$ACME_CLAUDE_CONFIG_DIR/projects/` 读取，未设置时从 `~/.acme-claude/projects/` 读取；用户级 pull 也写到这个目录。记录、续跑和打分都算在 `acme-claude` 名下，不会算成 Claude 的。
 
 如果 `env` 也是所扩展工具自己的 home 变量（例如 `claude` 实例的 `CLAUDE_CONFIG_DIR`），或者是 `XDG_CONFIG_HOME`、`XDG_DATA_HOME`，teamai 不使用你给它设置的值。这个值属于工具本身，所以实例的 home 始终是 `~/<dir>`。
 
