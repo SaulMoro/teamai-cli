@@ -21,6 +21,8 @@
 //                       milliseconds makes docker's `rm` wait that long once it stopped the processes, before the
 //                       container is gone, while another `rm` of it fails as already in progress; a file `delay-<command>`
 //                       holding a number of milliseconds makes that command (`run`, `rm`, …) wait that long first;
+//                       a file `save-hold` holding a number of milliseconds makes a `commit`, `build` or sbx `template save`
+//                       wait that long while it writes the image, as a save still on its way;
 //                       a file `format-fails` makes `ps --format` fail as an engine that cannot render it; a file
 //                       `version` holding a version makes `version` print it, as an upgraded engine does; a file
 //                       `create-hold` holding a number of milliseconds makes `run -d` wait that long after the container
@@ -211,16 +213,25 @@ function savedDir(tag) {
   return path.join(state, 'saved', encodeURIComponent(tag));
 }
 
-/** Saves `home` as image `tag` on `base`, which holds its tools. */
-function saveImage(tag, base, home) {
-  const dir = savedDir(tag);
-  fs.rmSync(dir, { recursive: true, force: true });
-  fs.mkdirSync(dir, { recursive: true });
-  fs.writeFileSync(path.join(dir, 'base'), base);
+/**
+ * Saves `home`, and the build context `context` when given, as image `tag` on `base`, which holds its tools. The image
+ * appears whole, as an engine's tag does once its commit is done: a removal seen after it is not undone by the save.
+ */
+function saveImage(tag, base, home, context) {
+  const staged = path.join(state, 'saving', `${encodeURIComponent(tag)}-${process.pid}`);
+  fs.mkdirSync(staged, { recursive: true });
+  fs.writeFileSync(path.join(staged, 'base'), base);
 
-  if (fs.existsSync(home)) fs.cpSync(home, path.join(dir, 'home'), { recursive: true, verbatimSymlinks: true });
+  if (fs.existsSync(home)) fs.cpSync(home, path.join(staged, 'home'), { recursive: true, verbatimSymlinks: true });
+
+  if (context !== undefined) fs.cpSync(context, path.join(staged, 'context'), { recursive: true });
+
+  waitAsLongAs('save-hold');
   fs.mkdirSync(path.join(state, 'pulled'), { recursive: true });
   fs.writeFileSync(path.join(state, 'pulled', encodeURIComponent(tag)), '');
+  fs.mkdirSync(path.join(state, 'saved'), { recursive: true });
+  fs.rmSync(savedDir(tag), { recursive: true, force: true });
+  fs.renameSync(staged, savedDir(tag));
 }
 
 /** The image whose tools `image` holds: itself, or a saved image's base. */
@@ -392,8 +403,7 @@ function docker() {
       const from = /^FROM\s+(\S+)/m.exec(fs.readFileSync(one(found, '-f'), 'utf8'))?.[1];
 
       if (from === undefined || toolsOf(from) === undefined) fail(`ERROR: failed to solve: ${from}: not found`);
-      saveImage(tag, from, path.join(state, 'no-home'));
-      fs.cpSync(context, path.join(savedDir(tag), 'context'), { recursive: true });
+      saveImage(tag, from, path.join(state, 'no-home'), context);
       process.stdout.write(`naming to ${tag} done\n`);
       break;
     }

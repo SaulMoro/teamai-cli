@@ -3093,8 +3093,10 @@ describe('a warm image', () => {
     { options: { provider: 'docker', image: IMAGE }, says: (tag: string) => `The warm image ${tag} was removed after it was made for attempt ${ATTEMPT}, so no sandbox was made for it. Start the step again, and teamai makes the image again.` },
     { options: { provider: 'sbx', agent: 'claude' }, says: (tag: string) => expect.stringContaining(`template ${tag} not found`) },
   ])('fails the open on $options.provider of an attempt whose warm image was removed once made, rather than making it again while creating the sandbox, which a close waits for', async ({ options, says }) => {
-    // The sandbox's lookup outlasts the removal, which lands between the warm image and the sandbox's creation.
+    // The sandbox's lookup outlasts the removal, which lands between the warm image and the sandbox's creation, and the
+    // image takes a while to save, as one under load does.
     engine.delay('ps', 3_000);
+    engine.holdSave(1_000);
     const connection = start();
     await init(connection, { ...options, warm: WARM });
     const at = checkout();
