@@ -22,6 +22,7 @@ import { PROVIDER_COMMANDS } from '../../packages/runtime-sandbox/src/provider-c
 import { journalOfSandboxName, placeKeyOfHandle, placeOfJournalSandbox } from '../../packages/runtime-sandbox/src/provider.js';
 import { containerNamed, IDLE } from '../../packages/runtime-sandbox/src/providers/container.js';
 import { errnoCode } from '../../src/utils/fs.js';
+import { sbxNotSignedIn } from './doctor.js';
 import { declaredCredentialNames, judgeSandboxEnv, parseEnviron, type EnvVerdict } from './secrets.js';
 import { CANARY_NAME, quote, worldHomes, type World } from './world.js';
 
@@ -306,7 +307,7 @@ export function startObserver(world: World, { pass, label, listed = listedHere }
     if (out.kind === 'missing') return;
 
     if (out.kind === 'failed') {
-      unobserved.add(`sbx sandboxes, \`sbx ls\` failed (${out.why})`);
+      unobserved.add(sbxNotSignedIn(world.runId, out.why) ?? `sbx sandboxes, \`sbx ls\` failed (${out.why})`);
 
       return;
     }
@@ -322,7 +323,7 @@ export function startObserver(world: World, { pass, label, listed = listedHere }
     const parsed = SbxListedSchema.safeParse(json);
 
     if (!parsed.success) {
-      unobserved.add('sbx sandboxes, `sbx ls --json` printed a list this harness cannot read');
+      unobserved.add(sbxNotSignedIn(world.runId, out.stdout) ?? 'sbx sandboxes, `sbx ls --json` printed a list this harness cannot read');
 
       return;
     }

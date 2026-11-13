@@ -89,12 +89,20 @@ const CHEAPEST_MODEL = {
   opencode: () => undefined,
 } satisfies Record<(typeof TOOL_COMMANDS)[number], () => string | undefined>;
 
+/**
+ * The line that says sbx is not signed in for world `runId`, when what sbx `said` is that refusal, which ends with the
+ * command that signs in: `try: sbx login`. Doctor and the observer print the same line for it.
+ */
+export function sbxNotSignedIn(runId: string, said: string): string | undefined {
+  return /\bsbx login\b/.test(said) ? `sandbox sbx: installed, not signed in in this world; sign in with \`npm run -s verify -- sh ${runId} sbx login\`. Claims on it are UNVERIFIABLE until then` : undefined;
+}
+
 /** The line `doctor <run> --drivers` gives sbx from what `sbx ls --no-input` answered in world `runId`. */
 export function sbxInWorld(runId: string, ran: { code: number | null; why: string }) {
   if (ran.code === 0) return { good: true, text: 'sandbox sbx: signed in in this world' };
+  const notSignedIn = sbxNotSignedIn(runId, ran.why);
 
-  // sbx ends its refusal with the command that signs in: `try: sbx login`.
-  if (/\bsbx login\b/.test(ran.why)) return { good: false, text: `sandbox sbx: installed, not signed in in this world; sign in with \`npm run -s verify -- sh ${runId} sbx login\`. Claims on it are UNVERIFIABLE until then` };
+  if (notSignedIn !== undefined) return { good: false, text: notSignedIn };
 
   return { good: false, text: `sandbox sbx: \`sbx ls\` failed in this world (${ran.why}): claims on it are UNVERIFIABLE here` };
 }

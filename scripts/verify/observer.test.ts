@@ -130,6 +130,27 @@ describe('the sandbox observer', () => {
     expect(await noSbx.stop()).toEqual([]);
   });
 
+  it('says sbx is not signed in, as doctor --drivers says it, when `sbx ls` refuses for that', async () => {
+    const world = worldIn();
+    const bin = path.join(world.dir, 'sbx-bin');
+    fs.mkdirSync(bin);
+    // What sbx v0.51.0 answers `sbx ls --json` from a HOME that never signed in: exit 1, and this on stderr.
+    fs.writeFileSync(path.join(bin, 'sbx'), "#!/bin/sh\nprintf 'error: not signed in to Docker\\n  try: sbx login\\n' >&2\nexit 1\n", { mode: 0o755 });
+    vi.stubEnv('PATH', bin);
+    const notSignedIn = `[verify] NOT OBSERVED: sandbox sbx: installed, not signed in in this world; sign in with \`npm run -s verify -- sh ${world.runId} sbx login\`. Claims on it are UNVERIFIABLE until then`;
+
+    try {
+      expect(await startObserver(world, { pass: new Map(), label: 'teamai workflow start' }).stop()).toEqual([notSignedIn]);
+    } finally {
+      vi.unstubAllEnvs();
+    }
+
+    // The same refusal printed on stdout with exit 0, which is not the list `--json` asks for.
+    const printedRefusal = startObserver(world, { pass: new Map(), label: 'teamai workflow start', listed: ([command]) => Promise.resolve(command === 'sbx' ? printed('error: not signed in to Docker\n  try: sbx login\n') : missing) });
+
+    expect(await printedRefusal.stop()).toEqual([notSignedIn]);
+  });
+
   it('forgets why a read of a sandbox failed once a later look reads it', async () => {
     vi.useFakeTimers();
     const world = worldIn();
