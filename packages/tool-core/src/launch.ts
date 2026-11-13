@@ -22,6 +22,12 @@ export interface CallOutput {
   lastMessage: string | undefined;
 }
 
+/**
+ * The OpenCode major version teamai takes wherever it reads none: OpenCode on PATH printed no version, or the launch has
+ * no need to ask. V2, the current major, has priority over V1. The one place this is decided (teamai/opencode-major).
+ */
+export const ASSUMED_OPENCODE_MAJOR = 2;
+
 /** What a call's arguments may name: the prompt, and fresh paths in a scratch directory for its prompt and last message. */
 export interface CallInput {
   prompt: string;
@@ -29,7 +35,7 @@ export interface CallInput {
   promptFile: string;
   /** For a tool that writes its last message to a file. */
   lastMessageFile: string;
-  /** The OpenCode major version on PATH, for OpenCode's call; 1 for another tool. */
+  /** The OpenCode major version on PATH, for OpenCode's call; ASSUMED_OPENCODE_MAJOR for another tool, whose call ignores it. */
   opencodeMajor: number;
 }
 
