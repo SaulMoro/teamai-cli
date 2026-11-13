@@ -114,8 +114,8 @@ interface RunRow {
   startedAt: string;
   endedAt?: string;
   durationMs?: number;
-  /** Input and output tokens of every pass. */
-  tokens: number;
+  /** Input and output tokens of every pass that reported tokens; absent when none did, so the page says so rather than 0. */
+  tokens?: number;
   sourceHash?: string;
   /** Absent when no pushed team commit holds the definitions the run used. */
   teamRevision?: string;
@@ -198,8 +198,10 @@ export type ReportedHistory = { state: 'ok'; runs: ReportedRunRow[]; handoffs: H
 
 const STATUS_OF_OUTCOME = { success: 'succeeded', failed: 'failed', timeout: 'failed', cancelled: 'cancelled' } as const;
 
-function tokenTotal(steps: StepEntry[] | undefined): number {
-  return (steps ?? []).reduce((sum, entry) => sum + (entry.tokens?.input ?? 0) + (entry.tokens?.output ?? 0), 0);
+function tokenTotal(steps: StepEntry[] | undefined): number | undefined {
+  const reported = (steps ?? []).flatMap((entry) => (entry.tokens ? [entry.tokens] : []));
+
+  return reported.length > 0 ? reported.reduce((sum, tokens) => sum + (tokens.input ?? 0) + (tokens.output ?? 0), 0) : undefined;
 }
 
 function learningsOf(steps: StepEntry[] | undefined): string[] {
@@ -214,7 +216,7 @@ function learningsOf(steps: StepEntry[] | undefined): string[] {
 
 /** The row fields a record may lack; a row leaves out each one its record lacks. */
 const OPTIONAL_ROW_FIELDS = [
-  'alias', 'driver', 'end', 'endedAt', 'durationMs', 'sourceHash', 'teamRevision', 'origin', 'stepCounts',
+  'alias', 'driver', 'end', 'endedAt', 'durationMs', 'tokens', 'sourceHash', 'teamRevision', 'origin', 'stepCounts',
 ] as const satisfies ReadonlyArray<keyof RunRow>;
 
 /** A record as a page row, its fields in the order the page's JSON has always had them. */
