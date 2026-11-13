@@ -13,6 +13,7 @@ const roots: string[] = [];
 
 afterEach(() => {
   vi.useRealTimers();
+  vi.unstubAllEnvs();
 
   for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true });
 });
@@ -136,6 +137,8 @@ describe('the sandbox observer', () => {
     fs.mkdirSync(bin);
     // What sbx v0.51.0 answers `sbx ls --json` from a HOME that never signed in: exit 1, and this on stderr.
     fs.writeFileSync(path.join(bin, 'sbx'), "#!/bin/sh\nprintf 'error: not signed in to Docker\\n  try: sbx login\\n' >&2\nexit 1\n", { mode: 0o755 });
+    // The harness's PATH too, so no container engine of this machine is asked.
+    vi.stubEnv('PATH', bin);
     const inWorld = { ...world, env: { ...world.env, HOME: world.home, PATH: bin } };
     const notSignedIn = `[verify] NOT OBSERVED: sandbox sbx: installed, not signed in in this world; sign in with \`npm run -s verify -- sh ${world.runId} sbx login\`. Claims on it are UNVERIFIABLE until then`;
 
@@ -154,7 +157,8 @@ describe('the sandbox observer', () => {
     const name = `teamai-${journal(sandboxJournalRoot(world.home)).owner}-r0123abcd-a0123abcd`;
     // sbx keeps its sandboxes per HOME: only the world's HOME lists the world's sandbox.
     fs.writeFileSync(path.join(bin, 'sbx'), `#!/bin/sh\nif [ "$HOME" = '${world.home}' ]; then printf '[{"name":"${name}","status":"stopped"}]'; else printf '[]'; fi\n`, { mode: 0o755 });
-    const inWorld = { ...world, env: { ...world.env, HOME: world.home, PATH: `${bin}:/usr/bin:/bin` } };
+    vi.stubEnv('PATH', bin);
+    const inWorld = { ...world, env: { ...world.env, HOME: world.home, PATH: bin } };
 
     expect(await startObserver(inWorld, { pass: new Map(), label: 'teamai workflow start' }).stop())
       .toEqual([`[verify] NOT OBSERVED: sbx:${name}'s environment, sbx listed it as stopped, and only a running one is asked`]);
@@ -169,6 +173,7 @@ describe('the sandbox observer', () => {
     // Signed in in the world's HOME, which lists nothing, and not in bob's.
     fs.writeFileSync(path.join(bin, 'sbx'), `#!/bin/sh\nif [ "$HOME" = '${bob.home}' ]; then printf 'error: not signed in to Docker\\n  try: sbx login\\n' >&2; exit 1; fi\nprintf '[]'\n`, { mode: 0o755 });
     const world = worldIn([bob]);
+    vi.stubEnv('PATH', bin);
     const inWorld = { ...world, env: { ...world.env, HOME: world.home, PATH: bin } };
 
     expect(await startObserver(inWorld, { pass: new Map(), label: 'teamai workflow start' }).stop())
