@@ -343,8 +343,8 @@ export async function cancelRun(
 }
 
 /**
- * Ends each run part of attempt `partOf` that still runs, which a driver calls once it stopped that attempt, however the
- * attempt ended: each is cancelled under its lock, named for the step the attempt ran. With no live driver of it here,
+ * Ends each run part of attempt `partOf`, which a driver calls once it stopped that attempt, however the attempt ended:
+ * each that still runs is cancelled under its lock, named for the step the attempt ran. With no live driver of it here,
  * as when the attempt's own process drove it and is gone, what its attempts left is stopped too, their process groups
  * first, as `teamai workflow cancel` stops them; a live driver of it stops its own attempts once it sees the cancel.
  */
@@ -352,15 +352,18 @@ export async function endRunsPartOf(config: LocalConfig, partOf: PartOfStep): Pr
   for (const part of await partsOf(config, partOf)) {
     const state = await readRun(config, part);
 
-    if (state === 'missing' || state === 'corrupt' || state.status !== 'running' || !isPartOf(state.partOf, partOf)) continue;
-    const [failure, secrets] = await Promise.all([stoppedFailure(config, partOf, new Date().toISOString()), knownSecrets(config)]);
+    if (state === 'missing' || state === 'corrupt' || !isPartOf(state.partOf, partOf)) continue;
+    // One that settled is stopped again, as teamai workflow cancel stops one: its driver may have been killed first.
+    const cancel = state.status === 'running'
+      ? await Promise.all([stoppedFailure(config, partOf, new Date().toISOString()), knownSecrets(config)]).then(([failure, secrets]) => ({ failure, secrets }))
+      : undefined;
 
     const taken = await takeRunLock(config, part, async (lock) => {
-      await cancelRun(config, part, secrets, undefined, failure, { heldLock: lock });
+      if (cancel) await cancelRun(config, part, cancel.secrets, undefined, cancel.failure, { heldLock: lock });
       await stopCancelledAttempts(config, lock, { isRunnerHolding: runnerAlive });
     }, { waitMs: 0 }).catch(runRemovalRefusal);
 
-    if ('kind' in taken && taken.kind === 'busy') await cancelRun(config, part, secrets, undefined, failure);
+    if (cancel && 'kind' in taken && taken.kind === 'busy') await cancelRun(config, part, cancel.secrets, undefined, cancel.failure);
   }
 }
 

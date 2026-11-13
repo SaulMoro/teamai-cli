@@ -8,7 +8,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { z } from 'zod';
-import { mayBeRunning } from '@teamai/shared/process-group';
+import { mayBeRunning, signalPid } from '@teamai/shared/process-group';
 import { benchmarkFixture, envelope, said, type BenchmarkFixture } from '../helpers/benchmark-fixture.js';
 
 /** The team's replacement of teamai-self-improvement: its one step writes its pid, then runs until it is stopped. */
@@ -21,6 +21,9 @@ steps:
   - id: again
     command: node -e "require('fs').writeFileSync(process.env.FIXTURE_ROOT + '/inner.pid', String(process.pid)); setInterval(() => {}, 1000)"
 `;
+
+/** As INNER, with a step that ignores SIGTERM, so the driver that started it is killed before it stops the step. */
+const STUBBORN_INNER = INNER.replace("setInterval(() => {}, 1000)", "process.on('SIGTERM', () => {}); setInterval(() => {}, 1000)");
 
 /** A workflow whose command step runs the self-improvement shortcut, as part of the step. */
 function outer(timeout?: string): string {
@@ -43,8 +46,8 @@ afterEach(() => {
   for (const fixture of fixtures.splice(0)) fixture.remove();
 });
 
-async function fixtureWith(timeout?: string): Promise<BenchmarkFixture> {
-  const fixture = await benchmarkFixture({ tool: 'does-nothing', sandbox: false, tools: [], team: { 'workflows/outer.yaml': outer(timeout), 'workflows/teamai-self-improvement.yaml': INNER } });
+async function fixtureWith(timeout?: string, inner = INNER): Promise<BenchmarkFixture> {
+  const fixture = await benchmarkFixture({ tool: 'does-nothing', sandbox: false, tools: [], team: { 'workflows/outer.yaml': outer(timeout), 'workflows/teamai-self-improvement.yaml': inner } });
   fixtures.push(fixture);
 
   return fixture;
@@ -126,6 +129,21 @@ describe('a run a command step started as part of the step', () => {
     }, 'the inner run to end', 15_000).catch(() => runNamed(fixture, 'teamai-self-improvement'));
     expect(inner).toMatchObject({ status: 'cancelled', failure: { message: `Ended: step work of run ${top?.id ?? ''} stopped (cancelled)` } });
     await until(() => (mayBeRunning(pid) ? undefined : true), 'the inner step to stop', 15_000);
+  }, 180_000);
+
+  it('has its step stopped when teamai workflow cancel stops the outer run and the step outlives the run\'s own driver', async () => {
+    const fixture = await fixtureWith(undefined, STUBBORN_INNER);
+    const { exited } = startOuter(fixture);
+    const pid = await until(() => innerPid(fixture), 'the inner step to run');
+    const top = runNamed(fixture, 'outer');
+
+    await fixture.teamai(['workflow', 'cancel', top?.id ?? '']);
+    await exited;
+
+    expect(runNamed(fixture, 'teamai-self-improvement')).toMatchObject({ status: 'cancelled' });
+    await until(() => (mayBeRunning(pid) ? undefined : true), 'the inner step to stop', 15_000).finally(() => {
+      if (mayBeRunning(pid)) signalPid(pid, 'SIGKILL');
+    });
   }, 180_000);
 
   it('is cancelled, and its step stopped, by a cancel of the outer run whose driver was killed', async () => {
