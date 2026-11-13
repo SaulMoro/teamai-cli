@@ -714,11 +714,14 @@ describe('instruction block targets on real CLI pull (#945)', () => {
       `const workers = ${JSON.stringify(workers)};`,
       'const spawn = cp.spawn;',
       'cp.spawn = (command, args, options) => {',
+      // teamai's detached workers run node, as this process does; a tool it starts in a group of its own, such as
+      // `codex app-server`, is not one, keeps its own pipes, and never loads this file to write its `.done`.
+      '  const isWorker = options?.detached && command === process.execPath;',
       // Keep the fixture's output pipes open until detached workers exit, so
       // runCLI's close event joins them before server/filesystem teardown.
-      "  if (options?.detached) options = { ...options, stdio: [Array.isArray(options.stdio) ? options.stdio[0] : 'ignore', 'inherit', 'inherit'] };",
+      "  if (isWorker) options = { ...options, stdio: [Array.isArray(options.stdio) ? options.stdio[0] : 'ignore', 'inherit', 'inherit'] };",
       '  const child = spawn(command, args, options);',
-      "  if (options?.detached && child.pid) fs.writeFileSync(workers + '/' + child.pid + '.started', '');",
+      "  if (isWorker && child.pid) fs.writeFileSync(workers + '/' + child.pid + '.started', '');",
       '  return child;',
       '};',
       "require('node:module').syncBuiltinESMExports();",
