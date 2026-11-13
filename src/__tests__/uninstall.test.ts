@@ -695,6 +695,47 @@ describe('uninstall', () => {
     expect(await fse.pathExists(dataHome), 'data home').toBe(false);
   });
 
+  it.each([
+    { uninstalling: 'a project', isConfigured: true },
+    { uninstalling: 'with no valid configuration', isConfigured: false },
+  ])('holds the lock a driver takes through its whole removal of a data home, uninstalling $uninstalling, and removes it after', async ({ isConfigured }) => {
+    const { homeDir, repoPath, teamaiHome } = await setupFixture(tmpDir);
+    vi.stubEnv('HOME', homeDir);
+    const dataHome = path.join(teamaiHome, 'projects', 'current');
+    await fse.outputJson(path.join(dataHome, 'workflows', 'runs', 'r0123456789abcdef.json'), {});
+    if (isConfigured) {
+      mockAutoDetectInit.mockResolvedValue({
+        localConfig: makeLocalConfig(homeDir, repoPath, { scope: 'project', projectRoot: homeDir, dataHome }),
+        teamConfig: makeTeamConfig(),
+      });
+    } else mockAutoDetectInit.mockRejectedValue(new Error('no configuration'));
+    const fsUtils = await import('../utils/fs.js');
+    const { acquireLock, LockDirectoryGoneError, releaseLock } = await import('../update.js');
+    const { remove } = fsUtils;
+    const lock = runsRemovalLockIn(dataHome);
+    const takenAfter: string[] = [];
+    // A driver tries the lock after each removal, and a recursive removal may unlink the lock before the rest of what it removes.
+    vi.spyOn(fsUtils, 'remove').mockImplementation(async (removed) => {
+      if (lock === removed || lock.startsWith(removed + path.sep)) await fse.remove(lock);
+      const isTaken = await acquireLock(lock, { createParent: false }).catch((error: unknown) => {
+        if (error instanceof LockDirectoryGoneError) return false;
+        throw error;
+      });
+
+      if (isTaken) {
+        takenAfter.push(removed);
+        await releaseLock(lock);
+      }
+
+      await remove(removed);
+    });
+
+    await uninstall({ force: true });
+
+    expect(takenAfter).toEqual([]);
+    expect(await fse.pathExists(isConfigured ? dataHome : teamaiHome), 'removed home').toBe(false);
+  });
+
   it('makes no data home to take its sync lock in, when the scope it uninstalls has none', async () => {
     const { homeDir, repoPath, teamaiHome } = await setupFixture(tmpDir);
     vi.stubEnv('HOME', homeDir);
