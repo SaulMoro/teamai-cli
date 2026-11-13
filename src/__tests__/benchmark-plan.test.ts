@@ -8,6 +8,7 @@ import { z } from 'zod';
 import type { LocalConfig } from '../types.js';
 import * as cliPaths from '@teamai/shared/cli-path';
 import { trialsOf } from '../benchmark/plan.js';
+import { decideCheckReport } from '../benchmark/trial.js';
 import { planBenchmark } from '../benchmark/start.js';
 import { ScoreVerbs } from '../score-verbs.js';
 import { attemptEnv } from '../workflow/attempt-marker.js';
@@ -340,6 +341,20 @@ describe('benchmark plan run', () => {
     expect(record.scorers).toEqual([{ name: 'teamai:correctness:t01', rubric: { sourceHash: expect.any(String) }, labels: [{ value: 'correct', score: 1 }, { value: 'incorrect', score: 0 }], passingScore: 1 }]);
     expect(run.steps.map((step) => step.id).filter((id) => id.includes('score'))).toEqual([]);
     expect(uncheckedOf(run)).toEqual(unchecked);
+  });
+
+  it('fails a check step reported without its exit code, whatever outputs the report carries', async () => {
+    const { config, runId } = await startFix();
+    const prompt = await leasePrompt(config, runId);
+    await reportAttempt(config, runId, { ...prompt, outcome: 'success', driver });
+    const check = LeaseSchema.parse(await leaseNext(config, runId, driver, { can, prepare: true })).data.lease;
+    const run = await readRun(config, runId);
+    if (typeof run !== 'object') throw new Error(`run ${runId} is ${run}`);
+
+    const decided = await decideCheckReport({ config, run, report: { ...check, outcome: 'success', driver, outputs: { result: 'passed', cause: '', label: '' } } });
+
+    expect(decided).toMatchObject({ outcome: 'failed', failure: { code: 'invalid_report', message: expect.stringContaining('report its exitCode') } });
+    expect(decided).not.toHaveProperty('outputs');
   });
 
   it.each([

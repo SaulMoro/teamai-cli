@@ -197,16 +197,25 @@ const RAN_TO_EXIT: ReadonlySet<WorkflowFailure['code'] | undefined> = new Set([u
  * step whose command, the task's own check, ran to an exit: the step succeeds with output `{ result, cause, label }`,
  * the check's verdict classified here, once, from the exit code alone, whatever the command printed. A trial's check
  * that ran stores the trial's correctness label, decided by the check, through the store `teamai score write` writes to,
- * but not one that passed a task with success criteria, whose judge then decides. A report of any other step, or of a
- * check that ended without an exit code, such as one its runtime lost, is answered as it came, and its step fails as it
- * reports; so does a check whose label could not be stored, with why.
+ * but not one that passed a task with success criteria, whose judge then decides. A report of any other step, or one
+ * that failed for a cause of its own, such as a runtime lost, is answered as it came. A check reported with no exit code
+ * fails `invalid_report`, whatever outputs it carries; a check whose label could not
+ * be stored fails with why.
  */
 export async function decideCheckReport({ config, run, report }: { config: LocalConfig; run: RunState; report: EndedReport }): Promise<EndedReport> {
-  if (report.exitCode === undefined || !RAN_TO_EXIT.has(report.failure?.code)) return report;
+  if (report.outcome === 'failed' && !RAN_TO_EXIT.has(report.failure?.code)) return report;
   const step = leasedStep(run, report.attempt);
   const checked = step && plannedCheckOf(run, step.id);
 
   if (!checked) return report;
+
+  if (report.exitCode === undefined) {
+    const { outputs, ...unreported } = report;
+    const failure: WorkflowFailure = { code: 'invalid_report', message: `Step "${step.id}" of run ${run.id} is a benchmark check step, whose output teamai decides from the check's exit status, and its report carries none. Have the driver report its exitCode.` };
+
+    return { ...unreported, outcome: 'failed', message: failure.message, failure };
+  }
+
   // What the command printed and how the report named its exit are not the step's: its output is the verdict.
   const { message, failure, outputs, ...ran } = report;
   const verdict = checkVerdict({ kind: 'exited', code: report.exitCode }, process.platform);
