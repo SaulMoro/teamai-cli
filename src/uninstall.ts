@@ -3336,9 +3336,7 @@ async function executeRemoval(
       ];
 
       await unregisterWorktreesIn(plan.teamaiHome, plan.checkouts, plan.unpushedSideBranches);
-
-      if (kept.length > 0) await removeAllBut(plan.teamaiHome, kept);
-      else await remove(plan.teamaiHome);
+      await removeAllBut(plan.teamaiHome, [...kept, ...await runsRemovalLocksOf([plan.teamaiHome])]);
 
       if (plan.preserveSharedManifest && sharedManifest) {
         await ensureDir(path.dirname(plan.preserveSharedManifest));
@@ -3559,6 +3557,16 @@ async function removeIfEmpty(dir: string): Promise<void> {
   } catch (e) {
     log.debug(`Kept ${dir}: ${e instanceof Error ? e.message : String(e)}`);
   }
+}
+
+/**
+ * The removal locks of `dataHomes` (`runsRemovalLockIn`), which a removal of them keeps for `whileRunsLocked` to release
+ * once the rest is gone: a lock unlinked before then lets a driver take it while its run is still there.
+ */
+async function runsRemovalLocksOf(dataHomes: readonly string[]): Promise<string[]> {
+  const { runsRemovalLockIn } = await import('./workflow/store.js');
+
+  return dataHomes.map(runsRemovalLockIn);
 }
 
 /** Remove everything under `root` but each path in `keep` and the directories on the way to them. */
@@ -3797,6 +3805,21 @@ async function whileRunsLocked(dataHomes: readonly string[], body: () => Promise
     await body();
   } finally {
     for (const lock of held) await releaseLock(lock);
+    await removeLeftEmpty(held, dataHomes);
+  }
+}
+
+/**
+ * Removes the directory of each of `locks`, and those up to the outermost of `dataHomes`, while each is left empty, as
+ * after a removal that kept only the locks (`runsRemovalLocksOf`). Removes nothing that holds anything else.
+ */
+async function removeLeftEmpty(locks: readonly string[], dataHomes: readonly string[]): Promise<void> {
+  const [outermost] = [...dataHomes].sort((a, b) => a.length - b.length);
+
+  for (const lock of [...locks].sort((a, b) => b.length - a.length)) {
+    for (let dir = path.dirname(lock); isWithin(dir, outermost); dir = path.dirname(dir)) {
+      if (!await rmdir(dir).then(() => true, () => false)) break;
+    }
   }
 }
 
@@ -4182,12 +4205,15 @@ async function uninstallHomeOnly(opts: UninstallOptions): Promise<void> {
   }
 
   await whileRunsLocked(dataHomes, async () => {
-    if (!await refusedForLiveRuns(async () => dataHomes)) await removeHome(home, kept, keptOwn);
+    if (!await refusedForLiveRuns(async () => dataHomes)) await removeHome(home, dataHomes, kept, keptOwn);
   });
 }
 
-/** Removes TeamAI's home `home` but what `kept` and `keptOwn` keep, once no step runtime holds a place of its runs. */
-async function removeHome(home: string, kept: KeptForProjects, keptOwn: string[]): Promise<void> {
+/**
+ * Removes TeamAI's home `home` but what `kept` and `keptOwn` keep, once no step runtime holds a place of the runs of
+ * `dataHomes`, the data homes in it that go.
+ */
+async function removeHome(home: string, dataHomes: readonly string[], kept: KeptForProjects, keptOwn: string[]): Promise<void> {
   try {
     try {
       const { ALL_MODEL_AGENTS, restoreModelProfiles } = await import('./models/switch.js');
@@ -4236,8 +4262,7 @@ async function removeHome(home: string, kept: KeptForProjects, keptOwn: string[]
 
     const keep = [...kept.paths, ...keptOwn];
 
-    if (keep.length > 0) await removeAllBut(home, keep);
-    else await remove(home);
+    await removeAllBut(home, [...keep, ...await runsRemovalLocksOf(dataHomes)]);
     log.success(keep.length > 0 ? `Removed ${home}/ but ${keep.join(', ')}` : `Removed ${home}/`);
     log.success('teamai uninstalled');
   } catch (e) {
