@@ -93,7 +93,7 @@ export async function reportBenchmark(env: NodeJS.ProcessEnv, secrets: Record<st
   const regression = compare.data === 'true' ? await regressionAgainstPublished(config, current) : undefined;
 
   const unchecked = uncheckedChecks(run, planned.found);
-  const unmeasured = unmeasuredTrials(run, planned.found);
+  const unmeasured = unmeasuredTrials(run, record.trials);
 
   const text = [
     ...asked, ...unlaunchedArms(run, planned.found), formatBenchmarkTable(table), ...(unchecked.length > 0 ? [uncheckedNotice(unchecked, record.suite.name)] : []),

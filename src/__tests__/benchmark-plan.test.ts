@@ -87,9 +87,7 @@ function uncheckedOf(run: RunState): string[] {
 
 /** The trials of `run` the run's report names as having ended in an error when no trial produced a result. */
 function unmeasuredOf(run: RunState): string[] {
-  const planned = planOfRun(run);
-  if ('failure' in planned) throw new Error(planned.failure.message);
-  return unmeasuredTrials(run, planned.found);
+  return unmeasuredTrials(run, recordOf(run).trials);
 }
 
 /** The benchmark record the run's report would write, from the plan its plan step printed and no verdict. */
