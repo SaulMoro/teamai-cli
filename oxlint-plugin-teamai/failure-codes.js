@@ -42,3 +42,10 @@ const answers = [...literalStrings('src/workflow/failure-codes.ts', 'FAILURE_COD
 
 /** Every recognized producer code, including diagnostics and command-only refusals. */
 export const KNOWN_FAILURE_CODES = new Set([...diagnostics, ...answers]);
+
+/** The string constants `@teamai/runtime-protocol` exports, by name, such as `CANCEL_FAILED`: a code a step may take from it. */
+export const PROTOCOL_STRING_CONSTANTS = new Map(
+  parse(fs.readFileSync(fileURLToPath(new URL('../packages/runtime-protocol/src/protocol.ts', import.meta.url)), 'utf8'), { sourceType: 'module', plugins: ['typescript'] }).program.body
+    .flatMap((statement) => (statement.type === 'ExportNamedDeclaration' && statement.declaration?.type === 'VariableDeclaration' ? statement.declaration.declarations : []))
+    .flatMap((declaration) => (isIdentifier(declaration.id) && declaration.init?.type === 'StringLiteral' ? [[declaration.id.name, declaration.init.value]] : [])),
+);
