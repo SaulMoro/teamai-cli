@@ -437,7 +437,13 @@ function endedAt(record: Extract<FleetRecord, { state: 'finished' | 'expired' | 
  * read for another reason than its absence counts as held, so the member leaves the run alone.
  */
 async function holdsRunRecord(config: LocalConfig, run: RunId): Promise<boolean> {
-  return fs.lstat(runFilePath(config, run)).then(() => true, (error: unknown) => errnoCode(error) !== 'ENOENT');
+  try {
+    await fs.lstat(runFilePath(config, run));
+
+    return true;
+  } catch (error) {
+    return errnoCode(error) !== 'ENOENT';
+  }
 }
 
 /**
