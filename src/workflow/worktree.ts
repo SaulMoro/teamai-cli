@@ -779,17 +779,27 @@ async function runWorktreeAt(dir: string, lines: readonly string[]): Promise<Run
 
   if (branch === undefined) return { kind: 'kept', dir, why: 'its HEAD is detached, so no branch holds its commits' };
   // A step may have planted a program in its worktree's config: read it as `unrestoredCopy` does.
-  const status = await copyStatus(dir, untrustedGit(hostGitEnv()));
+  const runGit = untrustedGit(hostGitEnv());
+  const status = await copyStatus(dir, runGit);
 
   if ('error' in status) return { kind: 'kept', dir, why: `git could not tell what changed in it (${status.error})` };
 
-  if (status.lines.length > 0) {
-    const shown = status.lines.slice(0, 5).map((line) => line.trim()).join(', ');
+  if (status.lines.length > 0) return { kind: 'kept', dir, why: `it has changes no commit holds: ${listedPaths(status.lines)}` };
+  // Files git ignores are in no commit either, such as an .env the member copied in. `traditional` names an ignored
+  // directory once, rather than each file in a node_modules. teamai's own .teamai/ in it is not the member's.
+  const ignored = await runGit(dir, ['status', '--porcelain', '--ignored=traditional', '--untracked-files=normal', '--ignore-submodules=none']);
 
-    return { kind: 'kept', dir, why: `it has changes no commit holds: ${shown}${status.lines.length > 5 ? `, and ${status.lines.length - 5} more` : ''}` };
-  }
+  if (ignored.code !== 0) return { kind: 'kept', dir, why: `git could not tell which files it ignores in it (${ignored.stderr.trim() || 'git status failed'})` };
+  const theirs = ignored.stdout.split('\n').filter((line) => line.startsWith('!! ') && !line.startsWith('!! .teamai/'));
+
+  if (theirs.length > 0) return { kind: 'kept', dir, why: `it holds files git ignores, which no commit holds: ${listedPaths(theirs)}` };
 
   return { kind: 'removable', dir, branch };
+}
+
+/** The first five of `git status --porcelain` `lines`, for a message. */
+function listedPaths(lines: readonly string[]): string {
+  return `${lines.slice(0, 5).map((line) => line.trim()).join(', ')}${lines.length > 5 ? `, and ${lines.length - 5} more` : ''}`;
 }
 
 /**

@@ -124,9 +124,9 @@ and give it your team repo URL."*
   settings stay on the same terms, but go with `--agent` when nothing else
   runs the tool.
 - In a project, uninstall removes the worktrees failed or cancelled workflow
-  runs kept when everything in one is committed on its branch, and keeps the
+  runs kept when nothing in one is left out of its branch, and keeps the
   branches (`teamai/<run>/…`): they are the user's. A worktree with uncommitted
-  changes, or a HEAD on no branch, stays, named with the
+  changes, a file git ignores (an `.env`), or a HEAD on no branch stays, named with the
   `git -C <checkout> worktree remove --force <dir>` command that removes it;
   tell the user to save what they need first. teamai's worktree setup (its
   exclude block and `extensions.worktreeConfig`) stays while one is left.

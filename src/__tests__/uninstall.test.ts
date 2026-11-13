@@ -2008,6 +2008,10 @@ describe('uninstall', () => {
       ['a file no commit holds', async (dir: string) => fse.writeFile(path.join(dir, 'notes.txt'), 'mine\n'), 'notes.txt'],
       ['an edit no commit holds', async (dir: string) => fse.appendFile(path.join(dir, 'work.txt'), 'more\n'), 'work.txt'],
       ['a HEAD on no branch', async (dir: string) => { git(dir, 'checkout', '-q', '--detach'); }, 'detached'],
+      ['a file git ignores', async (dir: string) => {
+        await fse.appendFile(path.join(path.dirname(path.dirname(path.dirname(dir))), '.git', 'info', 'exclude'), '.env\n');
+        await fse.writeFile(path.join(dir, '.env'), 'TOKEN=mine\n');
+      }, '.env'],
     ])('keeps one with %s, names it with the command that removes it, and keeps the setup the kept one needs', async (_name, leave, named) => {
       const { projectRoot, worktrees: [clean, kept] } = await projectWithRunWorktrees(['teamai/r0123456789abcdef/fail/p1', 'teamai/r1111111111111111/build/p1']);
       await leave(kept);
