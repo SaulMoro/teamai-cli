@@ -283,14 +283,23 @@ export function dirExists(p: string): boolean {
 }
 
 /**
- * Recursively scan a directory for matching files, sorted by modification time descending.
+ * Recursively scan a directory for matching files, sorted by modification time descending. A subfolder it cannot read, as
+ * one another user left in the store, is skipped; a root it cannot read fails, so the caller can say which folder.
  */
 export function scanFiles(rootDir: string, pattern: RegExp): string[] {
   if (!dirExists(rootDir)) return [];
   const results: string[] = [];
 
   const walk = (dir: string) => {
-    const entries = fs.readdirSync(dir, { withFileTypes: true });
+    let entries: fs.Dirent[];
+
+    try {
+      entries = fs.readdirSync(dir, { withFileTypes: true });
+    } catch (error) {
+      if (dir === rootDir) throw error;
+
+      return;
+    }
 
     for (const entry of entries) {
       const fullPath = path.join(dir, entry.name);

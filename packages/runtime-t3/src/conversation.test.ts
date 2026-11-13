@@ -627,11 +627,10 @@ describe('teamai-runtime-t3', () => {
       expect(await ended(runtime, 'op-00000012')).toMatchObject({ event: 'failed', failure: { code: 'tool_failed', message: expect.stringContaining(`claude kept no session for ${worktree} in ${path.join(t3.home, '.claude')}, so the step cannot be scored or resumed.`) } });
     });
 
-    // Claude's own project folder, which it writes its transcript into; for Codex, a folder of its store another user left,
-    // which Codex never lists and teamai's listing of the store enters.
+    // Claude's own project folder, which it writes its transcript into; Codex's store, which it writes its rollouts under.
     it.skipIf(process.platform === 'win32').each([
       { tool: 'claude', model: 'claude-opus-5-5', folder: () => path.join(t3.home, '.claude', 'projects', encodeCwdClaude(fs.realpathSync(worktree))) },
-      { tool: 'codex', model: 'gpt-6.1-sol', folder: () => path.join(t3.home, '.codex', 'sessions', '0000') },
+      { tool: 'codex', model: 'gpt-6.1-sol', folder: () => path.join(t3.home, '.codex', 'sessions') },
     ])('fails a $tool thread whose session folder teamai cannot list, saying which folder and how to let teamai read it', async ({ tool, model, folder: folderOf }) => {
       t3.config({ agent: { output: { verdict: 'approve' } } });
       // The tool can write there, and teamai cannot list the folder.
@@ -646,6 +645,23 @@ describe('teamai-runtime-t3', () => {
         expect(await ended(runtime, 'op-0000fe11')).toMatchObject({ event: 'failed', failure: { code: 'tool_failed', message: expect.stringContaining(`finished, but teamai cannot list ${folder}, where ${tool} keeps the step's session, because it has no permission to read it, so the step cannot be scored or resumed. Let the user teamai runs as read ${folder}, then retry the step.`) } });
       } finally {
         fs.chmodSync(folder, 0o700);
+      }
+    });
+
+    it.skipIf(process.platform === 'win32')('finds a Codex thread\'s session past a folder of its store teamai cannot list, and reports its tokens', async () => {
+      t3.config({ agent: { output: { verdict: 'approve' }, usage: { input: 1_200, output: 340, cacheRead: 18_000 } } });
+      // A folder another user left in Codex's store, which Codex never lists.
+      const foreign = path.join(t3.home, '.codex', 'sessions', '0000');
+      fs.mkdirSync(foreign, { recursive: true });
+      fs.chmodSync(foreign, 0o300);
+      const { runtime, handle } = await opened();
+
+      runtime.send(prompt(handle, 'op-0000fe13', { tool: 'codex', model: { name: 'gpt-6.1-sol' } }));
+
+      try {
+        expect(await ended(runtime, 'op-0000fe13')).toMatchObject({ event: 'finished', session: { tool: 'codex' }, usage: { input: 19_200, output: 340, cachedInput: 18_000 } });
+      } finally {
+        fs.chmodSync(foreign, 0o700);
       }
     });
 
