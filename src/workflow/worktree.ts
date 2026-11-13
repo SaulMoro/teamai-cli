@@ -1908,7 +1908,7 @@ export async function removeWorktree(main: string, dir: string): Promise<{ ok: t
   if ('error' in listed) return { ok: false, reason: `git could not list the worktrees (${listed.error})` };
   const inside = await worktreeInside(dir, listed);
 
-  if (inside !== undefined) return { ok: false, reason: `it holds the worktree ${inside}, which removing it would delete` };
+  if (inside !== undefined) return { ok: false, reason: `it holds the worktree ${inside}, which removing it would delete; finish or remove that one first` };
   const removed = await git(main, ['worktree', 'remove', '--force', dir]);
 
   await git(main, ['worktree', 'prune']);
