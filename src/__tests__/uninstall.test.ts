@@ -1976,6 +1976,18 @@ describe('uninstall', () => {
       for (const branch of branches) expect(said).toContain(branch);
     });
 
+    it('runs no program a step planted in the config of the worktree it removes', async () => {
+      const { worktrees: [planted] } = await projectWithRunWorktrees(['teamai/r0123456789abcdef/fail/p1']);
+      const ran = path.join(tmpDir, 'planted-ran');
+      const program = path.join(tmpDir, 'planted.sh');
+      await fse.writeFile(program, `#!/bin/sh\ntouch '${ran}'\n`, { mode: 0o755 });
+      git(planted, 'config', '--worktree', 'core.fsmonitor', program);
+
+      await uninstall({ force: true });
+
+      expect([await fse.pathExists(planted), await fse.pathExists(ran)]).toEqual([false, false]);
+    });
+
     it.each([
       ['a file no commit holds', async (dir: string) => fse.writeFile(path.join(dir, 'notes.txt'), 'mine\n'), 'notes.txt'],
       ['an edit no commit holds', async (dir: string) => fse.appendFile(path.join(dir, 'work.txt'), 'more\n'), 'work.txt'],

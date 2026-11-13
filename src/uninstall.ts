@@ -3586,7 +3586,7 @@ async function removeRunWorktrees(runWorktrees: RemovalPlan['runWorktrees']): Pr
     if (worktree.kind === 'kept') continue;
     const removed = await removeRunWorktree(checkout, worktree);
 
-    if (!removed.ok) log.warn(keptRunWorktreeLine({ checkout, dir: worktree.dir, why: `git did not remove it (${removed.reason})` }));
+    if (!removed.ok) log.warn(keptRunWorktreeLine({ checkout, dir: worktree.dir, why: removed.reason }));
     else if (worktree.branch === undefined) log.success(`Removed git's record of the workflow run worktree ${worktree.dir}, which was already gone`);
     else log.success(`Removed the workflow run worktree ${worktree.dir}. Its branch ${worktree.branch} stays, with the run's commits: delete it with \`git branch -D ${worktree.branch}\` once you no longer need it.`);
   }

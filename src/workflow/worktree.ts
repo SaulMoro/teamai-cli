@@ -723,18 +723,29 @@ export type RunWorktree =
   | { kind: 'removable'; dir: string; branch?: string }
   | { kind: 'kept'; dir: string; why: string };
 
-/** Each worktree teamai made for a workflow run in the repository of `checkout`, or why git could not list them. */
-export async function runWorktreesOf(checkout: string): Promise<{ worktrees: RunWorktree[] } | { error: string }> {
+/** Every worktree of the repository of `checkout`, each with the lines `git worktree list --porcelain` gave it. */
+async function listedWorktrees(checkout: string): Promise<{ dir: string; lines: string[] }[] | { error: string }> {
   const listed = await git(checkout, ['worktree', 'list', '--porcelain']);
 
   if (listed.code !== 0) return { error: listed.stderr.trim() || 'git worktree list failed' };
-  const worktrees: RunWorktree[] = [];
 
-  for (const entry of listed.stdout.split('\n\n')) {
+  return listed.stdout.split('\n\n').flatMap((entry) => {
     const lines = entry.split('\n');
     const dir = lines.find((line) => line.startsWith('worktree '))?.slice('worktree '.length);
 
-    if (dir !== undefined && worktreeCheckout(dir) !== undefined) worktrees.push(await runWorktreeAt(dir, lines));
+    return dir === undefined ? [] : [{ dir, lines }];
+  });
+}
+
+/** Each worktree teamai made for a workflow run in the repository of `checkout`, or why git could not list them. */
+export async function runWorktreesOf(checkout: string): Promise<{ worktrees: RunWorktree[] } | { error: string }> {
+  const listed = await listedWorktrees(checkout);
+
+  if ('error' in listed) return listed;
+  const worktrees: RunWorktree[] = [];
+
+  for (const { dir, lines } of listed) {
+    if (worktreeCheckout(dir) !== undefined) worktrees.push(await runWorktreeAt(dir, lines));
   }
 
   return { worktrees };
@@ -765,16 +776,25 @@ async function runWorktreeAt(dir: string, lines: readonly string[]): Promise<Run
 }
 
 /**
- * Removes the run worktree `worktree` of `checkout`'s repository with git's own records of it, never forcing: one that
- * gained a change since it was found stays, with git's reason. One whose directory is gone loses only git's record.
+ * Removes the run worktree `worktree` of `checkout`'s repository with git's own records of it, once it is read again as
+ * `runWorktreesOf` reads it: one that gained a change since stays, with why. One whose directory is gone loses only
+ * git's record. Forced, since git's own check would run a status in the worktree, and with it a program a step planted
+ * in the worktree's config; the read before it is the check, through untrusted git.
  */
 export async function removeRunWorktree(checkout: string, worktree: Extract<RunWorktree, { kind: 'removable' }>): Promise<{ ok: true } | { ok: false; reason: string }> {
-  const removed = await pathExists(worktree.dir) ? await git(checkout, ['worktree', 'remove', worktree.dir]) : undefined;
+  const listed = await listedWorktrees(checkout);
+
+  if ('error' in listed) return { ok: false, reason: `git could not list the worktrees (${listed.error})` };
+  const entry = listed.find(({ dir }) => dir === worktree.dir);
+  const now = entry === undefined ? undefined : await runWorktreeAt(entry.dir, entry.lines);
+
+  if (now?.kind === 'kept') return { ok: false, reason: now.why };
+  const removed = now !== undefined && await pathExists(worktree.dir) ? await git(checkout, ['worktree', 'remove', '--force', worktree.dir]) : undefined;
   const pruned = await git(checkout, ['worktree', 'prune']);
 
-  if (removed !== undefined && removed.code !== 0) return { ok: false, reason: removed.stderr.trim() || 'git worktree remove failed' };
+  if (removed !== undefined && removed.code !== 0) return { ok: false, reason: `git did not remove it (${removed.stderr.trim() || 'git worktree remove failed'})` };
 
-  return pruned.code === 0 ? { ok: true } : { ok: false, reason: pruned.stderr.trim() || 'git worktree prune failed' };
+  return pruned.code === 0 ? { ok: true } : { ok: false, reason: `git did not forget it (${pruned.stderr.trim() || 'git worktree prune failed'})` };
 }
 
 export function hooksPath(main: string): string {
