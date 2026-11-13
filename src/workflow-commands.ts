@@ -543,8 +543,8 @@ export interface ShortcutStart {
 /** `workflow start`, answering what the local driver ended a run it drove with; undefined for every other answer, which it printed. */
 export async function startWorkflow(name: string, options: StartOptions, shortcut: ShortcutStart = {}): Promise<WorkflowEnvelope | undefined> {
   const asked = askedDriver(options.driver);
-  // The skill driver's turns run in an agent session rather than in the step's process, so its run is never part of the step.
-  const isInStep = shortcut.canRunInStep === true && !asks(asked, 'skill') && isCommandStep(process.env);
+  // Only the local driver drives a run in the step's process; the skill driver's turns run in an agent session.
+  const isInStep = shortcut.canRunInStep === true && options.driver === LOCAL_DRIVER && isCommandStep(process.env);
 
   if (!shortcut.asCli && !isInStep && refusedNested(await nestedStart(process.env, process.cwd()), asks(asked, 'skill'))) return undefined;
 
@@ -2081,7 +2081,10 @@ export async function benchmarkRun(suite: string, options: { driver?: string; sa
     if (estimated.length > 0) log.info(estimated.join('\n  '));
   }
 
-  const { driver, byDefault } = await shortcutDriver(config, options.driver);
+  const decided = await shortcutDriver(config, options.driver);
+
+  if (!decided) return;
+  const { driver, byDefault } = decided;
   const start: StartOptions = { driver, inputs: JSON.stringify({ suite, ...inputs }), timeout: `${preflight.timeoutMs}ms` };
 
   if (options.sandbox) start.sandbox = true;
@@ -2144,19 +2147,30 @@ export async function selfImprovementRun(scorer: string, options: { suite: strin
     log.info(`Running the team's ${workflow.relativePath}, which replaces teamai's self-improvement workflow.`);
   }
 
-  const { driver, byDefault } = await shortcutDriver(config, options.driver);
+  const decided = await shortcutDriver(config, options.driver);
+
+  if (!decided) return;
+  const { driver, byDefault } = decided;
   const start: StartOptions = { driver, inputs: JSON.stringify({ scorer, suite: options.suite }), tools: options.tools };
 
   if (options.sandbox) start.sandbox = true;
   await startWorkflow(SELF_IMPROVEMENT_WORKFLOW, start, { byDefault, canRunInStep: true });
 }
 
-/** The driver a command's `--driver` names, else local inside a command step, else what `workflows.driver` decides, which `byDefault` carries for the start to say. */
-export async function shortcutDriver(config: LocalConfig, asked: string | undefined): Promise<{ driver?: string; byDefault?: DefaultDrive }> {
-  if (asked !== undefined) return { driver: asked };
+/**
+ * The driver a command's `--driver` names, else what `workflows.driver` decides, which `byDefault` carries for the start
+ * to say. Inside a command step the run is part of the step, so the step's process drives it on the local driver: any
+ * other `--driver` is refused there, printed, and answered with undefined.
+ */
+export async function shortcutDriver(config: LocalConfig, asked: string | undefined): Promise<{ driver?: string; byDefault?: DefaultDrive } | undefined> {
+  if (isCommandStep(process.env)) {
+    if (asked === undefined || asked === LOCAL_DRIVER) return { driver: LOCAL_DRIVER };
+    refuse({ error: { code: 'nested_workflow', message: `This command runs inside a command step of workflow attempt ${process.env[ATTEMPT_ENV] ?? ''}, where its run is part of the step and the local driver drives it in the step's process, so --driver ${asked} does not apply there. Leave --driver out or pass --driver local; to start it on another driver, run it outside the step.` } });
 
-  // Inside a command step the run is part of the step, so the step's own process drives it.
-  if (isCommandStep(process.env)) return { driver: LOCAL_DRIVER };
+    return undefined;
+  }
+
+  if (asked !== undefined) return { driver: asked };
   const byDefault = await driveByDefault(config);
 
   return { driver: byDefault.kind === 'drive' ? byDefault.driver : undefined, byDefault };

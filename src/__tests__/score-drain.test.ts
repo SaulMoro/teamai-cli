@@ -1258,6 +1258,21 @@ describe('teamai score of a subject the person names', () => {
     expect(await readRuns(config)).toEqual([]);
   });
 
+  it.each<[string, ScoreOptions]>([
+    ['with a scorer', { session: SESSION, source: 'claude-code', scorer: ['quality'], driver: 'none' }],
+    ['with a scorer file', { session: SESSION, source: 'claude-code', scorer: ['./draft.md'], driver: 'none' }],
+  ])('refuses the teamai score %s --driver none inside a command step, which would leave a run open past the step', async (_case, options) => {
+    const { config } = await team();
+    claudeSession(SESSION, 'Added the retries.');
+    fakeClaude();
+    fs.writeFileSync(path.join(root, 'app', 'draft.md'), SCORER);
+    vi.stubEnv(ATTEMPT_ENV, 'r0123456789abcdef/a0123456789');
+    vi.stubEnv(STEP_COMMAND_ENV, 'r0123456789abcdef/a0123456789');
+
+    expect(await scored(options)).toEqual({ envelope: { error: { code: 'nested_workflow', message: "This command runs inside a command step of workflow attempt r0123456789abcdef/a0123456789, where its run is part of the step and the local driver drives it in the step's process, so --driver none does not apply there. Leave --driver out or pass --driver local; to start it on another driver, run it outside the step." } }, code: 1 });
+    expect(await readRuns(config)).toEqual([]);
+  });
+
   it('refuses the teamai score an agent runs inside a command step, as it refuses that agent anywhere', async () => {
     const { config } = await team();
     claudeSession(SESSION, 'Added the retries.');

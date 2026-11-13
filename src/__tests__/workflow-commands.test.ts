@@ -1357,6 +1357,22 @@ outputs: { text: steps.report.outputs.text }
     expect(run).not.toHaveProperty('awaits');
   });
 
+  it.each([
+    { command: 'benchmark run --driver none', driver: 'none', start: () => benchmarkRun('fix', { driver: 'none' }) },
+    { command: 'self-improvement run --driver skill', driver: 'skill', start: () => selfImprovementRun('quality', { suite: 'fix', driver: 'skill' }) },
+  ])('refuses the $command inside a command step, whose run the step\'s process drives on the local driver', async ({ driver: asked, start }) => {
+    await pulledTeam(marked('teamai-benchmark', '{ suite: string }'), {
+      'workflows/teamai-self-improvement.yaml': marked('teamai-self-improvement', '{ scorer: string, suite: string }'),
+    });
+    const config = state.config;
+    if (config === undefined) throw new Error('no member');
+    vi.stubEnv('TEAMAI_WORKFLOW_ATTEMPT', 'r0123456789abcdef/a0123456789');
+    vi.stubEnv('TEAMAI_WORKFLOW_STEP_COMMAND', 'r0123456789abcdef/a0123456789');
+
+    expect(await capture(start)).toEqual({ error: { code: 'nested_workflow', message: `This command runs inside a command step of workflow attempt r0123456789abcdef/a0123456789, where its run is part of the step and the local driver drives it in the step's process, so --driver ${asked} does not apply there. Leave --driver out or pass --driver local; to start it on another driver, run it outside the step.` } });
+    expect(fs.existsSync(runsDir(config)) ? fs.readdirSync(runsDir(config)) : []).toEqual([]);
+  });
+
   it('refuses the self-improvement run that a command step of a run started from a step\'s command starts, as nested_workflow', async () => {
     // A team's teamai-self-improvement whose command step would run teamai self-improvement run itself: what that
     // step's process carries is what decides it.
