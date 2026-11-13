@@ -200,7 +200,7 @@ const CommandLeaseSchema = z.object({
 
 /**
  * Answers `next --prepare` for the driver `payload` names until it gets something other than a command lease, running
- * each command lease as an external driver does: in the lease's cwd, as its attempt, reporting its stdout as outputs.
+ * each command lease as an external driver does: in the lease's cwd, as its attempt, reporting its exit code and its stdout as outputs.
  */
 export async function driveCommands(fixture: BenchmarkFixture, run: string, payload: { driver: Record<string, unknown> }): Promise<Envelope> {
   for (;;) {
@@ -209,9 +209,9 @@ export async function driveCommands(fixture: BenchmarkFixture, run: string, payl
     if (!lease.success || lease.data.command === undefined) return answer;
     const { attempt, revision, command, env, cwd } = lease.data;
     const ran = spawnSync('sh', ['-c', command], { cwd: cwd ?? fixture.work, env: { ...fixture.env, ...env, TEAMAI_WORKFLOW_ATTEMPT: `${run}/${attempt}` }, encoding: 'utf8' });
-    const outputs: unknown = ran.status === 0 ? JSON.parse(ran.stdout) : undefined;
+    const outputs: unknown = ran.status === 0 && ran.stdout.trim() !== '' ? JSON.parse(ran.stdout) : undefined;
     const reported = envelope(await fixture.teamai(['workflow', 'report', run, '--json', JSON.stringify({
-      attempt, revision, outcome: ran.status === 0 ? 'success' : 'failed', driver: payload.driver, ...(outputs === undefined ? {} : { outputs }),
+      attempt, revision, outcome: ran.status === 0 ? 'success' : 'failed', driver: payload.driver, ...(ran.status === null ? {} : { exitCode: ran.status }), ...(outputs === undefined ? {} : { outputs }),
     })]));
     if (reported.error) throw new Error(`report of ${lease.data.step} refused: ${JSON.stringify(reported)}`);
   }
@@ -414,7 +414,7 @@ export async function benchmarkFixture(options: BenchmarkFixtureOptions): Promis
   fs.mkdirSync(path.join(hookHome, '.teamai', 'bin'), { recursive: true });
   fs.writeFileSync(path.join(hookHome, '.teamai', 'bin', 'teamai'), `#!/bin/sh\necho "$*" >> '${hookMarker}'\n`);
   fs.chmodSync(path.join(hookHome, '.teamai', 'bin', 'teamai'), 0o755);
-  // The check steps run `teamai benchmark check`, which resolves on PATH to the CLI under test.
+  // The host steps (plan, score, report) run `teamai`, which resolves on PATH to the CLI under test.
   fs.writeFileSync(path.join(bin, 'teamai'), `#!/bin/sh\nexec "${process.execPath}" "${CLI}" "$@"\n`, { mode: 0o755 });
   const firstLaunch: Record<FirstLaunch, string> = {
     'pulls-a-team-change': `if (first) {
@@ -738,7 +738,7 @@ export function fixRecord(run: string, { startedAt, username, result = 'passed',
 }
 
 /**
- * What `teamai benchmark check --trial` outputs as check step `checkStep` of run `runId` made in process, once its check
+ * What teamai decides a trial's check step outputs, as check step `checkStep` of run `runId` made in process, once its check
  * said `result`: for a check that ran, the version of the trial's correctness label it stored, decided by the check.
  */
 export async function trialCheckOutput(config: LocalConfig, runId: string, { checkStep, result }: { checkStep: string; result: 'passed' | 'failed' | 'could_not_run' }): Promise<Record<string, string>> {
@@ -765,7 +765,7 @@ export async function trialCheckOutput(config: LocalConfig, runId: string, { che
 const BaselineLeaseSchema = z.object({ data: z.object({ lease: z.object({ step: z.string().startsWith('trials.baselines.'), attempt: z.string(), revision: z.number() }) }) });
 
 /**
- * Settles each baseline of a run made in process as `teamai benchmark check --baseline` settles one: by its task in
+ * Settles each baseline of a run made in process as teamai decides one from its check's exit code: by its task in
  * `baselines`, with the result it outputs, and `failed` by default, as a check that fails on its starting commit, so
  * that task's trials run.
  */

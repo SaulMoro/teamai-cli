@@ -393,7 +393,9 @@ check:
 
 ### 基线
 
-对带 `check` 的任务，不论有没有 `successCriteria`，teamai 在它的第一个 trial 之前，在起始提交的全新克隆上运行 setup，写入任务的 `check.add` 文件，并运行一次 check。只有 `successCriteria` 的任务没有基线。
+对带 `check` 的任务，不论有没有 `successCriteria`，teamai 在它的第一个 trial 之前，在起始提交的全新克隆上写入任务的 `check.add` 文件，运行 setup，并运行一次 check。只有 `successCriteria` 的任务没有基线。
+
+check 在 trial 运行的地方运行，例如沙箱中，所以 `check.run` 调用的东西必须在那里；teamai 不必在。check 运行之前，teamai 在你机器上的克隆中写入 `check.add`，对 trial 还恢复 `protect`；运行之后，teamai 读取它的退出码。
 
 | check 在起始提交上 | 任务 |
 | --- | --- |
@@ -406,9 +408,8 @@ check:
 | 以 127 退出 | `not_found` |
 | 以 126 退出 | `not_executable` |
 | 在 Windows 以外以 129 到 192 退出 | `signal`：shell 把被信号杀死的命令报告为 128 加上信号编号。不要把它们用作 check 自己的失败退出码。 |
-| 运行超过超时时间 | `timeout` |
 
-prompt 之后无法运行的 check 让 trial 得到 `error`，而不是 `failed`。
+运行超过步骤超时时间的 check，或 teamai 无法放好其 `check.add` 或 `protect` 的 check，会让它的步骤失败：基线无法运行，trial 为 `error`。prompt 之后无法运行的 check 让 trial 得到 `error`，而不是 `failed`。
 
 ### trial 限制
 
@@ -847,7 +848,7 @@ outputs: { text: steps.report.outputs.text, table: steps.report.outputs.table }
 | 命令 | 作为 | 作用 |
 | --- | --- | --- |
 | `teamai benchmark plan <suite>` | `plan` 步骤 | 冻结你 pull 到的团队修订，获取 trial 读取的每个提交，并把 trial 打印成一个工作流，每个基线和 trial 一个克隆。 |
-| `teamai benchmark check --baseline\|--trial` | 每个克隆中的一个步骤 | 写入 `check.add`，对 trial 恢复 `protect`，运行任务的 check，并打印 `{ result, cause, label }`。trial 的 check 还会保存该 trial 的正确性标签，见[谁判定一个 trial](#谁判定一个-trial)。 |
+| 任务的 `check.run` | 每个克隆中的一个步骤，在 trial 运行的地方 | 运行任务的 check。运行之前，teamai 写入 `check.add`，对 trial 恢复 `protect`；运行之后，teamai 把它的退出码变成步骤的输出 `{ result, cause, label }`。trial 的 check 还会保存该 trial 的正确性标签，见[谁判定一个 trial](#谁判定一个-trial)。 |
 | `teamai score subjects --run <run> --step trials` | `subjects` 步骤 | 列出 trial 在本机结算的、需要评分的执行轮次。 |
 | [`teamai-score`](scorers.md#teamai-score-工作流) | `score` 步骤，每个 subject 一次 | 用运行开始时的评分器评判 trial。 |
 | `teamai score subjects --calibration --run <run> --step trials` | `calibration-subjects` 步骤 | 列出用来[校准评判](#校准评判)的 trial，每个带它的正确性评分器。 |
@@ -960,7 +961,7 @@ These results hold for these tasks, this run and this machine.
 | 以非 0 退出 | 分数最低的标签 | `failed` |
 | 无法运行 | 无 | `error`，`failure: { cause }` |
 
-`cause` 是 `not_found`、`not_executable`、`signal`、`timeout`、`spawn_failed`、`prepare_failed`（恢复 `protect` 或写入 `check.add` 失败）之一。
+`cause` 是 `not_found`、`not_executable` 或 `signal` 之一。旧版 teamai 写下的记录还可能带有 `timeout`、`spawn_failed` 或 `prepare_failed`（恢复 `protect` 或写入 `check.add` 失败）。
 
 每个记录下来的 trial 都带着它的结论：
 
@@ -1290,14 +1291,14 @@ benchmark 运行是一次普通的工作流运行，所以任何驱动都通过 
 ```text
 teamai workflow start teamai-benchmark --inputs '{"suite":"fix-auth","aliases":"team","tasks":[],"arms":[],"fail_on_regression":false}' --timeout 45m
 teamai workflow next <run> --prepare --json '{"driver":{..., "can":{"workspace":["read-only","new","continue","clone"],"isolation":"sandbox","env":true,"setup":true,"tools":["claude"],"unattended":true,"end_turn":true}}}'
-  -> a command lease (plan, check, report): run lease.command in lease.cwd, or in your checkout without one, with TEAMAI_WORKFLOW_ATTEMPT=<run>/<attempt>
+  -> a command lease (plan, check, report): run lease.command in lease.cwd, or in your checkout without one, with TEAMAI_WORKFLOW_ATTEMPT=<run>/<attempt>, and report its exitCode
   -> a prompt lease: launch lease.tool in lease.cwd on lease.prompt, with lease.model, in its unattended mode for lease.permissions, held to lease.limits
 teamai workflow report <run> --json '{..., "tool":"claude", "durationMs":84000, "cost":{"amount":0.31,"unit":"USD"}}'
 ```
 
 - **`driver.can`**: 每次 `next` 都带：`workspace` 中的 `clone`、`isolation: "sandbox"`、`env: true`、`setup: true`、`tools` 中列出各 arm 的工具、`unattended: true`，以及在租约的限制处结束一轮时带 `end_turn: true`。驱动缺少其中任何一项时，trial 会被扣住，`wait.held[].missing` 会指明缺的是哪项。
 - **`--prepare`**: teamai 在本机创建每个克隆、安装其团队资源并运行 setup，然后返回带 `cwd` 的租约。
-- **每个进程**: 运行时不带 `lease.envScope.withhold` 中的名字，带 `lease.env` 和 `TEAMAI_WORKFLOW_ATTEMPT=<run>/<attempt>`，所以从中调用的 `teamai` 不会改变任何运行。命令步骤把它的输出以 JSON 打印到 stdout；把它们作为 `outputs` 报告。
+- **每个进程**: 运行时不带 `lease.envScope.withhold` 中的名字，带 `lease.env` 和 `TEAMAI_WORKFLOW_ATTEMPT=<run>/<attempt>`，所以从中调用的 `teamai` 不会改变任何运行。命令步骤把它的输出以 JSON 打印到 stdout；把它们作为 `outputs` 报告，并把它的退出状态作为 `exitCode` 报告。check 步骤运行任务自己的 check，不需要 `teamai`：teamai 根据 `exitCode` 判定它的输出。
 - **`report`**: 对 prompt：`tool`、只围绕工具启动测得的 `durationMs`，以及仅在工具给出时才带的 `cost`。
 - **限制**: 让工具遵守 `lease.limits`。某个限制停止了工具时，报告 `outcome: "success"` 并带 `limit`：`timeout`、`budget` 或 `max_turns`；无法让工具遵守的 `budget` 或 `max_turns` 列在 `unenforced` 中。
 - **超时**: `benchmark run` 把套件的 `timeout` 作为 `--timeout` 传入；直接执行 `workflow start teamai-benchmark` 时也必须传入它，否则 `plan` 会失败。

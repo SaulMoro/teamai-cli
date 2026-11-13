@@ -393,7 +393,9 @@ check:
 
 ### Baselines
 
-Before the first trial of a task with a `check`, with `successCriteria` or without, teamai runs setup, writes the task's `check.add` files and runs the check once, on a fresh clone of the starting commit. A task with only `successCriteria` has no baseline.
+Before the first trial of a task with a `check`, with `successCriteria` or without, teamai writes the task's `check.add` files, runs setup and runs the check once, on a fresh clone of the starting commit. A task with only `successCriteria` has no baseline.
+
+The check runs where the trials run, such as in a sandbox, so whatever `check.run` calls must be there; teamai need not be. teamai writes `check.add`, and for a trial puts `protect` back, in the clone on your machine before the check runs, and reads its exit code after.
 
 | The check at the starting commit | The task |
 | --- | --- |
@@ -406,9 +408,8 @@ Before the first trial of a task with a `check`, with `successCriteria` or witho
 | it exits 127 | `not_found` |
 | it exits 126 | `not_executable` |
 | it exits 129 to 192, outside Windows | `signal`: a shell reports a killed command as 128 plus the signal. Do not use these as your check's own failure code. |
-| it runs past the timeout | `timeout` |
 
-After a prompt, a check that cannot run gives the trial `error`, not `failed`.
+A check that runs past the step's timeout, or whose `check.add` or `protect` teamai could not put in place, fails its step: the baseline cannot run, and a trial is `error`. After a prompt, a check that cannot run gives the trial `error`, not `failed`.
 
 ### Trial limits
 
@@ -847,7 +848,7 @@ outputs: { text: steps.report.outputs.text, table: steps.report.outputs.table }
 | Command | Runs as | Does |
 | --- | --- | --- |
 | `teamai benchmark plan <suite>` | The `plan` step | Freezes the team revision you pulled, fetches every commit a trial reads, and prints the trials as a workflow, with one clone per baseline and trial. |
-| `teamai benchmark check --baseline\|--trial` | A step in each clone | Writes `check.add`, puts `protect` back for a trial, runs the task's check, and prints `{ result, cause, label }`. A trial's check also stores the trial's correctness label, as [Who decides a trial](#who-decides-a-trial) says. |
+| The task's `check.run` | A step in each clone, where the trials run | Runs the task's check. Before it, teamai writes `check.add` and puts `protect` back for a trial; after it, teamai makes its exit code the step's output, `{ result, cause, label }`. A trial's check also stores the trial's correctness label, as [Who decides a trial](#who-decides-a-trial) says. |
 | `teamai score subjects --run <run> --step trials` | The `subjects` step | Lists the trials' scored passes that settled on this machine. |
 | [`teamai-score`](scorers.md#the-teamai-score-workflow) | The `score` step, once per subject | Judges the trial with the scorers as of the run's start. |
 | `teamai score subjects --calibration --run <run> --step trials` | The `calibration-subjects` step | Lists the trials to [calibrate a judge](#calibrate-a-judge) on, each with its correctness scorer. |
@@ -960,7 +961,7 @@ Only a trial's `teamai:correctness:<task>` label decides `passed`, `failed` or `
 | exits non-zero | the lowest-scoring label | `failed` |
 | cannot run | none | `error`, `failure: { cause }` |
 
-`cause` is one of `not_found`, `not_executable`, `signal`, `timeout`, `spawn_failed`, `prepare_failed` (restoring `protect` or writing `check.add` failed).
+`cause` is one of `not_found`, `not_executable` or `signal`. A record an older teamai wrote may also carry `timeout`, `spawn_failed` or `prepare_failed` (restoring `protect` or writing `check.add` failed).
 
 Each recorded trial carries its verdicts:
 
@@ -1290,14 +1291,14 @@ A benchmark run is an ordinary workflow run, so any driver runs it through `work
 ```text
 teamai workflow start teamai-benchmark --inputs '{"suite":"fix-auth","aliases":"team","tasks":[],"arms":[],"fail_on_regression":false}' --timeout 45m
 teamai workflow next <run> --prepare --json '{"driver":{..., "can":{"workspace":["read-only","new","continue","clone"],"isolation":"sandbox","env":true,"setup":true,"tools":["claude"],"unattended":true,"end_turn":true}}}'
-  -> a command lease (plan, check, report): run lease.command in lease.cwd, or in your checkout without one, with TEAMAI_WORKFLOW_ATTEMPT=<run>/<attempt>
+  -> a command lease (plan, check, report): run lease.command in lease.cwd, or in your checkout without one, with TEAMAI_WORKFLOW_ATTEMPT=<run>/<attempt>, and report its exitCode
   -> a prompt lease: launch lease.tool in lease.cwd on lease.prompt, with lease.model, in its unattended mode for lease.permissions, held to lease.limits
 teamai workflow report <run> --json '{..., "tool":"claude", "durationMs":84000, "cost":{"amount":0.31,"unit":"USD"}}'
 ```
 
 - **`driver.can`**: On every `next`: `clone` in `workspace`, `isolation: "sandbox"`, `env: true`, `setup: true`, the arms' tools in `tools`, `unattended: true`, and `end_turn: true` when it ends a turn at the lease's limits. A trial is held for a driver that lacks one of them, and `wait.held[].missing` names it.
 - **`--prepare`**: teamai makes each clone on this machine, installs its team resources and runs setup, then answers the lease with `cwd`.
-- **Every process**: Runs without the names in `lease.envScope.withhold`, with `lease.env`, and with `TEAMAI_WORKFLOW_ATTEMPT=<run>/<attempt>`, so a `teamai` call from it changes no run. A command step prints its outputs as JSON on stdout; report them as `outputs`.
+- **Every process**: Runs without the names in `lease.envScope.withhold`, with `lease.env`, and with `TEAMAI_WORKFLOW_ATTEMPT=<run>/<attempt>`, so a `teamai` call from it changes no run. A command step prints its outputs as JSON on stdout; report them as `outputs`, and its exit status as `exitCode`. A check step runs the task's own check, which needs no `teamai`: teamai decides its output from `exitCode`.
 - **`report`**: For a prompt: `tool`, `durationMs` measured around the tool launch, and `cost` only when the tool stated one.
 - **Limits**: Hold the tool to `lease.limits`. When one stopped it, report `outcome: "success"` with `limit`: `timeout`, `budget` or `max_turns`, and list in `unenforced` a `budget` or `max_turns` you could not hold it to.
 - **Timeout**: `benchmark run` passes the suite's `timeout` as `--timeout`; a direct `workflow start teamai-benchmark` must pass it too, or `plan` fails.

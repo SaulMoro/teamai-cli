@@ -32,8 +32,8 @@ import { newOpId, type ExecAnswer, type ExecQuestion, type StepRuntime } from '@
 import { resumeOrPublish, retryCommand } from '../../runtimes/retry-command.js';
 import type { RuntimeOffer, SoleDriver } from '../../engine.js';
 import { attemptDir, AttemptIdSchema, attemptResultPath, keepAttemptStdout, readRun, RunIdSchema, runScratchDir, updateRun, withRunLock, type AttemptId, type RunId, type RunLock } from '../../store.js';
-import { abandonPlace, isSetupCutShort, placeLeaseOf, placeOf, placeRoot, preparePlace, refuseDirtyAdoptedCommand, releaseUnlaunchedPlace, runPlaceSetup, sweepClones } from '../../place/place.js';
-import { commandEnd, commandOutputs, managedReport, StartedRunSchema, unreadablePlace, type StartedRun } from '../../protocol.js';
+import { abandonPlace, isSetupCutShort, placeLeaseOf, placeOf, placeRoot, refuseDirtyAdoptedCommand, releaseUnlaunchedPlace, runPlaceSetup, sweepClones } from '../../place/place.js';
+import { commandEnd, commandOutputs, managedReport, preparedPlace, StartedRunSchema, unreadablePlace, type StartedRun } from '../../protocol.js';
 import { WholeEndSchema } from '../../whole-workflow.js';
 import { memberTools } from '../../member-tools.js';
 import { stopRecordedGroup } from '@teamai/shared/process-group';
@@ -304,7 +304,7 @@ async function stageLease(lease: StagedLease, { config, lock, root, env, mode, s
   const leftSetup = (await setUpOn?.stopLeftSetup())?.failure;
 
   if (leftSetup) return { code: 'runtime_lost', message: leftSetup.message };
-  // A setup cut short is given up with the folder it ran in, which the prepare makes again (`preparePlace`).
+  // A setup cut short is given up with the folder it ran in, which the prepare makes again (`preparedPlace`).
   const unclosed = setUpOn && await isSetupCutShort({ config, run: lock.run, attempt: lease.attempt }) ? (await setUpOn.closeForRemadeFolder())?.failure : undefined;
 
   if (unclosed) return { code: 'runtime_lost', message: unclosed.message };
@@ -321,7 +321,7 @@ async function stageLease(lease: StagedLease, { config, lock, root, env, mode, s
   const placeLease = placeLeaseOf(lease);
 
   if (lease.tool === undefined && launches !== undefined) placeLease.tool = launches;
-  const prepared = await preparePlace({ config, lock, root, lease: placeLease });
+  const prepared = await preparedPlace({ config, lock, root, lease: placeLease });
 
   if (prepared.kind !== 'prepared') return prepared.failure;
   lease.cwd = prepared.dir;

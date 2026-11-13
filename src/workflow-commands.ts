@@ -49,7 +49,6 @@ import { agentEvidence, isAttemptRunner, nestedCall, nestedStart, nestedWorkflow
 import { outdatedBenchmarkPlan, planBenchmark, planStep, tryBenchmarkTask } from './benchmark/start.js';
 import { reportBenchmark } from './benchmark/report.js';
 import { formatEstimate } from './benchmark/estimate.js';
-import { runCheckStep } from './benchmark/trial.js';
 import type { RunState, WorkflowEnvelope, WorkflowFailure } from './workflow/types.js';
 
 
@@ -1913,44 +1912,6 @@ function table(rows: string[][]): string {
 
   return cells.map((row) => row.map((cell, column) => (column === row.length - 1 ? cell : cell.padEnd(widths[column] ?? 0))).join('  ')).join('\n').concat('\n');
 }
-
-/**
- * `teamai benchmark check --baseline|--trial`, the command of a benchmark run's baseline and trial check steps: prints
- * `{"result","cause","label"}`, the step's output, and exits 0 once it decided, whatever the check said. Exits 1, naming
- * why on stderr, when it could not check at all. A stop signal stops the check first.
- */
-export async function benchmarkCheck(options: { baseline?: boolean; trial?: boolean }): Promise<void> {
-  setStderrOnly(true);
-
-  if (options.baseline === options.trial) {
-    log.error('Pass exactly one of --baseline and --trial: the check of a task\'s baseline, or of a trial.');
-    process.exitCode = 1;
-
-    return;
-  }
-
-  const stop = new AbortController();
-  const onSignal = (signal: NodeJS.Signals): void => stop.abort(signal);
-
-  for (const signal of CHECK_STOP_SIGNALS) process.on(signal, onSignal);
-
-  try {
-    const checked = await runCheckStep({ mode: options.baseline ? 'baseline' : 'trial', env: process.env, cwd: process.cwd(), signal: stop.signal });
-
-    if ('failure' in checked) {
-      log.error(`${checked.failure.code}: ${checked.failure.message}`);
-      process.exitCode = 1;
-
-      return;
-    }
-
-    process.stdout.write(`${JSON.stringify(checked.output)}\n`);
-  } finally {
-    for (const signal of CHECK_STOP_SIGNALS) process.off(signal, onSignal);
-  }
-}
-
-const CHECK_STOP_SIGNALS: readonly NodeJS.Signals[] = ['SIGINT', 'SIGTERM', 'SIGHUP'];
 
 /** A benchmark verb that runs as a step: what it prints on stdout, or why it failed, on stderr with exit 1. */
 function writeStepOutput(answer: { failure: WorkflowFailure } | { output: unknown }): void {

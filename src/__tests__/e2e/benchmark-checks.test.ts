@@ -2,7 +2,6 @@
  * Real CLI on the local driver: teamai tries each task's check on its starting commit before any trial, and checks a
  * trial against the protected paths as the starting commit has them.
  */
-import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -144,23 +143,4 @@ solutionCommit: ${fix}
     expect(fixture.toolLaunches()).toEqual([]);
     expect(fixture.trialRootEntries()).toEqual([]);
   }, 120_000);
-});
-
-describe('teamai benchmark check', () => {
-  /** `teamai benchmark check <args>` in `cwd`, the member's checkout by default, as the step of attempt `marker` would run it. */
-  function check(fixture: BenchmarkFixture, args: string[], marker?: string, cwd = fixture.work) {
-    const env = { ...fixture.env, ...(marker !== undefined ? { TEAMAI_WORKFLOW_ATTEMPT: marker } : {}) };
-    return spawnSync(path.join(fixture.bin, 'teamai'), ['benchmark', 'check', ...args], { cwd, env, encoding: 'utf8' });
-  }
-
-  it('refuses to run as no step of a run', async () => {
-    const fixture = await benchmarkFixture({ tool: 'fixes', sandbox: true, tools: ['claude'] });
-    fixtures.push(fixture);
-
-    const checked = check(fixture, ['--trial']);
-
-    expect(checked.status).toBe(1);
-    expect(checked.stdout).toBe('');
-    expect(checked.stderr).toContain('TEAMAI_WORKFLOW_ATTEMPT is not set to <run>/<attempt>');
-  }, 60_000);
 });

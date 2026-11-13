@@ -1015,16 +1015,6 @@ benchmarkCmd
     await benchmarkReport();
   });
 
-benchmarkCmd
-  .command('check')
-  .description('Run the check of the benchmark step this process runs as, in its clone: the files check.add names, then the task\'s check. A trial\'s check stores the trial\'s correctness label, decided by the check: the highest-scoring label when it passes, the lowest when it fails. On a task with successCriteria too, a passing check stores none, and the judge decides. Prints {"result":"passed"|"failed"|"could_not_run","cause","label"}: cause, when it could not run, is not_found, not_executable, signal, timeout, spawn_failed or prepare_failed (putting back the protected paths or writing check.add failed); label is the version of the label it stored; each is \'\' when it has none. Exits 0 once it decided; exits 1 when it could not check at all. Refuses a run whose plan this teamai cannot read.')
-  .option('--baseline', 'The check of a task\'s baseline, on its starting commit')
-  .option('--trial', 'The check of a trial, after its prompt, with the protected paths put back as the starting commit has them first')
-  .action(async (cmdOpts: { baseline?: boolean; trial?: boolean }) => {
-    const { benchmarkCheck } = await import('./workflow-commands.js');
-    await benchmarkCheck(cmdOpts);
-  });
-
 const scoreCmd = program
   .command('score')
   .description('Label a workflow pass or a finished agent session with team scorers (scorers/<name>.md or scorers/<name>/SCORER.md). --run <id>, --session <id> or --team-session <name>, with --scorer, starts the default workflow teamai-score for that subject with demand named (no sampling; a failed or expired judgment opens again), on the driver --driver or workflows.driver names, else local, and prints the labels it wrote. A run for a driver this machine does not run waits for it, and the command says how to drive it here. A person starts it from their own terminal: from an agent session the start answers invoke_denied, and an agent judges its session with /teamai-share-session instead. The pass, session, scorers and --label value are checked before any run starts. When only a judge step no tool here can run is left, it exits 1 with judge_pending and the labels already written; a scorer with no label exits 1 with its code. A scorer file (--scorer ./scorers/x.md, or ./scorers/x/SCORER.md for a scorer folder) starts the default workflow teamai-try-scorer instead, which judges the session and its first prompt alone and stores no label; from an agent session it answers invoke_denied, and an agent tries a scorer with /teamai-new-scorer. Prints one JSON envelope; --drain prints lines.')

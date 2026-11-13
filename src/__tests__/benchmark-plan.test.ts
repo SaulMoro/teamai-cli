@@ -114,7 +114,7 @@ describe('benchmark plan run', () => {
     const next = await leaseNext(config, runId, driver, { can, prepare: true });
 
     expect(next).toMatchObject({ data: { lease: {
-      step: 'trials.baselines.t01', command: 'teamai benchmark check --baseline',
+      step: 'trials.baselines.t01', command: 'node test.js',
       workspace: { mode: 'new', base: { commit: RUN_START }, clone: { commit: RUN_START, team: { treatment: 'none' } } },
     } } });
   });
@@ -327,7 +327,7 @@ describe('benchmark plan run', () => {
     if ('failure' in planned) throw new Error(planned.failure.message);
     const task = planned.found.plan.tasks[0]?.sourceHash;
     const record = await judgedRecordOf(config, run);
-    expect(check).toMatchObject({ step: 'trials.r1.t01.a01.check', command: 'teamai benchmark check --trial' });
+    expect(check).toMatchObject({ step: 'trials.r1.t01.a01.check', command: 'node test.js' });
     expect(next).toMatchObject({ data: { done: { outcome: 'succeeded' } } });
     expect(record.trials).toEqual([expect.objectContaining(JSON.parse(JSON.stringify(recorded).replaceAll('TASK', task ?? '')))]);
     expect(record.scorers).toEqual([{ name: 'teamai:correctness:t01', rubric: { sourceHash: expect.any(String) }, labels: [{ value: 'correct', score: 1 }, { value: 'incorrect', score: 0 }], passingScore: 1 }]);

@@ -1,8 +1,8 @@
 /**
  * How a trial's steps become its result, and the benchmark record. Pure over an ended run: the step states
  * the engine keeps, with what each check step output, the frozen plan, and the verdicts of each trial's scorers
- * (`verdicts.ts`). It classifies nothing: `teamai benchmark check` did that once, when the check ran, and stored the
- * correctness label of a check task's trial.
+ * (`verdicts.ts`). It classifies nothing: teamai did that once, from the check step's exit code (trial.ts), and stored
+ * the correctness label of a check task's trial.
  *
  * Results are never failure codes, and no value here enters record `status` or `steps[].outcome`: an older dashboard
  * drops a whole record on an enum value it does not know.
