@@ -42,6 +42,12 @@ describe('the offer of a runtime through another', () => {
     expect(composedOffer(outer, { ...inner, can: { ...inner.can, unattended: true } }).can.unattended).toBe(true);
   });
 
+  it('offers no unattended prompt when the inner says nothing of unattended, however the outer keeps the tool', () => {
+    const { unattended: _unsaid, ...silent } = inner.can;
+
+    expect(composedOffer(outer, { ...inner, can: silent }).can.unattended).toBe(false);
+  });
+
   it('keeps the tools the inner runs in full access when the outer offers no unattended prompt, so the run still warns of them', () => {
     const { unattended: _none, ...attended } = outer.can;
 
