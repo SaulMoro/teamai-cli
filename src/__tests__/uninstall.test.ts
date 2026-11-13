@@ -70,6 +70,7 @@ import { TOOLS } from '../tools.js';
 import { renderWorkflowSkill } from '../workflow/discovery/render.js';
 import { newOpId } from '@teamai/runtime-protocol/step-runtime';
 import { placesLockIn } from '../workflow/runtimes/attempt.js';
+import { RunIdSchema, takeRunLock } from '../workflow/store.js';
 
 // ─── Helpers ───────────────────────────────────────────
 
@@ -648,6 +649,45 @@ describe('uninstall', () => {
 
     expect(checks).toBe(2);
     expect(opening).toEqual({ held: false });
+  });
+
+  it('keeps a driver that starts between its last check that none drives here and its removal from making the data home again', async () => {
+    const { homeDir, repoPath, teamaiHome } = await setupFixture(tmpDir);
+    vi.stubEnv('HOME', homeDir);
+    const dataHome = path.join(teamaiHome, 'projects', 'current');
+    const config = makeLocalConfig(homeDir, repoPath, { scope: 'project', projectRoot: homeDir, dataHome });
+    const run = RunIdSchema.parse('r0123456789abcdef');
+    await fse.outputJson(path.join(dataHome, 'workflows', 'runs', `${run}.json`), {});
+    mockAutoDetectInit.mockResolvedValue({ localConfig: config, teamConfig: makeTeamConfig() });
+    const store = await import('../workflow/store.js');
+    const { runsDrivenIn } = store;
+    let checks = 0;
+    let driving: ReturnType<typeof takeRunLock<boolean>> | undefined;
+    let uninstalled = (): void => undefined;
+    const ended = new Promise<void>((resolve) => { uninstalled = resolve; });
+    // A driver of the run starts right after the check uninstall makes once it is confirmed, and writes the run's
+    // records once it drives, as `workflow resume` beside it would.
+    vi.spyOn(store, 'runsDrivenIn').mockImplementation(async (runs) => {
+      const driven = await runsDrivenIn(runs);
+
+      if (++checks === 2) {
+        driving = takeRunLock(config, run, async () => {
+          await ended;
+          await fse.outputJson(path.join(dataHome, 'workflows', 'owner.json'), { id: 'driver' });
+
+          return true;
+        }, { waitMs: 0 });
+      }
+
+      return driven;
+    });
+
+    await uninstall({ force: true });
+    uninstalled();
+
+    expect(checks).toBe(2);
+    expect(await driving).toMatchObject({ kind: 'gone', error: { code: 'run_not_found', message: expect.stringContaining(`Run ${run} was removed`) } });
+    expect(await fse.pathExists(dataHome), 'data home').toBe(false);
   });
 
   it('previews what it would remove in a dry run while a step runtime holds a place, warning that the uninstall would refuse', async () => {
