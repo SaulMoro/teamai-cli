@@ -199,8 +199,23 @@ const CommandLeaseSchema = z.object({
 }).passthrough();
 
 /**
+ * What an external driver reports of a command lease whose process exited `code` (null when a signal ended it) after
+ * printing `stdout`: its outcome and exit code, and its stdout as outputs when that is JSON. A benchmark check runs the
+ * task's own check, which prints no outputs: teamai decides them from the exit code.
+ */
+export function commandLeaseReport({ code, stdout }: { code: number | null; stdout: string }): { outcome: 'success' | 'failed'; exitCode?: number; outputs?: unknown } {
+  const settled = { outcome: code === 0 ? 'success' as const : 'failed' as const, ...(code === null ? {} : { exitCode: code }) };
+  if (code !== 0 || stdout.trim() === '') return settled;
+  try {
+    return { ...settled, outputs: JSON.parse(stdout) };
+  } catch {
+    return settled;
+  }
+}
+
+/**
  * Answers `next --prepare` for the driver `payload` names until it gets something other than a command lease, running
- * each command lease as an external driver does: in the lease's cwd, as its attempt, reporting its exit code and its stdout as outputs.
+ * each command lease as an external driver does: in the lease's cwd, as its attempt, reporting it as `commandLeaseReport` says.
  */
 export async function driveCommands(fixture: BenchmarkFixture, run: string, payload: { driver: Record<string, unknown> }): Promise<Envelope> {
   for (;;) {
@@ -209,9 +224,8 @@ export async function driveCommands(fixture: BenchmarkFixture, run: string, payl
     if (!lease.success || lease.data.command === undefined) return answer;
     const { attempt, revision, command, env, cwd } = lease.data;
     const ran = spawnSync('sh', ['-c', command], { cwd: cwd ?? fixture.work, env: { ...fixture.env, ...env, TEAMAI_WORKFLOW_ATTEMPT: `${run}/${attempt}` }, encoding: 'utf8' });
-    const outputs: unknown = ran.status === 0 && ran.stdout.trim() !== '' ? JSON.parse(ran.stdout) : undefined;
     const reported = envelope(await fixture.teamai(['workflow', 'report', run, '--json', JSON.stringify({
-      attempt, revision, outcome: ran.status === 0 ? 'success' : 'failed', driver: payload.driver, ...(ran.status === null ? {} : { exitCode: ran.status }), ...(outputs === undefined ? {} : { outputs }),
+      attempt, revision, driver: payload.driver, ...commandLeaseReport({ code: ran.status, stdout: ran.stdout }),
     })]));
     if (reported.error) throw new Error(`report of ${lease.data.step} refused: ${JSON.stringify(reported)}`);
   }

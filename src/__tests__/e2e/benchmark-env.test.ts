@@ -13,7 +13,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { z } from 'zod';
 import { LeaseWireSchema } from '../../workflow/lease-wire.js';
 import type { EnvScope } from '../../workflow/requirements.js';
-import { benchmarkFixture, envelope, PRODUCT_URL, runFixBenchmark, startFixBenchmark, type BenchmarkFixture, type Envelope } from '../helpers/benchmark-fixture.js';
+import { benchmarkFixture, commandLeaseReport, envelope, PRODUCT_URL, runFixBenchmark, startFixBenchmark, type BenchmarkFixture, type Envelope } from '../helpers/benchmark-fixture.js';
 
 const WITHHELD = ['GITHUB_TOKEN', 'GH_TOKEN', 'GITLAB_TOKEN', 'GL_TOKEN', 'CI_JOB_TOKEN', 'SSH_AUTH_SOCK', 'GIT_ASKPASS', 'SSH_ASKPASS'];
 const WITH_SETUP = `schemaVersion: v1alpha1
@@ -82,7 +82,7 @@ function fromOutside(fixture: BenchmarkFixture, run: string, identity = { kind: 
   const command = async (lease: Lease): Promise<Envelope> => {
     if (lease.command === undefined) throw new Error(`step ${lease.step} runs no command`);
     const ran = await setUp(lease) ? await launch('/bin/sh', ['-c', lease.command], lease, envOf(lease, lease.envScope)) : undefined;
-    return send(lease, ran?.code === 0 ? { outcome: 'success', ...(lease.output !== undefined ? { outputs: JSON.parse(ran.stdout) } : {}) } : { outcome: 'failed' });
+    return send(lease, ran ? commandLeaseReport(ran) : { outcome: 'failed' });
   };
   const judged: string[] = [];
   /** Answers a lease confined to `dir` with a correct label, as a confined run of claude would, after reading the diff there. */
