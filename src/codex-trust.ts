@@ -1,3 +1,4 @@
+import type { ChildProcess } from 'node:child_process';
 import { realpathSync, statSync } from 'node:fs';
 import { mkdtemp, rm } from 'node:fs/promises';
 import os from 'node:os';
@@ -12,7 +13,7 @@ import { lenientList, type JsonValue, JsonValueSchema, JsonObjectSchema } from '
 import { log } from '@teamai/shared/log';
 import { findOnPath } from '@teamai/shared/lookpath';
 import { isBareCommandName } from '@teamai/shared/cli-path';
-import { signalChild } from '@teamai/shared/process-group';
+import { signalChild, signalGroup, signalPid } from '@teamai/shared/process-group';
 
 /**
  * Trusting what teamai writes into Codex (#955).
@@ -282,10 +283,14 @@ class AppServerError extends Error {
 }
 
 async function openAppServer(codexHome: string, command: string): Promise<AppServer> {
+  // A group of its own on POSIX, so closing it also stops what it started, such as a plugin fetch still running.
+  const isGrouped = process.platform !== 'win32';
+
   const child = spawnCommand(command, ['app-server'], {
     env: { ...process.env, CODEX_HOME: codexHome },
     stdio: ['pipe', 'pipe', 'ignore'],
     windowsHide: true,
+    detached: isGrouped,
   });
 
   const pending = new Map<number, { method: string; resolve: (v: JsonValue | undefined) => void; reject: (e: Error) => void }>();
@@ -367,7 +372,7 @@ async function openAppServer(codexHome: string, command: string): Promise<AppSer
     close() {
       fail(new AppServerError('closed'));
       child.stdin?.end();
-      signalChild(child);
+      stopAppServer(child, isGrouped);
     },
   };
 
@@ -380,6 +385,20 @@ async function openAppServer(codexHome: string, command: string): Promise<AppSer
     server.close();
     throw e;
   }
+}
+
+/**
+ * Stops the app-server `child` and, when `isGrouped`, every process of the group it leads. While any process of that
+ * group lives, POSIX gives no process its id; once the server is reaped, a process holding its pid is a later one, which
+ * may lead a later group of that id, so the group is left alone. On Windows only the process teamai started is signalled.
+ */
+function stopAppServer(child: ChildProcess, isGrouped: boolean): void {
+  const { pid } = child;
+  const isReaped = child.exitCode !== null || child.signalCode !== null;
+  const mayStopGroup = isGrouped && pid !== undefined && !(isReaped && signalPid(pid, 0) !== 'gone');
+
+  if (mayStopGroup && signalGroup(pid, 'SIGTERM') === 'sent') return;
+  signalChild(child);
 }
 
 type AppServerFailure = { kind: 'unavailable'; reason: string } | { kind: 'failed'; reason: string };

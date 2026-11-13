@@ -450,6 +450,24 @@ describe('Codex hook trust — user scope', () => {
     }
   });
 
+  it.skipIf(process.platform === 'win32')('stops the processes the app-server started when it closes it', async () => {
+    // As Codex's app-server starts a plugin fetch (`git ls-remote`) that is still running when teamai is done with it.
+    const shim = path.join(fakeBin, 'codex');
+    const fetchPid = path.join(home, 'fetch.pid');
+    const server = (await fse.readFile(shim, 'utf8')).split('\n').find((line) => line.startsWith('exec '));
+    await fse.writeFile(shim, `#!/bin/sh\nif [ "$1" = app-server ]; then sleep 600 </dev/null >/dev/null 2>&1 & echo $! > ${JSON.stringify(fetchPid)}; fi\n${server}\n`);
+
+    expect((await trustCodexHooks({ codexHome: codexHome(), cwd: home, hooks: [] })).kind).toBe('trusted');
+
+    const pid = Number(await fse.readFile(fetchPid, 'utf8'));
+    const running = () => signalPid(pid, 0) === 'sent';
+    try {
+      await expect.poll(running, { timeout: 2000 }).toBe(false);
+    } finally {
+      if (running()) signalPid(pid, 'SIGKILL');
+    }
+  });
+
   it('reports a failure when the app-server exits before answering', async () => {
     writeFakeCodexOptions(codexHome(), { exit: true });
 
