@@ -332,6 +332,7 @@ async function tryDriverLock(config: LocalConfig, run: RunId): Promise<'held' | 
   const removal = runsRemovalLockIn(dataHome);
   const isRecorded = async (): Promise<boolean> => (await fs.stat(runFilePath(config, run)).catch(() => undefined)) !== undefined;
   const wasRecorded = await isRecorded();
+
   const tried = await withFileLock(removal, RUNS_REMOVAL_LOCK_WAIT, async () => {
     if (wasRecorded && !await isRecorded()) return 'removed';
 
