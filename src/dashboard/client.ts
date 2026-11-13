@@ -248,7 +248,7 @@ const runStatusNames = { running:'Running', succeeded:'Succeeded', failed:'Faile
 const stepStatusNames = { pending:'Pending', waiting:'Waiting for an answer', leased:'Leased', running:'Running', delivering:'Delivering PR', succeeded:'Succeeded', failed:'Failed', skipped:'Skipped', cancelled:'Cancelled', elsewhere:'On another install' };
 function runStatus(status) { return '<span class="'+(status==='running'||status==='succeeded'?'good':status==='failed'||status==='waiting'?'amber':'')+'">'+label(runStatusNames[status]||stepStatusNames[status]||status)+'</span>'; }
 // A running run's duration is filled by tickRunDurations, so a poll that changes nothing leaves the HTML, and the buttons in it, alone.
-function runDurationHtml(r) { return r.durationMs==null&&r.status==='running'?'<span data-run-started="'+e(r.startedAt)+'"></span>':e(elapsed(r.durationMs ?? NaN)); }
+function runDurationHtml(r) { return r.durationMs==null&&r.status==='running'&&r.elsewhere?.kind!=='ended'?'<span data-run-started="'+e(r.startedAt)+'"></span>':e(elapsed(r.durationMs ?? NaN)); }
 function tickRunDurations() { document.querySelectorAll('[data-run-started]').forEach(span=>{span.textContent=elapsed(Date.now()-Date.parse(span.dataset.runStarted));}); }
 const shortHash = hash => e(String(hash).slice(0,12));
 function prLink(url) { return '<a class="link" href="'+e(url)+'" target="_blank" rel="noopener noreferrer" title="'+e(url)+'" data-verbatim>#'+e(url.split('/').filter(Boolean).pop())+'</a>'; }
