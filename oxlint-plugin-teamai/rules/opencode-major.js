@@ -7,7 +7,8 @@ const MAJOR = 'opencodeMajor';
 
 /**
  * The name `node`'s value is given to, through the expressions that pass a value on unchanged (a branch of `?:`, a side
- * of `??` or `||`, an `await`, a cast, a function's body or return); undefined when it is not given to a name.
+ * of `??` or `||`, an `await`, a cast or `!`, a function's body or a `return` anywhere in it, in an `if`, a `try`, a
+ * `catch` or a `switch` case); undefined when it is not given to a name.
  * @param {import('@oxlint/plugins').ESTree.Node} node
  * @returns {string | undefined}
  */
@@ -18,6 +19,8 @@ function receivingName(node) {
   while (parent) {
     switch (parent.type) {
       case 'ConditionalExpression':
+      case 'IfStatement':
+      case 'SwitchCase':
         if (parent.test === child) return undefined;
         break;
       case 'LogicalExpression':
@@ -25,13 +28,22 @@ function receivingName(node) {
       case 'ParenthesizedExpression':
       case 'TSAsExpression':
       case 'TSSatisfiesExpression':
+      case 'TSNonNullExpression':
+      case 'TSTypeAssertion':
       case 'ReturnStatement':
       case 'BlockStatement':
+      case 'TryStatement':
+      case 'CatchClause':
         break;
       case 'ArrowFunctionExpression':
       case 'FunctionExpression':
         if (parent.body !== child) return undefined;
         break;
+      case 'SwitchStatement':
+        if (parent.discriminant === child) return undefined;
+        break;
+      case 'FunctionDeclaration':
+        return parent.body === child && parent.id ? parent.id.name : undefined;
       case 'VariableDeclarator':
         return parent.init === child && parent.id.type === 'Identifier' ? parent.id.name : undefined;
       case 'AssignmentExpression':
