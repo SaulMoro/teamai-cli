@@ -515,7 +515,8 @@ export interface ShortcutStart {
   ready?: Ready;
   /**
    * A released command's shortcut, which the person or agent asked for rather than the workflow: it starts with no agent
-   * evidence, so `invoke` and the nested-start checks do not judge it, and an agent's start is recorded as `cli`.
+   * evidence, so `invoke` does not judge it, and an agent's start is recorded as `cli`. `runShortcut` judges its nested
+   * start itself, since inside a step the run is part of that step.
    */
   asCli?: boolean;
   /** What the person and the agent run in place of the shortcut, when an agent session's start is refused. */
@@ -820,6 +821,15 @@ export async function runShortcut({ workflow, inputs, command, json, nobodyAnswe
     log.error(redact(failure.message, { envSecrets: collectEnvSecrets(), patterns: false }));
     process.exitCode = 1;
   };
+
+  // Inside a step, the run is part of that step. Anywhere else, a place where a step of a run works refuses it as `workflow start` does.
+  const nested = nestedCall(process.env) === undefined ? await nestedStart(process.env, process.cwd()) : undefined;
+
+  if (nested !== undefined) {
+    refused(nestedWorkflowError(nested));
+
+    return undefined;
+  }
 
   const found = await shortcutReady(workflow, preview, teamRepo);
 

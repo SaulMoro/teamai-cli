@@ -25,7 +25,8 @@ import { acquireLock, releaseLock } from '../update.js';
 import { leaseNext, startRun } from '../workflow/engine.js';
 import { publishRun, resumeRun } from '../workflow/handoff.js';
 import { driverLockPath, readRun, runFilePath, runsDir } from '../workflow/store.js';
-import { benchmarkRun, workflowNext, workflowPublish, workflowReport, workflowRespond, workflowResume, workflowRetry, workflowStart } from '../workflow-commands.js';
+import { benchmarkRun, runShortcut, workflowNext, workflowPublish, workflowReport, workflowRespond, workflowResume, workflowRetry, workflowStart } from '../workflow-commands.js';
+import { ATTEMPT_ENV } from '../launch-context.js';
 import { loadLocalConfigForScope } from '../config.js';
 import { knownSecrets } from '../env-resolution.js';
 import { sharedTeam, skillHarness, untilStopped } from './helpers/skill-harness.js';
@@ -700,6 +701,55 @@ steps:
     expect(printed).toContainEqual(expect.stringMatching(/Step "sign\[0\]" failed with missing_env: /));
     expect(printed).toContainEqual(expect.stringContaining(`Retry it with teamai workflow retry ${runId} 'sign[0]', then`));
     expect(printed.filter((line) => line.includes('Step "sign" failed') || line.includes(`retry ${runId} sign,`))).toEqual([]);
+  });
+});
+
+describe('a released command\'s shortcut where a step of a run works', () => {
+  /** A config whose `mark` workflow is cached, and a git checkout of it on main to start from. */
+  async function markProject(): Promise<{ config: LocalConfig; work: string; git: (...args: string[]) => string }> {
+    const config = testConfig();
+    fs.writeFileSync(path.join(config.repo.localPath, 'workflows', 'mark.yaml'), 'schemaVersion: v1alpha1\nname: mark\ndescription: One command.\nsteps:\n  - id: mark\n    command: echo marked\n');
+    await syncScorersThenWorkflows(config);
+    state.config = config;
+    const work = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-shortcut-place-')));
+    dirs.push(work);
+    const git = (...args: string[]): string => execFileSync('git', ['-c', 'user.name=T', '-c', 'user.email=t@t', ...args], { cwd: work, encoding: 'utf8' }).trim();
+    git('init', '-q', '-b', 'main');
+    git('commit', '-q', '--allow-empty', '-m', 'start');
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    return { config, work, git };
+  }
+
+  const shortcut = (): Promise<unknown> => runShortcut({ workflow: 'mark', inputs: {}, command: 'teamai mark', json: true });
+
+  it.each([
+    ['in a workflow worktree', (work: string) => {
+      const dir = path.join(work, '.teamai', 'workflow-worktrees', 'teamai-r0123456789abcdef-build-p1-0123456789ab');
+      fs.mkdirSync(dir, { recursive: true });
+      return dir;
+    }, (_git: (...args: string[]) => string) => undefined],
+    ['in a checkout on a workflow branch', (work: string) => work, (git: (...args: string[]) => string) => { git('checkout', '-q', '-b', 'teamai/r0123456789abcdef/build/p1'); }],
+  ])('starts no run %s outside a step, refused as workflow start refuses it there', async (_name, placeOf, onBranch) => {
+    const { config, work, git } = await markProject();
+    onBranch(git);
+    vi.spyOn(process, 'cwd').mockReturnValue(placeOf(work));
+
+    const started = await capture(() => workflowStart('mark', { driver: 'local' }));
+    const shortcutAnswer = await capture(async () => { await shortcut(); });
+
+    expect(started).toMatchObject({ error: { code: 'nested_workflow' } });
+    expect(shortcutAnswer).toEqual(started);
+    expect(fs.existsSync(runsDir(config)) ? fs.readdirSync(runsDir(config)) : []).toEqual([]);
+  });
+
+  it('starts its run in a workflow worktree inside a step, as part of that step', async () => {
+    const { work } = await markProject();
+    const dir = path.join(work, '.teamai', 'workflow-worktrees', 'teamai-r0123456789abcdef-build-p1-0123456789ab');
+    fs.mkdirSync(dir, { recursive: true });
+    vi.spyOn(process, 'cwd').mockReturnValue(dir);
+    vi.stubEnv(ATTEMPT_ENV, 'r0123456789abcdef/a0123456789');
+
+    expect(await capture(async () => { await shortcut(); })).toMatchObject({ data: { done: { outcome: 'succeeded' } } });
   });
 });
 
