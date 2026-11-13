@@ -8,7 +8,10 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { z } from 'zod';
 import { benchmarkFixture, envelope, said, type BenchmarkFixture, type BenchmarkFixtureOptions } from '../helpers/benchmark-fixture.js';
 
-const DoneSchema = z.object({ run: z.string(), outcome: z.string(), outputs: z.object({ text: z.string() }) }).passthrough();
+const DoneSchema = z.object({
+  run: z.string(), outcome: z.string(), outputs: z.object({ text: z.string() }),
+  finally: z.array(z.object({ id: z.string(), failure: z.object({ message: z.string() }).partial().optional() }).passthrough()).optional(),
+}).passthrough();
 const RecordSchema = z.object({
   tasks: z.array(z.object({ id: z.string(), baseline: z.string() })),
   trials: z.array(z.object({ result: z.string() })),
@@ -72,7 +75,7 @@ async function ran(options: Omit<BenchmarkFixtureOptions, 'sandbox'>) {
   const started = await fixture.teamai(['benchmark', 'run', 'fix']);
   const done = DoneSchema.safeParse(envelope(started).data?.done);
   if (!done.success) throw new Error(`the run did not end: ${said(started)}`);
-  return { fixture, before, done: done.data, record: RecordSchema.parse(fixture.benchmarkRecord(done.data.run)) };
+  return { fixture, before, code: started.code, done: done.data, record: RecordSchema.parse(fixture.benchmarkRecord(done.data.run)) };
 }
 
 describe('benchmark checks on the local driver', () => {
@@ -135,10 +138,13 @@ solutionCommit: ${fix}
     expect(fs.readFileSync(path.join(fixture.teamClone, REFRESH_FROM), 'utf8')).toBe(REFRESH_TEST.replace('42', '43'));
   }, 120_000);
 
-  it('reports that the check could not run for a baseline whose check is killed under a shell that reports it as exit 137, and runs none of its trials', async () => {
-    const { fixture, done, record } = await ran({ tool: 'fixes', app: { 'kill.js': "process.kill(process.pid, 'SIGKILL');\n" }, tasks: { fix: task('node kill.js; exit $?', ['kill.js']) } });
+  it('reports that the check could not run for a baseline whose check is killed under a shell that reports it as exit 137, runs none of its trials, and exits 1 naming it', async () => {
+    const { fixture, code, done, record } = await ran({ tool: 'fixes', app: { 'kill.js': "process.kill(process.pid, 'SIGKILL');\n" }, tasks: { fix: task('node kill.js; exit $?', ['kill.js']) } });
 
     expect(done.outputs.text).toContain('| fix | check could not run |');
+    expect(done.outputs.text).toContain('Baseline fix: signal');
+    expect(done.finally).toEqual([expect.objectContaining({ id: 'checks', failure: expect.objectContaining({ message: expect.stringContaining('Baseline fix: signal') }) })]);
+    expect(code).toBe(1);
     expect(record).toEqual({ tasks: [expect.objectContaining({ baseline: 'could_not_run' })], trials: [expect.objectContaining({ result: 'not_run' })] });
     expect(fixture.toolLaunches()).toEqual([]);
     expect(fixture.trialRootEntries()).toEqual([]);

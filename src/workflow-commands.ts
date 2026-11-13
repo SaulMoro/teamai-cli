@@ -1982,9 +1982,9 @@ const BenchmarkDoneSchema = z.object({
  * `teamai benchmark run <suite>`: plans the suite once without a run, so a suite that cannot run leaves none, then
  * starts the workflow `teamai-benchmark`, the team's or teamai's default, with the suite as its input and the suite's timeout as
  * the run's, on the driver `--driver` names, else the one `workflows.driver` names, else local. Exits as `workflow start` does for the run's outcome,
- * and also 1 when a `finally` step failed or was cancelled: the report, or the regression gate, which with
- * `--fail-on-regression` fails when an arm dropped against the newest earlier comparable record on teamai-reports. A
- * record still pending never changes it.
+ * and also 1 when a `finally` step failed or was cancelled: the report; the checks gate, which fails when a check
+ * could not run; or the regression gate, which with `--fail-on-regression` fails when an arm dropped against the
+ * newest earlier comparable record on teamai-reports. A record still pending never changes it.
  */
 export async function benchmarkRun(suite: string, options: { driver?: string; sandbox?: boolean; memberAliases?: boolean; task?: string[]; arm?: string[]; failOnRegression?: boolean }): Promise<void> {
   setStderrOnly(true);
@@ -2081,7 +2081,7 @@ export async function benchmarkRun(suite: string, options: { driver?: string; sa
 
   if (ended.data.outputs?.text !== undefined) process.stderr.write(`${ended.data.outputs.text}\n`);
 
-  // A finally step that failed or was cancelled is listed: the report, whose results are then missing, or the regression gate.
+  // A finally step that failed or was cancelled is listed: the report, whose results are then missing, or a gate.
   if ((ended.data.finally ?? []).length > 0) process.exitCode = 1;
 }
 

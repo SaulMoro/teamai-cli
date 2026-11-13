@@ -412,6 +412,45 @@ function unlaunched(work: TrialWork): boolean {
   return unleased(work, work.isPrompt) && work.states.some((state) => state.status === 'failed' && state.failure?.code === 'tool_unavailable');
 }
 
+/**
+ * A line for each check of `run` that said nothing: a baseline whose check could not run on its starting commit, and a
+ * trial whose work ended but whose check never ran to a verdict, each with why, as its step output or failed it. The run
+ * measured nothing for them, so its report names them, and teamai's benchmark workflow fails its `checks` gate on them.
+ */
+export function uncheckedChecks(run: RunState, { plan, prefix }: RunPlan): string[] {
+  const stateOf = (step: string): StepState | undefined => run.steps.find((state) => state.id === `${prefix}${step}`);
+
+  const why = (state: StepState | undefined): string => {
+    const output = checkOutputOf(state);
+
+    if (output?.result === 'could_not_run') return output.cause;
+
+    if (state === undefined) return 'its step never ran';
+
+    if (state.status === 'failed') return state.failure ? `${state.failure.code}: ${state.failure.message}` : 'its step failed';
+
+    return state.status === 'cancelled' ? 'the run ended while it ran' : `its step is ${state.status}`;
+  };
+
+  const baselines = plan.tasks.flatMap((task) => {
+    const state = stateOf(baselineStepOf(task.id));
+
+    return baselineOf(state, task) === 'could_not_run' ? [`Baseline ${task.id}: ${why(state)}`] : [];
+  });
+
+  const trials = plan.trials.flatMap((trial) => {
+    const judge = plan.tasks.find((task) => task.id === trial.task)?.judge;
+    const state = stateOf(checkStepOf(trial));
+    const check = checkOutputOf(state);
+
+    if (judge === undefined || judge.kind === 'criteria' || stateOf(trial.step)?.status !== 'succeeded' || (check !== undefined && check.result !== 'could_not_run')) return [];
+
+    return [`Trial ${trial.order}/${plan.trials.length} ${trial.task} ${trial.arm}: ${why(state)}`];
+  });
+
+  return [...baselines, ...trials];
+}
+
 /** `unlaunched` of the trial whose work step is `step`. */
 export function unlaunchedTrial(run: RunState, step: string): boolean {
   return unlaunched(workOf(run, step));

@@ -411,6 +411,14 @@ The check runs where the trials run, such as in a sandbox, so whatever `check.ru
 
 A check that runs past the step's timeout, or whose `check.add` or `protect` teamai could not put in place, fails its step: the baseline cannot run, and a trial is `error`. After a prompt, a check that cannot run gives the trial `error`, not `failed`.
 
+A check that cannot run measures nothing, so the run does not pass for it. The results name each such baseline and trial with why, and tell you to give the place the trials run in what `check.run` calls, or to fix the cause named. Then the `checks` step fails, and `benchmark run` exits 1:
+
+```text
+These checks could not run, so the run measured nothing for them:
+  Baseline expired-token: not_found
+A check runs where the trials run, such as in a sandbox: give that place what check.run calls, or fix the cause named, then run teamai benchmark run fix-auth again.
+```
+
 ### Trial limits
 
 `trial` limits every trial's prompt. Reaching a limit ends the agent's turn, and teamai runs the trial's check, or its judges, on what the agent left, so a tool that runs out of time fails the task rather than the harness:
@@ -837,7 +845,14 @@ finally:
   - id: report
     command: teamai benchmark report
     env: { COMPARE: "{{ inputs.fail_on_regression }}" }
-    output: { text: string, table: json, regression: dropped | held | no_comparable | off }
+    output: { text: string, table: json, regression: dropped | held | no_comparable | off, unchecked: string }
+  # Fails when a baseline's or a trial's check could not run, naming each as report's text does: the run measured
+  # nothing for them. Drop it to report them without failing.
+  - id: checks
+    needs: [report]
+    if: steps.report.outputs.unchecked != ''
+    command: printf '%s\n' "$UNCHECKED" >&2; exit 1
+    env: { UNCHECKED: "{{ steps.report.outputs.unchecked }}" }
   - id: regression
     needs: [report]
     if: steps.report.outputs.regression == 'dropped'
@@ -877,7 +892,7 @@ steps:
     requires: { isolation: sandbox, strict: true }
   # no subjects, score, calibration-subjects or calibrate step
 finally:
-  # report and regression, as teamai's
+  # report, checks and regression, as teamai's
 ```
 
 ## Results
@@ -1223,7 +1238,7 @@ The gate is the team's to change. To warn of a drop instead of failing the job, 
 ```yaml
 # workflows/teamai-benchmark.yaml: a drop warns in the CI log, and the job still passes
 finally:
-  # report, as teamai's
+  # report and checks, as teamai's
   - id: regression
     needs: [report]
     if: steps.report.outputs.regression == 'dropped'

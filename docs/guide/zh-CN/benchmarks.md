@@ -411,6 +411,14 @@ check 在 trial 运行的地方运行，例如沙箱中，所以 `check.run` 调
 
 运行超过步骤超时时间的 check，或 teamai 无法放好其 `check.add` 或 `protect` 的 check，会让它的步骤失败：基线无法运行，trial 为 `error`。prompt 之后无法运行的 check 让 trial 得到 `error`，而不是 `failed`。
 
+无法运行的 check 什么也没有衡量，所以运行不会因此通过。结果会列出每个这样的基线和 trial 及其原因，并提示你让 trial 运行的地方具备 `check.run` 调用的东西，或修复列出的原因。随后 `checks` 步骤失败，`benchmark run` 以 1 退出：
+
+```text
+These checks could not run, so the run measured nothing for them:
+  Baseline expired-token: not_found
+A check runs where the trials run, such as in a sandbox: give that place what check.run calls, or fix the cause named, then run teamai benchmark run fix-auth again.
+```
+
 ### trial 限制
 
 `trial` 限制每个 trial 的 prompt。达到限制会结束智能体的这一轮，teamai 随后在智能体留下的结果上运行 trial 的 check 或评判，所以用完时间的工具算作任务失败，而不是测试框架出错：
@@ -837,7 +845,14 @@ finally:
   - id: report
     command: teamai benchmark report
     env: { COMPARE: "{{ inputs.fail_on_regression }}" }
-    output: { text: string, table: json, regression: dropped | held | no_comparable | off }
+    output: { text: string, table: json, regression: dropped | held | no_comparable | off, unchecked: string }
+  # Fails when a baseline's or a trial's check could not run, naming each as report's text does: the run measured
+  # nothing for them. Drop it to report them without failing.
+  - id: checks
+    needs: [report]
+    if: steps.report.outputs.unchecked != ''
+    command: printf '%s\n' "$UNCHECKED" >&2; exit 1
+    env: { UNCHECKED: "{{ steps.report.outputs.unchecked }}" }
   - id: regression
     needs: [report]
     if: steps.report.outputs.regression == 'dropped'
@@ -877,7 +892,7 @@ steps:
     requires: { isolation: sandbox, strict: true }
   # 没有 subjects、score、calibration-subjects 和 calibrate 步骤
 finally:
-  # report 和 regression，同 teamai 的
+  # report、checks 和 regression，同 teamai 的
 ```
 
 ## 结果
@@ -1223,7 +1238,7 @@ No arm has a comparable pair against run rA, so --fail-on-regression has nothing
 ```yaml
 # workflows/teamai-benchmark.yaml：下降只在 CI 日志中警告，任务仍然通过
 finally:
-  # report，与 teamai 的相同
+  # report 和 checks，与 teamai 的相同
   - id: regression
     needs: [report]
     if: steps.report.outputs.regression == 'dropped'
