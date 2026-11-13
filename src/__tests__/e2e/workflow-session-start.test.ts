@@ -116,7 +116,7 @@ steps:
     const described = await runCLI(['workflow', 'start', '--describe', 'review', '--driver', 'skill'], repo, thread);
 
     expect(envelope(described), described.stderr).toMatchObject({ data: { describe: { ask: {
-      kind: 'background', start: 'teamai workflow start review --driver t3', background: 'Each prompt step appears in T3 Code as a thread under this thread.',
+      kind: 'background', start: 'teamai workflow start review --driver t3', background: "Each prompt step appears in T3 Code as a thread under this thread, except a step that resumes an earlier step's session (session: continue or session: { from }), which goes on in that step's thread when T3 Code still has it.",
     } } } });
     expect(inits()).toEqual([expect.objectContaining({ mode: 'check' })]);
     expect(operations()).toEqual([]);
@@ -241,7 +241,7 @@ steps:
     const described = await runCLI(['workflow', 'start', '--describe', 'review', '--driver', 'skill'], repo, paseoAgent);
 
     expect(envelope(described), described.stderr).toMatchObject({ data: { describe: { ask: {
-      kind: 'background', start: 'teamai workflow start review --driver paseo', background: 'Each prompt step appears in Paseo as an agent of its own.',
+      kind: 'background', start: 'teamai workflow start review --driver paseo', background: "Each prompt step appears in Paseo as an agent of its own, except a step that resumes an earlier step's session (session: continue or session: { from }), which goes on in that step's agent when Paseo still has it.",
     } } } });
     expect(inits()).toEqual([expect.objectContaining({ mode: 'check' })]);
 
