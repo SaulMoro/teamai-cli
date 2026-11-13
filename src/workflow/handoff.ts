@@ -29,6 +29,7 @@ import { offeredPool } from './fleet/record.js';
 import { AttemptIdSchema, installOwner, isRunId, readRun, RunIdSchema, updateRun } from './store.js';
 import { workflowRunBy, type RunPublication, type RunState, type RunStatus, type WorkflowDefinition, type WorkflowFailure, type WorkflowSource, type WorkflowStep } from './types.js';
 import { attemptHoldingSession } from './runtimes/attempt.js';
+import { closedForOffer } from './runtimes/cancelled.js';
 import { basePinBranch, branchName, isIsolated, runBranchPrefix, stepMode, worksInTeam, type LeaseSession, type SessionRef } from './workspace.js';
 import { fetchMissingCommits, git, gitAnswer, reconcileCopy, saidYes } from './worktree.js';
 
@@ -42,6 +43,7 @@ export type HandoffError =
   | { code: 'not_owner'; owner: HandoffOwner; ownedAt: string; message: string }
   | { code: 'owner_active'; owner: HandoffOwner; wroteAt: string; message: string }
   | { code: 'run_offered'; message: string }
+  | { code: 'place_kept'; message: string }
   | { code: 'busy'; message: string }
   | { code: 'invalid_run'; message: string }
   | { code: 'unsupported_repo'; message: string }
@@ -257,12 +259,35 @@ type PublishVerdict =
  *
  * With `sessions`, the sessions it picks from the run are put in the team session archive first, scrubbed, so they can
  * be there even when the snapshot is then refused. The engine picks them: this module does not import the engine.
+ *
+ * It closes the places the run holds here for a conversation first (`offerRun`), and answers `place_kept`, publishing
+ * nothing, while one cannot close.
  */
-export async function publishRun(
-  config: LocalConfig,
-  runId: string,
-  options: { checkout: string; env?: NodeJS.ProcessEnv; sessions?: (run: RunState) => LeaseSession[] },
-): Promise<Result<PublishReceipt>> {
+export async function publishRun(config: LocalConfig, runId: string, options: OfferOptions): Promise<Result<PublishReceipt>> {
+  const offered = await offerRun(config, runId, options);
+
+  if (offered.kind === 'published') return offered.publication;
+
+  return refused({ code: 'place_kept', message: `Run ${runId} is not published: ${offered.why}. It stays on this machine: resume it here, or publish it again once its step runtime can close the place.` });
+}
+
+/** How a run is offered: `live` is the runtime a driver still has open for a held place's record, which closes it with no second open of the driver. */
+type OfferOptions = { checkout: string; env?: NodeJS.ProcessEnv; sessions?: (run: RunState) => LeaseSession[]; live?: Parameters<typeof closedForOffer>[2]['live'] };
+
+/**
+ * Closes every place run `runId` holds here for a conversation, then publishes it (`publishSnapshot`): the machine that
+ * takes the run cannot reach one. While one cannot close, nothing is published and the run stays here, where a resume
+ * still reaches it: `kept`, with why, as a clause. Every offer of a run goes through here.
+ */
+async function offerRun(config: LocalConfig, runId: string, { live, ...options }: OfferOptions): Promise<{ kind: 'published'; publication: Result<PublishReceipt> } | { kind: 'kept'; why: string }> {
+  const run = RunIdSchema.safeParse(runId);
+  const why = run.success ? await closedForOffer(config, run.data, { checkout: options.checkout, live }) : undefined;
+
+  return why === undefined ? { kind: 'published', publication: await publishSnapshot(config, runId, options) } : { kind: 'kept', why };
+}
+
+/** Publishes run `runId` as `publishRun` does, with no place of it closed: the end of a run, which no machine goes on with. */
+async function publishSnapshot(config: LocalConfig, runId: string, options: Omit<OfferOptions, 'live'>): Promise<Result<PublishReceipt>> {
   if (!isRunId(runId)) return refused(INVALID_RUN);
 
   if (!usesBranchWorktree(config)) return refused(UNSUPPORTED_REPO);
@@ -763,7 +788,7 @@ export async function publishRunEnd(config: LocalConfig, runId: string, checkout
   const stored = await readRun(config, runId);
 
   if (stored === 'missing' || stored === 'corrupt' || stored.publication === undefined || stored.status === 'running') return undefined;
-  const publishResult = await publishRun(config, runId, { checkout });
+  const publishResult = await publishSnapshot(config, runId, { checkout });
 
   if (publishResult.ok) return undefined;
   const { error } = publishResult;
@@ -801,10 +826,14 @@ async function fleetAttemptOut(config: LocalConfig, run: RunState): Promise<Hand
 
 /**
  * Offers run `runId` on teamai-reports, published from `checkout`, for a person to claim, as a driver nobody attends
- * hands over a step only a person can take. Answers why it could not, as a clause.
+ * hands over a step only a person can take. Closes the places it holds here for a conversation first, as every offer
+ * does (`offerRun`). Answers why it could not, as a clause.
  */
-export async function offerToPerson(config: LocalConfig, runId: string, checkout: string): Promise<string | undefined> {
-  const publication = await publishRun(config, runId, { checkout });
+export async function offerToPerson(config: LocalConfig, runId: string, options: Pick<OfferOptions, 'checkout' | 'live'>): Promise<string | undefined> {
+  const offered = await offerRun(config, runId, options);
+
+  if (offered.kind === 'kept') return offered.why;
+  const { publication } = offered;
 
   if (!publication.ok) return publication.error.message.replace(/\.$/, '');
 

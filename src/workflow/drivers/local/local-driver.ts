@@ -25,7 +25,7 @@ import { failedCommand, placeView, runtimeCommand, runtimeSetup, runtimeStepEnv,
 import { attemptRun, credentialSecrets, HeldPlace, isExecRuntimeTool, readAttemptPlacement, recordInProcessAttempt, attemptRuntimePath, maskAttemptResults, type AttemptRun, type AttemptRuntimeRecord, type RuntimeOrigin } from '../../runtimes/attempt.js';
 import { answerCallTool, hostStepRuntime } from '../../runtimes/host.js';
 import { writeHeldSteps, type HeldSteps } from '../../runtimes/held.js';
-import { closeAfterSweep, closedForOffer, endLeftLogins, releaseHeldPlaces, stopLeftInProcess, stopOnRecordedDriver } from '../../runtimes/cancelled.js';
+import { closeAfterSweep, endLeftLogins, releaseHeldPlaces, stopLeftInProcess, stopOnRecordedDriver } from '../../runtimes/cancelled.js';
 import { loginHolder } from '../../runtimes/login.js';
 import { toolsLaunchDeps, type EngineOptions, type OpenedDriver } from '../../runtimes/sources.js';
 import { newOpId, type ExecAnswer, type ExecQuestion, type StepRuntime } from '@teamai/runtime-protocol/step-runtime';
@@ -936,8 +936,8 @@ async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, given: 
     for (const kept of await releaseHeldPlaces(config, runId, { checkout: root, continued, live })) log.warn(kept.message);
   };
 
-  /** Offers the run to a person once no place stays held here for a conversation, or says, as a clause, why it did not. */
-  const offerHere = async (): Promise<string | undefined> => await closedForOffer(config, runId, { checkout: root, live }) ?? await offerToPerson(config, runId, cwd);
+  /** Offers the run to a person, closing with this driver's runtimes the places it holds, or says, as a clause, why it did not. */
+  const offerHere = async (): Promise<string | undefined> => await offerToPerson(config, runId, { checkout: root, live });
 
   const abandon = async (attempt: AttemptId): Promise<void> => {
     await abandonPlace({ config, lock, attempt });

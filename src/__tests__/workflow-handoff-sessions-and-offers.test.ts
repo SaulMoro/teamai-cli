@@ -822,7 +822,7 @@ describe('offering a run to a runner (#1390)', () => {
 
     const published = await publishRun(alice.config, runId, { env: {}, checkout: alice.checkout });
 
-    expect(published).toMatchObject({ ok: false, error: { code: 'place_kept', message: expect.stringContaining(`attempt ${attempt}`) } });
+    expect(published).toMatchObject({ ok: false, error: { code: 'place_kept', message: expect.stringContaining(`Attempt ${attempt} ran on step runtime "toy" of driver "gone"`) } });
     expect(originFile(acme.origin, `workflows/runs/${runId}/state.json`)).toBeNull();
     expect(JSON.parse(fs.readFileSync(runtime, 'utf8'))).toMatchObject({ phase: 'collected', heldFor: { conversation: { id: 'session-one' } } });
   });
