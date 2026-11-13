@@ -691,6 +691,20 @@ async function removeDeadFile(target: string, owner: string): Promise<boolean> {
 }
 
 /**
+ * The directory of lock `lock` is gone, and the caller asked `acquireLock` not to create it (`createParent: false`), as
+ * a lock inside a data home an uninstall removed asks: creating it again would leave an empty data home behind.
+ */
+export class LockDirectoryGoneError extends Error {
+  readonly lock: string;
+
+  constructor(lock: string) {
+    super(`Cannot acquire lock ${lock}: its directory ${path.dirname(lock)} is gone.`);
+    this.name = 'LockDirectoryGoneError';
+    this.lock = lock;
+  }
+}
+
+/**
  * Try to acquire a lock. Returns false when the lock is held (including a
  * permission-denied or ownerless existing lock); filesystem failures reject
  * with the lock path and original cause, so callers do not retry them as contention.
@@ -708,12 +722,15 @@ async function removeDeadFile(target: string, owner: string): Promise<boolean> {
  *
  * `signal` bounds how long judging a live holder may take (its start is read through ps outside Linux): a holder the
  * read was cut short for is held, so a caller with a budget gets false, never a lock it did not win.
+ *
+ * The lock's directory is created, as a first run needs, unless `createParent` is false: then a directory that is gone
+ * rejects with `LockDirectoryGoneError`, and nothing is created.
  */
 export async function acquireLock(
   lockPath?: string,
-  options: { dryRun?: boolean; signal?: AbortSignal } = {},
+  options: { dryRun?: boolean; signal?: AbortSignal; createParent?: boolean } = {},
 ): Promise<boolean> {
-  const { signal } = options;
+  const { signal, createParent = true } = options;
 
   const resolved = lockPath ?? expandHome(getUpdateLockPath());
 
@@ -733,7 +750,8 @@ export async function acquireLock(
     // From the first real lock on, a best-effort sweep at process exit removes
     // whatever this process still holds (#1027). Dry runs never register it.
     ensureExitSweep();
-    await ensureDir(path.dirname(resolved));
+
+    if (createParent) await ensureDir(path.dirname(resolved));
     // Fast path: no lock present. A live holder means busy; only a stale lock
     // may be reclaimed.
     const first = await createOrInspect(resolved, payload, signal);
@@ -779,6 +797,8 @@ export async function acquireLock(
       throw new Error(`Cannot acquire lock ${resolved}: ${err.file} is ${err.kind}, not a lock file. Remove it, then run the command again.`, { cause: err });
     }
 
+    if (!createParent && errnoCode(err) === 'ENOENT' && !(await fse.pathExists(path.dirname(resolved)))) throw new LockDirectoryGoneError(resolved);
+
     const refused = refusedWrite(err);
 
     throw new Error(`Cannot acquire lock ${resolved}: ${refused ? refusedWriteAdvice(refused) : err instanceof Error ? err.message : String(err)}`, { cause: err });
@@ -819,15 +839,26 @@ export async function releaseLock(lockPath?: string): Promise<void> {
 /**
  * Run `body` holding `lockPath`, trying up to `wait.attempts` times with
  * `wait.delayMs` between tries. `held: false` means the lock stayed busy and
- * `body` did not run.
+ * `body` did not run, or, with `createParent: false`, that the lock's directory
+ * is gone (`isDirectoryGone`), which it does not create.
  */
 export async function withFileLock<T>(
   lockPath: string,
   wait: { attempts: number; delayMs: number },
   body: () => Promise<T>,
-): Promise<{ held: true; value: T } | { held: false }> {
+  { createParent = true }: { createParent?: boolean } = {},
+): Promise<{ held: true; value: T } | { held: false; isDirectoryGone?: true }> {
   for (let attempt = 0; attempt < wait.attempts; attempt++) {
-    if (await acquireLock(lockPath)) {
+    let isAcquired: boolean;
+
+    try {
+      isAcquired = await acquireLock(lockPath, { createParent });
+    } catch (err) {
+      if (err instanceof LockDirectoryGoneError) return { held: false, isDirectoryGone: true };
+      throw err;
+    }
+
+    if (isAcquired) {
       try {
         return { held: true, value: await body() };
       } finally {

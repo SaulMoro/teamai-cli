@@ -867,17 +867,18 @@ function attemptThrough({ config, run, attempt, sends, driver, sources, deadline
       const wasRunRecorded = await isRunRecorded();
 
       // An uninstall holds this lock from its check that no place is open until it has removed the runs, so a run it
-      // removed meanwhile is gone once this takes it, and a place recorded there would have no run to close it.
+      // removed meanwhile is gone once this takes it, and a place recorded there would have no run to close it. A data
+      // home it removed whole is not made again: only a run never recorded before needs it made.
       const recorded = await withFileLock(lock, PLACES_LOCK_WAIT, async () => {
         if (wasRunRecorded && !await isRunRecorded()) return false;
         await save(opening);
 
         return true;
-      });
+      }, { createParent: !wasRunRecorded });
+
+      if (recorded.held ? !recorded.value : recorded.isDirectoryGone) return { ok: false, failure: runtimeFailure(runtime.name, `could not open attempt ${attempt}: its run was removed while it waited on ${lock}, as an uninstall of this scope removes the runs, so it opens no place that nothing would close.`) };
 
       if (!recorded.held) return { ok: false, failure: runtimeFailure(runtime.name, `could not open attempt ${attempt}: ${lock} stays taken, as an uninstall of this scope holds it while it removes the runs. Run the step again once the uninstall ends.`) };
-
-      if (!recorded.value) return { ok: false, failure: runtimeFailure(runtime.name, `could not open attempt ${attempt}: its run was removed while it waited on ${lock}, as an uninstall of this scope removes the runs, so it opens no place that nothing would close.`) };
 
       // A place opened again keeps the handle it recorded until it is ready: one made in steps (a runtime through
       // another) is accepted first with part of its handle, which must not replace the whole one if the rest fails.
