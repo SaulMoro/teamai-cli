@@ -722,7 +722,7 @@ export async function removeWorktreeSetup(checkout: string, { dryRun = false, go
  */
 export type RunWorktree =
   | { kind: 'removable'; dir: string; branch?: string }
-  | { kind: 'kept'; dir: string; why: string };
+  | { kind: 'kept'; dir: string; why: string; isLocked: boolean };
 
 /** Every worktree of the repository of `checkout`, each with the lines `git worktree list --porcelain` gave it. */
 async function listedWorktrees(checkout: string): Promise<{ dir: string; lines: string[] }[] | { error: string }> {
@@ -762,7 +762,7 @@ export async function runWorktreesOf(checkout: string): Promise<{ worktrees: Run
 
     if (found.kind === 'removable' && staying !== undefined) {
       const why = worktrees.find((sorted) => sorted.dir === staying.dir && sorted.kind === 'kept');
-      worktrees.push({ kind: 'kept', dir, why: `it holds the worktree ${staying.dir}, which stays${why?.kind === 'kept' ? ` (${why.why})` : ''}` });
+      worktrees.push({ kind: 'kept', dir, why: `it holds the worktree ${staying.dir}, which stays${why?.kind === 'kept' ? ` (${why.why})` : ''}`, isLocked: false });
     } else worktrees.push(found);
   }
 
@@ -776,24 +776,25 @@ async function runWorktreeAt(dir: string, lines: readonly string[]): Promise<Run
   if (!await pathExists(dir)) return { kind: 'removable', dir, ...branch !== undefined && { branch } };
   const locked = lines.find((line) => line === 'locked' || line.startsWith('locked '));
 
-  if (locked !== undefined) return { kind: 'kept', dir, why: `git keeps it locked${locked === 'locked' ? '' : ` (${locked.slice('locked '.length)})`}` };
+  if (locked !== undefined) return { kind: 'kept', dir, why: `git keeps it locked${locked === 'locked' ? '' : ` (${locked.slice('locked '.length)})`}`, isLocked: true };
+  const kept = (why: string): RunWorktree => ({ kind: 'kept', dir, why, isLocked: false });
 
-  if (branch === undefined) return { kind: 'kept', dir, why: 'its HEAD is detached, so no branch holds its commits' };
+  if (branch === undefined) return kept('its HEAD is detached, so no branch holds its commits');
   // A step may have planted a program in its worktree's config: read it as `unrestoredCopy` does.
   const runGit = untrustedGit(hostGitEnv());
   const status = await copyStatus(dir, runGit);
 
-  if ('error' in status) return { kind: 'kept', dir, why: `git could not tell what changed in it (${status.error})` };
+  if ('error' in status) return kept(`git could not tell what changed in it (${status.error})`);
 
-  if (status.lines.length > 0) return { kind: 'kept', dir, why: `it has changes no commit holds: ${listedPaths(status.lines)}` };
+  if (status.lines.length > 0) return kept(`it has changes no commit holds: ${listedPaths(status.lines)}`);
   // Files git ignores are in no commit either, such as an .env the member copied in. `traditional` names an ignored
   // directory once, rather than each file in a node_modules. teamai's own .teamai/ in it is not the member's.
   const ignored = await runGit(dir, ['status', '--porcelain', '--ignored=traditional', '--untracked-files=normal', '--ignore-submodules=none']);
 
-  if (ignored.code !== 0) return { kind: 'kept', dir, why: `git could not tell which files it ignores in it (${ignored.stderr.trim() || 'git status failed'})` };
+  if (ignored.code !== 0) return kept(`git could not tell which files it ignores in it (${ignored.stderr.trim() || 'git status failed'})`);
   const theirs = ignored.stdout.split('\n').filter((line) => line.startsWith('!! ') && !line.startsWith('!! .teamai/'));
 
-  if (theirs.length > 0) return { kind: 'kept', dir, why: `it holds files git ignores, which no commit holds: ${listedPaths(theirs)}` };
+  if (theirs.length > 0) return kept(`it holds files git ignores, which no commit holds: ${listedPaths(theirs)}`);
 
   return { kind: 'removable', dir, branch };
 }

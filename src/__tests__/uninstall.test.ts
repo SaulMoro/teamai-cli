@@ -2015,6 +2015,19 @@ describe('uninstall', () => {
       expect(git(projectRoot, 'config', '--local', '--list')).not.toMatch(/worktreeconfig/i);
     });
 
+    it('names the command that removes a locked worktree it keeps', async () => {
+      const { projectRoot, worktrees: [locked] } = await projectWithRunWorktrees(['teamai/r0123456789abcdef/fail/p1']);
+      git(projectRoot, 'worktree', 'lock', '--reason', 'on a USB disk', locked);
+
+      await uninstall({ force: true });
+
+      const [realRoot, realLocked] = await Promise.all([fse.realpath(projectRoot), fse.realpath(locked)]);
+      const line = vi.mocked(log.warn).mock.calls.map((call) => String(call[0])).find((warned) => warned.includes(realLocked));
+      expect(line).toContain('on a USB disk');
+      // git refuses a single --force on a locked worktree.
+      expect(line).toContain(`git -C ${realRoot} worktree remove --force --force ${realLocked}`);
+    });
+
     // A run started inside a failed run's worktree puts its own worktree inside that one, which teamai's exclude block hides.
     it('keeps a worktree holding another run\'s worktree it keeps, so the changes in that one stay', async () => {
       const { worktrees: [outer] } = await projectWithRunWorktrees(['teamai/r0123456789abcdef/fail/p1']);

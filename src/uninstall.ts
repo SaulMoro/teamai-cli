@@ -3563,15 +3563,18 @@ function emptiedDirs(plan: RemovalPlan): string[] {
   return [...dirs].sort((a, b) => b.length - a.length);
 }
 
-/** The line naming the run worktree `dir`, kept for `why`, with the command that removes it from `checkout`'s repository. */
-function keptRunWorktreeLine({ checkout, dir, why }: { checkout: string; dir: string; why: string }): string {
-  return `Kept the workflow run worktree ${dir}: ${why}. Save what you need, then remove it with \`git -C ${checkout} worktree remove --force ${dir}\`. `
+/**
+ * The line naming the run worktree `dir`, kept for `why`, with the command that removes it from `checkout`'s repository:
+ * git removes a locked one only when forced twice.
+ */
+function keptRunWorktreeLine({ checkout, dir, why, isLocked = false }: { checkout: string; dir: string; why: string; isLocked?: boolean }): string {
+  return `Kept the workflow run worktree ${dir}: ${why}. Save what you need, then remove it with \`git -C ${checkout} worktree remove --force ${isLocked ? '--force ' : ''}${dir}\`. `
     + `While it is there, teamai's workflow worktree setup in ${checkout} stays with it: its block in the git exclude file and extensions.worktreeConfig.`;
 }
 
 function warnKeptRunWorktrees(runWorktrees: RemovalPlan['runWorktrees']): void {
   for (const { checkout, worktree } of runWorktrees) {
-    if (worktree.kind === 'kept') log.warn(keptRunWorktreeLine({ checkout, dir: worktree.dir, why: worktree.why }));
+    if (worktree.kind === 'kept') log.warn(keptRunWorktreeLine({ checkout, ...worktree }));
   }
 }
 
