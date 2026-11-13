@@ -449,9 +449,10 @@ async function holdsRunRecord(config: LocalConfig, run: RunId): Promise<boolean>
 /**
  * Removes the directory a member kept attempt `attempt` of run `run` in, with the run's own folders once they hold
  * nothing else: a member holds no record of the run, so nothing else ends them. A member never claims a run whose
- * record its data home holds, so the folder is never the owner's.
+ * record its data home holds, and a record that reached it since, as a takeover into it brings one, owns the folder.
  */
 async function removeEndedAttempt(config: LocalConfig, run: RunId, attempt: AttemptId): Promise<void> {
+  if (await holdsRunRecord(config, run)) return;
   const dir = attemptDir(config, run, attempt);
   await fs.rm(dir, { recursive: true, force: true });
 
