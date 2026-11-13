@@ -1220,6 +1220,23 @@ describe('a restarted member', () => {
     }
   }, 60_000);
 
+  it('leaves an offer of a run whose record its own data home holds, and what the owner keeps of the attempt', async () => {
+    const { alice, bob, run, offered } = await offerSlow(60_000, { definition: AGAIN.replace('test -f left.txt && echo again > again.txt', 'echo again > again.txt'), command: 'echo again > again.txt' });
+    // The run's owner shares this member's data home: the run's record and the attempt's runtime record are the owner's.
+    fs.mkdirSync(path.dirname(runFilePath(bob.config, run)), { recursive: true });
+    fs.copyFileSync(runFilePath(alice.config, run), runFilePath(bob.config, run));
+    const runtime = attemptRuntimePath(bob.config, run, offered.attempt);
+    fs.mkdirSync(path.dirname(runtime), { recursive: true });
+    fs.writeFileSync(runtime, '{"phase":"open"}');
+
+    for (let pass = 0; pass < 2; pass++) {
+      expect(await takeFleetAttempt(bob.config, { pool: 'default', repository: 'github.com/acme/business', root: bob.checkout, member: await installOwner(bob.config), secrets: {}, place: HERE })).toEqual({ data: { idle: { offered: 0 } } });
+    }
+
+    expect(await recordOf(alice, run)).toMatchObject({ state: 'offered' });
+    expect(fs.readFileSync(runtime, 'utf8')).toBe('{"phase":"open"}');
+  }, 60_000);
+
   it('removes what it kept of an attempt once its record ended, at its next take', async () => {
     const { alice, bob, run, offered } = await offerSlow(60_000, { definition: AGAIN.replace('test -f left.txt && echo again > again.txt', 'echo again > again.txt'), command: 'echo again > again.txt' });
     await readableReportsWorktree(bob.config);
@@ -1245,12 +1262,6 @@ describe('a restarted member', () => {
 
     bob.config.workflows = { tools: {}, ...bob.config.workflows, retention: '1s' };
     await new Promise((resolve) => setTimeout(resolve, 1_100));
-    // The run's owner on this machine, in the same data home: the attempt's folder is its record, which its own
-    // retention ends.
-    fs.copyFileSync(runFilePath(alice.config, run), runFilePath(bob.config, run));
-    expect(await take()).toEqual({ data: { idle: { offered: 0 } } });
-    expect(fs.existsSync(attemptDir(bob.config, run, offered.attempt))).toBe(true);
-    fs.rmSync(runFilePath(bob.config, run));
     expect(await take()).toEqual({ data: { idle: { offered: 0 } } });
     expect(fs.existsSync(attemptDir(bob.config, run, offered.attempt))).toBe(false);
   }, 60_000);
