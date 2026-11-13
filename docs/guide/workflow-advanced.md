@@ -1446,6 +1446,7 @@ Every refusal is one JSON envelope with `error.code`, `error.message`, and the e
 | `owner_active` | The owner wrote the running run within the last hour and nobody offers it, so its driver may be running a step. Carries `owner` and `wroteAt`. | Ask the owner to stop it and publish it. Once it stopped, `resume <run> --claim --confirmed`; unattended, wait for the hour to pass. |
 | `run_offered` | A `next` without a claim on a run this install offers. | Take the offer back: `resume <run>`, or `"claim": true` on the next. |
 | `driver_running` | `publish` while a local driver of the run runs on this machine, or the skill driver runs one of its steps here. | Stop that driver, or wait until the skill driver reports the step, then publish. |
+| `place_kept` | `publish` of a run that holds a place here for a conversation, which its step runtime could not close: a machine that took the run could not reach it. Nothing was published, and the run stays on this machine. | Resume it here, or publish it again once its step runtime can close the place. |
 | `state_moved` | The run changed while this machine prepared its claim or its publish: on `teamai-reports` for a claim, on this machine for a publish. Nothing was claimed or published. | Claim again, or publish again. |
 | `state_conflict` | `teamai-reports` holds a later state than this machine last saw. | Run `resume <run>` to take the published state. |
 | `run_not_published` | Nobody published the run. | Publish it from the machine that has it. |
@@ -1727,7 +1728,7 @@ runtimes:
   - use: tools
 ```
 
-The entry is one runtime to the run, named `my-app through my-sandbox` in its messages. Where the tool runs comes from the outer runtime (`my-sandbox`): the isolation, env credentials, setup and command steps. How the tool is launched comes from the inner one (`my-app`): its tools, workspaces, HITL and turn ending. The entry also takes the `clone` and `team` workspaces the outer prepares. It offers `permissions: unattended` only for a tool the inner runs in full access, and runs no confined step. The step's sign-in goes to the outer, which hands it to the tool; the inner gets only its own credentials.
+The entry is one runtime to the run, named `my-app through my-sandbox` in its messages. Where the tool runs comes from the outer runtime (`my-sandbox`): the isolation, env credentials, setup and command steps. How the tool is launched comes from the inner one (`my-app`): its tools, workspaces, HITL and turn ending. The entry also takes the `clone` and `team` workspaces the outer prepares. It offers `permissions: unattended` only for a tool the inner runs in full access, and none when the inner refuses unattended prompts itself, as T3 and Paseo do. It runs no confined step. The step's sign-in goes to the outer, which hands it to the tool; the inner gets only its own credentials.
 
 teamai opens the outer, then the inner. It stops and closes the inner first, and keeps the outer's place while the inner cannot confirm its stop. That includes a teamai killed while the inner opened its place: no handle teamai recorded names that place, so `workflow cancel` keeps the outer's place and says so until you close the inner's yourself and release the attempt.
 
@@ -1951,7 +1952,7 @@ teamai workflow start review --driver containers
 teamai reads each variable once, when the run starts or resumes. One that is unset stops the start before any step runs:
 
 ```text
-{"error":{"code":"credential_missing","message":"Runtime \"sandbox\" of driver definition ~/.teamai/projects/…/team-repo/drivers/containers.yaml declares credential CLAUDE_CODE_OAUTH_TOKEN: env:CLAUDE_CODE_OAUTH_TOKEN, and CLAUDE_CODE_OAUTH_TOKEN is not set in your environment. Set CLAUDE_CODE_OAUTH_TOKEN, then start again."}}
+{"error":{"code":"credential_missing","message":"Runtime \"sandbox\" of driver definition drivers/containers.yaml in the team repo declares credential CLAUDE_CODE_OAUTH_TOKEN: env:CLAUDE_CODE_OAUTH_TOKEN, and CLAUDE_CODE_OAUTH_TOKEN is not set in your environment. Set CLAUDE_CODE_OAUTH_TOKEN, then start again."}}
 ```
 
 A runtime entry that declares no credential, neither an `env:` one nor a login, gets the tool sign-in variables set in your environment instead, by name: Claude's `CLAUDE_CODE_OAUTH_TOKEN`, `ANTHROPIC_API_KEY` or `ANTHROPIC_AUTH_TOKEN` (with `ANTHROPIC_BASE_URL`), Codex's `OPENAI_API_KEY` or `CODEX_API_KEY`, and CodeBuddy's `CODEBUDDY_API_KEY` or `CODEBUDDY_AUTH_TOKEN`. So the team's definition can name only the tool, and each member signs it in their own way. Their values are masked like any credential. teamai sends them only to a runtime that runs the tool's process itself and offers `can.env`, and each only to the tool it signs in: with `ANTHROPIC_API_KEY` and `OPENAI_API_KEY` both set, a Claude step gets `ANTHROPIC_API_KEY` alone, and a Codex step `OPENAI_API_KEY` alone. A runtime that launches agents its own way signs them in where it runs them, and teamai sends it none; like any runtime, its process still starts with your environment.
