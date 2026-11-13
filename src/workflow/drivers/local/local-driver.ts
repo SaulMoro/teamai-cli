@@ -11,7 +11,7 @@ import type { LocalConfig, TeamaiConfig } from '../../../types.js';
 import { log, PROGRESS_STREAMS_ENV, streamOfLine, withoutStreamMarks } from '@teamai/shared/log';
 import { redact } from '@teamai/shared/redact';
 import { openSessionArchive } from '../../../session-flow/archive.js';
-import { agentEvidence, attemptEnv } from '../../attempt-marker.js';
+import { agentEvidence, commandStepEnv } from '../../attempt-marker.js';
 import { continuedConversations, leaseNext, promptTool, type PersonHandoff, type ReportInput, type ToolFor } from '../../engine.js';
 import { offeredToPerson, offerToPerson, reconcileTakenCopies } from '../../handoff.js';
 import { UsageLimits } from '../../usage-limits.js';
@@ -1477,7 +1477,7 @@ async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, given: 
 
             // The lease `env` is set over the step's environment, so its values reach the shell only as variables.
             const input: Parameters<typeof startGroupedCommand>[0] = {
-              command, cwd: lease.cwd ?? root, env: { ...lease.processEnv ?? process.env, ...lease.env, ...attemptEnv(config, runId, lease.attempt, mode), [PROGRESS_STREAMS_ENV]: '1' }, detached, group: attemptDir(config, runId, lease.attempt),
+              command, cwd: lease.cwd ?? root, env: { ...lease.processEnv ?? process.env, ...lease.env, ...commandStepEnv(config, runId, lease.attempt, mode), [PROGRESS_STREAMS_ENV]: '1' }, detached, group: attemptDir(config, runId, lease.attempt),
             };
 
             const { progress } = options;

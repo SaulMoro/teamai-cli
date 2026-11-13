@@ -45,7 +45,7 @@ import { durationMs } from './utils/duration.js';
 import { findRunConfig } from './workflow/run-location.js';
 import { ATTEMPT_ENV, resolveRunMode } from './launch-context.js';
 import { memberTools } from './workflow/member-tools.js';
-import { agentEvidence, isAttemptRunner, nestedCall, nestedStart, nestedWorkflowError, type Nested } from './workflow/attempt-marker.js';
+import { agentEvidence, isAttemptRunner, isCommandStep, nestedCall, nestedStart, nestedWorkflowError, type Nested } from './workflow/attempt-marker.js';
 import { planBenchmark, planStep, tryBenchmarkTask } from './benchmark/start.js';
 import { outdatedBenchmarkPlan } from './benchmark/trial.js';
 import { reportBenchmark } from './benchmark/report.js';
@@ -521,8 +521,9 @@ export interface ShortcutStart {
   /** What the person and the agent run in place of the shortcut, when an agent session's start is refused. */
   instead?: string;
   /**
-   * A command that starts a default workflow for you, whose run inside a workflow attempt is part of that step: the
-   * attempt marker refuses it nothing, `invoke` judges the agent session it runs in, and it starts as the CLI's.
+   * A command that starts a default workflow for you, whose run inside a command step (`isCommandStep`) is part of that
+   * step: the attempt marker refuses it nothing, `invoke` judges the agent session it runs in, and it starts as the CLI's.
+   * In any other process of an attempt it answers `nested_workflow`.
    */
   canRunInStep?: boolean;
   answer?: (config: LocalConfig, runId: string, driven: WorkflowEnvelope) => Promise<WorkflowEnvelope | undefined>;
@@ -543,7 +544,7 @@ export interface ShortcutStart {
 export async function startWorkflow(name: string, options: StartOptions, shortcut: ShortcutStart = {}): Promise<WorkflowEnvelope | undefined> {
   const asked = askedDriver(options.driver);
   // The skill driver's turns run in an agent session rather than in the step's process, so its run is never part of the step.
-  const isInStep = shortcut.canRunInStep === true && !asks(asked, 'skill') && nestedCall(process.env) !== undefined;
+  const isInStep = shortcut.canRunInStep === true && !asks(asked, 'skill') && isCommandStep(process.env);
 
   if (!shortcut.asCli && !isInStep && refusedNested(await nestedStart(process.env, process.cwd()), asks(asked, 'skill'))) return undefined;
 
@@ -2150,12 +2151,12 @@ export async function selfImprovementRun(scorer: string, options: { suite: strin
   await startWorkflow(SELF_IMPROVEMENT_WORKFLOW, start, { byDefault, canRunInStep: true });
 }
 
-/** The driver a command's `--driver` names, else local inside a step, else what `workflows.driver` decides, which `byDefault` carries for the start to say. */
+/** The driver a command's `--driver` names, else local inside a command step, else what `workflows.driver` decides, which `byDefault` carries for the start to say. */
 export async function shortcutDriver(config: LocalConfig, asked: string | undefined): Promise<{ driver?: string; byDefault?: DefaultDrive }> {
   if (asked !== undefined) return { driver: asked };
 
-  // Inside a workflow attempt the run is part of the step, so the step's own process drives it.
-  if (nestedCall(process.env) !== undefined) return { driver: LOCAL_DRIVER };
+  // Inside a command step the run is part of the step, so the step's own process drives it.
+  if (isCommandStep(process.env)) return { driver: LOCAL_DRIVER };
   const byDefault = await driveByDefault(config);
 
   return { driver: byDefault.kind === 'drive' ? byDefault.driver : undefined, byDefault };

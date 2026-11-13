@@ -1339,7 +1339,7 @@ outputs: { text: steps.report.outputs.text }
   it.each([
     { command: 'benchmark run', start: () => benchmarkRun('fix', {}) },
     { command: 'self-improvement run', start: () => selfImprovementRun('quality', { suite: 'fix' }) },
-  ])('$command inside a workflow step drives its run in the step\'s process on the local driver, whatever workflows.driver names', async ({ start }) => {
+  ])('$command inside a command step drives its run in the step\'s process on the local driver, whatever workflows.driver names', async ({ start }) => {
     await pulledTeam(marked('teamai-benchmark', '{ suite: string }'), {
       'teamai.yaml': 'team: acme\nrepo: https://github.com/acme/team.git\nprovider: git\nworkflows: { driver: acme-sandbox }\n',
       'workflows/teamai-self-improvement.yaml': marked('teamai-self-improvement', '{ scorer: string, suite: string }'),
@@ -1347,6 +1347,7 @@ outputs: { text: steps.report.outputs.text }
     const config = state.config;
     if (config === undefined) throw new Error('no member');
     vi.stubEnv('TEAMAI_WORKFLOW_ATTEMPT', 'r0123456789abcdef/a0123456789');
+    vi.stubEnv('TEAMAI_WORKFLOW_STEP_COMMAND', 'r0123456789abcdef/a0123456789');
 
     const answer = await capture(start);
 
@@ -1354,6 +1355,21 @@ outputs: { text: steps.report.outputs.text }
     const run = await readRun(config, z.object({ run: z.string() }).parse(answer.data?.done).run);
     expect(run).toMatchObject({ status: 'succeeded', startedBy: 'cli' });
     expect(run).not.toHaveProperty('awaits');
+  });
+
+  it.each([
+    { command: 'benchmark run', start: () => benchmarkRun('fix', {}) },
+    { command: 'self-improvement run', start: () => selfImprovementRun('quality', { suite: 'fix' }) },
+  ])('refuses the $command that a prompt step\'s tool with no session variable runs, as nested_workflow', async ({ start }) => {
+    await pulledTeam(marked('teamai-benchmark', '{ suite: string }'), {
+      'workflows/teamai-self-improvement.yaml': marked('teamai-self-improvement', '{ scorer: string, suite: string }'),
+    });
+    const config = state.config;
+    if (config === undefined) throw new Error('no member');
+    vi.stubEnv('TEAMAI_WORKFLOW_ATTEMPT', 'r0123456789abcdef/a0123456789');
+
+    expect(await capture(start)).toMatchObject({ error: { code: 'nested_workflow' } });
+    expect(fs.existsSync(runsDir(config)) ? fs.readdirSync(runsDir(config)) : []).toEqual([]);
   });
 });
 

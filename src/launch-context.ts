@@ -80,6 +80,12 @@ export function resolveRunMode(env: NodeJS.ProcessEnv): RunMode {
  */
 export const ATTEMPT_ENV = 'TEAMAI_WORKFLOW_ATTEMPT';
 
+/**
+ * The variable every driver sets only in the process of a `command` step, to the same `<run>/<attempt>` as
+ * {@link ATTEMPT_ENV}: the one process of an attempt whose shortcut command may run its own run as part of the step.
+ */
+export const STEP_COMMAND_ENV = 'TEAMAI_WORKFLOW_STEP_COMMAND';
+
 // The runtime protocol owns it, so a runtime's agent gets it as it gets RUN_DIR_ENV.
 export { WORKFLOW_DIR_ENV } from '@teamai/runtime-protocol';
 

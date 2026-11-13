@@ -13,7 +13,7 @@ import type { RunMode } from '../../../launch-context.js';
 import type { LocalConfig } from '../../../types.js';
 import { writeFileAtomic } from '../../../utils/fs.js';
 import { redact } from '@teamai/shared/redact';
-import { attemptEnv } from '../../attempt-marker.js';
+import { attemptEnv, commandStepEnv } from '../../attempt-marker.js';
 import { runConfinedStep, type ConfinedStepEnd, type ConfinedStepLease } from '../../confined-step.js';
 import { STALE_WINDOW_MS } from '../../handoff.js';
 import { commandEnd, continuedAttempt, refuseDirtyAdoptedCommand, type WorkflowClient } from '../../protocol.js';
@@ -455,7 +455,7 @@ async function setUp(context: SkillContext, run: RunId, attempt: AttemptId, prep
  * stops it. Keeps its masked output in `output.log`, and answers with that masked `output`.
  */
 async function runCommand(context: SkillContext, run: RunId, attempt: AttemptId, stage: Extract<Stage, { kind: 'run' }>): Promise<GroupedCommandExit> {
-  const command = context.runners.command({ run, attempt, command: stage.command, cwd: stage.dir, env: { ...stage.env, ...attemptEnv(context.config, run, attempt, stage.mode) } });
+  const command = context.runners.command({ run, attempt, command: stage.command, cwd: stage.dir, env: { ...stage.env, ...commandStepEnv(context.config, run, attempt, stage.mode) } });
   const exited = (await whileOpen(context, run, attempt, { work: command.exit, stop: async () => { await command.stop(); }, phases: ['running'], expiresAt: stage.expiresAt })) ?? (await command.stop());
   const output = redact(exited.output, { envSecrets: context.env.secrets, patterns: false });
   await writeFileAtomic(path.join(attemptDir(context.config, run, attempt), 'output.log'), output);

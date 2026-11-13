@@ -15,7 +15,7 @@ vi.mock('../config.js', async (importOriginal) => ({
 }));
 
 import { syncScorersThenWorkflows } from '../scorers/team-sync.js';
-import { ATTEMPT_ENV, type RunMode } from '../launch-context.js';
+import { ATTEMPT_ENV, STEP_COMMAND_ENV, type RunMode } from '../launch-context.js';
 import { saveLocalConfig } from '../config.js';
 import { dataHomeKey } from '../dashboard-collector.js';
 import { syncScorerDefinitions } from '../scorers/cache.js';
@@ -1225,13 +1225,14 @@ describe('teamai score of a subject the person names', () => {
   it.each<[string, ScoreOptions]>([
     ['with a scorer', { session: SESSION, source: 'claude-code', scorer: ['quality'] }],
     ['with a scorer file', { session: SESSION, source: 'claude-code', scorer: ['./draft.md'] }],
-  ])('judges a session %s inside a workflow step, in the step\'s process on the local driver, whatever workflows.driver names', async (_case, options) => {
+  ])('judges a session %s inside a command step, in the step\'s process on the local driver, whatever workflows.driver names', async (_case, options) => {
     const { config } = await team({ 'teamai.yaml': 'team: acme\nrepo: https://example.com/acme/team.git\nworkflows: { driver: acme-sandbox }\n' });
     await syncScorersThenWorkflows(config);
     claudeSession(SESSION, 'Added the retries.');
     fakeClaude();
     fs.writeFileSync(path.join(root, 'app', 'draft.md'), SCORER);
     vi.stubEnv(ATTEMPT_ENV, 'r0123456789abcdef/a0123456789');
+    vi.stubEnv(STEP_COMMAND_ENV, 'r0123456789abcdef/a0123456789');
 
     const inStep = await scored(options);
 
@@ -1243,10 +1244,25 @@ describe('teamai score of a subject the person names', () => {
     expect(inStep.envelope).toMatchObject({ data: { done: { run: ran?.id } } });
   });
 
-  it('refuses the teamai score an agent runs inside a workflow step, as it refuses that agent anywhere', async () => {
+  it.each<[string, ScoreOptions]>([
+    ['with a scorer', { session: SESSION, source: 'claude-code', scorer: ['quality'] }],
+    ['with a scorer file', { session: SESSION, source: 'claude-code', scorer: ['./draft.md'] }],
+  ])('refuses the teamai score %s that a prompt step\'s tool with no session variable runs, as nested_workflow', async (_case, options) => {
+    const { config } = await team();
+    claudeSession(SESSION, 'Added the retries.');
+    fakeClaude();
+    fs.writeFileSync(path.join(root, 'app', 'draft.md'), SCORER);
+    vi.stubEnv(ATTEMPT_ENV, 'r0123456789abcdef/a0123456789');
+
+    expect(await scored(options)).toMatchObject({ envelope: { error: { code: 'nested_workflow' } }, code: 1 });
+    expect(await readRuns(config)).toEqual([]);
+  });
+
+  it('refuses the teamai score an agent runs inside a command step, as it refuses that agent anywhere', async () => {
     const { config } = await team();
     claudeSession(SESSION, 'Added the retries.');
     vi.stubEnv(ATTEMPT_ENV, 'r0123456789abcdef/a0123456789');
+    vi.stubEnv(STEP_COMMAND_ENV, 'r0123456789abcdef/a0123456789');
     vi.stubEnv('CLAUDE_CODE_SESSION_ID', 'agent-session');
 
     expect(await scored({ session: SESSION, source: 'claude-code', scorer: ['quality'] })).toEqual({ envelope: { error: {
