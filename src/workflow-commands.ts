@@ -1357,7 +1357,7 @@ export async function workflowCancel(runId: string, step?: string, options: { re
     // Cancelled under the run's lock, no driver of the run starts between the cancel and the stop. A run that already
     // settled is stopped again, so an attempt its runtime could not stop before is tried once more.
     const taken = await takeRunLock(config, run.data, async (lock): Promise<WorkflowEnvelope> => {
-      const cancelled = await cancelRun(config, runId, secrets, step);
+      const cancelled = await cancelRun(config, runId, secrets, step, undefined, { isDriverLockHeld: true });
       const isSettled = 'error' in cancelled && cancelled.error.code === 'run_settled';
       const stopped = !('error' in cancelled) || isSettled ? await stopCancelledAttempts(config, lock, { isRunnerHolding: isSkillRunnerHolding, release: release?.data }) : undefined;
 

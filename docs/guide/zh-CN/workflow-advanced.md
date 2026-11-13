@@ -641,7 +641,7 @@ finally:
 outputs: { summary: steps.summary.outputs.text }
 ```
 
-`finally` 步骤在运行的步骤都结束后运行，无论它们如何结束：成功、失败、超时或被取消。它们是命令，只读，没有自己的工作区，只带 `id`、`needs`、`if`、`command`、`env`、`output` 和 `timeout`。它们运行期间，运行保持 `running`，最多 10 分钟，然后以其步骤达到的结果结束：失败的 `finally` 步骤从不改变它。`done.finally` 列出每个失败或被取消的 `finally` 步骤及其失败原因。在它们运行期间执行 `workflow cancel` 会结束它们和这次运行。带 `finally` 的工作流只能作为独立的运行运行，从不作为另一个工作流的步骤。
+`finally` 步骤在运行的步骤都结束后运行，无论它们如何结束：成功、失败、超时或被取消。它们是命令，只读，没有自己的工作区，只带 `id`、`needs`、`if`、`command`、`env`、`output` 和 `timeout`。它们运行期间，运行保持 `running`，最多 10 分钟，然后以其步骤达到的结果结束：失败的 `finally` 步骤从不改变它。`done.finally` 列出每个失败或被取消的 `finally` 步骤及其失败原因。在它们运行期间执行 `workflow cancel` 会结束它们和这次运行。取消时如果没有驱动在推进这次运行（本机上的本地驱动已停止，或者从没有驱动领取它），运行会立即结束：它的 `finally` 步骤不会运行，`done.finally` 把每一个都列为已取消。带 `finally` 的工作流只能作为独立的运行运行，从不作为另一个工作流的步骤。
 
 `done.outputs` 带工作流的顶层 `outputs`，在 `finally` 之后解析，所以它们可以读取 `finally` 步骤。所属步骤失败的输出会被省略。
 

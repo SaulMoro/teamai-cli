@@ -24,6 +24,7 @@ import { answerHitl, cancel, cancellable, redeliver, repend, resetIteration, res
 import { parseTemplate, templatePaths, templatedTexts } from './template.js';
 import type { DriverIdentity, RunState, WorkflowEnvelope, WorkflowFailure } from './types.js';
 import { isIsolated } from './workspace.js';
+import { driverIdentity } from '../driver-identity.js';
 import { retryCommand } from './runtimes/retry-command.js';
 import { stopLeftInProcess } from './runtimes/cancelled.js';
 import { LOGIN_TOOLS, loginHolder } from './runtimes/login.js';
@@ -267,8 +268,27 @@ export async function respondToHitl(config: LocalConfig, runId: string, secrets:
   });
 }
 
-/** Stops a whole run or one open step and invalidates the attempts it cancelled. */
-export async function cancelRun(config: LocalConfig, runId: string, secrets: Record<string, string>, step?: string, failure: WorkflowFailure = { code: 'cancelled', message: 'Cancelled by teamai workflow cancel' }): Promise<WorkflowEnvelope> {
+/**
+ * Whether no driver will lease the `finally` steps of `run` once a cancel holds its driver lock on this machine: no driver
+ * took a step of it, or the last one was this machine's local driver, which held that lock while it lived.
+ */
+function isUndriven(run: RunState): boolean {
+  return run.driver === undefined || (run.driver.kind === 'local' && run.driver.machine === driverIdentity('local', run.driver.workspace).machine);
+}
+
+/**
+ * Stops a whole run or one open step and invalidates the attempts it cancelled. A whole run whose driver lock the caller
+ * holds (`isDriverLockHeld`) and that no driver drives ends at once: its `finally` steps are cancelled too, since nothing
+ * would lease them and it would stay `running`.
+ */
+export async function cancelRun(
+  config: LocalConfig,
+  runId: string,
+  secrets: Record<string, string>,
+  step?: string,
+  failure: WorkflowFailure = { code: 'cancelled', message: 'Cancelled by teamai workflow cancel' },
+  { isDriverLockHeld = false }: { isDriverLockHeld?: boolean } = {},
+): Promise<WorkflowEnvelope> {
   return controlRun(config, runId, secrets, async (run, now, finish) => {
     if (run.status !== 'running') return settledRunError(run);
 
@@ -290,6 +310,11 @@ export async function cancelRun(config: LocalConfig, runId: string, secrets: Rec
     if (step === undefined) {
       changed = stopWhere(run, () => true, failure, run.revision, now);
       await finish({ outcome: 'cancelled', settledAt: run.revision });
+
+      if (run.finalizing && isDriverLockHeld && isUndriven(run)) {
+        changed.push(...stopWhere(run, () => true, { code: 'cancelled', message: `Not run: no driver was driving run ${run.id} when teamai workflow cancel ended it` }, run.revision, now));
+        await finish({ outcome: 'cancelled', settledAt: run.revision });
+      }
     } else {
       const state = run.steps.find((s) => s.id === step);
 

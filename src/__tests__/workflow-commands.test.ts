@@ -25,7 +25,8 @@ import { acquireLock, releaseLock } from '../update.js';
 import { leaseNext, startRun } from '../workflow/engine.js';
 import { publishRun, resumeRun } from '../workflow/handoff.js';
 import { driverLockPath, readRun, runFilePath, runsDir } from '../workflow/store.js';
-import { benchmarkRun, selfImprovementRun, workflowNext, workflowPublish, workflowReport, workflowRespond, workflowResume, workflowRetry, workflowStart } from '../workflow-commands.js';
+import { benchmarkRun, selfImprovementRun, workflowCancel, workflowNext, workflowPublish, workflowReport, workflowRespond, workflowResume, workflowRetry, workflowStart } from '../workflow-commands.js';
+import { driverIdentity } from '../driver-identity.js';
 import { loadLocalConfigForScope } from '../config.js';
 import { knownSecrets } from '../env-resolution.js';
 import { sharedTeam, skillHarness, untilStopped } from './helpers/skill-harness.js';
@@ -1353,5 +1354,52 @@ outputs: { text: steps.report.outputs.text }
     const run = await readRun(config, z.object({ run: z.string() }).parse(answer.data?.done).run);
     expect(run).toMatchObject({ status: 'succeeded', startedBy: 'cli' });
     expect(run).not.toHaveProperty('awaits');
+  });
+});
+
+describe('workflow cancel of a run with finally steps', () => {
+  async function startTidied(): Promise<{ config: LocalConfig; runId: string }> {
+    const config = testConfig();
+    state.config = config;
+    fs.writeFileSync(path.join(config.repo.localPath, 'workflows', 'tidied.yaml'), `schemaVersion: v1alpha1
+name: tidied
+description: Work, then tidy whatever happened.
+steps:
+  - id: work
+    command: node work.js
+finally:
+  - id: tidy
+    command: node tidy.js
+`);
+    await syncScorersThenWorkflows(config);
+    const started = await startRun(config, 'tidied', {}, { secrets: await knownSecrets(config) });
+    if ('error' in started) throw new Error(started.error.message);
+    return { config, runId: String(started.data.run) };
+  }
+
+  const script = { kind: 'ci-script', machine: 'runner', workspace: '/ci' };
+
+  it.each([
+    { by: 'whose local driver on this machine stopped', driver: driverIdentity('local', process.cwd()) },
+    { by: 'that no driver took', driver: undefined },
+  ])('ends a run $by at once, and names each finally step no driver ran', async ({ driver: leasing }) => {
+    const { config, runId } = await startTidied();
+    if (leasing) expect(await leaseNext(config, runId, leasing)).toMatchObject({ data: { lease: { step: 'work' } } });
+
+    expect(await capture(() => workflowCancel(runId))).toMatchObject({ data: { cancelled: { steps: expect.arrayContaining(['tidy']) }, run: { status: 'cancelled' } } });
+
+    expect(await capture(() => workflowNext(runId, { json: JSON.stringify({ driver: script }) }))).toMatchObject({ data: { done: {
+      outcome: 'cancelled',
+      finally: [{ id: 'tidy', outcome: 'cancelled', failure: { code: 'cancelled', message: `Not run: no driver was driving run ${runId} when teamai workflow cancel ended it` } }],
+    } } });
+  });
+
+  it('leaves the finally steps of a run another driver drives to that driver, which runs them on its next lease', async () => {
+    const { config, runId } = await startTidied();
+    expect(await leaseNext(config, runId, script)).toMatchObject({ data: { lease: { step: 'work' } } });
+
+    expect(await capture(() => workflowCancel(runId))).toMatchObject({ data: { run: { status: 'running', finalizing: { outcome: 'cancelled' } } } });
+
+    expect(await capture(() => workflowNext(runId, { json: JSON.stringify({ driver: script }) }))).toMatchObject({ data: { lease: { step: 'tidy' } } });
   });
 });
