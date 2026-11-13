@@ -14,6 +14,7 @@ import { WorkflowFolder } from '../folder.js';
 import { attemptResultPath, runScratchDir, type RunId } from '../store.js';
 import type { WorkflowFailure } from '../types.js';
 import { git } from '../worktree.js';
+import { isWithin, samePath } from '../../utils/agent-path.js';
 import { UsageLimits } from '../usage-limits.js';
 import type { LocalConfig } from '../../types.js';
 import { stepPrompt, toolLauncher, withoutPrompt, type ToolClosed, type ToolLauncher } from '@teamai/tool-launch/run-step-launch';
@@ -32,9 +33,9 @@ const STDERR_KEPT = 64 * 1024;
 
 /**
  * What the attempt of `lease` gives its runtime: the worktree `cwd` read-write at its host path, its git paths read-only
- * (the common git directory, the worktree's admin directory, which holds `config.worktree`, and the `.git` pointer), the
- * workflow folder its env names read-only, the result directory read-write, and the tool home under the variable its
- * tool reads.
+ * (the common git directory, with the worktree's admin directory inside it, which holds `config.worktree`, and the
+ * `.git` pointer), the workflow folder its env names read-only, the result directory read-write, and the tool home
+ * under the variable its tool reads.
  */
 export async function placeView(config: LocalConfig, run: RunId, lease: Pick<LeaseWire, 'attempt' | 'env'>, cwd: string, toolHome?: { variable: string; dir: string }): Promise<PlaceView> {
   const { attempt } = lease;
@@ -42,7 +43,11 @@ export async function placeView(config: LocalConfig, run: RunId, lease: Pick<Lea
   const listed = await git(cwd, ['rev-parse', '--path-format=absolute', '--git-common-dir', '--git-dir']);
   const gitDirs = listed.code === 0 ? listed.stdout.split('\n').map((line) => line.trim()).filter((line) => line !== '') : [];
   const pointer = path.join(cwd, '.git');
-  const readonly = [...new Set([...gitDirs, ...(await fs.lstat(pointer).then(() => [pointer], () => [])), ...folder === undefined ? [] : [folder]])];
+  const given = [...new Set([...gitDirs, ...(await fs.lstat(pointer).then(() => [pointer], () => [])), ...folder === undefined ? [] : [folder]])];
+  // A path inside another one, as git's record of a linked worktree in the common git directory, is reached through it.
+  // A runtime mounts each one given at its own path, and Docker Desktop then refuses to remove that path while the
+  // container runs, and makes it again when the container starts after it went.
+  const readonly = given.filter((at) => !given.some((other) => !samePath(other, at) && isWithin(at, other)));
   const result = path.dirname(attemptResultPath(config, run, attempt));
   const runDir = runScratchDir(config, run);
   await Promise.all([fs.mkdir(result, { recursive: true }), fs.mkdir(runDir, { recursive: true })]);
