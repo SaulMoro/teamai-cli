@@ -1,8 +1,8 @@
 /**
  * The scoring the engine and its protocol reach: starting the scoring of settled passes, staging a clone pass's tree as
- * evidence, describe's judging line, and what teamai does on this machine around a benchmark check step, whose command
- * runs where its runtime runs it. `src/workflow/` imports `src/scorers/` only through this module, so the engine never
- * learns how a pass is scored.
+ * evidence, describe's judging line, what teamai does on this machine around a benchmark check step, whose command
+ * runs where its runtime runs it, and why no step of a benchmark run whose plan this teamai cannot read is leased.
+ * `src/workflow/` imports `src/scorers/` only through this module, so the engine never learns how a pass is scored.
  */
 import type { RunMode } from '../launch-context.js';
 import type { LocalConfig } from '../types.js';
@@ -29,6 +29,11 @@ const benchmarkChecks = (): Promise<typeof BenchmarkChecks> => import('../benchm
 /** `prepareCheckPlace` of the benchmark's checks: what teamai does in a check step's place before its command runs. */
 export async function prepareCheckPlace(input: Parameters<typeof BenchmarkChecks.prepareCheckPlace>[0]): ReturnType<typeof BenchmarkChecks.prepareCheckPlace> {
   return (await benchmarkChecks()).prepareCheckPlace(input);
+}
+
+/** `outdatedBenchmarkPlan` of the benchmark's checks: why no driver may lease a step of a run whose plan teamai cannot read. */
+export async function outdatedBenchmarkPlan(run: RunState): Promise<ReturnType<typeof BenchmarkChecks.outdatedBenchmarkPlan>> {
+  return (await benchmarkChecks()).outdatedBenchmarkPlan(run);
 }
 
 /** `decideCheckReport` of the benchmark's checks: a check step's output, decided from its exit code. */

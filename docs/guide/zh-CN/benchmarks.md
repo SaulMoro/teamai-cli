@@ -763,7 +763,7 @@ $ teamai benchmark run fix-auth --sandbox
 - **卡住的 trial**: 没有 [`trial.timeout`](#trial-限制) 时，一个永不返回的工具会一直运行到套件超时，它之后的每个 trial 结算为 `not_run`。
 - **评判**: 带 `successCriteria` 的任务和套件的评分器由运行自己的 `score` 步骤评判，它在 trial 之后、`report` 之前运行，每个评分器[对所有 arm 用同一个评判](#对所有-arm-用同一个评判)。机器上没有安装某个评分器的评判工具，或该工具不能以评分器要求的隔离级别运行它的模型时，需要评判的套件在启动时被拒绝。
 - **控制命令**: trial 的步骤要等运行的 `plan` 步骤报告后才存在。在此之前，对 trial 步骤执行 `teamai workflow cancel <run> <step>` 会返回 `step_not_found`。benchmark 运行是[隔离的](workflow-advanced.md#隔离运行)：`workflow retry`、`publish` 和 `--claim` 拒绝它，`publish` 和 `--claim` 返回 `isolated_run`，retry 会给出 `teamai benchmark run <suite>`。
-- **停下**: 用 `teamai workflow resume <run>` 继续，沿用启动时的 `--sandbox`。升级前的 teamai 启动的运行，如果计划的版本不同，就不能继续：`workflow resume` 会拒绝它，并指出 `teamai benchmark run <suite>`。
+- **停下**: 用 `teamai workflow resume <run>` 继续，沿用启动时的 `--sandbox`。升级前的 teamai 启动的运行，如果计划的版本不同，就不能继续：`workflow resume` 和每个驱动的 `next` 都会以 `benchmark_plan_outdated` 拒绝它，并指出 `teamai benchmark run <suite>`，它的步骤一个也不会运行。
 
 无法运行的启动会被拒绝，消息说明该怎么做，并且不会创建运行。你的 user 范围 teamai 安装也能到达该团队，或团队通过 HTTP 提供时，运行无法固定 trial 得到的团队，会以 `team_ref_blocked` 拒绝，并说明要改什么。
 

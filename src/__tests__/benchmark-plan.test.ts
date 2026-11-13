@@ -127,6 +127,24 @@ describe('benchmark plan run', () => {
     } } });
   });
 
+  it('refuses a driver every step of a run whose plan a teamai before an upgrade froze, as resume refuses it, and leases none', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-benchmark-plan-'));
+    dirs.push(root);
+    const config = benchmarkRunConfig(root);
+    const started = await startBenchmarkRun(config, suiteOf(), { outputsOf: (bundle, plan) => ({ definition: { ...bundle, workflows: {} }, plan: { ...plan, schemaVersion: 2 } }) });
+    if ('error' in started) throw new Error(started.error.message);
+    const runId = String(started.data.run);
+
+    const next = await leaseNext(config, runId, driver, { can, prepare: true });
+
+    expect(next).toEqual({ error: {
+      code: 'benchmark_plan_outdated',
+      message: `Run ${runId} measures a benchmark plan of schemaVersion 2, which the teamai that started it froze, and this teamai reads only schemaVersion 3, so the run cannot go on here. Run it with the teamai that started it, or start the suite again with teamai benchmark run fix.`,
+    } });
+    const run = await readRun(config, runId);
+    expect(typeof run === 'object' && run.steps.filter((step) => step.status === 'leased').map((step) => step.id)).toEqual([]);
+  });
+
   it('leases a trial prompt in a clone of the starting commit with the arm\'s team once its task baseline fails there', async () => {
     const { config, runId } = await startFix();
     await settleBaselines(config, runId, driver, can);

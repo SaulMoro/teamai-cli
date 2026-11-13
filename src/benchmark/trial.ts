@@ -3,8 +3,8 @@
  * runs it, such as in a sandbox with no teamai. teamai owns the rest of it, on this machine: `prepareCheckPlace` writes
  * the files check.add names, and for a trial puts the protected paths back as the starting commit has them, in the
  * clone it prepared for the step; `decideCheckReport` turns the step's exit code into its output, the check's verdict,
- * and stores a trial's correctness label. `commitCheckFiles` commits the files a suite's checks write, before a plan is
- * frozen.
+ * and stores a trial's correctness label. `outdatedBenchmarkPlan` refuses every lease and resume of a run whose plan
+ * another schemaVersion froze. `commitCheckFiles` commits the files a suite's checks write, before a plan is frozen.
  */
 import fs from 'node:fs/promises';
 import os from 'node:os';
@@ -133,9 +133,20 @@ export function toolUnavailableNotice(arm: Pick<PlannedArm, 'name' | 'tool'>): s
 }
 
 /**
+ * Why no driver may lease a step of `run`, and `teamai workflow resume` refuses it: a benchmark run whose plan a teamai
+ * before an upgrade froze in another schemaVersion, which this one cannot measure. Undefined for any other run, and for
+ * a benchmark run before its plan step printed the plan.
+ */
+export function outdatedBenchmarkPlan(run: RunState): WorkflowFailure | undefined {
+  const planned = planOfRun(run);
+
+  return 'failure' in planned && planned.failure.code === 'benchmark_plan_outdated' ? planned.failure : undefined;
+}
+
+/**
  * The check step `step` is in the benchmark plan of `run`: a task's baseline, or a trial's check, with the task's check
  * and, for a trial's check, the trial as its lines name it. Undefined for any other step, and in a run with no plan this
- * teamai reads, which never runs a check here: `planOfRun` refuses its steps and its resume.
+ * teamai reads, which never runs a check here: `outdatedBenchmarkPlan` refuses its leases and its resume.
  */
 function plannedCheckOf(run: RunState, step: string): (Checked & { plan: BenchmarkPlan; prefix: string }) | undefined {
   const planned = planOfRun(run, step);

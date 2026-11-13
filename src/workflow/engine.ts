@@ -30,6 +30,7 @@ import {
   type StepExpression, type TemplateError,
 } from './template.js';
 import { stageSettledEvidence } from './place/place.js';
+import { outdatedBenchmarkPlan } from '../scorers/engine-hooks.js';
 import { parseStepPath } from './step-path.js';
 import type { ConfinedLease, LeaseWire } from './lease-wire.js';
 import { decideConfined, type ConfinedDecision } from './confined-place.js';
@@ -2468,6 +2469,10 @@ export async function leaseNext(config: LocalConfig, runId: string, driver: Driv
     const older = missingNeeds(run);
 
     if (older) return { save: false, envelope: error('run_unreadable', older) };
+    // Every driver leases here, so a benchmark run frozen by a teamai before an upgrade runs no step on any of them.
+    const outdated = await outdatedBenchmarkPlan(run);
+
+    if (outdated) return { save: false, envelope: { error: outdated } };
     // Made before any step it leases runs; a run a retry reopened gets it again.
     await fs.mkdir(runScratchDir(config, run.id), { recursive: true });
     const { handoff } = options;
