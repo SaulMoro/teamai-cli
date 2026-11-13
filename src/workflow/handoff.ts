@@ -26,7 +26,7 @@ import {
 import { openPrivateStep } from './scope.js';
 import { takeOver, type UnleasedStep } from './step-state.js';
 import { offeredPool } from './fleet/record.js';
-import { AttemptIdSchema, installOwner, isRunId, readRun, RunIdSchema, updateRun } from './store.js';
+import { AttemptIdSchema, installOwner, isRunId, readRun, RunIdSchema, updateRun, type RunId } from './store.js';
 import { workflowRunBy, type RunPublication, type RunState, type RunStatus, type WorkflowDefinition, type WorkflowFailure, type WorkflowSource, type WorkflowStep } from './types.js';
 import { attemptHoldingSession } from './runtimes/attempt.js';
 import { closedForOffer } from './runtimes/cancelled.js';
@@ -280,19 +280,23 @@ type OfferOptions = { checkout: string; env?: NodeJS.ProcessEnv; sessions?: (run
  * still reaches it: `kept`, with why, as a clause. Every offer of a run goes through here.
  */
 async function offerRun(config: LocalConfig, runId: string, { live, ...options }: OfferOptions): Promise<{ kind: 'published'; publication: Result<PublishReceipt> } | { kind: 'kept'; why: string }> {
-  const run = RunIdSchema.safeParse(runId);
-  const why = run.success ? await closedForOffer(config, run.data, { checkout: options.checkout, live }) : undefined;
+  // A run this machine never publishes is refused before a place is closed for an offer that cannot happen.
+  const publishable = await publishableHere(config, runId);
+
+  if (!publishable.ok) return { kind: 'published', publication: publishable };
+  const why = await closedForOffer(config, publishable.value.run, { checkout: options.checkout, live });
 
   return why === undefined ? { kind: 'published', publication: await publishSnapshot(config, runId, options) } : { kind: 'kept', why };
 }
 
-/** Publishes run `runId` as `publishRun` does, with no place of it closed: the end of a run, which no machine goes on with. */
-async function publishSnapshot(config: LocalConfig, runId: string, options: Omit<OfferOptions, 'live'>): Promise<Result<PublishReceipt>> {
-  if (!isRunId(runId)) return refused(INVALID_RUN);
+/** Run `runId` as this machine stores it, or the refusal of a run whose publish nothing outside this machine decides. */
+async function publishableHere(config: LocalConfig, runId: string): Promise<Result<{ run: RunId; stored: RunState }>> {
+  const run = RunIdSchema.safeParse(runId);
+
+  if (!run.success) return refused(INVALID_RUN);
 
   if (!usesBranchWorktree(config)) return refused(UNSUPPORTED_REPO);
-  const env = options.env ?? process.env;
-  const stored = await readRun(config, runId);
+  const stored = await readRun(config, run.data);
 
   if (stored === 'missing') return refused({ code: 'run_not_found', message: `Run ${runId} was not found` });
 
@@ -309,7 +313,16 @@ async function publishSnapshot(config: LocalConfig, runId: string, options: Omit
 
   const out = await fleetAttemptOut(config, stored);
 
-  if (out) return refused(out);
+  return out ? refused(out) : ok({ run: run.data, stored });
+}
+
+/** Publishes run `runId` as `publishRun` does, with no place of it closed: the end of a run, which no machine goes on with. */
+async function publishSnapshot(config: LocalConfig, runId: string, options: Omit<OfferOptions, 'live'>): Promise<Result<PublishReceipt>> {
+  const publishable = await publishableHere(config, runId);
+
+  if (!publishable.ok) return publishable;
+  const { stored } = publishable.value;
+  const env = options.env ?? process.env;
   const secrets = await knownSecrets(config, env);
   const projected = projectRun(stored, secrets);
 
