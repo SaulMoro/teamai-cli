@@ -1,7 +1,7 @@
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import type { CallLaunch } from '@teamai/tool-core/launch';
+import { ASSUMED_OPENCODE_MAJOR, type CallLaunch } from '@teamai/tool-core/launch';
 import { stoppedOnUsageLimit, toolStdout, type TokenUsage } from '@teamai/tool-core/stdout';
 import { readRegularFile, writeRegularFile } from '@teamai/shared/regular-file';
 import { MAX_TIMER_MS } from '@teamai/shared/timer';
@@ -119,7 +119,7 @@ export async function callLaunch({ tool, prompt, session, timeoutMs, idleTimeout
     if (call.prompt === 'file') await writeRegularFile(promptFile, prompt);
     const resumed = session !== undefined && call.resume ? call.resume.args(session) : [];
     const streaming = idleTimeoutMs === undefined ? undefined : call.streams;
-    const opencodeMajor = tool.family === 'opencode' ? await host.opencodeMajor(tool.executable) : 1;
+    const opencodeMajor = tool.family === 'opencode' ? await host.opencodeMajor(tool.executable) : ASSUMED_OPENCODE_MAJOR;
     const args = [...(streaming?.args ?? call.args)({ prompt, promptFile, lastMessageFile, opencodeMajor }), ...resumed];
     const stdin = call.prompt !== 'stdin' ? '' : call.stdinOf ? call.stdinOf(prompt) : prompt;
     const run = await runHeadless({ start: start(args), stdin, timeoutMs, ...(streaming && { idleTimeoutMs }), signal });

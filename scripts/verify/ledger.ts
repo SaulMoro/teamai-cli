@@ -304,6 +304,10 @@ const OWN_STATE = [
   ...TOOL_HOMES.map((dir) => ({ owner: 'the tool', dir, paths: [dir], makesDir: false })),
   // T3 Code checkpoints the project a thread of a teamai run works in, under refs/t3.
   { owner: 'T3 Code', dir: 'project/.git/refs/t3', paths: ['project/.git/refs/t3'], makesDir: true },
+  // OpenCode's own folders under the XDG folders of a HOME that sets none, as its home under ~/.config is: v2.3.0 makes
+  // them on any start, `opencode --version` included, which doctor, pull and a workflow launch ask, and keeps a step's
+  // session there. What its TUI keeps beyond them (~/.local/share/opentui, bun's cache) stays a LEAK.
+  ...['home/.cache/opencode', 'home/.local/share/opencode', 'home/.local/state/opencode'].map((dir) => ({ owner: 'OpenCode', dir, paths: [dir], makesDir: true })),
   // Teamai's sandbox runtime, doctor, the observer and section (f) all ask sbx in a world's HOME.
   { owner: 'sbx', dir: 'home/Library/Application Support/com.docker.sandboxes', paths: SBX_OWN.map((own) => `home/Library/Application Support/com.docker.sandboxes/sandboxes/${own}`), makesDir: true },
   { owner: 'sbx', dir: 'home/Library/Caches/com.docker.sandboxes', paths: ['policykit', 'unleash-toggles-production.json'].map((own) => `home/Library/Caches/com.docker.sandboxes/sandboxes/${own}`), makesDir: true },

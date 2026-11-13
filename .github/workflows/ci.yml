@@ -14,9 +14,10 @@ concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
-# OpenCode 2 for the session migrate and OpenCode hooks E2Es. `opencode-ai` on
-# npm is OpenCode 1; OpenCode 2 ships as `@opencode/cli`, one npm package per
-# platform. Bump both values together.
+# OpenCode 2 for the session migrate and OpenCode hooks E2Es, which take it from
+# TEAMAI_OPENCODE_V2_BIN: every E2E file meets a stand-in `opencode` on PATH.
+# `opencode-ai` on npm is OpenCode 1; OpenCode 2 ships as `@opencode/cli`, one
+# npm package per platform. Bump both values together.
 env:
   OPENCODE2_VERSION: 2.0.29
   OPENCODE2_LINUX_X64_SHA256: 14b5a6638a1a093ac9d484599c844b10c29b445d04844b682ccc668ce26530a2
@@ -205,7 +206,6 @@ jobs:
           echo "$OPENCODE2_LINUX_X64_SHA256  $dir/cli.tgz" | sha256sum -c -
           tar -xzf "$dir/cli.tgz" -C "$dir"
           "$dir/package/bin/opencode" --version
-          echo "$dir/package/bin" >> "$GITHUB_PATH"
           echo "TEAMAI_OPENCODE_V2_BIN=$dir/package/bin/opencode" >> "$GITHUB_ENV"
 
       # Fork code is untrusted. Never expose repository secrets to this job.

@@ -18,7 +18,8 @@ import { readRegularFileSync } from '@teamai/shared/regular-file';
  *
  * Like the real CLI under an isolated data home, any session command without
  * `--standalone` fails: it would try to start the managed background service.
- * `$XDG_DATA_HOME/fake-opencode/version` overrides the version it prints, and
+ * It prints the version `installFakeOpencode` was given, `opencode v2.0.29` by
+ * default; `$XDG_DATA_HOME/fake-opencode/version` overrides it, and
  * `$XDG_DATA_HOME/fake-opencode/export-error` makes `session export` fail with that message.
  */
 const CLI = String.raw`
@@ -31,7 +32,7 @@ const fail = (message) => { process.stderr.write(message + '\n'); process.exit(1
 const real = (p) => { try { return fs.realpathSync.native(p); } catch { return path.resolve(p); } };
 const repoOf = (d) => fs.existsSync(path.join(d, '.git')) ? d : path.dirname(d) === d ? undefined : repoOf(path.dirname(d));
 if (args[0] === '--version') {
-  let version = 'opencode v2.0.29';
+  let version = VERSION;
   try { version = fs.readFileSync(path.join(root, 'version'), 'utf8').trim(); } catch {}
   process.stdout.write(version + '\n');
   process.exit(0);
@@ -112,11 +113,15 @@ if (sub === 'list') {
 } else fail('fake opencode: unsupported command ' + args.join(' '));
 `;
 
-/** Write the fake `opencode` into a new directory and return it (put it on PATH). */
-export function installFakeOpencode(): string {
+/**
+ * Write the fake `opencode` into a new directory and return it (put it on PATH).
+ * `version` is what `opencode --version` prints, as the real one does: `opencode v2.0.29`
+ * (V2) by default, `1.18.35` for a test that pins OpenCode V1.
+ */
+export function installFakeOpencode(options: { version?: string } = {}): string {
   const dir = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-fake-opencode-')));
   const script = path.join(dir, 'fake-opencode.cjs');
-  fs.writeFileSync(script, CLI);
+  fs.writeFileSync(script, `const VERSION = ${JSON.stringify(options.version ?? 'opencode v2.0.29')};\n${CLI}`);
 
   const node = JSON.stringify(process.execPath);
   fs.writeFileSync(path.join(dir, 'opencode'), `#!/bin/sh\nexec ${node} ${JSON.stringify(script)} "$@"\n`);

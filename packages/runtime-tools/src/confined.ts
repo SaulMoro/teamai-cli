@@ -6,7 +6,7 @@ import { stringify as stringifyToml, type TomlTable } from 'smol-toml';
 import { execCommand, probeBinary } from '@teamai/shared/exec';
 import { JsonValueSchema, type JsonValue } from '@teamai/shared/json';
 import { copyRegularTree, readRegularFile, writeRegularFile } from '@teamai/shared/regular-file';
-import type { CallLaunch, ConfinedLaunch, ConfinedLevel } from '@teamai/tool-core/launch';
+import { ASSUMED_OPENCODE_MAJOR, type CallLaunch, type ConfinedLaunch, type ConfinedLevel } from '@teamai/tool-core/launch';
 import { extractReply } from '@teamai/tool-core/reply';
 import { stoppedOnUsageLimit, toolStdout, type ConfinedUsage, type TokenUsage } from '@teamai/tool-core/stdout';
 import type { HeadlessRun } from '@teamai/tool-launch/call-launch';
@@ -383,7 +383,7 @@ const LAUNCHES = {
     return {
       stdin: confinedStdin('opencode', request.prompt),
       configuredModel: await openCodeSettings(request, env, tmp, deps),
-      args: confinedArgs({ family: 'opencode', model: request.model, opencodeMajor: request.model?.effort ? await deps.opencodeMajor(executable) : 2 }),
+      args: confinedArgs({ family: 'opencode', model: request.model, opencodeMajor: request.model?.effort ? await deps.opencodeMajor(executable) : ASSUMED_OPENCODE_MAJOR }),
       // OpenCode keeps every run as a session in its database; the confined one must not outlive the run.
       async failureOf(run, spent) {
         const session = toolStdout('opencode', run.stdout)?.session;

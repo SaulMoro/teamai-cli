@@ -15,14 +15,17 @@ const Invocation = z.object({ args: z.array(z.string()), env: z.record(z.string(
 
 /**
  * A fake tool on disk: it records how it was launched, with the file after `--prompt-file`, prints `stdout` and
- * `stderr`, and writes `lastMessage` to the file after `-o`, as Codex does.
+ * `stderr`, and writes `lastMessage` to the file after `-o`, as Codex does. With `version`, `--version` prints only
+ * that, unrecorded.
  */
-async function fakeTool(name: string, { stdout = '', stderr = '', exitCode = 0, lastMessage }: { stdout?: string; stderr?: string; exitCode?: number; lastMessage?: string }): Promise<{ executable: string; invocation: () => Promise<z.infer<typeof Invocation>> }> {
+async function fakeTool(name: string, { stdout = '', stderr = '', exitCode = 0, lastMessage, version }: { stdout?: string; stderr?: string; exitCode?: number; lastMessage?: string; version?: string }): Promise<{ executable: string; invocation: () => Promise<z.infer<typeof Invocation>> }> {
   root ||= await fs.mkdtemp(path.join(os.tmpdir(), 'teamai-call-'));
   const executable = path.join(root, name);
   const record = path.join(root, `${name}.json`);
   await fs.writeFile(executable, `#!${process.execPath}
 const fs = require('fs');
+const version = ${JSON.stringify(version ?? null)};
+if (version !== null && process.argv[2] === '--version') { process.stdout.write(version + '\\n'); process.exit(0); }
 let stdin = ''; process.stdin.on('data', (d) => stdin += d); process.stdin.on('end', () => {
   const args = process.argv.slice(2);
   const promptFile = args.includes('--prompt-file') ? fs.readFileSync(args[args.indexOf('--prompt-file') + 1], 'utf8') : null;
@@ -124,6 +127,7 @@ it('runs Codex with the prompt on stdin, reads its last message from the -o file
 
 it('runs OpenCode with the prompt on stdin and joins the text parts it prints, with the step tokens', async () => {
   const opencode = await fakeTool('opencode', {
+    version: 'opencode v2.0.29',
     stdout: [
       JSON.stringify({ type: 'step_start', part: { type: 'step-start' } }),
       JSON.stringify({ type: 'text', part: { type: 'text', text: 'first line' } }),
@@ -136,7 +140,8 @@ it('runs OpenCode with the prompt on stdin and joins the text parts it prints, w
 
   expect(answer).toEqual({ text: 'first line\nsecond line', tool: 'opencode', tokens: { input: 30, output: 6, cachedInput: 7 } });
   const { args, stdin } = await opencode.invocation();
-  expect(args).toEqual(['run', '--format', 'json']);
+  // OpenCode V2 runs the call on its own server.
+  expect(args).toEqual(['run', '--standalone', '--format', 'json']);
   expect(stdin).toBe('Summarize');
 });
 

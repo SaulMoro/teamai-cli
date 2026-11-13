@@ -1,6 +1,6 @@
 import { PromptResultSchema, type PromptRequestSchema } from '@teamai/runtime-protocol';
 import { redact, redactJson } from '@teamai/shared/redact';
-import type { StepLaunch } from '@teamai/tool-core/launch';
+import { ASSUMED_OPENCODE_MAJOR, type StepLaunch } from '@teamai/tool-core/launch';
 import { stepLaunchOf } from '@teamai/tool-definitions';
 import { runStepLaunch, toolLauncher, type StepFamily, type StepLaunchHost, type StepLaunchInput, type StepLaunchResult, type StepStop, type ToolClosed } from '@teamai/tool-launch/run-step-launch';
 import type { z } from 'zod';
@@ -47,7 +47,7 @@ export function stepToolOf(tool: string): { family: StepFamily; step: StepLaunch
  * here (STEP_FAMILY), and teamai writes the result the prompt finishes with (runtimePrompter), so the runtime writes none.
  */
 const IN_SANDBOX: StepLaunchHost = {
-  opencodeMajor: async () => 1,
+  opencodeMajor: async () => ASSUMED_OPENCODE_MAJOR,
   agyGatewayEnv: () => ({}),
   writeResult: async () => {},
 };

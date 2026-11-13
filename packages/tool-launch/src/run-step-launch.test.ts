@@ -206,6 +206,27 @@ describe('runStepLaunch', () => {
     expect(launched).toEqual(argv);
   });
 
+  it('builds an OpenCode step it does not ask the version of for OpenCode V2, the version teamai takes when it reads none', async () => {
+    const shipped = BUILT_IN_TOOLS.opencode.launch.opencode.step;
+    const majors: number[] = [];
+    const opencode = {
+      name: 'opencode', family: 'opencode', executable: '/usr/bin/opencode',
+      step: { ...shipped, args: (input, how) => { majors.push(how.opencodeMajor); return shipped.args(input, how); } },
+    } as const satisfies Parameters<typeof runStepLaunch>[0]['tool'];
+    const asked: string[] = [];
+    let launched: string[] = [];
+    const { start } = fakeLauncher([]);
+
+    // Interactive, with no agent and no effort: nothing in the launch needs the version, so the launch reads none.
+    await runStepLaunch({
+      tool: opencode, input: { prompt: 'Fix it.', cwd: os.tmpdir(), resultPath: await resultPathIn(), secrets: {}, expected: undefined },
+      start: toolLauncher((launch) => { launched = launch.args; return start(launch); }), interactive: true,
+      host: { ...host, opencodeMajor: async (executable) => { asked.push(executable); return 1; } },
+    });
+
+    expect({ asked, majors, launched }).toEqual({ asked: [], majors: [2], launched: ['--prompt', 'Fix it.'] });
+  });
+
   it.each([
     ['starts its tool anew', false, undefined],
     ['can attach to the tool an earlier launch began, whose result it is', true, { ok: true }],

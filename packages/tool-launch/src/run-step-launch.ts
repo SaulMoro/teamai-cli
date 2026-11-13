@@ -1,7 +1,7 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { z } from 'zod';
-import type { StepLaunch } from '@teamai/tool-core/launch';
+import { ASSUMED_OPENCODE_MAJOR, type StepLaunch } from '@teamai/tool-core/launch';
 import { log } from '@teamai/shared/log';
 import { budgeted, stoppedOnUsageLimit, tokenMeter, toolStdout, type TokenUsage, type ToolReport } from '@teamai/tool-core/stdout';
 import { NotRegularFileError, readRegularFile } from '@teamai/shared/regular-file';
@@ -311,7 +311,7 @@ export async function runStepLaunch({ tool, input, start, canReattach = false, l
 
   const opencode = tool.family === 'opencode';
   // Headless, the version also decides whether OpenCode runs on its own server rather than its background service.
-  const opencodeMajor = opencode && (!interactive || input.agent || input.model?.effort) ? await host.opencodeMajor(tool.executable) : 1;
+  const opencodeMajor = opencode && (!interactive || input.agent || input.model?.effort) ? await host.opencodeMajor(tool.executable) : ASSUMED_OPENCODE_MAJOR;
 
   if (opencode && input.agent) {
     const { name: agent, model, settings = {} } = input.agent;
