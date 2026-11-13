@@ -751,8 +751,8 @@ When no trial produced a result and a trial ended in an error, such as when no t
 
 ```text
 No trial produced a result, so the run measured nothing. These trials ended with an error:
-  Trial 1/2 expired-token claude: sandbox_failed: <why the sandbox did not open>
-  Trial 2/2 expired-token codex: sandbox_failed: <why the sandbox did not open>
+  Trial 1/2 expired-token claude: runtime_failed: Step runtime "sandbox" could not open attempt a8089166b (sandbox_failed): <why the sandbox did not open>
+  Trial 2/2 expired-token codex: runtime_failed: Step runtime "sandbox" could not open attempt a51c0e2d7 (sandbox_failed): <why the sandbox did not open>
 Fix the cause named, then run teamai benchmark run fix-auth again.
 ```
 
