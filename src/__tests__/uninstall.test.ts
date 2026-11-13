@@ -1912,6 +1912,94 @@ describe('uninstall', () => {
     expect([await fse.pathExists(path.dirname(copies)), await fse.readFile(excludeFile, 'utf8')]).toEqual([false, '# my own\nscratch/\n']);
   });
 
+  describe('the worktrees failed and cancelled workflow runs kept', () => {
+    const git = (cwd: string, ...args: string[]): string => execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@t', ...args], { cwd, encoding: 'utf8' });
+
+    /** A project whose runs kept `branches` in worktrees teamai made, each with one commit of the step's work. */
+    async function projectWithRunWorktrees(branches: string[]): Promise<{ projectRoot: string; worktrees: string[]; excludeBefore: string; configBefore: string }> {
+      const { homeDir, repoPath } = await setupFixture(tmpDir);
+      const projectRoot = path.join(tmpDir, 'business-repo');
+      vi.stubEnv('HOME', homeDir);
+      vi.stubEnv('SHELL', '/bin/zsh');
+      await fse.ensureDir(projectRoot);
+      git(projectRoot, 'init', '-q', '-b', 'main');
+      git(projectRoot, 'commit', '-q', '--allow-empty', '-m', 'init');
+      const excludeBefore = await fse.readFile(path.join(projectRoot, '.git', 'info', 'exclude'), 'utf8');
+      const configBefore = git(projectRoot, 'config', '--local', '--list');
+      const { ensureWorktree } = await import('../workflow/worktree.js');
+      const worktrees: string[] = [];
+
+      for (const branch of branches) {
+        const made = await ensureWorktree(projectRoot, branch, 'HEAD');
+        if ('error' in made) throw new Error(made.error);
+        await fse.writeFile(path.join(made.dir, 'work.txt'), `${branch}\n`);
+        git(made.dir, 'add', 'work.txt');
+        git(made.dir, 'commit', '-q', '-m', `work of ${branch}`);
+        worktrees.push(made.dir);
+      }
+
+      const dataHome = path.join(homeDir, '.teamai', 'projects', 'business-repo-0123456789abcdef');
+      await fse.ensureDir(dataHome);
+      mockAutoDetectInit.mockResolvedValue({ localConfig: makeLocalConfig(homeDir, repoPath, { scope: 'project', projectRoot, dataHome }), teamConfig: makeTeamConfig({ toolPaths: {} }) });
+
+      return { projectRoot, worktrees, excludeBefore, configBefore };
+    }
+
+    it('removes each one no change of which is left out of its branch, with what git and teamai set up for them, and keeps the branches', async () => {
+      const branches = ['teamai/r0123456789abcdef/fail/p1', 'teamai/r1111111111111111/build/p1'];
+      const { projectRoot, worktrees, excludeBefore, configBefore } = await projectWithRunWorktrees(branches);
+
+      await uninstall({ force: true });
+
+      expect(git(projectRoot, 'worktree', 'list', '--porcelain').match(/^worktree /gm)).toHaveLength(1);
+      expect(await fse.pathExists(path.join(projectRoot, '.git', 'worktrees'))).toBe(false);
+      expect(await Promise.all(worktrees.map((dir) => fse.pathExists(dir)))).toEqual([false, false]);
+      expect(git(projectRoot, 'config', '--local', '--list')).toBe(configBefore);
+      expect(await fse.readFile(path.join(projectRoot, '.git', 'info', 'exclude'), 'utf8')).toBe(excludeBefore);
+      expect(await fse.pathExists(path.join(projectRoot, '.teamai'))).toBe(false);
+      // The run's work is the member's: its branches stay, with their commits.
+      for (const branch of branches) expect(git(projectRoot, 'log', '-1', '--format=%s', branch).trim()).toBe(`work of ${branch}`);
+      const said = vi.mocked(log.success).mock.calls.map((call) => String(call[0])).join('\n');
+      for (const branch of branches) expect(said).toContain(branch);
+    });
+
+    it.each([
+      ['a file no commit holds', async (dir: string) => fse.writeFile(path.join(dir, 'notes.txt'), 'mine\n'), 'notes.txt'],
+      ['an edit no commit holds', async (dir: string) => fse.appendFile(path.join(dir, 'work.txt'), 'more\n'), 'work.txt'],
+      ['a HEAD on no branch', async (dir: string) => { git(dir, 'checkout', '-q', '--detach'); }, 'detached'],
+    ])('keeps one with %s, names it with the command that removes it, and keeps the setup the kept one needs', async (_name, leave, named) => {
+      const { projectRoot, worktrees: [clean, kept] } = await projectWithRunWorktrees(['teamai/r0123456789abcdef/fail/p1', 'teamai/r1111111111111111/build/p1']);
+      await leave(kept);
+      const printed: string[] = [];
+      const logSpy = vi.spyOn(console, 'log').mockImplementation((line?: unknown) => { printed.push(String(line ?? '')); });
+
+      try {
+        await uninstall({ dryRun: true });
+        expect(await Promise.all([clean, kept].map((dir) => fse.pathExists(dir)))).toEqual([true, true]);
+        await uninstall({ force: true });
+      } finally {
+        logSpy.mockRestore();
+      }
+
+      const realClean = path.join(await fse.realpath(path.dirname(clean)), path.basename(clean));
+      expect(printed.some((line) => line.includes(realClean)), 'the preview names the worktree it removes').toBe(true);
+      expect(await Promise.all([clean, kept].map((dir) => fse.pathExists(dir)))).toEqual([false, true]);
+      const warned = vi.mocked(log.warn).mock.calls.map((call) => String(call[0]));
+      // git names the worktrees by their real path.
+      const [realRoot, realKept] = await Promise.all([fse.realpath(projectRoot), fse.realpath(kept)]);
+      const keptLines = warned.filter((line) => line.includes(realKept));
+      // Once in the preview, once as the uninstall runs.
+      expect(keptLines.length).toBeGreaterThanOrEqual(2);
+      for (const line of keptLines) {
+        expect(line).toContain(named);
+        expect(line).toContain(`git -C ${realRoot} worktree remove --force ${realKept}`);
+      }
+      // The kept worktree still runs on the setup it was made with.
+      expect(git(projectRoot, 'config', '--local', '--get', 'extensions.worktreeConfig').trim()).toBe('true');
+      expect(await fse.readFile(path.join(projectRoot, '.git', 'info', 'exclude'), 'utf8')).toContain('.teamai/workflow-worktrees/');
+    });
+  });
+
   it('removes the .teamai/delivered/ of every worktree of the project, which the exclude block it removes kept out of git (#1787)', async () => {
     const { homeDir, repoPath } = await setupFixture(tmpDir);
     const projectRoot = path.join(tmpDir, 'business-repo');

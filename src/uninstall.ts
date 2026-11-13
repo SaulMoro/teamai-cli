@@ -105,6 +105,7 @@ import { log } from '@teamai/shared/log';
 import { askConfirmation } from './utils/prompt.js';
 import { getUserHome, expandHome } from '@teamai/shared/home';
 import { runtimeStateRoot } from '@teamai/runtime-protocol/state-root';
+import type { RunWorktree } from './workflow/worktree.js';
 import { createGit, gitCommonDir, listWorktrees } from './utils/git.js';
 import {
   envLoaderProfiles,
@@ -207,6 +208,11 @@ interface RemovalPlan {
   checkouts: string[];
   /** teamai's git hook in the project repository: config sections and hook scripts holding its block. */
   gitHook: { repoDir: string; entries: string[]; checkouts?: string[] } | null;
+  /**
+   * The worktrees failed and cancelled workflow runs kept in this project's checkouts, each with a checkout of its
+   * repository: a removable one goes, its branch staying; a kept one is named with the command that removes it.
+   */
+  runWorktrees: Array<{ checkout: string; worktree: RunWorktree }>;
   /** What workflow worktrees set up in each checkout, once none of them is left (`removeWorktreeSetup`). */
   worktreeSetups: Array<{ checkout: string; entries: string[] }>;
   /** The .teamai home directory path. */
@@ -1617,6 +1623,7 @@ async function buildRemovalPlan(
     localAgentWorkspacesDropped: null,
     checkouts: [],
     gitHook: null,
+    runWorktrees: [],
     worktreeSetups: [],
     teamaiHome,
     teamaiHomeExists: includeShared && await pathExists(teamaiHome),
@@ -1893,10 +1900,26 @@ async function buildRemovalPlan(
       }
 
       if (!agentFilter) {
-        const { removeWorktreeSetup } = await import('./workflow/worktree.js');
+        const { removeWorktreeSetup, runWorktreesOf } = await import('./workflow/worktree.js');
+
+        // The checkouts of one repository list the same worktrees.
+        for (const checkout of plan.checkouts) {
+          const found = await runWorktreesOf(checkout);
+
+          if ('error' in found) {
+            log.warn(`Could not list the workflow run worktrees of ${checkout} (${found.error}), so uninstall leaves them and what teamai set up for them there.`);
+            continue;
+          }
+
+          for (const worktree of found.worktrees) {
+            if (!plan.runWorktrees.some((planned) => planned.worktree.dir === worktree.dir)) plan.runWorktrees.push({ checkout, worktree });
+          }
+        }
+
+        const gone = plan.runWorktrees.flatMap(({ worktree }) => (worktree.kind === 'removable' ? [worktree.dir] : []));
 
         for (const checkout of plan.checkouts) {
-          const entries = await removeWorktreeSetup(checkout, { dryRun: true });
+          const entries = await removeWorktreeSetup(checkout, { dryRun: true, gone });
 
           if (entries.length > 0) plan.worktreeSetups.push({ checkout, entries });
         }
@@ -1968,6 +1991,7 @@ function isPlanEmpty(plan: RemovalPlan): boolean {
     plan.gitExcludeBlocks.length === 0 &&
     plan.gitHook === null &&
     plan.worktreeSetups.length === 0 &&
+    !plan.runWorktrees.some(({ worktree }) => worktree.kind === 'removable') &&
     !plan.teamaiHomeExists &&
     plan.syntheticManifestCleanup == null
   );
@@ -2167,6 +2191,15 @@ function printSummary(plan: RemovalPlan, agentFilter?: string): void {
     console.log(`   Git hook in ${(plan.gitHook.checkouts ?? [plan.gitHook.repoDir]).join(', ')} (teamai's entries and blocks):`);
 
     for (const entry of plan.gitHook.entries) console.log(`     ${entry}`);
+    console.log('');
+  }
+
+  const removableRunWorktrees = plan.runWorktrees.flatMap(({ worktree }) => (worktree.kind === 'removable' ? [worktree] : []));
+
+  if (removableRunWorktrees.length > 0) {
+    console.log(`   Worktrees of failed or cancelled workflow runs (${removableRunWorktrees.length}), whose commits stay on their branches:`);
+
+    for (const { dir, branch } of removableRunWorktrees) console.log(`     ${dir}${branch === undefined ? '   (already gone: git\'s record of it)' : `   (branch ${branch} stays)`}`);
     console.log('');
   }
 
@@ -3287,6 +3320,8 @@ async function executeRemoval(
     }
   }
 
+  await removeRunWorktrees(plan.runWorktrees);
+
   if (plan.worktreeSetups.length > 0) {
     const { removeWorktreeSetup } = await import('./workflow/worktree.js');
 
@@ -3523,6 +3558,37 @@ function emptiedDirs(plan: RemovalPlan): string[] {
   return [...dirs].sort((a, b) => b.length - a.length);
 }
 
+/** The line naming the run worktree `dir`, kept for `why`, with the command that removes it from `checkout`'s repository. */
+function keptRunWorktreeLine({ checkout, dir, why }: { checkout: string; dir: string; why: string }): string {
+  return `Kept the workflow run worktree ${dir}: ${why}. Save what you need, then remove it with \`git -C ${checkout} worktree remove --force ${dir}\`. `
+    + `While it is there, teamai's workflow worktree setup in ${checkout} stays with it: its block in the git exclude file and extensions.worktreeConfig.`;
+}
+
+function warnKeptRunWorktrees(runWorktrees: RemovalPlan['runWorktrees']): void {
+  for (const { checkout, worktree } of runWorktrees) {
+    if (worktree.kind === 'kept') log.warn(keptRunWorktreeLine({ checkout, dir: worktree.dir, why: worktree.why }));
+  }
+}
+
+/**
+ * Removes the run worktrees `runWorktrees` names removable, before the setup they needed goes, and names again the
+ * kept ones. Each branch stays: the run's commits are on it, the member's to keep.
+ */
+async function removeRunWorktrees(runWorktrees: RemovalPlan['runWorktrees']): Promise<void> {
+  const { removeRunWorktree } = await import('./workflow/worktree.js');
+
+  for (const { checkout, worktree } of runWorktrees) {
+    if (worktree.kind === 'kept') continue;
+    const removed = await removeRunWorktree(checkout, worktree);
+
+    if (!removed.ok) log.warn(keptRunWorktreeLine({ checkout, dir: worktree.dir, why: `git did not remove it (${removed.reason})` }));
+    else if (worktree.branch === undefined) log.success(`Removed git's record of the workflow run worktree ${worktree.dir}, which was already gone`);
+    else log.success(`Removed the workflow run worktree ${worktree.dir}. Its branch ${worktree.branch} stays, with the run's commits: delete it with \`git branch -D ${worktree.branch}\` once you no longer need it.`);
+  }
+
+  warnKeptRunWorktrees(runWorktrees);
+}
+
 /** Self mode's side branches that hold a commit origin lacks; one git cannot read counts as holding one. */
 async function unpushedSideBranches(localConfig: LocalConfig): Promise<string[]> {
   const { learningsBranch } = await import('./utils/learnings-branch.js');
@@ -3661,6 +3727,7 @@ export async function uninstall(opts: UninstallOptions): Promise<void> {
     }
 
     for (const line of [...plan.keptSkillDirs, ...plan.keptFiles]) log.warn(line);
+    warnKeptRunWorktrees(plan.runWorktrees);
 
     const exclusionOnly = isPlanEmpty(plan) && agentKey && localConfig.scope === 'project'
       && ((isToolId(agentKey) && descriptorOf(agentKey).projectFromHome) || plan.sharedRetentionOnly);
