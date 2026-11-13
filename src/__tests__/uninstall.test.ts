@@ -571,6 +571,30 @@ describe('uninstall', () => {
     expect(await fse.pathExists(path.join(homeDir, '.claude', 'skills', 'team-skill')), 'delivered skill').toBe(true);
   });
 
+  // A driver left running would write the run again into a data home the uninstall removed under it.
+  it('refuses while a teamai of this machine drives one of its runs, naming the run, and removes nothing', async () => {
+    const { homeDir, repoPath, teamaiHome } = await setupFixture(tmpDir);
+    vi.stubEnv('HOME', homeDir);
+    const dataHome = path.join(teamaiHome, 'projects', 'current');
+    const runFile = path.join(dataHome, 'workflows', 'runs', 'r0123456789abcdef.json');
+    await fse.outputJson(runFile, {});
+    const { lockHolder } = await import('../update.js');
+    await fse.outputJson(path.join(dataHome, 'workflows', 'runs', 'r0123456789abcdef', 'driver.lock'), { ...await lockHolder(), owner: 'driver' });
+    mockAutoDetectInit.mockResolvedValue({
+      localConfig: makeLocalConfig(homeDir, repoPath, { scope: 'project', projectRoot: homeDir, dataHome }),
+      teamConfig: makeTeamConfig(),
+    });
+    const previousExitCode = process.exitCode;
+
+    await uninstall({ force: true });
+
+    expect(process.exitCode).toBe(1);
+    process.exitCode = previousExitCode;
+    expect(log.error).toHaveBeenCalledWith(expect.stringContaining(`teamai drives run r0123456789abcdef on this machine (process ${process.pid})`));
+    expect(await fse.pathExists(runFile), 'run record').toBe(true);
+    expect(await fse.pathExists(path.join(homeDir, '.claude', 'skills', 'team-skill')), 'delivered skill').toBe(true);
+  });
+
   it('refuses when a step runtime opens a place while the person confirms, and removes nothing', async () => {
     const { homeDir, repoPath, teamaiHome } = await setupFixture(tmpDir);
     vi.stubEnv('HOME', homeDir);
