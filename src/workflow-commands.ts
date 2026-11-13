@@ -45,7 +45,7 @@ import { durationMs } from './utils/duration.js';
 import { findRunConfig } from './workflow/run-location.js';
 import { ATTEMPT_ENV, resolveRunMode } from './launch-context.js';
 import { memberTools } from './workflow/member-tools.js';
-import { agentEvidence, isAttemptRunner, nestedCall, nestedStart, nestedWorkflowError, type Nested } from './workflow/attempt-marker.js';
+import { agentEvidence, isAttemptRunner, isCommandStep, nestedCall, nestedStart, nestedWorkflowError, type Nested } from './workflow/attempt-marker.js';
 import { planBenchmark, planStep, tryBenchmarkTask } from './benchmark/start.js';
 import { outdatedBenchmarkPlan } from './benchmark/trial.js';
 import { reportBenchmark } from './benchmark/report.js';
@@ -418,9 +418,9 @@ async function readyRunConfig(runId: string, options: { allowRemote: boolean } =
   return { ...owner, env, secrets: env.secrets };
 }
 
-/** This process as `invoke` judges it: its agent evidence and run mode, and whether it passed `--confirmed`. */
+/** The process `env` belongs to as `invoke` judges it: its agent evidence and run mode, and whether it passed `--confirmed`. */
 function invokeCaller(confirmed: boolean | undefined, env: NodeJS.ProcessEnv = process.env): InvokeCaller {
-  return { evidence: agentEvidence(env), confirmed: confirmed === true, mode: resolveRunMode(process.env) };
+  return { evidence: agentEvidence(env), confirmed: confirmed === true, mode: resolveRunMode(env) };
 }
 
 function parseTools(value: string | undefined): { ok: true; tools: Record<string, string> } | { ok: false; message: string } {
@@ -514,18 +514,17 @@ export interface ShortcutStart {
   /** The config the run starts in, already loaded, as a shortcut found it; it takes the place of `scope`. */
   ready?: Ready;
   /**
-   * A released command's shortcut, which the person or agent asked for rather than the workflow: it starts with no agent
-   * evidence, so `invoke` does not judge it, and an agent's start is recorded as `cli`. `runShortcut` judges its nested
-   * start itself, since inside a step the run is part of that step.
+   * Whose start it is, a person's when unset:
+   * - `cli`: a released command's shortcut, which the person or agent asked for rather than the workflow. It starts with
+   *   no agent evidence, so `invoke` and the nested-start checks do not judge it, and an agent's start is recorded as `cli`.
+   * - `step-command`: a command that starts a default workflow for you, a person's start anywhere but a command step
+   *   (`isCommandStep`), whose run is part of that step there: the attempt marker refuses it nothing, `invoke` judges the
+   *   agent session it runs in, and it starts as the CLI's. In any other process of an attempt it answers `nested_workflow`.
+   *   `runShortcut` judges a shortcut's nested start itself, since inside a step the run is part of that step.
    */
-  asCli?: boolean;
+  startsAs?: 'cli' | 'step-command';
   /** What the person and the agent run in place of the shortcut, when an agent session's start is refused. */
   instead?: string;
-  /**
-   * A command that starts a default workflow for you, whose run inside a workflow attempt is part of that step: the
-   * attempt marker refuses it nothing, `invoke` judges the agent session it runs in, and it starts as the CLI's.
-   */
-  canRunInStep?: boolean;
   answer?: (config: LocalConfig, runId: string, driven: WorkflowEnvelope) => Promise<WorkflowEnvelope | undefined>;
   /**
    * What `workflows.driver` decided, when no `--driver` was given: a driver this machine does not run, which the run
@@ -543,10 +542,10 @@ export interface ShortcutStart {
 /** `workflow start`, answering what the local driver ended a run it drove with; undefined for every other answer, which it printed. */
 export async function startWorkflow(name: string, options: StartOptions, shortcut: ShortcutStart = {}): Promise<WorkflowEnvelope | undefined> {
   const asked = askedDriver(options.driver);
-  // The skill driver's turns run in an agent session rather than in the step's process, so its run is never part of the step.
-  const isInStep = shortcut.canRunInStep === true && !asks(asked, 'skill') && nestedCall(process.env) !== undefined;
+  // Only the local driver drives a run in the step's process; the skill driver's turns run in an agent session.
+  const isInStep = shortcut.startsAs === 'step-command' && options.driver === LOCAL_DRIVER && isCommandStep(process.env);
 
-  if (!shortcut.asCli && !isInStep && refusedNested(await nestedStart(process.env, process.cwd()), asks(asked, 'skill'))) return undefined;
+  if (shortcut.startsAs !== 'cli' && !isInStep && refusedNested(await nestedStart(process.env, process.cwd()), asks(asked, 'skill'))) return undefined;
 
   if (asks(asked, 'skill')) {
     const { driver: _skill, timeout, ...rest } = options;
@@ -636,7 +635,7 @@ export async function startWorkflow(name: string, options: StartOptions, shortcu
   // starts as the CLI, which invoke never refuses (`startAsCli`).
   // Inside a step, the agent session a prompt step's tool gives its commands is judged as anywhere else.
   const caller = invokeCaller(options.confirmed, isInStep ? { ...process.env, [ATTEMPT_ENV]: undefined } : process.env);
-  const refused = shortcut.asCli ? undefined : invokeRefusal((await loadCachedWorkflow(config, name))?.definition, caller, { kind: 'start', instead: shortcut.instead });
+  const refused = shortcut.startsAs === 'cli' ? undefined : invokeRefusal((await loadCachedWorkflow(config, name))?.definition, caller, { kind: 'start', instead: shortcut.instead });
 
   if (refused) {
     writeEnvelope({ error: refused }, secrets);
@@ -705,7 +704,7 @@ async function startDriven(input: {
   const start = { inputs, checkout: process.cwd(), alone, timeout, awaits };
   const client = inProcessClient({ config, env });
 
-  const started = (shortcut.asCli && caller.evidence.kind !== 'none') || isInStep
+  const started = (shortcut.startsAs === 'cli' && caller.evidence.kind !== 'none') || isInStep
     ? await startAsCli(client, name, { ...start, mode: caller.mode })
     : await client.start(name, { ...start, caller, instead: shortcut.instead, startedBy: 'person' });
 
@@ -933,7 +932,7 @@ async function runShortcutIn(loaded: Ready, { workflow, inputs, command, json }:
 
   await startWorkflow(workflow, { driver, inputs: JSON.stringify(inputs) }, {
     ready: loaded,
-    asCli: true,
+    startsAs: 'cli',
     isResumeSaidWhenOpen: true,
     byDefault: decided,
     progress: say,
@@ -1367,7 +1366,7 @@ export async function workflowCancel(runId: string, step?: string, options: { re
     // Cancelled under the run's lock, no driver of the run starts between the cancel and the stop. A run that already
     // settled is stopped again, so an attempt its runtime could not stop before is tried once more.
     const taken = await takeRunLock(config, run.data, async (lock): Promise<WorkflowEnvelope> => {
-      const cancelled = await cancelRun(config, runId, secrets, step);
+      const cancelled = await cancelRun(config, runId, secrets, step, undefined, { heldLock: lock });
       const isSettled = 'error' in cancelled && cancelled.error.code === 'run_settled';
       const stopped = !('error' in cancelled) || isSettled ? await stopCancelledAttempts(config, lock, { isRunnerHolding: isSkillRunnerHolding, release: release?.data }) : undefined;
 
@@ -2090,11 +2089,14 @@ export async function benchmarkRun(suite: string, options: { driver?: string; sa
     if (estimated.length > 0) log.info(estimated.join('\n  '));
   }
 
-  const { driver, byDefault } = await shortcutDriver(config, options.driver);
+  const decided = await shortcutDriver(config, options.driver);
+
+  if (!decided) return;
+  const { driver, byDefault } = decided;
   const start: StartOptions = { driver, inputs: JSON.stringify({ suite, ...inputs }), timeout: `${preflight.timeoutMs}ms` };
 
   if (options.sandbox) start.sandbox = true;
-  const done = await startWorkflow(BENCHMARK_WORKFLOW, start, { byDefault, canRunInStep: true });
+  const done = await startWorkflow(BENCHMARK_WORKFLOW, start, { byDefault, startsAs: 'step-command' });
 
   const ended = done && 'data' in done ? BenchmarkDoneSchema.safeParse(done.data.done) : undefined;
 
@@ -2153,19 +2155,30 @@ export async function selfImprovementRun(scorer: string, options: { suite: strin
     log.info(`Running the team's ${workflow.relativePath}, which replaces teamai's self-improvement workflow.`);
   }
 
-  const { driver, byDefault } = await shortcutDriver(config, options.driver);
+  const decided = await shortcutDriver(config, options.driver);
+
+  if (!decided) return;
+  const { driver, byDefault } = decided;
   const start: StartOptions = { driver, inputs: JSON.stringify({ scorer, suite: options.suite }), tools: options.tools };
 
   if (options.sandbox) start.sandbox = true;
-  await startWorkflow(SELF_IMPROVEMENT_WORKFLOW, start, { byDefault, canRunInStep: true });
+  await startWorkflow(SELF_IMPROVEMENT_WORKFLOW, start, { byDefault, startsAs: 'step-command' });
 }
 
-/** The driver a command's `--driver` names, else local inside a step, else what `workflows.driver` decides, which `byDefault` carries for the start to say. */
-export async function shortcutDriver(config: LocalConfig, asked: string | undefined): Promise<{ driver?: string; byDefault?: DefaultDrive }> {
-  if (asked !== undefined) return { driver: asked };
+/**
+ * The driver a command's `--driver` names, else what `workflows.driver` decides, which `byDefault` carries for the start
+ * to say. Inside a command step the run is part of the step, so the step's process drives it on the local driver: any
+ * other `--driver` is refused there, printed, and answered with undefined.
+ */
+export async function shortcutDriver(config: LocalConfig, asked: string | undefined): Promise<{ driver?: string; byDefault?: DefaultDrive } | undefined> {
+  if (isCommandStep(process.env)) {
+    if (asked === undefined || asked === LOCAL_DRIVER) return { driver: LOCAL_DRIVER };
+    refuse({ error: { code: 'nested_workflow', message: `This command runs inside a command step of workflow attempt ${process.env[ATTEMPT_ENV] ?? ''}, where its run is part of the step and the local driver drives it in the step's process, so --driver ${asked} does not apply there. Leave --driver out or pass --driver local; to start it on another driver, run it outside the step.` } });
 
-  // Inside a workflow attempt the run is part of the step, so the step's own process drives it.
-  if (nestedCall(process.env) !== undefined) return { driver: LOCAL_DRIVER };
+    return undefined;
+  }
+
+  if (asked !== undefined) return { driver: asked };
   const byDefault = await driveByDefault(config);
 
   return { driver: byDefault.kind === 'drive' ? byDefault.driver : undefined, byDefault };

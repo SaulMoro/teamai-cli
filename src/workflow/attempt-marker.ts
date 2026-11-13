@@ -1,5 +1,5 @@
 import { RUN_DIR_ENV } from '@teamai/runtime-protocol';
-import { ATTEMPT_ENV, EPHEMERAL_CONFIG_ENV, RUN_MODE_ENV, type RunMode } from '../launch-context.js';
+import { ATTEMPT_ENV, EPHEMERAL_CONFIG_ENV, RUN_MODE_ENV, STEP_COMMAND_ENV, type RunMode } from '../launch-context.js';
 import type { LocalConfig } from '../types.js';
 import { AGENT_SESSION_ENV } from '../utils/session-id.js';
 import { isRunId, runScratchDir } from './store.js';
@@ -14,6 +14,28 @@ export function attemptEnv(config: LocalConfig, run: string, attempt: string, mo
   const marked = { [ATTEMPT_ENV]: `${run}/${attempt}`, [RUN_MODE_ENV]: mode, [RUN_DIR_ENV]: runScratchDir(config, run) };
 
   return config.ephemeralConfig === undefined ? marked : { ...marked, [EPHEMERAL_CONFIG_ENV]: config.ephemeralConfig };
+}
+
+/**
+ * What the process of a `command` step gets: `attemptEnv`, and the command-step marker naming the same attempt. The local
+ * driver, the skill runner and a fleet member's host command launch a command step with it, and nothing else: a prompt
+ * step's tool, setup, a runtime's command, a `--json` driver's lease or a step kind added later gets `attemptEnv` alone,
+ * so `isCommandStep` holds for none of them. A driver that itself runs inside another attempt, as
+ * the run a step's command started does, gives no marker either: that run is part of the step, one level deep.
+ */
+export function commandStepEnv(config: LocalConfig, run: string, attempt: string, mode: RunMode): ReturnType<typeof attemptEnv> & Partial<Record<typeof STEP_COMMAND_ENV, string>> {
+  const marked = attemptEnv(config, run, attempt, mode);
+  const outer = process.env[ATTEMPT_ENV];
+
+  // A skill driver's runner runs inside the attempt it launches, which is no other one.
+  return outer !== undefined && outer !== '' && outer !== marked[ATTEMPT_ENV] ? marked : { ...marked, [STEP_COMMAND_ENV]: marked[ATTEMPT_ENV] };
+}
+
+/** Whether `env` is the process of a `command` step: its command-step marker names the attempt its attempt marker names. */
+export function isCommandStep(env: NodeJS.ProcessEnv): boolean {
+  const attempt = env[ATTEMPT_ENV];
+
+  return attempt !== undefined && attempt !== '' && env[STEP_COMMAND_ENV] === attempt;
 }
 
 /** Whether `env` marks its process as the runner of `attempt` of `run`. */
@@ -55,10 +77,10 @@ export function withoutOuterSessionMarkers(env: NodeJS.ProcessEnv): NodeJS.Proce
 
 /**
  * `env` without what `agentEvidence` reads, for a process the CLI starts itself to drive a run of its own: the attempt
- * marker and run directory, and every agent session variable, which a hook inherits from the session it runs in.
+ * and command-step markers and run directory, and every agent session variable, which a hook inherits from the session it runs in.
  */
 export function withoutAgentEvidence(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
-  const removed = new Set<string>([ATTEMPT_ENV, RUN_DIR_ENV, ...AGENT_SESSION_ENV]);
+  const removed = new Set<string>([ATTEMPT_ENV, STEP_COMMAND_ENV, RUN_DIR_ENV, ...AGENT_SESSION_ENV]);
 
   return Object.fromEntries(Object.entries(env).filter(([name]) => !removed.has(name)));
 }

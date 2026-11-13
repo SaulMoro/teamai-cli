@@ -23,8 +23,12 @@ export type { ScoredLabels } from './pass-scoring.js';
 
 export { stageEvidence } from './scoring-evidence.js';
 
-// Loaded on call: the benchmark's checks reach place.ts and engine.ts, which import this module.
-const benchmarkChecks = (): Promise<typeof BenchmarkChecks> => import('../benchmark/trial.js');
+let loadingChecks: Promise<typeof BenchmarkChecks> | undefined;
+
+// Loaded on call: the benchmark's checks reach place.ts and engine.ts, which import this module. Loaded once, so a
+// call made while they load waits for that load: the module runner Vitest runs tests in answers a second import of a
+// module in a cycle with its exports before they are initialized.
+const benchmarkChecks = (): Promise<typeof BenchmarkChecks> => (loadingChecks ??= import('../benchmark/trial.js'));
 
 /** `prepareCheckPlace` of the benchmark's checks: what teamai does in a check step's place before its command runs. */
 export async function prepareCheckPlace(input: Parameters<typeof BenchmarkChecks.prepareCheckPlace>[0]): ReturnType<typeof BenchmarkChecks.prepareCheckPlace> {

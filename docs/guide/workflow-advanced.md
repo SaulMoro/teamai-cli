@@ -641,7 +641,7 @@ finally:
 outputs: { summary: steps.summary.outputs.text }
 ```
 
-`finally` steps run once the run's steps have ended, however they ended: succeeded, failed, timed out or cancelled. They are commands, read-only, with no workspace of their own, and carry only `id`, `needs`, `if`, `command`, `env`, `output` and `timeout`. The run stays `running` while they run, for at most 10 minutes, then ends with the outcome its steps reached: a failed `finally` step never changes it. `done.finally` lists each one that failed or was cancelled, with its failure. `workflow cancel` during them ends them and the run. A workflow with `finally` runs only as a run of its own, never as another workflow's step.
+`finally` steps run once the run's steps have ended, however they ended: succeeded, failed, timed out or cancelled. They are commands, read-only, with no workspace of their own, and carry only `id`, `needs`, `if`, `command`, `env`, `output` and `timeout`. The run stays `running` while they run, for at most 10 minutes, then ends with the outcome its steps reached: a failed `finally` step never changes it. `done.finally` lists each one that failed or was cancelled, with its failure. `workflow cancel` during them ends them and the run. A run that no driver is driving when you cancel it, because its local driver on this machine stopped or no driver took it, ends at once: its `finally` steps do not run, and `done.finally` lists each one as cancelled. A workflow with `finally` runs only as a run of its own, never as another workflow's step.
 
 `done.outputs` holds the workflow's top-level `outputs`, resolved after `finally`, so they may read `finally` steps. An output whose step failed is left out.
 

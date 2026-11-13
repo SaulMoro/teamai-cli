@@ -24,9 +24,10 @@ import { log, setStderrOnly } from '@teamai/shared/log';
 import { acquireLock, releaseLock } from '../update.js';
 import { leaseNext, startRun } from '../workflow/engine.js';
 import { publishRun, resumeRun } from '../workflow/handoff.js';
-import { driverLockPath, readRun, runFilePath, runsDir } from '../workflow/store.js';
-import { benchmarkRun, runShortcut, selfImprovementRun, workflowNext, workflowPublish, workflowReport, workflowRespond, workflowResume, workflowRetry, workflowStart } from '../workflow-commands.js';
+import { driverLockPath, readRun, runFilePath, RunIdSchema, runsDir, takeRunLock } from '../workflow/store.js';
+import { benchmarkRun, runShortcut, selfImprovementRun, workflowCancel, workflowNext, workflowPublish, workflowReport, workflowRespond, workflowResume, workflowRetry, workflowStart } from '../workflow-commands.js';
 import { ATTEMPT_ENV } from '../launch-context.js';
+import { driverIdentity } from '../driver-identity.js';
 import { loadLocalConfigForScope } from '../config.js';
 import { knownSecrets } from '../env-resolution.js';
 import { sharedTeam, skillHarness, untilStopped } from './helpers/skill-harness.js';
@@ -1393,7 +1394,7 @@ outputs: { text: steps.report.outputs.text }
   it.each([
     { command: 'benchmark run', start: () => benchmarkRun('fix', {}) },
     { command: 'self-improvement run', start: () => selfImprovementRun('quality', { suite: 'fix' }) },
-  ])('$command inside a workflow step drives its run in the step\'s process on the local driver, whatever workflows.driver names', async ({ start }) => {
+  ])('$command inside a command step drives its run in the step\'s process on the local driver, whatever workflows.driver names', async ({ start }) => {
     await pulledTeam(marked('teamai-benchmark', '{ suite: string }'), {
       'teamai.yaml': 'team: acme\nrepo: https://github.com/acme/team.git\nprovider: git\nworkflows: { driver: acme-sandbox }\n',
       'workflows/teamai-self-improvement.yaml': marked('teamai-self-improvement', '{ scorer: string, suite: string }'),
@@ -1401,6 +1402,7 @@ outputs: { text: steps.report.outputs.text }
     const config = state.config;
     if (config === undefined) throw new Error('no member');
     vi.stubEnv('TEAMAI_WORKFLOW_ATTEMPT', 'r0123456789abcdef/a0123456789');
+    vi.stubEnv('TEAMAI_WORKFLOW_STEP_COMMAND', 'r0123456789abcdef/a0123456789');
 
     const answer = await capture(start);
 
@@ -1408,5 +1410,118 @@ outputs: { text: steps.report.outputs.text }
     const run = await readRun(config, z.object({ run: z.string() }).parse(answer.data?.done).run);
     expect(run).toMatchObject({ status: 'succeeded', startedBy: 'cli' });
     expect(run).not.toHaveProperty('awaits');
+  });
+
+  it.each([
+    { command: 'benchmark run --driver none', driver: 'none', start: () => benchmarkRun('fix', { driver: 'none' }) },
+    { command: 'self-improvement run --driver skill', driver: 'skill', start: () => selfImprovementRun('quality', { suite: 'fix', driver: 'skill' }) },
+  ])('refuses the $command inside a command step, whose run the step\'s process drives on the local driver', async ({ driver: asked, start }) => {
+    await pulledTeam(marked('teamai-benchmark', '{ suite: string }'), {
+      'workflows/teamai-self-improvement.yaml': marked('teamai-self-improvement', '{ scorer: string, suite: string }'),
+    });
+    const config = state.config;
+    if (config === undefined) throw new Error('no member');
+    vi.stubEnv('TEAMAI_WORKFLOW_ATTEMPT', 'r0123456789abcdef/a0123456789');
+    vi.stubEnv('TEAMAI_WORKFLOW_STEP_COMMAND', 'r0123456789abcdef/a0123456789');
+
+    expect(await capture(start)).toEqual({ error: { code: 'nested_workflow', message: `This command runs inside a command step of workflow attempt r0123456789abcdef/a0123456789, where its run is part of the step and the local driver drives it in the step's process, so --driver ${asked} does not apply there. Leave --driver out or pass --driver local; to start it on another driver, run it outside the step.` } });
+    expect(fs.existsSync(runsDir(config)) ? fs.readdirSync(runsDir(config)) : []).toEqual([]);
+  });
+
+  it('refuses the self-improvement run that a command step of a run started from a step\'s command starts, as nested_workflow', async () => {
+    // A team's teamai-self-improvement whose command step would run teamai self-improvement run itself: what that
+    // step's process carries is what decides it.
+    const reportsMarkers = `schemaVersion: v1alpha1
+name: teamai-self-improvement
+description: Runs itself again.
+invoke: deny
+inputs: { scorer: string, suite: string }
+steps:
+  - id: again
+    command: |
+      node -e "process.stdout.write(JSON.stringify({ attempt: process.env.TEAMAI_WORKFLOW_ATTEMPT ?? '', step: process.env.TEAMAI_WORKFLOW_STEP_COMMAND ?? '' }))"
+    output: { attempt: string, step: string }
+outputs:
+  attempt: steps.again.outputs.attempt
+  step: steps.again.outputs.step
+`;
+    await pulledTeam(marked('teamai-benchmark', '{ suite: string }'), { 'workflows/teamai-self-improvement.yaml': reportsMarkers });
+    vi.stubEnv('TEAMAI_WORKFLOW_ATTEMPT', 'r0123456789abcdef/a0123456789');
+    vi.stubEnv('TEAMAI_WORKFLOW_STEP_COMMAND', 'r0123456789abcdef/a0123456789');
+    const outer = await capture(() => selfImprovementRun('quality', { suite: 'fix' }));
+    expect(outer).toMatchObject({ data: { done: { outcome: 'succeeded' } } });
+    const inner = z.object({ done: z.object({ outcome: z.literal('succeeded'), outputs: z.object({ attempt: z.string().min(1), step: z.string() }) }) }).parse(outer.data).done.outputs;
+
+    vi.stubEnv('TEAMAI_WORKFLOW_ATTEMPT', inner.attempt);
+    vi.stubEnv('TEAMAI_WORKFLOW_STEP_COMMAND', inner.step === '' ? undefined : inner.step);
+
+    expect(await capture(() => selfImprovementRun('quality', { suite: 'fix' }))).toMatchObject({ error: { code: 'nested_workflow' } });
+  });
+
+  it.each([
+    { command: 'benchmark run', start: () => benchmarkRun('fix', {}) },
+    { command: 'self-improvement run', start: () => selfImprovementRun('quality', { suite: 'fix' }) },
+  ])('refuses the $command that a prompt step\'s tool with no session variable runs, as nested_workflow', async ({ start }) => {
+    await pulledTeam(marked('teamai-benchmark', '{ suite: string }'), {
+      'workflows/teamai-self-improvement.yaml': marked('teamai-self-improvement', '{ scorer: string, suite: string }'),
+    });
+    const config = state.config;
+    if (config === undefined) throw new Error('no member');
+    vi.stubEnv('TEAMAI_WORKFLOW_ATTEMPT', 'r0123456789abcdef/a0123456789');
+
+    expect(await capture(start)).toMatchObject({ error: { code: 'nested_workflow' } });
+    expect(fs.existsSync(runsDir(config)) ? fs.readdirSync(runsDir(config)) : []).toEqual([]);
+  });
+});
+
+describe('workflow cancel of a run with finally steps', () => {
+  async function startTidied(): Promise<{ config: LocalConfig; runId: string }> {
+    const config = testConfig();
+    state.config = config;
+    fs.writeFileSync(path.join(config.repo.localPath, 'workflows', 'tidied.yaml'), `schemaVersion: v1alpha1
+name: tidied
+description: Work, then tidy whatever happened.
+steps:
+  - id: work
+    command: node work.js
+finally:
+  - id: tidy
+    command: node tidy.js
+`);
+    await syncScorersThenWorkflows(config);
+    const started = await startRun(config, 'tidied', {}, { secrets: await knownSecrets(config) });
+    if ('error' in started) throw new Error(started.error.message);
+    return { config, runId: String(started.data.run) };
+  }
+
+  const script = { kind: 'ci-script', machine: 'runner', workspace: '/ci' };
+
+  it.each([
+    { by: 'whose local driver on this machine stopped', driver: driverIdentity('local', process.cwd()) },
+    { by: 'that no driver took', driver: undefined },
+  ])('ends a run $by at once, and names each finally step no driver ran', async ({ driver: leasing }) => {
+    const { config, runId } = await startTidied();
+    // As the local driver leases: under the run's driver lock, which it lets go as it stops.
+    if (leasing) expect(await takeRunLock(config, RunIdSchema.parse(runId), (lock) => leaseNext(config, runId, leasing, { drivesUnder: lock }), { waitMs: 0 })).toMatchObject({ value: { data: { lease: { step: 'work' } } } });
+
+    expect(await capture(() => workflowCancel(runId))).toMatchObject({ data: { cancelled: { steps: expect.arrayContaining(['tidy']) }, run: { status: 'cancelled' } } });
+
+    expect(await capture(() => workflowNext(runId, { json: JSON.stringify({ driver: script }) }))).toMatchObject({ data: { done: {
+      outcome: 'cancelled',
+      finally: [{ id: 'tidy', outcome: 'cancelled', failure: { code: 'cancelled', message: `Not run: no driver was driving run ${runId} when teamai workflow cancel ended it` } }],
+    } } });
+  });
+
+  it.each([
+    { by: 'another driver', driver: script },
+    // workflow next --json takes any kind, and the guide's own example calls its driver local.
+    { by: 'a driver of its own that calls itself local on this machine', driver: driverIdentity('local', '/ci') },
+  ])('leaves the finally steps of a run $by drives to that driver, which runs them on its next lease', async ({ driver: leasing }) => {
+    const { config, runId } = await startTidied();
+    expect(await leaseNext(config, runId, leasing)).toMatchObject({ data: { lease: { step: 'work' } } });
+
+    expect(await capture(() => workflowCancel(runId))).toMatchObject({ data: { run: { status: 'running', finalizing: { outcome: 'cancelled' } } } });
+
+    expect(await capture(() => workflowNext(runId, { json: JSON.stringify({ driver: leasing }) }))).toMatchObject({ data: { lease: { step: 'tidy' } } });
   });
 });

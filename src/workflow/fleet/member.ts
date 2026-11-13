@@ -42,7 +42,7 @@ import { setTimeout as sleep } from 'node:timers/promises';
 import { z } from 'zod';
 import { commandOutputs } from '../protocol.js';
 import { parseStepPath } from '../step-path.js';
-import { attemptEnv } from '../attempt-marker.js';
+import { attemptEnv, commandStepEnv } from '../attempt-marker.js';
 import { attemptDir, attemptOutDir, attemptResultPath, keepAttemptStdout, readRun, runFilePath, RunIdSchema, runRemovalRefusal, takeRunLock, type AttemptId, type RunId, type RunLock } from '../store.js';
 import { isWorkflowFile, stepWorkflow, workflowRunBy, type RunState, type WorkflowDefinition, type WorkflowEnvelope, type WorkflowFailure, type WorkflowStep } from '../types.js';
 import { envAdvice, envScopeOf, lackedLabels, lacksTool, mergeRequirements, requiredEnvKeys, type EnvScope, type InEffect, type TurnLimits } from '../requirements.js';
@@ -661,7 +661,7 @@ async function runClaim(config: LocalConfig, { lock, claim, root, secrets, membe
       ? promptRun(config, { lock, claim, trusted: ready, place: place.prompt ?? { kind: 'here' }, work, root, secrets })
       : commandRun(config, { run, attempt, step: lease.step, secrets }, place.command?.kind === 'runtime'
         ? runtimeCommand(config, { run, attempt, place: place.command, work, runDir, command: ready.command, env: { ...providedEnv(ready.scoped), ...ready.env, ...marked }, unset: ready.scoped.scope?.withhold ?? [] })
-        : startGroupedCommand({ command: ready.command, cwd: work, env: { ...ready.scoped.env, ...ready.env, ...marked }, detached: process.platform !== 'win32', group: dir }));
+        : startGroupedCommand({ command: ready.command, cwd: work, env: { ...ready.scoped.env, ...ready.env, ...commandStepEnv(config, run, attempt, resolveRunMode(process.env)), [RUN_DIR_ENV]: runDir }, detached: process.platform !== 'win32', group: dir }));
 
     stopCommand = command.stop;
 

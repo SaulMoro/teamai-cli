@@ -19,11 +19,12 @@ import { spentTokens, startLimits } from './limits.js';
 import { publishRunRecords, removeQueuedEndRecord } from './records.js';
 import { resolveRetention, runRetainedUntil, type ResolvedRetention } from './retention.js';
 import { contextOf, localId, locateStep, statesIn, type Scope } from './scope.js';
-import { attemptDir, AttemptIdSchema, isRunId, readRun, RunIdSchema, runScratchDir, withCleanupLock, type RunId } from './store.js';
+import { attemptDir, AttemptIdSchema, isRunId, readRun, RunIdSchema, runScratchDir, withCleanupLock, type RunId, type RunLock } from './store.js';
 import { answerHitl, cancel, cancellable, redeliver, repend, resetIteration, resetPending, settled, start, stopAttempt, stopWhere, stopped, type HitlAnswer, type StepState } from './step-state.js';
 import { parseTemplate, templatePaths, templatedTexts } from './template.js';
 import type { DriverIdentity, RunState, WorkflowEnvelope, WorkflowFailure } from './types.js';
 import { isIsolated } from './workspace.js';
+import { driverIdentity } from '../driver-identity.js';
 import { retryCommand } from './runtimes/retry-command.js';
 import { stopLeftInProcess } from './runtimes/cancelled.js';
 import { LOGIN_TOOLS, loginHolder } from './runtimes/login.js';
@@ -267,8 +268,27 @@ export async function respondToHitl(config: LocalConfig, runId: string, secrets:
   });
 }
 
-/** Stops a whole run or one open step and invalidates the attempts it cancelled. */
-export async function cancelRun(config: LocalConfig, runId: string, secrets: Record<string, string>, step?: string, failure: WorkflowFailure = { code: 'cancelled', message: 'Cancelled by teamai workflow cancel' }): Promise<WorkflowEnvelope> {
+/**
+ * Whether no driver will lease the `finally` steps of `run` once a cancel holds its driver lock on this machine: no driver
+ * took a step of it, or the last one held that lock for its whole drive here (`isLeasedUnderLock`), and so is gone.
+ */
+function isUndriven(run: RunState): boolean {
+  return run.driver === undefined || (run.isLeasedUnderLock === true && run.driver.machine === driverIdentity(run.driver.kind, run.driver.workspace).machine);
+}
+
+/**
+ * Stops a whole run or one open step and invalidates the attempts it cancelled. A whole run whose driver lock the caller
+ * holds (`heldLock`) and that no driver drives ends at once: its `finally` steps are cancelled too, since nothing would
+ * lease them and it would stay `running`.
+ */
+export async function cancelRun(
+  config: LocalConfig,
+  runId: string,
+  secrets: Record<string, string>,
+  step?: string,
+  failure: WorkflowFailure = { code: 'cancelled', message: 'Cancelled by teamai workflow cancel' },
+  { heldLock }: { heldLock?: RunLock } = {},
+): Promise<WorkflowEnvelope> {
   return controlRun(config, runId, secrets, async (run, now, finish) => {
     if (run.status !== 'running') return settledRunError(run);
 
@@ -290,6 +310,11 @@ export async function cancelRun(config: LocalConfig, runId: string, secrets: Rec
     if (step === undefined) {
       changed = stopWhere(run, () => true, failure, run.revision, now);
       await finish({ outcome: 'cancelled', settledAt: run.revision });
+
+      if (run.finalizing && heldLock?.run === run.id && isUndriven(run)) {
+        changed.push(...stopWhere(run, () => true, { code: 'cancelled', message: `Not run: no driver was driving run ${run.id} when teamai workflow cancel ended it` }, run.revision, now));
+        await finish({ outcome: 'cancelled', settledAt: run.revision });
+      }
     } else {
       const state = run.steps.find((s) => s.id === step);
 

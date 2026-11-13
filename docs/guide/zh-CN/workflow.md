@@ -1097,7 +1097,10 @@ steps:
 
 运行的步骤内不能启动或驱动另一次运行。步骤的进程带有 `TEAMAI_WORKFLOW_ATTEMPT`：本地驱动为它运行的命令和提示词步骤的工具设置它，skill 驱动为它的 runner 及其命令设置它，所有驱动都为 setup 设置它。设置了它时，每个会改变运行的 `workflow` 命令（`start`、`next`、`report`、`respond`、`retry`、`cancel`、`resume` 和 `publish`）都返回 `nested_workflow`，只有 skill 驱动的 runner 上报它自己的 attempt 除外。在 `.teamai/workflow-worktrees` 下的工作流 worktree 中，以及在 `teamai/<run>/...` 分支上的检出中，`start` 也返回 `nested_workflow`；作为工作流快捷方式的命令（如 `teamai recall maintenance --update-quality`）也一样，除非它在步骤内运行，那时它的运行是该步骤的一部分。其他命令在那里仍然可用，因为步骤的子 agent 从它的位置上报。要让另一个工作流成为运行的一部分，把它作为 `workflow` 步骤加入定义。
 
-替你启动默认工作流的命令仍可作为步骤的命令运行。它在步骤的进程中、用本地驱动驱动自己的运行（不管 `workflows.driver` 如何设置），该运行结束时步骤才结束：
+替你启动默认工作流的命令仍可作为步骤的命令运行。步骤的进程用本地驱动驱动它的运行（不管 `workflows.driver` 如何设置），该运行结束时步骤才结束：
+
+- `teamai score`、`teamai benchmark run` 和 `teamai self-improvement run` 只有在本地驱动、skill 驱动或[集群](workflow-advanced.md#在其他成员的机器上运行步骤fleet)成员在自己机器上（而不是在[步骤运行时](workflow-advanced.md#驱动定义和步骤运行时)中）运行的 `command` 步骤进程里，才把它们的运行作为该步骤的一部分。在那里它们可以不带 `--driver` 或带 `--driver local` 运行，其他 `--driver` 返回 `nested_workflow`。在那里 `invoke` 仍会判断它们：agent 的会话变量到达步骤时（例如 skill 驱动在设置了它的会话中运行的步骤），teamai 自带的这些命令的工作流返回 `invoke_denied`。这只支持一层：它们启动的运行中，`command` 步骤再次运行其中任一命令时返回 `nested_workflow`。在步骤的其他进程中，例如提示词步骤的工具、setup、步骤运行时中的命令步骤，或你自己的驱动通过 `workflow next` 运行的命令步骤，它们返回 `nested_workflow`。
+- 其他命令，例如 `teamai recall maintenance --update-quality`，在步骤的任何进程中都会运行自己的运行。
 
 ```yaml
 # workflows/weekly-quality.yaml in the team repo
