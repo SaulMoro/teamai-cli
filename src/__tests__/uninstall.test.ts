@@ -690,6 +690,22 @@ describe('uninstall', () => {
     expect(await fse.pathExists(dataHome), 'data home').toBe(false);
   });
 
+  it('makes no data home to take its sync lock in, when the scope it uninstalls has none', async () => {
+    const { homeDir, repoPath, teamaiHome } = await setupFixture(tmpDir);
+    vi.stubEnv('HOME', homeDir);
+    const dataHome = path.join(teamaiHome, 'projects', 'never-made');
+    mockAutoDetectInit.mockResolvedValue({
+      localConfig: makeLocalConfig(homeDir, repoPath, { scope: 'project', projectRoot: homeDir, dataHome }),
+      teamConfig: makeTeamConfig(),
+    });
+
+    await uninstall({ force: true });
+
+    expect(log.info).not.toHaveBeenCalledWith('Nothing to uninstall');
+    expect(log.error).not.toHaveBeenCalledWith(expect.stringContaining('Another teamai pull or push'));
+    expect(await fse.pathExists(dataHome), 'data home').toBe(false);
+  });
+
   it('previews what it would remove in a dry run while a step runtime holds a place, warning that the uninstall would refuse', async () => {
     const { homeDir, repoPath, teamaiHome } = await setupFixture(tmpDir);
     vi.stubEnv('HOME', homeDir);
