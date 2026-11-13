@@ -476,11 +476,13 @@ export function unmeasuredTrials(run: RunState, trials: BenchmarkRecord['trials'
 }
 
 /**
- * Why `work`, whose work step is `step`, ended in an error: the failure of its deepest step that has one, as
- * `code: message`, else how its work step stands.
+ * Why `work`, whose work step is `step`, ended in an error: the failure of its deepest failed step, else of its deepest
+ * cancelled one, as `code: message`, else how its work step stands. A step cancelled beside one that failed is a
+ * consequence, not the cause.
  */
 function whyErrored({ states }: TrialWork, step: StepState | undefined): string {
-  const [failure] = states.toSorted((left, right) => right.id.length - left.id.length).flatMap((state) => ((state.status === 'failed' || state.status === 'cancelled') && state.failure ? [state.failure] : []));
+  const deepestFirst = states.toSorted((left, right) => right.id.split('.').length - left.id.split('.').length);
+  const [failure] = (['failed', 'cancelled'] as const).flatMap((ended) => deepestFirst.flatMap((state) => (state.status === ended && state.failure ? [state.failure] : [])));
 
   if (failure) return `${failure.code}: ${failure.message}`;
 
