@@ -286,14 +286,22 @@ export function isToolOwnState(entry: string, text: string): boolean {
   return !holds(parsed);
 }
 
-/** Where a program keeps state of its own, which teamai writes none of. */
-const OWN_STATE = TOOL_HOMES.map((dir) => ({ owner: 'the tool', dir }));
+/**
+ * Where a program keeps state of its own, which teamai writes none of: what a sandbox or a thread left running is
+ * section (f)'s. `makesDir`: the program makes the folder too, while a tool's home is #1808's (KNOWN_LEFTOVERS).
+ */
+const OWN_STATE = [
+  ...TOOL_HOMES.map((dir) => ({ owner: 'the tool', dir, makesDir: false })),
+  // T3 Code checkpoints the project a thread of a teamai run works in, under refs/t3.
+  { owner: 'T3 Code', dir: 'project/.git/refs/t3', makesDir: true },
+];
 
 /** Whose own state the entry left behind with `value` is, and the folder it keeps it in; undefined when it may be teamai's. */
 export function ownStateOf(entry: string, value: string | undefined): { owner: string; dir: string } | undefined {
   if (teamaiPlace(entry, value)) return undefined;
+  const own = OWN_STATE.find(({ dir, makesDir }) => entry.startsWith(`${dir}/`) || (makesDir && value === 'dir' && (entry === dir || dir.startsWith(`${entry}/`))));
 
-  return OWN_STATE.find(({ dir }) => entry.startsWith(`${dir}/`));
+  return own === undefined ? undefined : { owner: own.owner, dir: own.dir };
 }
 
 /** A run's branch, which a run that succeeded keeps as its result (docs/guide/workflow.md, The branches a run leaves). */

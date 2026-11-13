@@ -47,6 +47,12 @@ describe("another program's own state in a ledger's section (e)", () => {
     ['home/.claude', 'dir', undefined],
     ['home/.claude/skills/teamai-share/SKILL.md', 'f'.repeat(64), undefined],
     ['project/.git/refs/heads/main', 'f'.repeat(40), undefined],
+    // T3 Code checkpoints a thread's project under refs/t3 (its CheckpointService and git driver).
+    ['project/.git/refs/t3/checkpoints/turns/1', 'f'.repeat(64), { owner: 'T3 Code', dir: 'project/.git/refs/t3' }],
+    ['project/.git/refs/t3/orchestration-v2/checkpoints/x', 'f'.repeat(64), { owner: 'T3 Code', dir: 'project/.git/refs/t3' }],
+    ['project/.git/refs/t3', 'dir', { owner: 'T3 Code', dir: 'project/.git/refs/t3' }],
+    ['project/.git/refs/t3x', 'dir', undefined],
+    ['project/.git/refs/t3/teamai/r1', 'f'.repeat(64), undefined],
   ])('judges %s holding %s as the state of %o', (entry, value, own) => {
     expect(ownStateOf(entry, value)).toEqual(own);
   });
