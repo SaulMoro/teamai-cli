@@ -634,6 +634,19 @@ export type OpState = z.infer<typeof OpStateSchema>;
  * so a runtime that gets it wrong loses only its display, and reads `can` as its own driver offer.
  */
 export function runtimeMessageSchemas<TDisplay extends z.ZodType>({ display }: { display: TDisplay }) {
+  // The nested shapes of a reply, read as strictly as the reply itself. The shared schemas stay open, since they also
+  // read what is no reply: a driver's `can`, which carries its own keys, and a runtime's own journal.
+  const failure = RuntimeFailureSchema.strict();
+  const can = CanSchema.extend({ confined: z.array(ConfinedOfferSchema.strict()).optional() }).strict();
+  const finished = { ...finishedPrompt, session: PromptSessionSchema.strict(), confined: ConfinedKeptSchema.strict().optional() };
+  const opState = z.discriminatedUnion('state', [
+    z.object({ op: OpIdSchema, state: z.literal('running') }).strict(),
+    z.object({ op: OpIdSchema, state: z.literal('exited'), code: z.number().int(), stdout: z.string() }).strict(),
+    z.object({ op: OpIdSchema, state: z.literal('finished'), ...finished }).strict(),
+    z.object({ op: OpIdSchema, state: z.literal('cancelled'), stdout: z.string().optional() }).strict(),
+    z.object({ op: OpIdSchema, state: z.literal('failed'), failure }).strict(),
+  ]) satisfies z.ZodType<OpState>;
+
   /**
    * A reply to `init`: the runtime's offer, or why it cannot run with the options it was given. `prompt: true` says it
    * launches agents its own way, so teamai sends it each prompt step as a `prompt`, never as an `exec` of the tool.
@@ -645,12 +658,12 @@ export function runtimeMessageSchemas<TDisplay extends z.ZodType>({ display }: {
    * does: teamai seeds it, copies a `login` into it and reads sessions there.
    * `conversations: true` says a prompt's conversation outlives the prompt in its place, so a later prompt can continue
    * it, and teamai holds the place for it. Absent: teamai holds no place of the runtime for a later prompt.
-   * Read strictly, as every reply is: a key teamai does not know fails the start. Protocol 1 has not been released, and
+   * Read strictly, as every reply is at every depth (`can` and its offers too): a key teamai does not know fails the start. Protocol 1 has not been released, and
    * teamai ships its runtimes with the engine, so a new key lands with the teamai that reads it and the protocol stays 1.
    */
   const InitReply = z.discriminatedUnion('ok', [
     z.object({
-      type: z.literal('init'), ok: z.literal(true), can: CanSchema, prompt: z.boolean().optional(), confinedPrompt: z.boolean().optional(), wake: z.boolean().optional(),
+      type: z.literal('init'), ok: z.literal(true), can, prompt: z.boolean().optional(), confinedPrompt: z.boolean().optional(), wake: z.boolean().optional(),
       toolHome: z.boolean().optional(), conversations: z.boolean().optional(),
       // The tools it cannot run now, each with why and what the person does about it; it still offers the rest.
       unavailable: z.record(z.string().min(1), z.string().min(1).max(UNAVAILABLE_REASON_MAX)).optional(),
@@ -660,7 +673,7 @@ export function runtimeMessageSchemas<TDisplay extends z.ZodType>({ display }: {
       // attempt's tool home, and sends none of their sign-in variables it found by name in the member's environment.
       ownLogins: z.array(z.string().min(1)).optional(),
     }).strict(),
-    z.object({ type: z.literal('init'), ok: z.literal(false), error: RuntimeFailureSchema }).strict(),
+    z.object({ type: z.literal('init'), ok: z.literal(false), error: failure }).strict(),
   ]);
 
   const OpEvent = z.discriminatedUnion('event', [
@@ -672,10 +685,10 @@ export function runtimeMessageSchemas<TDisplay extends z.ZodType>({ display }: {
      * prompt. It neither accepts the operation nor ends it; the latest display given is shown.
      */
     z.object({ op: OpIdSchema, event: z.literal('display'), display: display.nonoptional() }).strict(),
-    z.object({ op: OpIdSchema, event: z.literal('failed'), failure: RuntimeFailureSchema }).strict(),
+    z.object({ op: OpIdSchema, event: z.literal('failed'), failure }).strict(),
     z.object({ op: OpIdSchema, event: z.literal('output'), stream: z.enum(['stdout', 'stderr']), data: z.string() }).strict(),
     z.object({ op: OpIdSchema, event: z.literal('exited'), code: z.number().int(), stdout: z.string() }).strict(),
-    z.object({ op: OpIdSchema, event: z.literal('finished'), ...finishedPrompt }).strict(),
+    z.object({ op: OpIdSchema, event: z.literal('finished'), ...finished }).strict(),
     z.object({ op: OpIdSchema, event: z.literal('cancelled') }).strict(),
     /** A `wake`'s end: the member launched, on `where`, the machine or environment it launched on. */
     z.object({ op: OpIdSchema, event: z.literal('woken'), where: z.string(), display }).strict(),
@@ -689,17 +702,17 @@ export function runtimeMessageSchemas<TDisplay extends z.ZodType>({ display }: {
 
   const HandleEvent = z.discriminatedUnion('event', [
     z.object({ event: z.literal('collected'), handle: RuntimeHandleSchema }).strict(),
-    z.object({ event: z.literal('collect_failed'), handle: RuntimeHandleSchema, failure: RuntimeFailureSchema }).strict(),
-    z.object({ event: z.literal('alive'), handle: RuntimeHandleSchema, ops: z.array(OpStateSchema), display }).strict(),
+    z.object({ event: z.literal('collect_failed'), handle: RuntimeHandleSchema, failure }).strict(),
+    z.object({ event: z.literal('alive'), handle: RuntimeHandleSchema, ops: z.array(opState), display }).strict(),
     z.object({ event: z.literal('gone'), handle: RuntimeHandleSchema }).strict(),
     z.object({ event: z.literal('closed'), handle: RuntimeHandleSchema, kept }).strict(),
     /** The runtime could not end the place, so what it started there may still run. */
-    z.object({ event: z.literal('close_failed'), handle: RuntimeHandleSchema, failure: RuntimeFailureSchema, kept }).strict(),
+    z.object({ event: z.literal('close_failed'), handle: RuntimeHandleSchema, failure, kept }).strict(),
     /**
      * The runtime could not answer a `reattach`, `collect` or `close` of the handle, such as when its journal cannot be
      * read or its provider cannot be reached: never `gone` for that, since the place may still be there.
      */
-    z.object({ event: z.literal('failed'), handle: RuntimeHandleSchema, failure: RuntimeFailureSchema, kept }).strict(),
+    z.object({ event: z.literal('failed'), handle: RuntimeHandleSchema, failure, kept }).strict(),
   ]);
 
   /**
