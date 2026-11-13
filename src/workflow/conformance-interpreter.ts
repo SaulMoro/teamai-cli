@@ -111,7 +111,8 @@ export type ConformanceScenario = WorkflowScenario | BenchmarkScenario;
 /**
  * The kinds of driver a scenario speaks as. Each sends the driver identity of its `kind`, so a lease one holds is
  * another kind's to the rest, and each declares what it can do in `driver.can`. A local driver's `hitl` comes from the
- * operation, since it has a person only when it runs in a terminal.
+ * operation, since it has a person only when it runs in a terminal. A step runtime's profile is what that runtime
+ * offers the local driver, which step-runtime-scenarios.test.ts checks against the runtime itself.
  */
 export const DRIVER_PROFILES = {
   /** The in-process driver `workflow start --driver local` and `workflow resume` run. */
@@ -131,21 +132,21 @@ export const DRIVER_PROFILES = {
   /** The skill driver's identity declaring only a person and workspaces, so a run owes it no env, setup or tokens. */
   'skill-bare': { kind: 'skill', can: { hitl: true, workspace: ['read-only', 'new', 'continue'] } },
   /**
-   * The local driver offering a step on a T3 Code runtime: each prompt a thread, no command, setup, env, budget or
-   * unattended step, and its tools judged best-effort.
+   * The local driver offering a step on a T3 Code runtime: each prompt a thread reporting the tokens its tool's session
+   * records, no command, setup, env, turn cap or unattended step, and its tools judged best-effort.
    */
   t3: {
     kind: 'local',
     can: {
-      exec: false, setup: false, env: false, tokens: false, unattended: false, max_turns: false, workspace: ['read-only', 'new', 'continue', 'clone', 'team'], tools: ['claude'],
+      exec: false, setup: false, env: false, tokens: true, unattended: false, max_turns: false, workspace: ['read-only', 'new', 'continue', 'clone', 'team'], tools: ['claude'],
       confined: [{ level: 'best-effort', access: 'read', tools: ['claude'] }], remote: true,
     },
   },
-  /** The local driver offering a step on a Paseo runtime: as T3, and a role delivered into the agent's home. */
+  /** The local driver offering a step on a Paseo runtime on this machine, running Claude: as T3, and a role delivered into the agent's home. */
   paseo: {
     kind: 'local',
     can: {
-      exec: false, setup: false, env: false, tokens: false, unattended: false, max_turns: false, workspace: ['read-only', 'new', 'continue', 'clone', 'team'], role: true, tools: ['claude'],
+      exec: false, setup: false, env: false, tokens: true, unattended: false, max_turns: false, workspace: ['read-only', 'new', 'continue', 'clone', 'team'], role: true, tools: ['claude'],
       confined: [{ level: 'best-effort', access: 'read', tools: ['claude'] }], remote: true,
     },
   },

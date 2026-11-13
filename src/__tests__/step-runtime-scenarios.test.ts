@@ -40,6 +40,7 @@ import { getRepoIdentity } from '../session-flow/sync.js';
 import { signalPid } from '@teamai/shared/process-group';
 import { entriesUnder } from '@teamai/shared/entries-under';
 import { hostRuntimeIn } from './helpers/host-runtime.js';
+import { DRIVER_PROFILES, DRIVERS_UNDER_TEST, PROFILES_UNDER_TEST } from '../workflow/conformance-interpreter.js';
 
 /**
  * One scenario suite every step runtime passes, through the `StepRuntime` interface alone. `retains` says whether the
@@ -1075,6 +1076,66 @@ describe.each(PROMPT_SUBJECTS)('StepRuntime prompt scenarios: $name', (subject) 
  * host. A runtime offers `can.confined` only when its `init` says it answers such prompts; teamai drops the offer
  * otherwise, so a step confined to a directory never reaches it.
  */
+/** A conformance profile that speaks as the local driver offering a step on a step runtime teamai ships. */
+type RuntimeProfile = Exclude<(typeof PROFILES_UNDER_TEST)[number], (typeof DRIVERS_UNDER_TEST)[number]>;
+
+/**
+ * Each step runtime a conformance profile speaks for, as it runs here on its fake, with the options that make it offer
+ * what the profile describes. Keyed by every runtime profile under test, so a new one is tied to its runtime's offer, or
+ * says why it is not, before it type checks.
+ */
+const RUNTIME_OFFERS: Record<RuntimeProfile, ((state: string) => { runtime: StepRuntime<DriverCan>; options: RuntimeOptions }) | undefined> = {
+  t3: (state) => ({ runtime: t3Started(state, t3Runtime(state)), options: T3.options(state, {}) }),
+  // The profile runs Claude alone, whose sessions the runtime reads in the home the daemon names.
+  paseo: (state) => {
+    paseo.behave({ models: { claude: ['claude-opus-5-5'] }, claude_home: path.join(state, 'daemon-user', '.claude') });
+
+    return { runtime: paseoRuntime(state), options: { url: paseo.url } };
+  },
+  // Its profile offers a verified Codex judge too, which needs Codex and its sign-in in an image this fake docker lacks.
+  sandbox: undefined,
+};
+
+const isRuntimeProfile = (profile: string): profile is RuntimeProfile => Object.hasOwn(RUNTIME_OFFERS, profile);
+
+describe('the conformance profile of each step runtime', () => {
+  let dir: string;
+  const started: StepRuntime<DriverCan>[] = [];
+
+  beforeEach(() => {
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-runtime-profile-'));
+  });
+
+  afterEach(async () => {
+    await Promise.all(started.splice(0).map((runtime) => runtime.dispose()));
+
+    try {
+      await T3.stop(path.join(dir, 'state'));
+      await expectNothingLeft({ dir });
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  const tied = PROFILES_UNDER_TEST.flatMap((profile) => {
+    const offer = isRuntimeProfile(profile) ? RUNTIME_OFFERS[profile] : undefined;
+
+    return offer ? [{ profile, offer }] : [];
+  });
+
+  // A scenario run as the profile then holds and leases steps as the local driver does with the runtime's own offer.
+  it.each(tied)('declares what the $profile runtime offers the local driver', async ({ profile, offer }) => {
+    const { runtime, options } = offer(path.join(dir, 'state'));
+    started.push(runtime);
+    const ready = await runtime.init({ options, mode: 'unattended' });
+
+    if (!ready.ok) throw new Error(`The ${profile} runtime offered nothing: ${ready.failure.message}`);
+    // A local driver has a person by its operation, not by the runtime's offer, and runs every runtime's steps remotely.
+    const { hitl: _hitl, ...offered } = ready.can;
+    expect(DRIVER_PROFILES[profile].can).toEqual({ ...offered, remote: true });
+  });
+});
+
 describe('a runtime that answers confined prompts, over stdio', () => {
   let dir: string;
   let evidence: string;
