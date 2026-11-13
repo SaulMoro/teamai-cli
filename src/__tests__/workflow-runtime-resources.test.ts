@@ -149,7 +149,7 @@ describe('which runtime a name finds', () => {
     expect(fs.readFileSync(`${seen}.from`, 'utf8').startsWith(fs.realpathSync(os.tmpdir()))).toBe(false);
   });
 
-  it('removes the copy a killed teamai left of a team runtime folder, at the next run of it', async () => {
+  it('removes the copy a killed teamai left of a team runtime folder, at the next run of it, and none a teamai on another host sharing the home runs', async () => {
     const team = teamWith({ 'runtimes/acme/RUNTIME.yaml': 'protocol: 1\nentry: ./runtime\n', 'runtimes/acme/runtime': '#!/bin/sh\nexit 0\n' });
     const { locateRuntime, pinRuntime } = await import('../workflow/runtimes/locate.js');
     const resolved = await resolveDriver(team, 'acme', { personal: true });
@@ -164,11 +164,19 @@ describe('which runtime a name finds', () => {
     if (!left.ok || left.source.launch.kind !== 'executable') throw new Error('no copy');
     const leftDir = path.dirname(left.source.launch.executable);
     expect(fs.existsSync(leftDir)).toBe(true);
+    // A teamai in a container sharing the data home, whose pid names no process here.
+    const hostname = vi.spyOn(os, 'hostname').mockReturnValue('devcontainer-4f2a');
+    const containerPid = vi.spyOn(process, 'pid', 'get').mockReturnValue(gone);
+    const elsewhere = await pinRuntime(found.source, { config: team });
+    containerPid.mockRestore();
+    hostname.mockRestore();
+    if (!elsewhere.ok || elsewhere.source.launch.kind !== 'executable') throw new Error('no copy');
 
     const next = await pinRuntime(found.source, { config: team });
     if (!next.ok) throw new Error(next.failure.message);
 
-    expect(fs.existsSync(leftDir)).toBe(false);
+    expect([fs.existsSync(leftDir), fs.existsSync(path.dirname(elsewhere.source.launch.executable))]).toEqual([false, true]);
+    await elsewhere.remove();
     if (next.source.launch.kind !== 'executable') throw new Error('no copy');
     // The person reviews what runs, which a pull no longer changes, at the revision they accept.
     const asked: string[] = [];

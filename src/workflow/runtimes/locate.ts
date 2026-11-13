@@ -1,12 +1,13 @@
 import { createHash } from 'node:crypto';
 import fs from 'node:fs/promises';
+import os from 'node:os';
 import path from 'node:path';
 import { createInterface } from 'node:readline/promises';
 import { z } from 'zod';
 import { RUNTIME_PROTOCOL } from '@teamai/runtime-protocol';
 import { resolvePathCommand } from '@teamai/shared/cli-path';
 import { copyRegularTree, readRegularFile, readRegularFileNoLink } from '@teamai/shared/regular-file';
-import { signalPid } from '@teamai/shared/process-group';
+import { identityOf, signalPid } from '@teamai/shared/process-group';
 import { parseYaml } from '@teamai/shared/yaml';
 import { teamaiBin } from '../../default-drivers.js';
 import type { RunMode } from '../../launch-context.js';
@@ -339,17 +340,31 @@ function unanswered(source: ExternalRuntime): Acceptance {
 /** The runtime a source runs as, and what removes the copy it runs from once nothing runs it. */
 export type PinnedRuntime = { ok: true; source: ExternalRuntime; remove: () => Promise<void> };
 
-/** Where each teamai process keeps the copies of team runtime folders it runs: `<pid>-<random>`, one per open. */
+/**
+ * Where each teamai process keeps the copies of team runtime folders it runs: `<pid>-<host>-<random>`, one per open,
+ * `<host>` telling the host and pid namespace whose `<pid>` it is.
+ */
 function runtimeCopies(config: LocalConfig): string {
   return path.join(getDataHome(config), 'workflows', 'runtime-copies');
 }
 
-/** Removes the copies in `dir` whose teamai process is gone, as a killed one leaves them. */
-async function removeOrphanCopies(dir: string): Promise<void> {
-  for (const entry of await fs.readdir(dir).catch(() => [])) {
-    const pid = Number(entry.split('-')[0]);
+/** This process's host and pid namespace as a copy's name holds them: a container sharing the home has its own. */
+async function copierHost(): Promise<string> {
+  const { pidNamespace } = await identityOf(process.pid);
 
-    if (Number.isSafeInteger(pid) && signalPid(pid, 0) === 'gone') await fs.rm(path.join(dir, entry), { recursive: true, force: true });
+  return createHash('sha256').update(`${os.hostname()}\0${pidNamespace ?? ''}`).digest('hex').slice(0, 12);
+}
+
+/**
+ * Removes the copies in `dir` whose teamai process is gone, as a killed one leaves them. A pid of another host or pid
+ * namespace names no process here, so its copies stay, for as long as that teamai may run from them.
+ */
+async function removeOrphanCopies(dir: string, host: string): Promise<void> {
+  for (const entry of await fs.readdir(dir).catch(() => [])) {
+    const [pidPart, hostPart] = entry.split('-');
+    const pid = Number(pidPart);
+
+    if (hostPart === host && Number.isSafeInteger(pid) && signalPid(pid, 0) === 'gone') await fs.rm(path.join(dir, entry), { recursive: true, force: true });
   }
 }
 
@@ -401,9 +416,10 @@ export type PinProblem = { kind: 'uncopied'; why: string } | { kind: 'link'; lin
  */
 export async function pinFolder(dir: string, { config }: { config: LocalConfig }): Promise<{ ok: true; copy: string; remove: () => Promise<void> } | { ok: false; problem: PinProblem }> {
   const copies = runtimeCopies(config);
-  await removeOrphanCopies(copies);
+  const host = await copierHost();
+  await removeOrphanCopies(copies, host);
   await fs.mkdir(copies, { recursive: true });
-  const copy = await fs.mkdtemp(path.join(copies, `${process.pid}-`));
+  const copy = await fs.mkdtemp(path.join(copies, `${process.pid}-${host}-`));
   const remove = async (): Promise<void> => fs.rm(copy, { recursive: true, force: true });
 
   const refused = async (problem: PinProblem): Promise<{ ok: false; problem: PinProblem }> => {
