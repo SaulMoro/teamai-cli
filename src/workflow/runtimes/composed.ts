@@ -30,8 +30,8 @@ function weaker(outer: boolean | undefined, inner: boolean | undefined): boolean
  * `workspace`, `hitl`, `end_turn`, `role`, `prompt` (`launchesAgents`) and `unavailable` are the inner's, and so is
  * `fullAccess`; where it runs decides `isolation`, `env`, `setup`, `exec` (setup and command steps run on the outer) and
  * `ownLogins`. `workspace` also holds the modes the outer prepares (`clone`, `team`). `unattended` is the outer's, for
- * the tools the inner runs in full access, and for none when it reports none, unless the inner says it runs no
- * unattended prompt, as T3 and Paseo do: it refuses one wherever its tool runs. `network`, `tokens` and `max_turns` are
+ * the tools the inner runs in full access, and for none when it reports none, only when the inner offers unattended
+ * itself: one that refuses it, as T3 and Paseo do, or says nothing of it, runs none wherever its tool runs. `network`, `tokens` and `max_turns` are
  * the weaker of both. A composed entry answers no confined prompt: `confined` is dropped.
  */
 export function composedOffer(outer: Offer, inner: Offer): Offer {
@@ -50,7 +50,7 @@ export function composedOffer(outer: Offer, inner: Offer): Offer {
     ...(outer.can.env !== undefined && { env: outer.can.env }),
     ...(outer.can.setup !== undefined && { setup: outer.can.setup }),
     ...(outer.can.exec !== undefined && { exec: outer.can.exec }),
-    ...(outer.can.unattended !== undefined && { unattended: outer.can.unattended && inner.can.unattended !== false, fullAccess: [] }),
+    ...(outer.can.unattended !== undefined && { unattended: outer.can.unattended && inner.can.unattended === true, fullAccess: [] }),
     // Kept whether or not the outer offers unattended prompts: a tool in full access is warned of either way.
     ...(inner.can.fullAccess !== undefined && { fullAccess: inner.can.fullAccess }),
   };
