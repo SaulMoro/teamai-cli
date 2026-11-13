@@ -1710,6 +1710,50 @@ steps:
       expect(sends()).toHaveLength(1);
     });
 
+    it('closes a place held for a conversation once the run is published to go on elsewhere, after its teamai stopped with it held', async () => {
+      const waiting = path.join(state, 'waiting');
+      writeDefinition('heldpub', [{ use: 'toy', options: { state, agent: { release: path.join(state, 'release-{step}'), output: { ok: true } } } }, { use: 'local' }]);
+      writeFlow('heldpair', `  - id: change
+    workspace: new
+    workflow:
+      steps:
+        - id: one
+          prompt: Plan the change.
+          output:
+            ok: boolean
+        - id: pause
+          needs: [one]
+          command: node -e "require('fs').writeFileSync(process.argv[1], ''); setTimeout(() => {}, 60000)" ${JSON.stringify(waiting)}
+        - id: two
+          needs: [pause]
+          session:
+            from: one
+          prompt: Make the change you planned.
+          output:
+            ok: boolean`);
+      fs.writeFileSync(path.join(state, 'release-change.one'), '');
+      expect((await runCLI(['pull'], repo)).code).toBe(0);
+      const before = runIds();
+      const first = await startKilled(['workflow', 'start', 'heldpair', '--driver', 'heldpub']);
+      await until(() => fs.existsSync(waiting));
+      // Ctrl-C while the command between the two prompts runs: step one's place stays held for step two.
+      first.child.kill('SIGINT');
+      await first.ended;
+      const runId = String([...runIds()].find((id) => !before.has(id)));
+      const one = attemptOf(readRunState(runId).steps.find((step) => step.id === 'change.one'));
+      const closes = (): string => (fs.existsSync(path.join(state, 'closes.jsonl')) ? fs.readFileSync(path.join(state, 'closes.jsonl'), 'utf8') : '');
+      expect(runtimeRecord(runId, one)).toMatchObject({ heldFor: { conversation: { tool: 'claude' } } });
+      expect(closes()).not.toContain(`"handle":"toy-${runId}-${one}"`);
+      // A run's branches reach its origin before it is published, as a member pushes them.
+      execFileSync('git', ['push', '-q', 'origin', `refs/heads/teamai/${runId}/*:refs/heads/teamai/${runId}/*`], { cwd: repo });
+
+      const published = await runCLI(['workflow', 'publish', runId], repo, env());
+
+      expect(envelope(published), published.stderr).toMatchObject({ data: { run: runId, offered: true } });
+      expect(closes()).toContain(`"handle":"toy-${runId}-${one}"`);
+      expect(runtimeRecord(runId, one)).toMatchObject({ phase: 'closed' });
+    });
+
     it('keeps the display the runtime gives with the prompt\'s acceptance while the prompt runs, for the run\'s details', async () => {
       const release = path.join(state, 'release');
       const display = { label: 'Review the repository', url: 'paseo://agent/9f2c', fields: { agent: 'claude', mode: 'default' } };
