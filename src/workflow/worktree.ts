@@ -639,10 +639,11 @@ async function hideTeamaiWorktrees(main: string): Promise<void> {
   await appendRegularFile(exclude, `${current.endsWith('\n') || current === '' ? '' : '\n'}${EXCLUDE_BLOCK}`);
 }
 
-async function removeEmptyDir(dir: string, dryRun: boolean): Promise<boolean> {
+/** Removes `dir` when empty; a dry run counts it empty when it holds only the worktrees in `gone`, which go first. */
+async function removeEmptyDir(dir: string, dryRun: boolean, gone: readonly string[] = []): Promise<boolean> {
   const entries = await fs.readdir(dir).catch(() => null);
 
-  if (entries === null || entries.length > 0) return false;
+  if (entries === null || entries.some((name) => !(dryRun && gone.includes(path.join(dir, name))))) return false;
 
   if (!dryRun) await fs.rmdir(dir);
 
@@ -669,7 +670,7 @@ export async function removeWorktreeSetup(checkout: string, { dryRun = false, go
   const removed: string[] = [];
 
   for (const dir of [path.join(checkout, '.teamai', 'workflow-worktrees'), hooksPath(checkout)]) {
-    if (await removeEmptyDir(dir, dryRun)) removed.push(dir);
+    if (await removeEmptyDir(dir, dryRun, gone)) removed.push(dir);
   }
 
   const excludePath = await gitPath(checkout, 'info/exclude');

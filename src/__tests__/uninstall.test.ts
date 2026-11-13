@@ -1988,6 +1988,33 @@ describe('uninstall', () => {
       expect([await fse.pathExists(planted), await fse.pathExists(ran)]).toEqual([false, false]);
     });
 
+    it('removes the emptied folders in another checkout of the project whose runs kept worktrees', async () => {
+      const { projectRoot } = await projectWithRunWorktrees([]);
+      const linked = path.join(tmpDir, 'business-repo-linked');
+      git(projectRoot, 'worktree', 'add', '-q', '-b', 'feature', linked);
+      const { ensureWorktree } = await import('../workflow/worktree.js');
+      const made = await ensureWorktree(linked, 'teamai/r0123456789abcdef/fail/p1', 'HEAD');
+      if ('error' in made) throw new Error(made.error);
+      // Without it, the checkout is named for the folder the worktrees leave empty alone.
+      await fse.remove(path.join(linked, '.teamai', 'workflow-hooks'));
+      const printed: string[] = [];
+      const logSpy = vi.spyOn(console, 'log').mockImplementation((line?: unknown) => { printed.push(String(line ?? '')); });
+
+      try {
+        await uninstall({ dryRun: true });
+      } finally {
+        logSpy.mockRestore();
+      }
+
+      const realLinked = await fse.realpath(linked);
+      expect(printed).toContain(`     ${path.join(realLinked, '.teamai', 'workflow-worktrees')}`);
+
+      await uninstall({ force: true });
+
+      expect([await fse.pathExists(made.dir), await fse.pathExists(path.join(linked, '.teamai'))]).toEqual([false, false]);
+      expect(git(projectRoot, 'config', '--local', '--list')).not.toMatch(/worktreeconfig/i);
+    });
+
     // A run started inside a failed run's worktree puts its own worktree inside that one, which teamai's exclude block hides.
     it('keeps a worktree holding another run\'s worktree it keeps, so the changes in that one stay', async () => {
       const { worktrees: [outer] } = await projectWithRunWorktrees(['teamai/r0123456789abcdef/fail/p1']);
