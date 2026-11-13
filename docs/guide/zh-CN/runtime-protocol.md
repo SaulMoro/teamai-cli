@@ -172,7 +172,7 @@ exec 或提示运行期间退出的运行时，出于同样的原因会让它失
 ← {"event":"failed","handle":"teamai-r7c41d09e-a1d0e9f42","failure":{"code":"journal_unreadable","message":"/var/lib/acme-runtime/r7c41d09e.json is not valid JSON. Fix or remove it, then run teamai workflow cancel r7c41d09e again."}}
 ```
 
-`{"event":"error"}` 这一行不指向任何请求，所以 teamai 会让所有仍在等待你的运行时的请求失败为 `runtime_unanswered`：`open` 失败，正在进行的 `exec` 或 `prompt` 以 `runtime_lost` 结束，因为它启动的东西可能还在运行。15 秒内没有收到回复的 `init`（有人值守时为 10 分钟）、`reattach` 或 `close`，以及 15 秒内你没有回答的 `open`、`exec` 或 `prompt` 也一样，所以要在任何耗时的工作（例如拉取镜像或启动代理）之前先发送 `accepted`。`cancel` 本身不需要回复：用操作的结果结束它即可。teamai 在等待某个 `exec` 或 `prompt` 时取消了它，如果 15 秒内你没有给出结果，它也会同样以 `runtime_lost` 结束。驱动退出后的停止通过 `reattach` 读取结果，从发出 `cancel` 起最多等 15 秒。这次尝试保留它的位置、记录和登录：
+`{"event":"error"}` 这一行不指向任何请求，所以 teamai 会让所有仍在等待你的运行时的请求失败为 `runtime_unanswered`：`open` 失败，正在进行的 `exec` 或 `prompt` 以 `runtime_lost` 结束，因为它启动的东西可能还在运行。15 秒内没有收到回复的 `init`（有人值守时为 10 分钟）、`reattach` 或 `close`，以及 15 秒内你没有回答的 `open`、`exec` 或 `prompt` 也一样，所以要在任何耗时的工作（例如拉取镜像或启动智能体）之前先发送 `accepted`。`cancel` 本身不需要回复：用操作的结果结束它即可。teamai 在等待某个 `exec` 或 `prompt` 时取消了它，如果 15 秒内你没有给出结果，它也会同样以 `runtime_lost` 结束。驱动退出后的停止通过 `reattach` 读取结果，从发出 `cancel` 起最多等 15 秒。这次尝试保留它的位置、记录和登录：
 
 ```text
 Step runtime "acme" could not close the place of attempt a1d0e9f42, so what ran there may still run (runtime_unanswered): Step runtime "acme" did not answer close of teamai-r7c41d09e-a1d0e9f42 within 15 s.
@@ -191,9 +191,9 @@ Step runtime "acme" could not close the place of attempt a1d0e9f42, so what ran 
 ⚠ Step runtime "acme", operation op-83bfffde9ce3: Pulling ghcr.io/acme/agent:1 (1.2 GB).
 ```
 
-`open` 的 `view` 列出地点按与本机相同的绝对路径拿到的路径：可读写的工作树、只读的 git 路径、attempt 的结果目录和工具主目录，以及可读写的 `runDir`，即运行的临时目录，所以 `$TEAMAI_RUN_DIR` 在那里和在本机一样可用。
+`open` 的 `view` 列出地点按与本机相同的绝对路径拿到的路径：可读写的工作树、只读的 git 路径（工作流写成文件夹时还有该文件夹，也是只读）、attempt 的结果目录和工具主目录，以及可读写的 `runDir`，即运行的临时目录，所以 `$TEAMAI_RUN_DIR` 在那里和在本机一样可用。
 
-`timeout` 会让步骤失败的步骤，会让它的 `open` 带上 `deadline`，即它的限制允许的最晚时间。步骤自己的超时会先停止它的工作；在 `deadline` 之后 15 秒仍在运行的该位置的 `exec` 或 `prompt`（包括重新连上的）会被 teamai 取消；到 `deadline` 时位置还没 `ready`，`open` 失败；`collect` 最多等到它之后 15 秒。没有时间限制的步骤，或者限制只结束 agent 这一轮的步骤（`on_limit: end_turn`），没有 `deadline`：
+`timeout` 会让步骤失败的步骤，或者所在的运行或外层步骤有 `timeout` 的步骤，会让它的 `open` 带上 `deadline`，即这些限制允许的最晚时间。步骤自己的超时会先停止它的工作；在 `deadline` 之后 15 秒仍在运行的该位置的 `exec` 或 `prompt`（包括重新连上的）会被 teamai 取消；到 `deadline` 时位置还没 `ready`，`open` 失败；`collect` 最多等到它之后 15 秒。不受任何时间限制的步骤，或者唯一的限制只结束 agent 这一轮的步骤（`on_limit: end_turn`），没有 `deadline`：
 
 ```text
 → {"type":"open","op":"op-5e0d11cb4777","run":"r…","attempt":"a…","deadline":"2026-11-06T15:10:00.000Z","view":{…},"credentials":{}}
@@ -233,7 +233,7 @@ teamai 随后把每个提示步骤作为一次 `prompt` 发送。`lease.prompt` 
 | `lease` 字段 | 含义 |
 | --- | --- |
 | `step`、`tool` | 步骤，以及启动智能体用的工具，它是你的 `can.tools` 之一 |
-| `model` | 启动时使用的 `name` 和可选的 `effort`：步骤的，否则是它的智能体定义的；没有时用工具的默认值 |
+| `model` | 启动时使用的 `name` 和可选的 `effort`：步骤的，否则是它的智能体定义的，再否则是工作流的 `defaults.model`；没有时用工具的默认值 |
 | `prompt`、`result` | 完整的提示，以及智能体写入结果的文件。像 teamai 自己的启动那样，让智能体无需询问就能在该文件所在目录里写入：对 Claude 是 `--allowedTools=Edit(/<结果文件所在目录>/**)`。步骤在那里留下随会话归档的证据文件。不要为此改变任何模式 |
 | `resume` | 同一个工具中要继续的会话 id，用于之后的轮次。智能体继续了它时，在 `finished` 里写 `"resumed":true`。你开了新会话时不写或写 `false`，teamai 就不会把新会话连到旧会话上 |
 | `permissions` | `approval-required`；你的 `can.unattended` 接下这类步骤时为 `unattended` |
@@ -260,7 +260,7 @@ teamai 随后把每个提示步骤作为一次 `prompt` 发送。`lease.prompt` 
 
 teamai 自己启动的工具不需要运行时做这件事。工具的上限让步骤停下后，运行怎么处理它，见 [工具达到用量上限时](workflow-advanced.md#工具达到用量上限时)。
 
-守护进程重启时丢失的提示以 `daemon_restarted` 结束，teamai 把它记录为 `runtime_failed`，消息末尾带上重试该步骤的命令：`Then run: teamai workflow retry <run> <step>`。受限提示（例如评审的提示）也一样。受限提示因工具的用量上限而停止时，以 `usage_limited` 失败：teamai 不会等待该上限重置。因运行时无法确认停止而以 `runtime_lost` 失败的步骤，会在之后的 `teamai workflow cancel` 确认停止时拿到这条命令：
+守护进程重启时丢失的提示以 `daemon_restarted` 结束，teamai 把它记录为 `runtime_failed`，消息末尾带上重试该步骤的命令：`Then run: teamai workflow retry <run> <step>`。受限提示（例如评审的提示）把它记录为 `confined_failed`，同样带上这条命令。受限提示因工具的用量上限而停止时，以 `usage_limited` 失败：teamai 不会等待该上限重置。因运行时无法确认停止而以 `runtime_lost` 失败的步骤，会在之后的 `teamai workflow cancel` 确认停止时拿到这条命令：
 
 ```text
 ℹ Stopped attempt a3f0… of run r7a1… on step runtime "sandbox" and closed its place. Then run: teamai workflow retry r7a1… review

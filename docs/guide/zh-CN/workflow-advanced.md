@@ -1549,7 +1549,7 @@ teamai 按下面的顺序查找 `<name>.yaml`，或存放 `DRIVER.yaml`（内容
 | 用户作用域的团队仓库 | 只在项目里启动时查找。 |
 | teamai 自带的定义 | 每个都命名为 `teamai-<name>`。 |
 
-没有名为 `x` 的定义时，`--driver x` 运行 `teamai-x`，所以 `--driver claude` 和 `--driver teamai-claude` 都运行自带的 `teamai-claude`。`--driver local`，以及没有设置驱动的启动，运行 `teamai-local`：先找你在 `~/.teamai/drivers/` 中的，再找团队的，最后是 teamai 自带的。运行用了你的或团队的定义时，会说明用的是哪个文件。`local`、`none`、`skill` 和 `fleet` 不能用作定义名：`drivers/none.yaml` 这样的文件会以 `driver_invalid` 被拒绝。
+没有名为 `x` 的定义时，`--driver x` 运行 `teamai-x`，所以 `--driver claude` 和 `--driver teamai-claude` 都运行自带的 `teamai-claude`。`--driver local`，以及没有设置驱动时替你启动运行的命令（例如 `teamai score`），运行 `teamai-local`：先找你在 `~/.teamai/drivers/` 中的，再找团队的，最后是 teamai 自带的。运行用了你的或团队的定义时，会说明用的是哪个文件。`local`、`none`、`skill` 和 `fleet` 不能用作定义名：teamai 从不读取 `drivers/none.yaml` 这样的文件。
 
 一个定义列出一个或多个运行时。teamai 按列出的顺序把每个步骤交给它们，第一个能接下的运行时运行它：
 
@@ -1587,7 +1587,7 @@ Step "review" needs what no single runtime of driver "sandboxed" offers: runtime
 - 带 `deliver: publish` 的步骤，它从这里推送到数据分支；
 - `answer:` 步骤，由你自己的 AI 工具在本机回答，所以本机需要装有该工具。若 `defaults.requires` 是本机达不到的严格要求，`workflow start` 会以 `requirement_unmet` 拒绝。
 
-其他运行时都不接这些步骤。定义里有运行时运行命令时，你自己的命令步骤交给它，而不是 host。所以只由外部运行时组成的定义，在没有安装 AI 工具的机器上也能运行并评判每个没有 `answer:` 步骤的工作流：
+其他运行时都不接这些步骤。定义里有运行时运行命令时，你自己的命令步骤交给它，而不是 host。所以只由外部运行时组成的定义，在没有安装 AI 工具的机器上也能运行每个没有 `answer:` 步骤的工作流：
 
 ```yaml
 # drivers/sandbox-only.yaml
@@ -1598,7 +1598,7 @@ runtimes:
   - use: sandbox          # 提示步骤和你的命令步骤；teamai 自己的步骤在 host 条目上运行；档案 default：teamai 的 sbx microVM
 ```
 
-打分 pass 的评判在[回答限定提示的运行时](runtime-protocol.md#回答限定提示的运行时)上运行；没有这种运行时而定义列出了 `tools` 时，用本机的工具；两者都没有时，运行以 `confined_pending` 停下。teamai 自己的工作流换个名字复制后，不会留在本机。运行状态中每个步骤都以 `runtime` 记录它运行在哪个运行时上：其条目的 `use`；在 teamai 进程中运行的步骤，命令和回答记为 `host`，提示记为 `tools`。
+打分 pass 的评判在[回答限定提示的运行时](runtime-protocol.md#回答限定提示的运行时)上运行；没有这种运行时而定义列出了 `tools` 时，用本机的工具；两者都没有时，运行以 `confined_pending` 停下。teamai 自己的工作流换个名字复制后，其命令步骤也会通过该文件设置的 `requires.host` 留在本机。运行状态中每个步骤都以 `runtime` 记录它运行在哪个运行时上：其条目的 `use`；在 teamai 进程中运行的步骤，命令和回答记为 `host`，提示记为 `tools`。
 
 `use: tools` 按 `--driver local` 的方式，在本机的工具上运行提示步骤。`use: local` 是它的旧名字。其他名字都是外部程序，用文件 `runtimes/<name>.yaml` 声明，或用文件夹 `runtimes/<name>/` 存放它的 `RUNTIME.yaml` 和代码。teamai 按下面的顺序在每个位置先找完全相同的名字，再用同样的方式找 `teamai-<name>`：
 
@@ -1721,7 +1721,7 @@ runtimes:
   - use: tools
 ```
 
-对运行来说，这个条目是一个运行时，消息里叫 `my-app through my-sandbox`。工具在哪里运行由外层运行时（`my-sandbox`）决定：隔离、env 凭据、setup 和命令步骤。工具怎样启动由内层运行时（`my-app`）决定：它的工具、工作区、HITL 和结束轮次的方式。条目还提供外层准备的 `clone` 和 `team` 工作区。只有内层以完全访问运行的工具才提供 `permissions: unattended`，并且不运行受限步骤。步骤的登录交给外层，由外层交给工具；内层只得到它自己的凭据。
+对运行来说，这个条目是一个运行时，消息里叫 `my-app through my-sandbox`。工具在哪里运行由外层运行时（`my-sandbox`）决定：隔离、env 凭据、setup 和命令步骤。工具怎样启动由内层运行时（`my-app`）决定：它的工具、工作区、HITL 和结束轮次的方式。条目还提供外层准备的 `clone` 和 `team` 工作区。它只为内层以完全访问运行的工具提供 `permissions: unattended`，也不运行受限步骤。步骤的登录交给外层，由外层交给工具；内层只得到它自己的凭据。
 
 teamai 先打开外层，再打开内层。它先停止并关闭内层；内层无法确认已停止时，外层的位置保留。teamai 在内层打开位置的过程中被杀掉时也是如此：teamai 记下的句柄都没有指向那个位置，所以 `workflow cancel` 会保留外层的位置并说明原因，直到你自己关闭内层的位置并释放这次尝试。
 
@@ -1790,7 +1790,7 @@ runtimes:
 
 你的驱动第一次读到该尝试处于已发布状态时，会请求那个运行时一次：在它能到达的某台机器上、业务仓库的一个检出里运行 `teamai workflow resume --next --pool gpu`。它启动的成员像其他成员一样领取尝试。每个尝试只唤醒一次，驱动重启后也一样；尝试被领取或等待结束时，还在进行中的唤醒会被停止。唤醒失败时会提示一次，并附上那条命令，尝试继续等待有人启动的成员。成员运行的是它自己那台机器 PATH 上的 `teamai`，所以那台机器需要一个支持 fleet 的 teamai 版本：旧版本会在不认识的 `--pool` 选项上停下。被唤醒的成员失败时，原因显示在那台机器上它自己的线程或 agent 里，尝试继续等待。`teamai workflow resume` 会在 WOKEN 一列列出成员是在哪里被唤醒的，只在你的安装上可见。init 不提供 wake 的运行时会让启动以 `bad_option` 失败。被唤醒的成员用那台机器的工具和登录运行步骤，所以消耗的是那台机器的账号，并在那里运行步骤要运行的内容：只指定能到达你信任其运行本池步骤的机器的运行时。
 
-哪些步骤交给 fleet 沿用平常的路由，不需要步骤键：`runtimes` 的顺序、fleet 的 `options` 下 `can` 所承诺的能力（由成员的机器提供，teamai 不做检查）、步骤的 `requires` 和 `strict`，以及总是留在本机的步骤。fleet 接命令步骤和提示词步骤。受限（confined）的提示词步骤不交给它，不管它的 `can` 怎么写：它的目录在本机的 `$TEAMAI_RUN_DIR` 下，成员拿不到，所以它在驱动的下一个运行时上运行，例如 `local`。带 `requires.labels` 的步骤交给 `labels` 选项列出每个标签的 fleet 条目，成员按它自己那份工作流定义要求的标签，只有在它将运行该步骤的地方列出每个标签时才接：在本机运行的步骤看它的 `workflows.labels`，在它 `--driver` 的某个运行时上运行的步骤看该运行时的 `labels`；其他成员会跳过它并记录原因。成员用它自己的工具、模型和登录，按它自己那份步骤定义运行提示词步骤；在 fleet 的 `can.tools` 里列出你的池拥有的工具，其他步骤就不会交给它。成员会把这个会话连同步骤在其尝试的 `out/` 目录里留下的文件（[保留哪些](scorers.md#无人值守任务结束前运行-drain)）推送到团队会话归档，之后带 `session: continue` 的步骤就在你这里接着它继续。每个就绪的步骤、`for_each` 的每一项都是单独的尝试，数量最多到 fleet 的 `max_parallel`。请给这类步骤设置工作区，例如 `workspace: new`：没有工作区的步骤在你的检出里运行，成员对它的改动会让步骤以 `read_only_dirty` 失败。
+哪些步骤交给 fleet 沿用平常的路由，不需要步骤键：`runtimes` 的顺序、fleet 的 `options` 下 `can` 所承诺的能力（由成员的机器提供，teamai 不做检查）、步骤的 `requires` 和 `strict`，以及总是留在本机的步骤。fleet 接命令步骤和提示词步骤。受限（confined）的提示词步骤不交给它，不管它的 `can` 怎么写：它的目录在本机的 `$TEAMAI_RUN_DIR` 下，成员拿不到，所以它在驱动的下一个运行时上运行，例如 `tools`。带 `requires.labels` 的步骤交给 `labels` 选项列出每个标签的 fleet 条目，成员按它自己那份工作流定义要求的标签，只有在它将运行该步骤的地方列出每个标签时才接：在本机运行的步骤看它的 `workflows.labels`，在它 `--driver` 的某个运行时上运行的步骤看该运行时的 `labels`；其他成员会跳过它并记录原因。成员用它自己的工具、模型和登录，按它自己那份步骤定义运行提示词步骤；在 fleet 的 `can.tools` 里列出你的池拥有的工具，其他步骤就不会交给它。成员会把这个会话连同步骤在其尝试的 `out/` 目录里留下的文件（[保留哪些](scorers.md#无人值守任务结束前运行-drain)）推送到团队会话归档，之后带 `session: continue` 的步骤就在你这里接着它继续。每个就绪的步骤、`for_each` 的每一项都是单独的尝试，数量最多到 fleet 的 `max_parallel`。请给这类步骤设置工作区，例如 `workspace: new`：没有工作区的步骤在你的检出里运行，成员对它的改动会让步骤以 `read_only_dirty` 失败。
 
 当成员能独立运行整个 `workflow:` 步骤时，它会作为一次尝试整体交给 fleet：它运行的是一个工作流文件，或者一个内联工作流，其中的步骤除了 `inputs` 之外不读取外层的任何内容（不读其他步骤，也不读 `item`）；其中的步骤都是在该步骤的副本里工作的命令步骤或提示词步骤（自身的 `workspace` 只能是 `continue` 或 `read-only`），且没有角色、`deliver`、回答步骤、嵌套工作流或 `interactive`，步骤本身也没有 `on_limit: end_turn`。其中的闸门在你这里提问：成员等待你的驱动像在你运行中的闸门那样问你，然后按你的回答继续；你的驱动前没有人时，按你的驱动此时回答自己闸门的方式作答（`auto_approve`），否则步骤以 `hitl_required` 失败。备注里含有密钥或本地路径的回答不会写入 teamai-reports，你会被再问一次。成员按它自己那份团队工作流运行这些步骤，使用它自己的驱动，并把它们的工作作为这次尝试推送。成员只有在拥有其中每个提示词步骤的工具时才接这个步骤，和下文的提示词尝试一样；其他成员会跳过它并记录原因，例如 `its step "review" runs on claude, which is not on PATH here`。你的运行用该工作流返回的输出和结束点记录这个工作流步骤。其他工作流步骤，以及没有 fleet 条目接的整体步骤，照旧在本机启动，其中的步骤逐个交出。对这类步骤做 `for_each` 会把整条流水线分发出去，每一项一次尝试。
 
@@ -1804,7 +1804,7 @@ runtimes:
 
 `teamai workflow cancel <run>` 结束在外的尝试，无论你的驱动在运行还是已停止。没有人领取的尝试会被撤回。已领取的成员会停止步骤，推送到目前为止的产出，并输出 `{"data":{"cancelled":{"run":…,"attempt":…,"step":…}}}`；这些产出会进入步骤的位置。成员在 `stale_after` 内没有回应时，尝试以 `fleet_member_gone` 失败，同上。如果取消在 60 秒内都无法写入尝试的记录（例如你的另一个 teamai 命令正占用 `teamai-reports`），或者在 `stale_after` 内完全读不到这条记录，teamai 会停止尝试并说明原因，同时保留该尝试；请再次运行 `teamai workflow cancel <run>`。
 
-成员在自己检出的一个克隆里运行步骤，所以步骤写进 git 配置的内容不会影响检出。带 `--driver <name>`（团队的或 teamai 自带的定义，从不读 `~/.teamai/drivers/`）时，成员在该驱动里第一个能运行命令的运行时上运行命令步骤（例如沙箱），只带步骤自己的 env 和尝试的标记，在第一个能运行提示词的运行时上运行提示词步骤；不带它，或驱动的第一个运行时是 `local` 时，就在本机运行。命令步骤会像在本地驱动上一样拿到 `TEAMAI_WORKFLOW_ATTEMPT`、`TEAMAI_MODE`（成员自己的）和 `TEAMAI_RUN_DIR`；这个目录是成员自己的，为该尝试创建，尝试结束时删除，所以步骤留在里面的文件既不会到你的安装，也不会到其他尝试。成员按它自己那份步骤定义，像本地驱动一样限定步骤的 env：步骤 `requires.env` 列出的每个键取自成员的团队 env，团队的其他键都不给，严格沙箱下也不给代码托管平台的令牌；步骤的 `requires.env` 不在它 `workflows.allow.env` 允许范围内时，成员会跳过它。带 `requires.env` 的步骤只有在 fleet 条目的 `can` 声明 `env: true` 或 `env: member` 时才交给它。`env: true` 还要求你的安装上有每个值；`env: member` 不要求：成员从它自己的团队 env 给出每个值，只有在本机运行的工作流 setup 需要你的安装上有它的值。成员没有某个键的值时，会跳过该尝试并记录原因，例如 `its step requires env DEPLOY_KEY, which has no value here: …`。成员在步骤中途被杀掉时，它下一次运行 `teamai workflow resume --next --pool` 会先停止上次留下的内容（无论在本机还是在它的运行时上），再从已推送的产出继续完成它仍持有的尝试。如果无法确认上次运行启动的某个进程已经结束（例如容器里的成员重启前启动的进程），它会保留该尝试，不再重复运行其中任何部分，并说出那个进程：等它结束后再运行一次这条命令。
+成员在自己检出的一个克隆里运行步骤，所以步骤写进 git 配置的内容不会影响检出。带 `--driver <name>`（团队的或 teamai 自带的定义，从不读 `~/.teamai/drivers/`）时，成员在该驱动里第一个能运行命令的运行时上运行命令步骤（例如沙箱），只带步骤自己的 env 和尝试的标记，在第一个能运行提示词的运行时上运行提示词步骤；不带它，或驱动的第一个运行时是 `tools` 时，就在本机运行。命令步骤会像在本地驱动上一样拿到 `TEAMAI_WORKFLOW_ATTEMPT`、`TEAMAI_MODE`（成员自己的）和 `TEAMAI_RUN_DIR`；这个目录是成员自己的，为该尝试创建，尝试结束时删除，所以步骤留在里面的文件既不会到你的安装，也不会到其他尝试。成员按它自己那份步骤定义，像本地驱动一样限定步骤的 env：步骤 `requires.env` 列出的每个键取自成员的团队 env，团队的其他键都不给，严格沙箱下也不给代码托管平台的令牌；步骤的 `requires.env` 不在它 `workflows.allow.env` 允许范围内时，成员会跳过它。带 `requires.env` 的步骤只有在 fleet 条目的 `can` 声明 `env: true` 或 `env: member` 时才交给它。`env: true` 还要求你的安装上有每个值；`env: member` 不要求：成员从它自己的团队 env 给出每个值，只有在本机运行的工作流 setup 需要你的安装上有它的值。成员没有某个键的值时，会跳过该尝试并记录原因，例如 `its step requires env DEPLOY_KEY, which has no value here: …`。成员在步骤中途被杀掉时，它下一次运行 `teamai workflow resume --next --pool` 会先停止上次留下的内容（无论在本机还是在它的运行时上），再从已推送的产出继续完成它仍持有的尝试。如果无法确认上次运行启动的某个进程已经结束（例如容器里的成员重启前启动的进程），它会保留该尝试，不再重复运行其中任何部分，并说出那个进程：等它结束后再运行一次这条命令。
 
 每条记录都写明写入它的 teamai 版本。teamai 遇到更新格式的记录，或者记录要求一个它不认识的字段时：作为成员会跳过这个尝试，作为所有者会让步骤以 `fleet_record_newer` 失败，并说明要升级到哪个版本。记录不要求的未知字段会被忽略。尝试在外时，你的驱动每秒读一次它的记录；记录没有变化时读得越来越少，最慢每 30 秒一次。成员如果运行不了这个步骤（缺少标签、env 或工具，或找不到运行的定义），会把它留给其他成员，并在记录上写明原因；你的驱动会把每个成员的原因打印一次。
 
@@ -1945,7 +1945,7 @@ teamai workflow start review --driver containers
 teamai 在运行开始或继续时读取每个变量一次。未设置的变量会在任何步骤运行前让启动停止：
 
 ```text
-{"error":{"code":"credential_missing","message":"Runtime \"sandbox\" of driver definition drivers/containers.yaml declares credential CLAUDE_CODE_OAUTH_TOKEN: env:CLAUDE_CODE_OAUTH_TOKEN, and CLAUDE_CODE_OAUTH_TOKEN is not set in your environment. Set CLAUDE_CODE_OAUTH_TOKEN, then start again."}}
+{"error":{"code":"credential_missing","message":"Runtime \"sandbox\" of driver definition ~/.teamai/projects/…/team-repo/drivers/containers.yaml declares credential CLAUDE_CODE_OAUTH_TOKEN: env:CLAUDE_CODE_OAUTH_TOKEN, and CLAUDE_CODE_OAUTH_TOKEN is not set in your environment. Set CLAUDE_CODE_OAUTH_TOKEN, then start again."}}
 ```
 
 如果运行时条目没有声明任何凭据，既没有 `env:` 凭据也没有登录，它会按名字拿到你环境中已设置的工具登录变量：Claude 的 `CLAUDE_CODE_OAUTH_TOKEN`、`ANTHROPIC_API_KEY` 或 `ANTHROPIC_AUTH_TOKEN`（连同 `ANTHROPIC_BASE_URL`），Codex 的 `OPENAI_API_KEY` 或 `CODEX_API_KEY`，以及 CodeBuddy 的 `CODEBUDDY_API_KEY` 或 `CODEBUDDY_AUTH_TOKEN`。这样团队的定义只需写出工具，每个成员用自己的方式登录。这些值和其他凭据一样会被遮盖。teamai 只把它们发给自己运行工具进程并提供 `can.env` 的运行时，并且每个变量只发给它所登录的工具：同时设置了 `ANTHROPIC_API_KEY` 和 `OPENAI_API_KEY` 时，Claude 步骤只拿到 `ANTHROPIC_API_KEY`，Codex 步骤只拿到 `OPENAI_API_KEY`。以自己的方式启动代理的运行时在它运行代理的地方为其登录，teamai 不会发给它这些值；不过和所有运行时一样，它的进程仍以你的环境启动。
@@ -1958,14 +1958,14 @@ teamai 在运行开始或继续时读取每个变量一次。未设置的变量�
 | 发给自己启动智能体的运行时的 prompt | 定义里的其他运行时 |
 | | 步骤扣留的名字，例如严格沙箱里的代码托管令牌 |
 | | 任何文件：运行的记录、`runtime.json`、日志。工具打印出的值在 teamai 保存的内容里会被遮盖 |
-| 这个运行时上的评审，只限它的工具在本机受限运行时读取的名字：Claude 评审得到 `ANTHROPIC_API_KEY` 和 `ANTHROPIC_BASE_URL`，任何评审都得到 `HTTPS_PROXY`、`HTTP_PROXY`、`NO_PROXY`、`SSL_CERT_FILE` 和 `NODE_EXTRA_CA_CERTS` | 评审，任何其他名字：Claude 评审永远得不到 `OPENAI_API_KEY` |
+| 这个运行时上的评审，只限它的工具在本机受限运行时读取的名字，例如 Claude 评审得到 `ANTHROPIC_API_KEY` 和 `ANTHROPIC_BASE_URL`，任何评审都得到 `HTTPS_PROXY`、`HTTP_PROXY`、`NO_PROXY`、`SSL_CERT_FILE` 和 `NODE_EXTRA_CA_CERTS` | 评审，任何其他名字：Claude 评审永远得不到 `OPENAI_API_KEY` |
 
 只有提供 `can.env` 的运行时接受凭据，因为只有它决定每个进程的环境。`tools` 运行时不接受：你的步骤本来就在你的环境里运行。两种情况都会在启动时被拒绝为 `bad_option`。
 
 团队运行时是队友推送的代码，所以只有在这台机器上有人接受过的修订才会运行。它目录下任何文件的改动都会产生新的修订。有人值守的运行在第一次启动前会询问：
 
 ```text
-Step runtime "toy" comes from the team repo (runtimes/toy) at revision 3f9c0a1b2d4e, which you have not accepted on this machine. It runs as you, with your files. Review /home/me/team/runtimes/toy (runtime) before you accept it.
+Step runtime "toy" comes from the team repo (runtimes/toy) at revision 3f9c0a1b2d4e, which you have not accepted on this machine. It runs as you, with your files. Review /home/me/.teamai/projects/…/workflows/runtime-copies/48213-9b1c0e7a4d2f-Xq3LZp (RUNTIME.yaml, runtime) before you accept it.
 Run it? [y/N]
 ```
 
@@ -2053,7 +2053,7 @@ claude hit its usage limit, which resets at 15:00 (Europe/Madrid). Wait here unt
 | `login_missing` | 运行 `CODEX_HOME=~/.teamai/logins/codex codex login`，然后重试这个步骤 |
 | `login_not_written_back` | 如果 Codex 刷新过令牌，用同一条命令重新登录，然后重试这个步骤 |
 | `runtime_failed`、`runtime_interrupted` | 重试这个步骤：`teamai workflow retry <run> <step>` |
-| `runtime_lost` | 步骤运行期间运行时停止了，所以它的工具可能还在那里运行。在运行时上停止它，如果警告给出了登录锁就删除它，然后重试这个步骤 |
+| `runtime_lost` | 步骤运行期间运行时停止了，所以它的工具可能还在那里运行。在运行时上停止它，如果警告给出了 `teamai workflow cancel <run> --release <attempt>` 就运行它，然后重试这个步骤 |
 
 ## 在自己的驱动里使用工作区
 
@@ -2079,7 +2079,7 @@ claude hit its usage limit, which resets at 15:00 (Europe/Madrid). Wait here unt
 
 要准备驱动已经领取的 attempt，运行 `next <run> --prepare --attempt <attempt>`。运行不再把该 attempt 租给这个驱动时，返回 `wrong_attempt`。加上 `--adopt <dir>` 时，attempt 改在会话宿主创建的位置运行：该仓库的一个干净 worktree，位于租约的工作区分支上，或分离在其起点，就像 `git worktree add` 创建的那样。不符合的位置返回 `adopt_mismatch`，attempt 仍保持租约。TeamAI 在那里像在自己的 worktree 中一样 commit 和 push，但从不删除该位置。
 
-提示词步骤的子代理在 `attempts/<attempt>/result.json` 的 `changed` 里列出它改过的每个路径，相对该位置。重命名要列出旧路径和新路径。TeamAI 只提交这些路径。git 会提交、但名单里没有的路径让步骤以 `unreported_changes` 失败：什么都不 commit、不 push，文件留在原地。步骤已经跑过并自己报了失败时，也是这个失败。步骤还没跑就失败时，例如这个会话跑不了所需的模型，保留那个失败，文件仍然不会被提交。准备时的合并已经暂存、并且步骤没有再改的文件属于这次合并，不必写进名单。
+提示词步骤的子代理在 `attempts/<attempt>/out/result.json` 的 `changed` 里列出它改过的每个路径，相对该位置。重命名要列出旧路径和新路径。TeamAI 只提交这些路径。git 会提交、但名单里没有的路径让步骤以 `unreported_changes` 失败：什么都不 commit、不 push，文件留在原地。步骤已经跑过并自己报了失败时，也是这个失败。步骤还没跑就失败时，例如这个会话跑不了所需的模型，保留那个失败，文件仍然不会被提交。准备时的合并已经暂存、并且步骤没有再改的文件属于这次合并，不必写进名单。
 
 ```json
 {"kind":"output","output":"Fixed the null check.","changed":["src/app.ts","src/legacy.ts"]}

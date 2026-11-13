@@ -75,7 +75,7 @@ steps:
 
 `scorers: { names: [review-quality], sampling: all }` 评判每一个成功的 pass，不管每个评分器的 `samplingRate`，每个 pass 由它自己的 teamai-score 运行评判，运行结束时不等待它们。见[一次运行和它的评审](scorers.md#一次运行和它的评审)。`scorers: { names: [review-quality], start: workflow }` 把其轮次的评分交给工作流自己的步骤，见[在下一步之前拿到标签](scorers.md#在下一步之前拿到标签)。
 
-第一个步骤之后的每个步骤都要用 `needs` 列出它等待的步骤。`needs: []` 表示另起一个没有依赖的分支。每次 `next` 租出文件中第一个依赖都已完成的步骤。`--driver local` 一次运行一个步骤，除非 `workflows.max_parallel` 大于 1。某个依赖失败，或所有依赖都被跳过时，该步骤会被跳过。被跳过的步骤不会运行。一个步骤失败不会停止其他分支。没有可运行的步骤时，只要有步骤失败，运行结果就是 `failed`，否则是 `succeeded`。带 [`continue_on_failure: true`](workflow-advanced.md#让步骤失败而不让工作流失败) 的步骤失败时不会让运行失败。缺少 `needs`、`needs` 中的 id 不是本工作流的步骤，或依赖成环，都会让该文件无效。缺少 `needs` 时，即使之前有有效版本，该工作流也没有可运行版本。
+第一个步骤之后的每个步骤都要用 `needs` 列出它等待的步骤。`needs: []` 表示另起一个没有依赖的分支。每次 `next` 租出文件中第一个依赖都已完成的步骤。`--driver local` 一次运行一个步骤，除非 `workflows.max_parallel` 大于 1，或未设置它时某个 `for_each` 声明的 `max_parallel` 大于 1。某个依赖失败，或所有依赖都被跳过时，该步骤会被跳过。被跳过的步骤不会运行。一个步骤失败不会停止其他分支。没有可运行的步骤时，只要有步骤失败，运行结果就是 `failed`，否则是 `succeeded`。带 [`continue_on_failure: true`](workflow-advanced.md#让步骤失败而不让工作流失败) 的步骤失败时不会让运行失败。缺少 `needs`、`needs` 中的 id 不是本工作流的步骤，或依赖成环，都会让该文件无效。缺少 `needs` 时，即使之前有有效版本，该工作流也没有可运行版本。
 
 步骤可以带 `if` 表达式。表达式为假时跳过该步骤，这不会让运行失败。表达式可以读取 `steps.<id>.outcome`（`success`、`failed` 或 `skipped`）和 `steps.<id>.outputs.<field>`，且只能读取该步骤直接或间接依赖的步骤。可用 `==`、`!=`、`<`、`<=`、`>`、`>=`、`&&`、`||`、`!`、括号，以及字面量 `'text'`、数字、`true`、`false`、`null` 和 `[]`。路径可以用下标读取数组元素，例如 `steps.review.outputs.files[0]`。函数 `length`、`any`、`all` 和 `filter` 读取数组。不存在的值读作 `null`。`false`、`null`、`0` 和 `''` 为假，其他值都为真。`==` 是严格比较，并比较整个值：`'1' == 1` 和 `'Build' == 'build'` 都为假。
 
@@ -250,7 +250,7 @@ $ teamai workflow start nightly-small --driver local --tools default=claude
 ✖ Run rdcfd8a2eb4ffe5ca failed with budget_exceeded: workflow "nightly-small" spent 350 of its 300-token budget
 ```
 
-等待 HITL 请求用 `workflow respond <run> <step> <choice>` 回答，失败或卡住的步骤用 `workflow retry <run> <step>` 重试，`workflow cancel <run> [step]` 停止工作，`workflow resume <run>` 继续本地执行，`workflow publish <run>` 让另一台机器接着运行（见[在另一台机器上继续运行](#在另一台机器上继续运行)）。next 返回 lease、hitl、wait 或 done。参见[HITL](workflow-advanced.md#hitl人在回路中)和[重试、取消和继续运行](workflow-advanced.md#重试取消和继续运行)。本地运行以 failed 或 cancelled 结束时退出码为 1。结束运行的操作在锁内排队写入结束记录，在释放锁后发布；重试后仍更新同一路径。回答记录只发布 choice、channel 和 agent，备注、回答时间和回答驱动身份只保存在本地。
+等待 HITL 请求用 `workflow respond <run> <step> <choice>` 回答，失败或卡住的步骤用 `workflow retry <run> <step>` 重试，`workflow cancel <run> [step]` 停止工作，`workflow resume <run>` 继续本地执行，`workflow publish <run>` 让另一台机器接着运行（见[在另一台机器上继续运行](#在另一台机器上继续运行)）。`next` 返回 `lease`、`hitl`、`wait` 或 `done`。参见[HITL](workflow-advanced.md#hitl人在回路中)和[重试、取消和继续运行](workflow-advanced.md#重试取消和继续运行)。
 
 ## 工作流文件夹
 
@@ -308,7 +308,7 @@ teamai 自己提交并推送每个步骤的改动，并关闭 git hook。所有�
 
 ```text
 $ teamai workflow start fix-date --driver local
-ℹ Run r7c1d2e3f4a5b6c7d started. If it stops before it ends, continue it here with: teamai workflow resume r7c1d2e3f4a5b6c7d --driver local, or hand it to another machine with: teamai workflow publish r7c1d2e3f4a5b6c7d
+ℹ Run r7c1d2e3f4a5b6c7d started. If it stops before it ends, continue it here with: teamai workflow resume r7c1d2e3f4a5b6c7d, or hand it to another machine with: teamai workflow publish r7c1d2e3f4a5b6c7d
 {"data":{"done":{"run":"r7c1d2e3f4a5b6c7d","outcome":"succeeded","record":"published"},"cancelled":[]}}
 ```
 
@@ -602,7 +602,7 @@ teamai workflow start judge-change --driver local
 - `<dir>` 可以是模板，读取输入、`item` 和该步骤所需步骤的输出。它在步骤被租用时渲染，相对路径位于 `$TEAMAI_RUN_DIR` 下。目录在它之外、是符号链接，或没有可读的 `confined.json` 时，步骤以 `confined_invalid` 失败，并说明怎么修。
 - `confined.json` 是 `{ "level": "verified" | "best-effort", "prefer": "<tool>" | ["<tool>", …], "require": "<tool>", "schema": "<file>" }`，`prefer` 和 `require` 最多写一个。`verified` 只在 TeamAI 检查过其受限启动的工具版本上运行，例如 Claude Code 2.1.308、Codex 0.163.0 或 OpenCode 2.1.2；`best-effort` 可在 TeamAI 能受限启动的任何工具上运行，例如 Cursor。`prefer` 最先尝试；列表按其顺序尝试。`require` 让步骤只在该工具上运行，并等待提供它的驱动，benchmark 的评判就是这样。`schema` 是该目录里的一个 JSON Schema 文件，回答要符合它。级别由写证据的步骤决定：工作流文件不能设置或降低它。
 - 该步骤只运行一个提示，一次。pull 拒绝把 `workspace: { confined }` 用在命令步骤或 `workflow` 步骤上，也拒绝它与 `for_each`、`scorers`、`requires.env`、`agent`、`tool`、`session`、`role`、`interactive` 或 `deliver` 同时出现。它可以设置 `model`：本机没有一个达到其级别的工具能解析该模型时，步骤保持待处理。
-- 本地 driver 运行它；[driver 定义](runtime-protocol.md#回答限定提示的运行时)在回答限定提示的运行时上运行它；没有这种运行时而定义列出了 `tools` 时，用本机的工具。只剩这类步骤而本机没有工具能运行时，它以 `confined_pending` 停下，并说明缺什么；让那个工具可用后，运行 `teamai workflow resume`。在编程会话中，会话所用工具在本机达到 `verified` 时，skill driver 在后台用它运行该步骤，否则交给只读这个目录的新子 agent，以 `best-effort` 运行。会话宿主不能启动子 agent 时，若会话所用工具在 PATH 上，它在后台用该工具以 `best-effort` 运行该步骤。使用 `--no-judge`，或在这样的会话宿主上而该工具不在 PATH 上时，该步骤等待其他 driver。
+- 本地 driver 运行它；[driver 定义](runtime-protocol.md#回答限定提示的运行时)在回答限定提示的运行时上运行它；没有这种运行时而定义列出了 `tools` 时，用本机的工具。只剩这类步骤而本机没有工具能运行时，它以 `confined_pending` 停下，并说明缺什么；让那个工具可用后，运行 `teamai workflow resume`。在编程会话中，会话所用工具在本机达到 `verified` 时，skill driver 在后台用它运行该步骤，否则交给只读这个目录的新子 agent，以 `best-effort` 运行。会话宿主不能启动子 agent 时，若 TeamAI 能以受限方式运行会话所用工具且它在 PATH 上，它在后台用该工具以 `best-effort` 运行该步骤。使用 `--no-judge`，或在这样的会话宿主上而不能这样运行该工具时，该步骤等待其他 driver。
 - 该步骤记录 `confined`：工具、工具报告的模型和 effort、TeamAI 测得的隔离级别、工具拥有的访问权限，以及用量。成功的报告没有记录，或记录中的工具不在租约提供的工具里，或隔离级别低于该步骤的级别时，步骤以 `confined_report_mismatch` 失败。
 
 ## 交付 PR
@@ -969,7 +969,7 @@ $ teamai workflow start release --driver local                 # 在 CI 中
 {"data":{"handoff":{"run":"r6aa0e2c0927ff266","steps":["ship"],"resume":"teamai workflow resume r6aa0e2c0927ff266 --claim"}}}
 ```
 
-接手运行的运行器会跳过它，因为现在就绪的步骤需要人：
+接手待接手运行的运行器会跳过它，因为现在就绪的步骤需要人：
 
 ```console
 $ teamai workflow resume --next --auto-approve                  # 运行器作业
@@ -1051,7 +1051,7 @@ benchmark 运行在启动时冻结计划：运行期间修改套件并 pull，�
 jq -r '. as $b | $b.arms[] | .name as $arm | [$b.trials[] | select(.arm == $arm)] | (map(select(.result == "passed")) | length) as $passed | "\($arm) \($passed / length * 100 | round)% (\($passed)/\(length))"' benchmarks/runs/<run id>.json
 ```
 
-结束运行的操作在锁内排队保存结束记录，在释放锁后发布。发布失败时——没有远端、reports 锁被占用、push 被拒——记录会进入当前 scope 数据目录的本地队列，在下一次 `teamai pull` 时重试。此时 `start`、`next` 的返回会带 `record: pending` 而不是 `record: published`。运行本身不受影响：一台机器在运行开始后崩溃，该运行会以"已开始未结束"的状态保持可见。
+结束运行的操作在锁内排队保存结束记录，在释放锁后发布。运行再次结束时，重试仍更新同一记录路径。回答记录只发布 choice、channel 和 agent；备注、回答时间和回答驱动身份只保存在本地。发布失败时——没有远端、reports 锁被占用、push 被拒——记录会进入当前 scope 数据目录的本地队列，在下一次 `teamai pull` 时重试。此时 `start`、`next` 的返回会带 `record: pending` 而不是 `record: published`。运行本身不受影响：一台机器在运行开始后崩溃，该运行会以"已开始未结束"的状态保持可见。
 
 Run id 是 `r` 加 16 位十六进制。此方案之前创建的运行用 8 位十六进制，仍然可以解析。
 
@@ -1153,7 +1153,7 @@ skill 驱动声明 `env: "commands"`（见[要求和限制](workflow-advanced.md
 
 ### 从 T3 线程或 Paseo agent 启动
 
-在 T3 Code 线程（设置了 `T3CODE_THREAD_ID`）或 Paseo agent（`PASEO_AGENT_ID`，两者都设置时以它为准）中，describe 先检查需要 AI 工具的运行现在能否在该应用的驱动（`t3` 或 `paseo`）上启动。它以 `check` 模式询问驱动的运行时，所以没有运行时会登录、写入或启动任何东西。T3 根据保存的登录或 `t3` 命令回答，Paseo 列出其守护进程运行的工具，sandbox 运行时拒绝这次检查。能启动时，回复是 `ask.kind: background`，带 `teamai workflow start <name> --driver t3`（或 `--driver paseo`）。还有要问的内容时（`invoke: ask`、必需输入、可选关卡），回复是平常的问题，其中的启动命令使用该驱动。agent 在后台运行启动命令，并等待它结束。步骤显示在应用中。不能在那里启动时，describe 的回答与其他会话相同。
+在有人值守的 T3 Code 线程（设置了 `T3CODE_THREAD_ID`）或 Paseo agent（`PASEO_AGENT_ID`，两者都设置时以它为准）中，describe 先检查需要 AI 工具的运行现在能否在该应用的驱动（`t3` 或 `paseo`）上启动。它以 `check` 模式询问驱动的运行时，所以没有运行时会登录、写入或启动任何东西。T3 根据保存的登录或 `t3` 命令回答，Paseo 列出其守护进程运行的工具，sandbox 运行时拒绝这次检查。能启动时，回复是 `ask.kind: background`，带 `teamai workflow start <name> --driver t3`（或 `--driver paseo`）。还有要问的内容时（`invoke: ask`、必需输入、可选关卡），回复是平常的问题，其中的启动命令使用该驱动。agent 在后台运行启动命令，并等待它结束。步骤显示在应用中。不能在那里启动时，describe 的回答与其他会话相同。
 
 后台运行没有终端，任何关卡都不会替你决定。只有 `--auto-approve` 或 `workflows.auto_approve` 会自动回答可选关卡。其他内容都不再运行后，启动以 `hitl_waiting` 结束。它给出步骤、轮次、消息和选项、关卡是否必需、`respond` 命令，以及该驱动上的 `resume` 命令（`--driver t3` 或 `--driver paseo`）。agent 会问你。可选关卡由它用 `teamai workflow respond` 回答；必需关卡则把命令交给你，在应用的终端中运行。然后它在后台继续运行。从会话中用本地驱动的运行仍按原来的方式决定关卡。
 
@@ -1184,7 +1184,7 @@ agent 从不启动 `deny` 工作流。在有人值守的会话中，describe 回
 
 ### 评审
 
-当步骤列出[评分器](scorers.md)，且本机安装了会话所用工具的受限评审器时，TeamAI 在后台评审每个被评分的 pass，会话把标签告诉本人。本机没有会话所用工具的已验证评审器时（例如 Cursor），每个 pass 的 teamai-score 运行中的评审步骤交给会话，会话在新的子 agent 中以 `best-effort` 隔离评审它。评分器要求 `verified` 的任务保持打开，留给其他 driver。它的会话宿主不能启动子 agent 时，若会话所用工具在 PATH 上，TeamAI 在后台用该工具以 `best-effort` 评审，否则全部任务都保持打开。如果不想在本机评审这些步骤，本人选择不评审的启动选项（`--no-judge`）。负责编排的 agent 从不在自己的上下文中评审。
+当步骤列出[评分器](scorers.md)，且本机安装了会话所用工具的已验证受限评审器时，TeamAI 在后台评审每个被评分的 pass，会话把标签告诉本人。本机没有会话所用工具的已验证评审器时（例如 Cursor），每个 pass 的 teamai-score 运行中的评审步骤交给会话，会话在新的子 agent 中以 `best-effort` 隔离评审它。评分器要求 `verified` 的任务保持打开，留给其他 driver。它的会话宿主不能启动子 agent 时，若 TeamAI 能以受限方式运行会话所用工具且它在 PATH 上，TeamAI 在后台用该工具以 `best-effort` 评审，否则全部任务都保持打开。如果不想在本机评审这些步骤，本人选择不评审的启动选项（`--no-judge`）。负责编排的 agent 从不在自己的上下文中评审。
 
 ### 限制
 

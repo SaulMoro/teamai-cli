@@ -8,7 +8,7 @@
 
 `teamai uninstall` removes the agent resources TeamAI installed. Files you created stay, unless taking teamai's part out of one leaves it empty. A user-scope uninstall removes `~/.teamai` but your own `drivers/`, `runtimes/`, `sandboxes/` and `tools/` in it, and its preview and output name what it keeps. It also keeps data for projects still registered on this machine. Uninstall each project first. Then run `teamai uninstall` outside any project to remove the remaining shared data.
 
-Uninstall refuses while a workflow run still holds a place on a step runtime, such as a sandbox, a T3 thread or a Paseo agent: removing teamai's records would leave nothing to close it. Let the run end, or stop it with `teamai workflow cancel <run>`, then uninstall again. `--dry-run` still previews, and warns of each run that would make it refuse.
+An uninstall that removes the shared data refuses while a workflow run still holds a place on a step runtime, such as a sandbox, a T3 thread or a Paseo agent: removing teamai's records would leave nothing to close it. Let the run end, or stop it with `teamai workflow cancel <run>`, then uninstall again. `--dry-run` still previews, and warns of each run that would make it refuse.
 
 A workspace uninstall can keep built-in hooks in your tool home because other installs may use them. If the uninstall preview lists hooks under "Kept for other teamai installs" and you have confirmed that no other workspace, checkout, user-scope install, or HTTP agent needs them, run `teamai hooks remove` in the still-configured workspace before uninstalling it. A later uninstall outside the workspace may only remove `~/.teamai`.
 

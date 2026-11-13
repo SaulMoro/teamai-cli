@@ -2,7 +2,7 @@
 
 > 本文是 [TeamAI CLI 使用指南](../../usage-guide.zh-CN.md) 的一部分。
 
-`t3` [步骤运行时](workflow-advanced.md#驱动定义和步骤运行时)把工作流的每个提示词步骤作为一个独立的 [T3 Code](https://t3.codes) 线程运行。你可以在应用里看 agent 工作，回应它的审批请求，发消息引导它，或者停止它。teamai 仍然在你的机器上准备步骤的 worktree、读取结果、提交并推送。命令步骤和带 `setup` 的步骤在本机运行，和 `--driver local` 一样。T3 无法运行的工具上的提示词步骤以 `tool_unavailable` 失败，并给出 T3 的原因。
+`t3` [步骤运行时](workflow-advanced.md#驱动定义和步骤运行时)把工作流的每个提示词步骤作为一个独立的 [T3 Code](https://t3.codes) 线程运行。你可以在应用里看 agent 工作，回应它的审批请求，发消息引导它，或者停止它。teamai 仍然在你的机器上准备步骤的 worktree、读取结果、提交并推送。命令步骤在本机运行，和 `--driver local` 一样。T3 无法运行的工具上的提示词步骤以 `tool_unavailable` 失败，并给出 T3 的原因。
 
 它作为可执行文件 `teamai-runtime-t3` 随 teamai 一起发布。`--driver t3` 使用 teamai 自带的定义：
 
@@ -86,7 +86,7 @@ teamai 运行它找到的第一个 `t3`：`$T3CODE_CLI_PATH`（T3 在自己的�
 
 ```text
 This thread runs step "review" of teamai workflow run r928e2fc23ab9bd62 (attempt a96c8bc03). It was started from
-the T3 thread <t3-thread://v2/88e28b29-…/thread-…>. Work only in this worktree. Do not run teamai workflow commands:
+the T3 thread <t3-thread://v2/88e28b29-…/thread-…>. Its shell has no TEAMAI_RUN_DIR: the run's scratch directory is ~/.teamai/projects/…/scratch. Work only in this worktree. Do not run teamai workflow commands:
 teamai commits, pushes and reports the step itself.
 
 Read README.md. Count its markdown sections …
@@ -180,7 +180,7 @@ teamai 会重新登录，这次以 Full access 登录（配对码还会申请 `s
 
 ## 选择提供方实例和模型
 
-可用的工具是此刻能运行的 T3 提供方实例，不包括你为这个项目关掉的实例。没有指定工具的步骤，在同样没有指定工具的定义里，会在你的 T3 默认模型（项目的，否则是全局的）所属的工具上运行。一个提供方有多个实例时，`claude` 和 `codex` 在你的 T3 默认模型所在的实例上运行，前提是它运行提供方自己的二进制文件（没有 Binary path，或者 Binary path 名为 `claude` 或 `codex`）；否则在以提供方命名的实例上运行（Claude 是 `claudeAgent`，Codex 是 `codex`），不论它的 Binary path 是什么；再否则在第一个运行提供方自己二进制文件的实例上运行。Binary path 是包装命令（比如团队工具的命令）的实例只运行那个团队工具，即使它是你的 T3 默认实例；这时没有指定工具的步骤在那个团队工具上运行，没有团队工具在它上面运行时，以 `claude` 在上面选出的实例上运行。要让所有提示词都在某一个实例上运行，比如第二个 Claude 账号，在你机器的配置里写上它：
+可用的工具是此刻能运行的 T3 提供方实例，不包括你为这个项目关掉的实例。没有指定工具的步骤，在同样没有指定工具的定义里，会在你的 T3 默认模型（项目的，否则是全局的）所属的工具上运行。一个提供方有多个实例时，`claude` 和 `codex` 在你的 T3 默认模型所在的实例上运行，前提是它运行提供方自己的二进制文件（没有 Binary path，或者 Binary path 名为 `claude` 或 `codex`）；否则在以提供方命名的实例上运行（Claude 是 `claudeAgent`，Codex 是 `codex`），不论它的 Binary path 是什么；再否则在第一个运行提供方自己二进制文件的实例上运行。Binary path 是包装命令（比如团队工具的命令）的实例只运行那个团队工具，即使它是你的 T3 默认实例；这时没有指定工具的步骤在那个团队工具上运行，没有团队工具在它上面运行时，以提供方自己的工具（`claude` 或 `codex`）在上面选出的实例上运行。要让所有提示词都在某一个实例上运行，比如第二个 Claude 账号，在你机器的配置里写上它：
 
 ```yaml
 # ~/.teamai/config.yaml
@@ -320,7 +320,7 @@ T3 评审的[隔离级别](scorers.md#隔离)是 **best-effort**：
 {"error":{"code":"runtime_failed","message":"Runtime \"t3\" of driver \"teamai-t3\" did not start (login_required): teamai has no valid T3 Code sign-in for http://127.0.0.1:3773 and could not sign in through the t3 command (found no t3 command at $T3CODE_CLI_PATH (unset), on PATH, or at ~/.t3/bin/t3), and an unattended run cannot ask for one. Start any workflow with --driver t3 from a terminal on this machine once, approve teamai in the page T3 Code opens, then run this again."}}
 ```
 
-无人值守运行的线程以上面的模式运行。agent 仍然请求审批，或者委派的任务请求审批的步骤会被停止，并以 `tool_failed` 失败，消息里写明线程。如果 T3 没有停止这个线程，步骤改以 `cancel_failed` 失败，teamai 会保留步骤的位置，直到之后的 `teamai workflow cancel` 停止它。交互式步骤只在有人值守运行中运行。
+无人值守运行的线程以上面的模式运行。agent 仍然请求审批，或者委派的任务请求审批的步骤会被停止，并以 `tool_failed` 失败，消息里写明线程。如果 T3 没有停止这个线程，步骤改以 `runtime_lost` 失败，并写明 `cancel_failed`，teamai 会保留步骤的位置，直到之后的 `teamai workflow cancel` 停止它。交互式步骤只在有人值守运行中运行。
 
 ## 重启、取消和重试
 
@@ -365,7 +365,7 @@ teamai workflow cancel r70d31098c8884803
 
 ## 在关联的机器上唤醒 fleet 成员
 
-[fleet](workflow-advanced.md#在其他成员的机器上运行步骤fleet) 条目的 `wake` 使用 `t3` 时，若它发出的某个 attempt 没有人接，teamai 就会启动一个成员：T3 Code 在与它关联的另一台机器上启动成员的线程。
+[fleet](workflow-advanced.md#在其他成员的机器上运行步骤fleet) 条目的 `wake` 使用 `t3` 时，它一发出还没有成员接手的 attempt，teamai 就会启动一个成员：T3 Code 在与它关联的另一台机器上启动成员的线程。
 
 设置方法：
 
@@ -400,7 +400,7 @@ No machine linked to T3 Code has https://github.com/acme/acme-app.git as a proje
 | `… (sign_in_too_narrow): T3 Code refused to start the step's thread in auto mode …` | teamai 的登录允许的模式比线程运行的模式窄。 | 删除 `~/.teamai/runtime-state/t3/credentials.json` 并重新运行：teamai 会重新登录；如果 T3 Code 询问，用 Auto 权限批准。或者设置 `runtime_mode`。 |
 | `… (sign_in_too_narrow): teamai's T3 Code sign-in was approved without Full access, which runtime_mode full-access needs …` | 有人在 T3 的登录页面里选了比 Full access 窄的权限。 | 重新启动工作流并选 Full access，或者删掉 `runtime_mode: full-access`。 |
 | `… is not a project in T3 Code <machine>, and teamai could not add it (…)` | 这个检出不是 T3 项目，`t3 project add` 也失败了。括号里的文字说明原因。 | 在 T3 Code 里添加它（Add project），或运行 `t3 project add <path>`。 |
-| `T3 Code has no provider instance "claude-sandbox".` | `instance` 指向 T3 没有的实例，或一个已禁用的实例。 | 在 T3 Code 的 Settings → Providers 里添加或启用它，或者删掉 `instance`。 |
+| `T3 Code has no provider instance "claude-sandbox".` | `instance` 指向 T3 没有的实例。 | 在 T3 Code 的 Settings → Providers 里添加它，或者删掉 `instance`。 |
 | `… No T3 Code provider instance runs acme-claude, and teamai cannot add one: T3 Code already has a provider instance "acme-claude" that runs another command …` | 你已有一个同名实例，运行的是别的命令。teamai 不会改动它。 | 把它的 Binary path 指向工具的命令，或者用 `instances` 映射另一个实例。 |
 | `… T3 Code cannot run the provider instance "claude-work" for claude-work yet: Claude Code is not authenticated …` | 该实例已存在，但 T3 Code 对它的检查没有通过，例如工具从未在该实例的 home 中登录。 | 按 T3 Code 的提示，在消息给出的 home 中处理（Claude 用 `CLAUDE_CONFIG_DIR=~/.claude-work claude auth login`），然后重试该步骤。 |
 | `… ended without writing the result file …` | agent 结束了，但没有写结果。 | 用消息里的链接打开线程，然后运行 `teamai workflow retry <run> <step>`。 |
@@ -417,6 +417,6 @@ No machine linked to T3 Code has https://github.com/acme/acme-app.git as a proje
 
 - 步骤的线程是独立的线程，不是启动运行的那个线程的子线程；被唤醒成员的线程也一样：T3 不为它们记录父线程。
 - 它不接受 `credentials`。线程的工具在 T3 Code 的环境中、用 T3 Code 自己的登录运行，所以 teamai 会在任何步骤运行之前拒绝为这个运行时配置的凭据：`NAME: env:VAR` 的提示是 `t3 does not offer can.env, so it cannot keep a credential to the processes it is for`，`<tool>: login` 的提示是 `t3 launches agents its own way, in each tool's own home, so it brings no login`。
-- 只读的提示词步骤在 teamai 为它保留的副本里运行，和 `new` 步骤在它的 worktree 里一样。`clone` 或 `team` 步骤在它自己的文件夹上运行，teamai 会把那个文件夹添加为 T3 Code 项目。文件夹被删除后，下一个关闭的 T3 步骤会删除这个项目。带 `role`、`env` 或 `setup` 的步骤会交给 `local`。
+- 只读的提示词步骤在 teamai 为它保留的副本里运行，和 `new` 步骤在它的 worktree 里一样。`clone` 或 `team` 步骤在它自己的文件夹上运行，teamai 会把那个文件夹添加为 T3 Code 项目。文件夹被删除后，下一个关闭的 T3 步骤会删除这个项目。带 `role`、`env` 或 `setup` 的提示词步骤只在定义中提供它们的其他运行时（例如 `tools`）上运行；`teamai-t3` 没有这样的运行时，所以在那里以 `requirement_unmet` 失败。
 - T3 不报告 token 用量，所以这里无法检查以 token 计的 `budget`，也无法限制 `max_turns`。
 - 不提供 `permissions: unattended` 的步骤。它们需要一个工具在沙箱中运行的线程，后续版本会加入。

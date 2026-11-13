@@ -4,7 +4,7 @@
 
 `teamai-runtime-paseo` 把每个提示词步骤作为 [Paseo](https://github.com/getpaseo/paseo) 守护进程的智能体运行，放在 teamai 交给该步骤的目录上的一个 Paseo 工作区里：只读步骤用你的检出目录，其余步骤用 teamai 准备的 worktree、克隆或团队仓库克隆。你在 Paseo 应用里查看智能体、回答它的权限请求。读取结果、提交、交付、评分和恢复仍由 teamai 负责。
 
-它只运行提示词步骤。命令和 `setup` 交给定义里的下一个运行时，或留在本机。需要 `permissions: unattended` 的提示词步骤，交给下一个能运行它的运行时。带 `role` 的步骤在这里运行，使用 teamai 交付到其副本中的角色：运行时只在 Paseo 里打开这个副本，而 Paseo 只在它自己创建的 worktree 里运行项目的 worktree setup，所以不会有别的东西把你自己的资源交付进去。它也以 best-effort 评判被评分的轮次，见[评判被评分的轮次](#评判被评分的轮次)。
+它只运行提示词步骤。命令交给定义里的下一个运行时，或留在本机。带 `setup` 的提示词步骤交给下一个能运行它的运行时；`teamai-paseo` 没有列出这样的运行时，所以在那里它以 `requirement_unmet` 失败。需要 `permissions: unattended` 的提示词步骤，交给下一个能运行它的运行时。带 `role` 的步骤在这里运行，使用 teamai 交付到其副本中的角色：运行时只在 Paseo 里打开这个副本，而 Paseo 只在它自己创建的 worktree 里运行项目的 worktree setup，所以不会有别的东西把你自己的资源交付进去。它也以 best-effort 评判被评分的轮次，见[评判被评分的轮次](#评判被评分的轮次)。
 
 ## 快速开始
 
@@ -69,7 +69,7 @@ teamai workflow start paseo-review --driver paseo
 ```
 
 ```text
-ℹ Run r0769801107010602 started. If it stops before it ends, continue it here with: teamai workflow resume r0769801107010602 --driver paseo, or hand it to another machine with: teamai workflow publish r0769801107010602
+ℹ Run r0769801107010602 started. If it stops before it ends, continue it here with: teamai workflow resume r0769801107010602, or hand it to another machine with: teamai workflow publish r0769801107010602
 {"data":{"done":{"run":"r0769801107010602","outcome":"succeeded","record":"published"},"cancelled":[]}}
 ```
 
@@ -365,7 +365,7 @@ Judge whether the change does what the step asked. Read the diff and the session
 团队工具实例上的步骤，在 Paseo 中运行于它自己的 Paseo 自定义提供方上。守护进程在本机时，teamai 在第一个运行该实例的步骤开始时添加这个提供方，无论是否有人值守。该提供方以实例命名，扩展实例所属的工具，从你的 `PATH` 运行实例的命令；实例有自己的主目录时，还会设置该工具的主目录变量。它会保留供以后的运行使用，运行会提示一次如何删除它：
 
 ```text
-⚠ Step runtime "paseo": teamai added the Paseo provider acme-claude to the daemon at ws://127.0.0.1:6767/ws for its acme-claude steps: it extends claude and runs /Users/ana/.local/bin/acme-claude, with CLAUDE_CONFIG_DIR=/Users/ana/.claude-acme. It stays for later runs; to remove it, choose Remove provider on acme-claude in the Paseo app's provider settings, or delete agents.providers.acme-claude from /Users/ana/.paseo/config.json, then run `paseo daemon reload`. Paseo cannot show its agents' logs once it is gone, so read them first.
+⚠ Step runtime "paseo", operation op-2b7e91c4d0a3: teamai added the Paseo provider acme-claude to the daemon at ws://127.0.0.1:6767/ws for its acme-claude steps: it extends claude and runs /Users/ana/.local/bin/acme-claude, with CLAUDE_CONFIG_DIR=/Users/ana/.claude-acme. It stays for later runs; to remove it, choose Remove provider on acme-claude in the Paseo app's provider settings, or delete agents.providers.acme-claude from /Users/ana/.paseo/config.json, then run `paseo daemon reload`. Paseo cannot show its agents' logs once it is gone, so read them first.
 ```
 
 之后 `paseo daemon config get agents.providers --json` 会显示它添加的这一项，守护进程原有的每一项都保持不变：
@@ -429,9 +429,9 @@ runtimes:
 { "teamai-sandbox-claude": { "extends": "claude", "label": "teamai-sandbox-claude", "command": ["/usr/local/bin/teamai-sandbox-claude"] } }
 ```
 
-step 的 agent 创建时不带 prompt。teamai 先在 attempt 的 socket 上登记该 agent，再启动它的工具，直到沙箱确认该 agent 的包装器已连接才发送 prompt。若沙箱拒绝包装器，或包装器 30 秒内未连接，teamai 删除该 agent，step 以 `isolation_unproven` 失败，prompt 不会到达沙箱外的工具。崩溃后重新启动的 runtime 会再次登记该 agent。step 的会话从 attempt 的工具主目录读取。
+step 的 agent 创建时不带 prompt。teamai 先在 attempt 的 socket 上登记该 agent，再启动它的工具，直到沙箱确认该 agent 的包装器已连接才发送 prompt。若沙箱拒绝包装器，或包装器 30 秒内未连接，teamai 删除该 agent，step 以 `runtime_failed` 失败并注明 `isolation_unproven`，prompt 不会到达沙箱外的工具。崩溃后重新启动的 runtime 会再次登记该 agent。step 的会话从 attempt 的工具主目录读取。
 
-包装器在 daemon 启动它时所用的 `HOME` 下查找 attempt，因此 daemon 必须使用与 teamai 相同的 `HOME`，由你自己启动两者时即是如此。若 daemon 以其他 `HOME` 启动，每个 step 都会以 `isolation_unproven` 失败；请在该 provider 的 `env` 中把 `HOME` 设为 teamai 的。
+包装器在 daemon 启动它时所用的 `HOME` 下查找 attempt，因此 daemon 必须使用与 teamai 相同的 `HOME`，由你自己启动两者时即是如此。若 daemon 以其他 `HOME` 启动，每个 step 都会以 `runtime_failed` 失败并注明 `isolation_unproven`；请在该 provider 的 `env` 中把 `HOME` 设为 teamai 的。
 
 在 Paseo 上，OpenCode 不能通过沙箱运行：Paseo 可能让多个 agent 共用一个 OpenCode 服务，沙箱无法区分 step 的 agent 与其他 agent。
 
@@ -493,7 +493,7 @@ paseo permit allow 7c483fce --all
 - 这个步骤使用相同的 provider、模型、effort 和 Paseo 模式；
 - 两个步骤都不通过沙箱运行。
 
-这个步骤无法在那个智能体里继续，或者前面的步骤不是在这个运行时的智能体里运行的（例如它在另一个驱动或另一台机器上运行）时，如果 Paseo 在这个步骤的 worktree 里列出了那个会话，teamai 会把会话导入到一个新智能体中。这个智能体随后按步骤的要求运行，并被告知运行的临时目录和工作流目录在哪里，因为导入的智能体拿不到 `TEAMAI_RUN_DIR` 和 `TEAMAI_WORKFLOW_DIR`。
+这个步骤无法在那个智能体里继续，或者前面的步骤不是在这个运行时的智能体里运行的（例如它在另一个驱动或另一台机器上运行）时，如果这个步骤不通过沙箱运行，且 Paseo 在这个步骤的 worktree 里列出了那个会话，teamai 会把会话导入到一个新智能体中。这个智能体随后按步骤的要求运行，并被告知运行的临时目录和工作流目录在哪里，因为导入的智能体拿不到 `TEAMAI_RUN_DIR` 和 `TEAMAI_WORKFLOW_DIR`。
 
 否则步骤会启动一个新智能体，并说明原因：
 
@@ -530,13 +530,13 @@ No Paseo host saved on this machine has a workspace of https://github.com/acme/a
 teamai workflow cancel r144a3913136e7b62
 ```
 
-Paseo 可能在智能体的这一轮结束之前就答复取消，所以只有当 Paseo 报告智能体不再运行时，步骤才以 `cancelled` 结束。取消 10 秒后仍在运行的智能体，或者 Paseo 在这段时间内没有答复的取消，会让步骤以 `cancel_failed` 失败，teamai 会保留这次尝试和登录：
+Paseo 可能在智能体的这一轮结束之前就答复取消，所以只有当 Paseo 报告智能体不再运行时，取消才算停止了智能体。取消 10 秒后仍在运行的智能体，或者 Paseo 在这段时间内没有答复的取消，会让这次停止无法确认（`cancel_failed`），teamai 会保留这次尝试和登录：
 
 ```text
 Paseo cancelled the claude agent 6f0d2c4e-8b1a-5c3f-9e7d-2a4b6c8d0e1f, but it still ran 10 s later. It may still change the worktree; stop it in the Paseo app.
 ```
 
-等智能体能够停止后，再运行一次 `teamai workflow cancel`：运行时会重新尝试停止，步骤以 `cancelled` 结束。
+等智能体能够停止后，再运行一次 `teamai workflow cancel`：运行时会重新尝试停止，并关闭这次尝试的位置。
 
 智能体工作时 teamai 被杀掉，智能体会继续运行。`resume` 重新连上同一个智能体，不会再启动第二个：
 
@@ -582,9 +582,9 @@ Paseo did not cancel the claude agent 6f0d2c4e-8b1a-5c3f-9e7d-2a4b6c8d0e1f: Agen
 
 你在 Paseo 里已经打开的、同一目录上的工作区（例如只读步骤在你的检出目录中运行时）从不被归档：这次尝试改为取消它自己的智能体，你的工作区保持打开。步骤运行期间你在 Paseo 中打开该目录（得到的是这次尝试的工作区）并在其中启动了智能体时，也是如此。
 
-打开时向 Paseo 提出的问题在 20 秒内没有得到回答时（例如守护进程卡住），步骤以 `workspace_failed` 失败，之后对该工作树的打开可以继续。Paseo 之后仍可能打开该工作区；失败信息会提示届时在 Paseo 应用中归档它。
+打开时向 Paseo 提出的问题在 20 秒内没有得到回答时（例如守护进程卡住），步骤以 `runtime_failed` 失败并注明 `workspace_failed`，之后对该工作树的打开可以继续。Paseo 之后仍可能打开该工作区；失败信息会提示届时在 Paseo 应用中归档它。
 
-运行时在步骤中途被杀掉就无法归档；步骤以 `runtime_lost` 失败，它的工作区会留在 Paseo 里，直到你归档它（`paseo workspace archive <id>`）。
+运行时在步骤中途被杀掉就无法归档；步骤以 `runtime_lost` 失败，它的工作区会留在 Paseo 里，直到之后的 `teamai workflow cancel` 关闭这次尝试，或你归档它（`paseo workspace archive <id>`）。
 
 崩溃后的 `teamai workflow cancel` 会以 recover 模式打开运行时。它不检查登录，所以之后退出登录的工具不会妨碍它停止智能体；它只为取消智能体和关闭这次尝试而连接守护进程。守护进程停着时，取消会保留这次尝试和登录，并说明原因：
 

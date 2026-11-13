@@ -191,9 +191,9 @@ To tell the person something without answering a request, write a `notice`: a si
 ⚠ Step runtime "acme", operation op-83bfffde9ce3: Pulling ghcr.io/acme/agent:1 (1.2 GB).
 ```
 
-`open`'s `view` names the paths the place gets at the same absolute path as on this machine: the worktree read-write, its git paths read-only, the attempt's result directory and tool home, and `runDir`, the run's scratch directory, read-write, so `$TEAMAI_RUN_DIR` works there as it does here.
+`open`'s `view` names the paths the place gets at the same absolute path as on this machine: the worktree read-write, its git paths and, for a workflow written as a folder, that folder read-only, the attempt's result directory and tool home, and `runDir`, the run's scratch directory, read-write, so `$TEAMAI_RUN_DIR` works there as it does here.
 
-A step with a `timeout` that fails it gives its `open` a `deadline`, the latest time its limits allow. The step's own timeout stops its work first; teamai cancels an `exec` or `prompt` of the place still running 15 s past the `deadline`, a reconnected one included, fails the `open` when the place is not `ready` by the `deadline`, and waits for a `collect` 15 s past it at most. A step without a time limit, or whose limit ends the agent's turn (`on_limit: end_turn`), has no `deadline`:
+A step with a `timeout` that fails it, or one in a run or under a step with a `timeout`, gives its `open` a `deadline`, the latest time those limits allow. The step's own timeout stops its work first; teamai cancels an `exec` or `prompt` of the place still running 15 s past the `deadline`, a reconnected one included, fails the `open` when the place is not `ready` by the `deadline`, and waits for a `collect` 15 s past it at most. A step under no time limit, or whose only limit ends the agent's turn (`on_limit: end_turn`), has no `deadline`:
 
 ```text
 → {"type":"open","op":"op-5e0d11cb4777","run":"r…","attempt":"a…","deadline":"2026-11-06T15:10:00.000Z","view":{…},"credentials":{}}
@@ -233,7 +233,7 @@ teamai then sends each prompt step as one `prompt`. `lease.prompt` is the whole 
 | `lease` field | Meaning |
 | --- | --- |
 | `step`, `tool` | The step and the tool to start the agent on, one of your `can.tools` |
-| `model` | `name` and optional `effort` to launch on: the step's, or else its agent definition's; absent means the tool's default |
+| `model` | `name` and optional `effort` to launch on: the step's, or else its agent definition's, or else the workflow's `defaults.model`; absent means the tool's default |
 | `prompt`, `result` | The whole prompt, and the file the agent writes the result to. Let the agent write in that file's directory without asking, as teamai's own launch does: for Claude, `--allowedTools=Edit(/<result's directory>/**)`. The step leaves there the files archived with its session as its evidence. Change no mode for it |
 | `resume` | A session id of the same tool to continue, for a later pass. Say `"resumed":true` in `finished` when the agent continued it. Leave it out, or say `false`, when you started a new session, and teamai does not link the new session to the old one |
 | `permissions` | `approval-required`, or `unattended` when your `can.unattended` took such a step |
@@ -260,7 +260,7 @@ A prompt that cannot finish ends `failed`. Use `model_unavailable`, `tool_unavai
 
 A tool teamai launches itself needs no runtime for this, and what the run does with a step its tool's limit stopped is in [When a tool hits its usage limit](workflow-advanced.md#when-a-tool-hits-its-usage-limit).
 
-A prompt your daemon lost when it restarted ends `daemon_restarted`, which teamai records as `runtime_failed`, ending its message with the command that retries the step: `Then run: teamai workflow retry <run> <step>`. So does a confined prompt, such as a judge's. A confined prompt that stops on its tool's usage limit fails `usage_limited`: teamai does not wait for that limit to reset. A step that failed `runtime_lost`, because the runtime could not confirm its stop, gets the command once a later `teamai workflow cancel` confirms it:
+A prompt your daemon lost when it restarted ends `daemon_restarted`, which teamai records as `runtime_failed`, ending its message with the command that retries the step: `Then run: teamai workflow retry <run> <step>`. A confined prompt, such as a judge's, records it as `confined_failed`, with the same command. A confined prompt that stops on its tool's usage limit fails `usage_limited`: teamai does not wait for that limit to reset. A step that failed `runtime_lost`, because the runtime could not confirm its stop, gets the command once a later `teamai workflow cancel` confirms it:
 
 ```text
 ℹ Stopped attempt a3f0… of run r7a1… on step runtime "sandbox" and closed its place. Then run: teamai workflow retry r7a1… review
