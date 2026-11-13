@@ -572,14 +572,18 @@ describe('uninstall', () => {
   });
 
   // A driver left running would write the run again into a data home the uninstall removed under it.
-  it('refuses while a teamai of this machine drives one of its runs, naming the run, and removes nothing', async () => {
+  it.each([
+    { driver: 'a driver', lock: 'driver.lock' },
+    // A skill driver's runner takes the run's lock only for each check, and holds its own for its whole life.
+    { driver: "a skill driver's runner", lock: path.join('attempts', 'a0123abcd', 'runner.lock') },
+  ])('refuses while $driver of this machine drives one of its runs, naming the run, and removes nothing', async ({ lock }) => {
     const { homeDir, repoPath, teamaiHome } = await setupFixture(tmpDir);
     vi.stubEnv('HOME', homeDir);
     const dataHome = path.join(teamaiHome, 'projects', 'current');
     const runFile = path.join(dataHome, 'workflows', 'runs', 'r0123456789abcdef.json');
     await fse.outputJson(runFile, {});
     const { lockHolder } = await import('../update.js');
-    await fse.outputJson(path.join(dataHome, 'workflows', 'runs', 'r0123456789abcdef', 'driver.lock'), { ...await lockHolder(), owner: 'driver' });
+    await fse.outputJson(path.join(dataHome, 'workflows', 'runs', 'r0123456789abcdef', lock), { ...await lockHolder(), owner: 'driver' });
     mockAutoDetectInit.mockResolvedValue({
       localConfig: makeLocalConfig(homeDir, repoPath, { scope: 'project', projectRoot: homeDir, dataHome }),
       teamConfig: makeTeamConfig(),
