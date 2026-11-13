@@ -319,7 +319,7 @@ async function startScore(start: ScoreStart, driver: string | undefined): Promis
   await startWorkflow(SCORE_WORKFLOW, { driver: chosen === 'none' ? undefined : chosen, inputs: JSON.stringify(inputs) }, {
     scope: named.config,
     byDefault,
-    canRunInStep: true,
+    startsAs: 'step-command',
     instead: insteadOf(start, driver),
     answer: async (config, runId, driven) => {
       const answered = await ScoreAnswer.of(config, runId, driven, start.scorers);
@@ -351,7 +351,7 @@ async function startTry(start: TryStart, driver: string | undefined): Promise<vo
   await startWorkflow(TRY_SCORER_WORKFLOW, { driver: chosen === 'none' ? undefined : chosen, inputs: JSON.stringify(start.inputs) }, {
     scope: start.config,
     byDefault,
-    canRunInStep: true,
+    startsAs: 'step-command',
     instead: `The person runs ${words.map(shellWord).join(' ')} in their own terminal, and the agent drafts and tries a scorer with /teamai-new-scorer.`,
     answer: async (_config, _runId, driven) => {
       const tried = TriedSchema.safeParse(driven);

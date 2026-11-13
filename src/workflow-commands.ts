@@ -418,9 +418,9 @@ async function readyRunConfig(runId: string, options: { allowRemote: boolean } =
   return { ...owner, env, secrets: env.secrets };
 }
 
-/** This process as `invoke` judges it: its agent evidence and run mode, and whether it passed `--confirmed`. */
+/** The process `env` belongs to as `invoke` judges it: its agent evidence and run mode, and whether it passed `--confirmed`. */
 function invokeCaller(confirmed: boolean | undefined, env: NodeJS.ProcessEnv = process.env): InvokeCaller {
-  return { evidence: agentEvidence(env), confirmed: confirmed === true, mode: resolveRunMode(process.env) };
+  return { evidence: agentEvidence(env), confirmed: confirmed === true, mode: resolveRunMode(env) };
 }
 
 function parseTools(value: string | undefined): { ok: true; tools: Record<string, string> } | { ok: false; message: string } {
@@ -514,18 +514,16 @@ export interface ShortcutStart {
   /** The config the run starts in, already loaded, as a shortcut found it; it takes the place of `scope`. */
   ready?: Ready;
   /**
-   * A released command's shortcut, which the person or agent asked for rather than the workflow: it starts with no agent
-   * evidence, so `invoke` and the nested-start checks do not judge it, and an agent's start is recorded as `cli`.
+   * Whose start it is, a person's when unset:
+   * - `cli`: a released command's shortcut, which the person or agent asked for rather than the workflow. It starts with
+   *   no agent evidence, so `invoke` and the nested-start checks do not judge it, and an agent's start is recorded as `cli`.
+   * - `step-command`: a command that starts a default workflow for you, a person's start anywhere but a command step
+   *   (`isCommandStep`), whose run is part of that step there: the attempt marker refuses it nothing, `invoke` judges the
+   *   agent session it runs in, and it starts as the CLI's. In any other process of an attempt it answers `nested_workflow`.
    */
-  asCli?: boolean;
+  startsAs?: 'cli' | 'step-command';
   /** What the person and the agent run in place of the shortcut, when an agent session's start is refused. */
   instead?: string;
-  /**
-   * A command that starts a default workflow for you, whose run inside a command step (`isCommandStep`) is part of that
-   * step: the attempt marker refuses it nothing, `invoke` judges the agent session it runs in, and it starts as the CLI's.
-   * In any other process of an attempt it answers `nested_workflow`.
-   */
-  canRunInStep?: boolean;
   answer?: (config: LocalConfig, runId: string, driven: WorkflowEnvelope) => Promise<WorkflowEnvelope | undefined>;
   /**
    * What `workflows.driver` decided, when no `--driver` was given: a driver this machine does not run, which the run
@@ -544,9 +542,9 @@ export interface ShortcutStart {
 export async function startWorkflow(name: string, options: StartOptions, shortcut: ShortcutStart = {}): Promise<WorkflowEnvelope | undefined> {
   const asked = askedDriver(options.driver);
   // Only the local driver drives a run in the step's process; the skill driver's turns run in an agent session.
-  const isInStep = shortcut.canRunInStep === true && options.driver === LOCAL_DRIVER && isCommandStep(process.env);
+  const isInStep = shortcut.startsAs === 'step-command' && options.driver === LOCAL_DRIVER && isCommandStep(process.env);
 
-  if (!shortcut.asCli && !isInStep && refusedNested(await nestedStart(process.env, process.cwd()), asks(asked, 'skill'))) return undefined;
+  if (shortcut.startsAs !== 'cli' && !isInStep && refusedNested(await nestedStart(process.env, process.cwd()), asks(asked, 'skill'))) return undefined;
 
   if (asks(asked, 'skill')) {
     const { driver: _skill, timeout, ...rest } = options;
@@ -636,7 +634,7 @@ export async function startWorkflow(name: string, options: StartOptions, shortcu
   // starts as the CLI, which invoke never refuses (`startAsCli`).
   // Inside a step, the agent session a prompt step's tool gives its commands is judged as anywhere else.
   const caller = invokeCaller(options.confirmed, isInStep ? { ...process.env, [ATTEMPT_ENV]: undefined } : process.env);
-  const refused = shortcut.asCli ? undefined : invokeRefusal((await loadCachedWorkflow(config, name))?.definition, caller, { kind: 'start', instead: shortcut.instead });
+  const refused = shortcut.startsAs === 'cli' ? undefined : invokeRefusal((await loadCachedWorkflow(config, name))?.definition, caller, { kind: 'start', instead: shortcut.instead });
 
   if (refused) {
     writeEnvelope({ error: refused }, secrets);
@@ -705,7 +703,7 @@ async function startDriven(input: {
   const start = { inputs, checkout: process.cwd(), alone, timeout, awaits };
   const client = inProcessClient({ config, env });
 
-  const started = (shortcut.asCli && caller.evidence.kind !== 'none') || isInStep
+  const started = (shortcut.startsAs === 'cli' && caller.evidence.kind !== 'none') || isInStep
     ? await startAsCli(client, name, { ...start, mode: caller.mode })
     : await client.start(name, { ...start, caller, instead: shortcut.instead, startedBy: 'person' });
 
@@ -924,7 +922,7 @@ async function runShortcutIn(loaded: Ready, { workflow, inputs, command, json }:
 
   await startWorkflow(workflow, { driver, inputs: JSON.stringify(inputs) }, {
     ready: loaded,
-    asCli: true,
+    startsAs: 'cli',
     isResumeSaidWhenOpen: true,
     byDefault: decided,
     progress: say,
@@ -2088,7 +2086,7 @@ export async function benchmarkRun(suite: string, options: { driver?: string; sa
   const start: StartOptions = { driver, inputs: JSON.stringify({ suite, ...inputs }), timeout: `${preflight.timeoutMs}ms` };
 
   if (options.sandbox) start.sandbox = true;
-  const done = await startWorkflow(BENCHMARK_WORKFLOW, start, { byDefault, canRunInStep: true });
+  const done = await startWorkflow(BENCHMARK_WORKFLOW, start, { byDefault, startsAs: 'step-command' });
 
   const ended = done && 'data' in done ? BenchmarkDoneSchema.safeParse(done.data.done) : undefined;
 
@@ -2154,7 +2152,7 @@ export async function selfImprovementRun(scorer: string, options: { suite: strin
   const start: StartOptions = { driver, inputs: JSON.stringify({ scorer, suite: options.suite }), tools: options.tools };
 
   if (options.sandbox) start.sandbox = true;
-  await startWorkflow(SELF_IMPROVEMENT_WORKFLOW, start, { byDefault, canRunInStep: true });
+  await startWorkflow(SELF_IMPROVEMENT_WORKFLOW, start, { byDefault, startsAs: 'step-command' });
 }
 
 /**
