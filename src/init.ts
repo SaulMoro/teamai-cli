@@ -254,23 +254,23 @@ import {
 import { descriptorOf, TOOL_ORDER } from './tool-registry.js';
 import { describeToolHomeChange, recordToolHomes } from './tool-home-record.js';
 
-function validAgentIds(teamToolIds: readonly string[]): string[] {
+function validAgentIds(teamTools: readonly string[]): string[] {
   return [...new Set([
     ...TOOL_ORDER,
     ...KNOWN_AGENTS.map((agent) => agent.id),
-    ...teamToolIds,
+    ...teamTools,
   ])].sort();
 }
 
-function unknownAgentIds(agentIds: string[], teamToolIds: readonly string[]): string[] {
-  const known = new Set(validAgentIds(teamToolIds));
+function unknownAgentIds(agentIds: string[], teamTools: readonly string[]): string[] {
+  const known = new Set(validAgentIds(teamTools));
 
   return agentIds.filter((id) => !known.has(id));
 }
 
-/** Whether every id of `agentIds` is a tool teamai ships or one the team repo adds (`teamToolIds`); logs the others when not. */
-function validateGitInitAgentIds(agentIds: string[], teamToolIds: readonly string[]): boolean {
-  const unknown = unknownAgentIds(agentIds, teamToolIds);
+/** Whether every id of `agentIds` is a tool teamai ships or one of `teamTools`, those the team repo adds (`teamToolIds`); logs the others when not. */
+function validateGitInitAgentIds(agentIds: string[], teamTools: readonly string[]): boolean {
+  const unknown = unknownAgentIds(agentIds, teamTools);
 
   if (unknown.length === 0) return true;
 
@@ -282,7 +282,7 @@ function validateGitInitAgentIds(agentIds: string[], teamToolIds: readonly strin
 
   log.error(
     'Unknown --agent id' + (unknown.length === 1 ? '' : 's') + ': ' + explanation +
-    ' Valid ids: ' + validAgentIds(teamToolIds).join(', ') + '.',
+    ' Valid ids: ' + validAgentIds(teamTools).join(', ') + '.',
   );
 
   return false;

@@ -10,7 +10,7 @@ import { isSessionPlatform } from './session-flow/adapters/platform-facts.js';
 import { homeEnvOf } from './tool-home.js';
 import { homeVariables, isToolId, TOOL_ORDER, useToolInstances } from './tool-registry.js';
 import type { ToolId } from './tools.js';
-import { DEFAULT_TOOL_PATHS, getTeamaiHomeDir, rerootToolPaths, toolInstallRoot, ToolPathsSchema, type Scope, type TeamaiConfig } from './types.js';
+import { DEFAULT_TOOL_PATHS, getTeamaiHomeDir, rerootToolPaths, TOOL_ROOT_FIELDS, toolInstallRoot, ToolPathsSchema, type Scope, type TeamaiConfig } from './types.js';
 import { writeJsonAtomic } from './utils/fs.js';
 import { getUserHome } from '@teamai/shared/home';
 import { log } from '@teamai/shared/log';
@@ -330,7 +330,15 @@ export function defaultPathsOf(instance: ResolvedToolInstance): z.infer<typeof T
  */
 export function instanceReadPath(instance: ResolvedToolInstance, relative: string): string {
   if (!instance.home || instance.name === instance.extends || !relative.includes('/')) return relative;
-  const roots = new Set(Object.values(DEFAULT_TOOL_PATHS[instance.extends]).flatMap((field) => (typeof field === 'string' && field.includes('/') ? [toolInstallRoot(field)] : [])));
+
+  const shipped: z.infer<typeof ToolPathsSchema> = DEFAULT_TOOL_PATHS[instance.extends];
+
+  const roots = new Set(TOOL_ROOT_FIELDS.flatMap((field) => {
+    const value = shipped[field];
+
+    return value?.includes('/') ? [toolInstallRoot(value)] : [];
+  }));
+
   const root = toolInstallRoot(relative);
 
   return roots.has(root) ? instance.home.dir + relative.slice(root.length) : relative;

@@ -332,6 +332,7 @@ export async function loadTeamConfig(repoPath: string, member: LocalConfig | nul
  */
 export async function teamToolIds(repoPath: string, teamConfig: TeamaiConfig | null): Promise<string[]> {
   if (teamConfig) return Object.keys(teamConfig.toolPaths);
+
   const [team, own] = await Promise.all([
     teamToolInstances({ root: repoPath, namespaces: () => memberNamespaces(repoPath, null) }),
     personalToolInstances(),

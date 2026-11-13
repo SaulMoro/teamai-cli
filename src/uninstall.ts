@@ -50,6 +50,7 @@ import {
   scopedToolPaths,
   hookToolPathsForConfig,
   SYNC_LOCK_FILENAME,
+  TOOL_ROOT_FIELDS,
   toolInstallRoot,
   type GlobalOptions,
   type TeamaiConfig,
@@ -3515,7 +3516,9 @@ function instanceFoldersOf(tools: readonly string[], toolPaths: ReturnType<typeo
 
     if (instance === undefined || instance.name === instance.extends) return [];
 
-    return Object.entries(toolPaths[tool] ?? {}).flatMap(([field, relative]) => (typeof relative === 'string' ? foldersOf(field, relative) : []));
+    const paths = toolPaths[tool] ?? {};
+
+    return [...TOOL_ROOT_FIELDS, 'mcpProject' as const].flatMap((field) => foldersOf(field, paths[field] ?? ''));
   }))];
 }
 
