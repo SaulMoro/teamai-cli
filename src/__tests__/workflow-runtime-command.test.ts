@@ -9,7 +9,7 @@ import { attemptRun, attemptRuntimePath, placesLockIn, type AttemptRun } from '.
 import { acquireLock, releaseLock } from '../update.js';
 import type { DriverCan } from '../workflow/requirements.js';
 import { getDataHome, type LocalConfig } from '../types.js';
-import { AttemptIdSchema, attemptResultPath, RunIdSchema } from '../workflow/store.js';
+import { AttemptIdSchema, attemptResultPath, attemptsDir, RunIdSchema } from '../workflow/store.js';
 import type { StepRuntime } from '@teamai/runtime-protocol/step-runtime';
 import type { OpId } from '@teamai/runtime-protocol';
 
@@ -307,6 +307,23 @@ describe('an attempt\'s operations on a step runtime', () => {
     expect(recordedWhileHeld).toBe(false);
     await expect(opened).resolves.toEqual({ ok: true, handle: 'h-1' });
     expect(fs.existsSync(record)).toBe(true);
+  });
+
+  it('records no place for a run an uninstall removed while the open waited on the places lock, and opens none', async () => {
+    const { run, config, done } = counted();
+    onTestFinished(done);
+    const runDir = path.dirname(attemptsDir(config, RunIdSchema.parse('r0123abcd')));
+    fs.mkdirSync(runDir, { recursive: true });
+    const lock = placesLockIn(getDataHome(config));
+    expect(await acquireLock(lock)).toBe(true);
+
+    const opened = run.open({ worktree: '/work', readonly: [], result: '/work/out', runDir: '/work/scratch', toolHome: {} });
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    fs.rmSync(runDir, { recursive: true, force: true });
+    await releaseLock(lock);
+
+    await expect(opened).resolves.toMatchObject({ ok: false, failure: { message: expect.stringContaining('its run was removed while it waited') } });
+    expect(fs.existsSync(runDir)).toBe(false);
   });
 
   it('sends no exec when the step is stopped while the attempt records the exec it is about to send', async () => {
