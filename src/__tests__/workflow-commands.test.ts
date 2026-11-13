@@ -24,7 +24,8 @@ import { log, setStderrOnly } from '@teamai/shared/log';
 import { acquireLock, releaseLock } from '../update.js';
 import { leaseNext, startRun } from '../workflow/engine.js';
 import { publishRun, resumeRun } from '../workflow/handoff.js';
-import { driverLockPath, readRun, runFilePath, RunIdSchema, runsDir, takeRunLock } from '../workflow/store.js';
+import { cancelRun } from '../workflow/run-controls.js';
+import { attemptDir, AttemptIdSchema, driverLockPath, readRun, runFilePath, RunIdSchema, runsDir, takeRunLock } from '../workflow/store.js';
 import { benchmarkRun, selfImprovementRun, workflowCancel, workflowNext, workflowPublish, workflowReport, workflowRespond, workflowResume, workflowRetry, workflowStart } from '../workflow-commands.js';
 import { driverIdentity } from '../driver-identity.js';
 import { loadLocalConfigForScope } from '../config.js';
@@ -1480,5 +1481,29 @@ finally:
     expect(await capture(() => workflowCancel(runId))).toMatchObject({ data: { run: { status: 'running', finalizing: { outcome: 'cancelled' } } } });
 
     expect(await capture(() => workflowNext(runId, { json: JSON.stringify({ driver: own }) }))).toMatchObject({ data: { lease: { step: 'tidy' } } });
+  });
+});
+
+describe('workflow cancel of a run whose step started a run of its own', () => {
+  it('ends that run when the run whose step it was had already settled', async () => {
+    const config = testConfig();
+    state.config = config;
+    fs.writeFileSync(path.join(config.repo.localPath, 'workflows', 'build.yaml'), 'schemaVersion: v1alpha1\nname: build\ndescription: Builds.\nsteps:\n  - id: work\n    command: node work.js\n');
+    await syncScorersThenWorkflows(config);
+    const secrets = await knownSecrets(config);
+    const outer = await startRun(config, 'build', {}, { secrets });
+    if ('error' in outer) throw new Error(outer.error.message);
+    const outerId = String(outer.data.run);
+    const leased = z.object({ data: z.object({ lease: z.object({ attempt: AttemptIdSchema }) }) }).parse(await leaseNext(config, outerId, { kind: 'ci-script', machine: 'runner', workspace: '/ci' }));
+    const partOf = { run: RunIdSchema.parse(outerId), attempt: leased.data.lease.attempt };
+    fs.mkdirSync(attemptDir(config, partOf.run, partOf.attempt), { recursive: true });
+    const inner = await startRun(config, 'build', {}, { secrets, partOf });
+    if ('error' in inner) throw new Error(inner.error.message);
+    // Settled where nothing ended the run part of its step, as the outer run's own next does once its driver was killed.
+    await cancelRun(config, outerId, secrets);
+
+    await capture(() => workflowCancel(outerId));
+
+    expect(await readRun(config, String(inner.data.run))).toMatchObject({ status: 'cancelled' });
   });
 });

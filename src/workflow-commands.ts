@@ -1363,7 +1363,7 @@ export async function workflowCancel(runId: string, step?: string, options: { re
       const isSettled = 'error' in cancelled && cancelled.error.code === 'run_settled';
       const stopped = !('error' in cancelled) || isSettled ? await stopCancelledAttempts(config, lock, { isRunnerHolding: isSkillRunnerHolding, release: release?.data }) : undefined;
       // After their processes stopped, which a run one of them drove ran in.
-      await endRunsPartOfCancelled(config, run.data, cancelled);
+      await endRunsPartOfCancelled(config, run.data);
 
       // Of a run that had settled, what this cancel did is the places it closed or let go, which it answers with.
       if (!isSettled || stopped === undefined || stopped.closed.length + stopped.released.length === 0) return cancelled;
@@ -1378,17 +1378,26 @@ export async function workflowCancel(runId: string, step?: string, options: { re
     if (release) log.warn(`A driver of run ${runId} is still live, so attempt ${release.data} is not released. Stop that driver, then run teamai workflow cancel ${runId} --release ${release.data} again.`);
     const cancelled = await cancelRun(config, runId, secrets, step);
     // The live driver stops the cancelled attempts too, and ends these runs as it closes each; ended here, they stop now.
-    await endRunsPartOfCancelled(config, run.data, cancelled);
+    await endRunsPartOfCancelled(config, run.data);
 
     return cancelled;
   });
 }
 
-/** Ends the runs part of each attempt `cancelled`, a cancel's answer, says it cancelled (`endRunsPartOf`). */
-async function endRunsPartOfCancelled(config: LocalConfig, run: RunId, cancelled: WorkflowEnvelope): Promise<void> {
-  const attempts = 'data' in cancelled ? z.object({ attempts: z.array(AttemptIdSchema) }).safeParse(cancelled.data.cancelled).data?.attempts ?? [] : [];
+/**
+ * Ends the runs part of each attempt run `run` cancelled (`endRunsPartOf`), by this cancel or one before it, as a cancel
+ * of a run that settled stops again what its cancelled attempts left.
+ */
+async function endRunsPartOfCancelled(config: LocalConfig, run: RunId): Promise<void> {
+  const state = await readRun(config, run);
 
-  for (const attempt of attempts) await endRunsPartOf(config, { run, attempt });
+  if (state === 'missing' || state === 'corrupt') return;
+
+  for (const attempt of state.cancelledAttempts ?? []) {
+    const parsed = AttemptIdSchema.safeParse(attempt);
+
+    if (parsed.success) await endRunsPartOf(config, { run, attempt: parsed.data });
+  }
 }
 
 /** Publishes a run to teamai-reports, with the sessions its unsettled steps continue when asked. */
