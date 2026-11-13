@@ -77,6 +77,20 @@ const TEMPLATE_SIGN_IN = { claude: '.claude/.credentials.json' } satisfies Parti
 /** The notice sbx prints on stderr when an exec starts a sandbox it stopped while idle: sbx's line, not the step's. */
 const STARTED = /^[ \t]*✓ sandbox \S+ — started\r?\n/;
 
+/**
+ * The warm templates teamai saved (`teamai-warm:<key>`) that `sbx template ls --json` printed: the reference `sbx
+ * template rm` takes and the key; undefined when it printed something else.
+ */
+export function sbxWarmTemplatesListed(stdout: string): Array<{ ref: string; key: string }> | undefined {
+  try {
+    const listed = TemplatesSchema.safeParse(JSON.parse(stdout));
+
+    return listed.success ? listed.data.filter(({ repository }) => repository === WARM_REPOSITORY || repository.endsWith(`/${WARM_REPOSITORY}`)).map(({ repository, tag }) => ({ ref: `${repository}:${tag}`, key: tag })) : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 /** The sandbox names `sbx ls --json` printed, or undefined when it printed something else. */
 export function sbxNamesListed(stdout: string): string[] | undefined {
   try {
@@ -202,14 +216,9 @@ export function sbxProvider({ agent, owner, env, warm, profile }: { agent: strin
   /** Whether sbx keeps the warm template of `plan` already; a list sbx cannot give is taken as not, so it is saved again. */
   const isSaved = async (plan: WarmPlan): Promise<boolean> => {
     const ran = await cli(['template', 'ls', '--json'], { timeoutMs: COMMAND_MS, isListing: true });
+    const saved = ran.kind === 'ran' && ran.code === 0 ? sbxWarmTemplatesListed(ran.stdout) : undefined;
 
-    try {
-      const listed = ran.kind === 'ran' && ran.code === 0 ? TemplatesSchema.safeParse(JSON.parse(ran.stdout)) : undefined;
-
-      return listed?.success === true && listed.data.some(({ repository, tag }) => tag === plan.key && (repository === WARM_REPOSITORY || repository.endsWith(`/${WARM_REPOSITORY}`)));
-    } catch {
-      return false;
-    }
+    return saved?.some(({ key }) => key === plan.key) ?? false;
   };
 
   /** Saves the warm template of `plan` from `template`, prepared in a scratch sandbox on copies of the `cache` files. */

@@ -62,9 +62,9 @@ A ledger section or an observer line that says NOT OBSERVED proves nothing for t
                     (f) no teamai container left. An engine that is installed but not running is NOT OBSERVED in
                     (f), since its stopped containers and images outlive it: start it before the ledger
     sbx             a microVM per attempt named teamai-<journal>-...; needs sbx signed in and a policy that lets the
-                    step reach what it needs; ends: env ok, (f) no teamai sbx sandbox left. A world's HOME starts
-                    signed out: \`doctor <run> --drivers\` says so, and \`sh <run> sbx login\` signs in there. Until
-                    then a sbx claim is UNVERIFIABLE
+                    step reach what it needs; ends: env ok, (f) no teamai sbx sandbox or template left. A
+                    world's HOME starts signed out: \`doctor <run> --drivers\` says so, and \`sh <run> sbx login\`
+                    signs in there. Until then a sbx claim is UNVERIFIABLE
     bwrap           Linux only; the observer reads the first process under bwrap; ends: env ok, no world process left
     seatbelt        macOS; no observer reads a seatbelt step's environment, so the env part proves nothing for it,
                     and (f) says NOT OBSERVED for each attempt that ran on it
