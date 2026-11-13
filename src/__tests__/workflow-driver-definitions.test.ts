@@ -68,7 +68,7 @@ describe('driver definition names', () => {
       fs.writeFileSync(at(file), definition(path.basename(file, '.yaml')));
     }
 
-    expect(await resolveDriver(team, 'web-box', { personal: true })).toMatchObject({ ok: true, driver: { name: 'web-box', source: 'team', file: at('drivers/web/web-box.yaml') } });
+    expect(await resolveDriver(team, 'web-box', { personal: true })).toMatchObject({ ok: true, driver: { name: 'web-box', source: 'team', location: 'drivers/web/web-box.yaml in the team repo' } });
     expect(await resolveDriver(team, 'mobile-box', { personal: true })).toMatchObject({ ok: false, failure: { code: 'driver_not_found' } });
     expect(await resolveDriver(team, 'twice', { personal: true })).toEqual({ ok: false, failure: {
       code: 'driver_namespace_conflict',
@@ -83,7 +83,17 @@ describe('driver definition names', () => {
     fs.writeFileSync(path.join(business, '.teamai', 'drivers', 'self-box.yaml'), definition('self-box'));
     const self: LocalConfig = { repo: { localPath: path.join(business, '.teamai'), remote: 'origin', kind: 'self', businessRepoRoot: business }, username: 'tester', scope: 'project', additionalRoles: [], projectRoot: business };
 
-    expect(await resolveDriver(self, 'self-box', { personal: true })).toMatchObject({ ok: true, driver: { source: 'team', file: path.join(business, '.teamai', 'drivers', 'self-box.yaml') } });
+    expect(await resolveDriver(self, 'self-box', { personal: true })).toMatchObject({ ok: true, driver: { source: 'team', location: 'drivers/self-box.yaml in the team repo' } });
+  });
+
+  it('names a definition that is not valid by its path in the team repo, never by the team clone\'s', async () => {
+    const team = teamWith([]);
+    fs.writeFileSync(path.join(team.repo.localPath, 'drivers', 'broken.yaml'), definition('other'));
+
+    expect(await resolveDriver(team, 'broken', { personal: true })).toEqual({ ok: false, failure: {
+      code: 'driver_invalid',
+      message: 'Driver definition drivers/broken.yaml in the team repo is not valid: its name is "other", and a definition is named after its file or its folder, "broken". Fix the file and start again.',
+    } });
   });
 
   it('loads a definition kept as a folder with its DRIVER.yaml, named after the folder, of the team, a namespace or the member, and refuses one name kept both ways', async () => {
@@ -102,11 +112,11 @@ describe('driver definition names', () => {
     fs.mkdirSync(path.join(getTeamaiHomeDir(), 'drivers', 'my_box'), { recursive: true });
     fs.writeFileSync(path.join(getTeamaiHomeDir(), 'drivers', 'my_box', 'DRIVER.yaml'), definition('my_box'));
 
-    expect(await resolveDriver(team, 'acme', { personal: true })).toMatchObject({ ok: true, driver: { name: 'acme', source: 'team', file: at('drivers/acme/DRIVER.yaml') } });
+    expect(await resolveDriver(team, 'acme', { personal: true })).toMatchObject({ ok: true, driver: { name: 'acme', source: 'team', location: 'drivers/acme/DRIVER.yaml in the team repo' } });
     expect(await resolveDriver(team, 'DRIVER', { personal: true })).toMatchObject({ ok: false, failure: { code: 'driver_not_found' } });
-    expect(await resolveDriver(team, 'web-box', { personal: true })).toMatchObject({ ok: true, driver: { name: 'web-box', file: at('drivers/web/web-box/DRIVER.yaml') } });
+    expect(await resolveDriver(team, 'web-box', { personal: true })).toMatchObject({ ok: true, driver: { name: 'web-box', location: 'drivers/web/web-box/DRIVER.yaml in the team repo' } });
     expect(await resolveDriver(team, 'mobile-box', { personal: true })).toMatchObject({ ok: false, failure: { code: 'driver_not_found' } });
-    expect(await resolveDriver(team, 'my_box', { personal: true })).toMatchObject({ ok: true, driver: { name: 'my_box', source: 'personal' } });
+    expect(await resolveDriver(team, 'my_box', { personal: true })).toMatchObject({ ok: true, driver: { name: 'my_box', source: 'personal', location: path.join(getTeamaiHomeDir(), 'drivers', 'my_box', 'DRIVER.yaml') } });
     expect(await resolveDriver(team, 'both', { personal: true })).toEqual({ ok: false, failure: {
       code: 'driver_namespace_conflict',
       message: 'Driver "both" is defined twice in one place (drivers/both.yaml and drivers/both/). Keep one, push it, run teamai pull, and start again.',
@@ -154,7 +164,7 @@ describe('the local driver, which is the definition teamai-local', () => {
     fs.writeFileSync(file, 'schemaVersion: v1alpha1\nname: teamai-local\ntool: codex\nruntimes:\n  - use: tools\n');
     const info = vi.spyOn(log, 'info').mockImplementation(() => {});
 
-    expect(await open(team, 'local')).toMatchObject({ ok: true, opened: { driver: { source: 'personal', file, definition: { tool: 'codex' } } } });
+    expect(await open(team, 'local')).toMatchObject({ ok: true, opened: { driver: { source: 'personal', location: file, definition: { tool: 'codex' } } } });
     expect(info.mock.calls.map(([line]) => line)).toEqual([`Driver local runs ${file}, your own teamai-local, in place of teamai's.`]);
   });
 
@@ -163,7 +173,7 @@ describe('the local driver, which is the definition teamai-local', () => {
     const info = vi.spyOn(log, 'info').mockImplementation(() => {});
 
     expect(await open(team, 'local')).toMatchObject({ ok: true, opened: { driver: { source: 'team' } } });
-    expect(info.mock.calls.map(([line]) => line)).toEqual([`Driver local runs ${path.join(team.repo.localPath, 'drivers', 'teamai-local.yaml')}, the team's teamai-local, in place of teamai's.`]);
+    expect(info.mock.calls.map(([line]) => line)).toEqual(['Driver local runs drivers/teamai-local.yaml in the team repo, the team\'s teamai-local, in place of teamai\'s.']);
   });
 
   it('refuses a definition named local, and never reads a team\'s drivers/local.yaml for --driver local', async () => {
@@ -235,7 +245,7 @@ describe('the host driver, which teamai builds in', () => {
     expect(parseDriverDefinition('drivers/host.yaml', definition('host'))).toMatchObject({ ok: false, failure: { code: 'driver_invalid', message: expect.stringContaining('"host" is a name teamai keeps for its own driver') } });
     expect(await resolveDriver(team, 'host', { personal: true })).toMatchObject({ ok: true, driver: { name: 'host', source: 'builtin' } });
     expect(await open(team, 'host')).toMatchObject({ ok: true, opened: { driver: { name: 'host', source: 'builtin' }, runtimes: [] } });
-    expect(warn.mock.calls.map(([line]) => line)).toEqual([personal, path.join(team.repo.localPath, 'drivers', 'host.yaml')].map((file) => (
+    expect(warn.mock.calls.map(([line]) => line)).toEqual([personal, 'drivers/host.yaml in the team repo'].map((file) => (
       `Driver definition ${file} is not read: host is teamai's built-in driver, which runs only commands, gates and workflows whose steps need no AI tool, and no file replaces it. Rename the file and the name in it.`
     )));
   });
