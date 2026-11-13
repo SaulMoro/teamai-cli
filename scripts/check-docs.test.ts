@@ -299,7 +299,7 @@ it('check refuses UTF-8 encoded twice in a page or a skill, naming the file and 
   fs.appendFileSync(path.join(root, 'docs/guide/workflow.md'), `\nIt waits${Buffer.from([0xc3, 0xa2, 0xc2, 0x80, 0xc2, 0xa6]).toString('utf8')}\n`);
   fs.mkdirSync(path.join(root, 'skill-data/core'), { recursive: true });
   fs.appendFileSync(path.join(root, 'skill-data/core/SKILL.md'), '\nCafÃ© is "Café" encoded again.\n');
-  fs.appendFileSync(path.join(root, 'docs/guide/sharing.md'), '\nIt waits… for the café, 中文 too.\n');
+  fs.appendFileSync(path.join(root, 'docs/guide/sharing.md'), '\nIt waits… for the café, 中文 too, and «café» in French quotes.\n');
   const checked = run(root, '--only=double-encoded-utf8');
   expect(checked.status).toBe(1);
   const lines = fs.readFileSync(path.join(root, 'docs/guide/workflow.md'), 'utf8').split('\n').length - 1;
