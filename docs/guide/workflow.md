@@ -1097,7 +1097,11 @@ A process runs inside an agent session when an agent's session variable, such as
 
 No run starts or is driven from inside a step of another run. The process of a step carries `TEAMAI_WORKFLOW_ATTEMPT`: the local driver sets it for the commands it runs and the tools of its prompt steps, the skill driver for its runners and their commands, and every driver for setup. With it set, every `workflow` command that changes a run (`start`, `next`, `report`, `respond`, `retry`, `cancel`, `resume`, and `publish`) answers `nested_workflow`, except a skill driver runner's report of its own attempt. `start` also answers `nested_workflow` in a workflow worktree under `.teamai/workflow-worktrees`, and in a checkout on a `teamai/<run>/...` branch. The other commands still work there, since a step's child reports from its place. To run another workflow as part of a run, add it to the definition as a `workflow` step.
 
-A command that starts a default workflow for you still runs as a step's command. It drives its own run in the step's process, on the local driver whatever `workflows.driver` says, and the step ends when that run does:
+A command that starts a default workflow for you still runs as a step's command. The step's process drives its run on the local driver, whatever `workflows.driver` says, and the step ends when that run does:
+
+- `teamai score`, `teamai benchmark run` and `teamai self-improvement run` run their run as part of the step only in the process of a `command` step that the local driver, the skill driver or a [fleet](workflow-advanced.md#run-steps-on-other-members-machines-fleet) member runs on its own machine, not in a [step runtime](workflow-advanced.md#driver-definitions-and-step-runtimes). There they take no `--driver` or `--driver local`, and any other `--driver` answers `nested_workflow`. This goes one level deep: a `command` step of the run they started answers `nested_workflow` when it runs one of them again. In every other process of a step, such as a prompt step's tool, setup, or a command step in a step runtime, they answer `nested_workflow`.
+- The others, such as `teamai recall maintenance --update-quality`, run their run in any process of a step.
+
 
 ```yaml
 # workflows/weekly-quality.yaml in the team repo
