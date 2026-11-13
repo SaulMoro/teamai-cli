@@ -24,6 +24,7 @@ import { containerNamed, IDLE } from '../../packages/runtime-sandbox/src/provide
 import { errnoCode } from '../../src/utils/fs.js';
 import { sbxNotSignedIn } from './doctor.js';
 import { declaredCredentialNames, judgeSandboxEnv, parseEnviron, type EnvVerdict } from './secrets.js';
+import { hostInstalls } from './target.js';
 import { CANARY_NAME, quote, worldHomes, type World } from './world.js';
 
 const run = promisify(execFile);
@@ -165,12 +166,15 @@ function environsOf(stdout: string): Array<Map<string, string>> {
 /** What a command the observer runs answered: what it printed, that it is not installed here, or that it failed, why, and whether its time ran out. */
 export type Listed = { kind: 'ran'; stdout: string } | { kind: 'missing' } | { kind: 'failed'; why: string; timedOut: boolean };
 
-/** What `argv` answered on this machine: the observer's one effect on a sandbox. */
-async function listedHere(argv: readonly string[]): Promise<Listed> {
+/** How the observer asks: with `env`, an install's environment, or else the harness's own. */
+type Ask = (argv: readonly string[], options: { env: Readonly<Record<string, string>> | undefined }) => Promise<Listed>;
+
+/** What `argv` answered on this machine, run with `env` when given: the observer's one effect on a sandbox. */
+const listedHere: Ask = async (argv, { env }) => {
   const [command = 'true', ...args] = argv;
 
   try {
-    return { kind: 'ran', stdout: (await run(command, args, { encoding: 'utf8', timeout: 10_000, maxBuffer: 16 * 1024 ** 2 })).stdout };
+    return { kind: 'ran', stdout: (await run(command, args, { encoding: 'utf8', timeout: 10_000, maxBuffer: 16 * 1024 ** 2, ...(env !== undefined && { env }) })).stdout };
   } catch (error) {
     if (errnoCode(error) === 'ENOENT') return { kind: 'missing' };
     const failure = ExecFailureSchema.safeParse(error);
@@ -180,7 +184,7 @@ async function listedHere(argv: readonly string[]): Promise<Listed> {
 
     return { kind: 'failed', why: timedOut ? 'it took over 10 s' : said || (error instanceof Error ? error.message : String(error)), timedOut };
   }
-}
+};
 
 const SbxListedSchema = z.array(z.looseObject({ name: z.string(), status: z.string().optional() }));
 
@@ -229,7 +233,7 @@ export function bwrapSteps(procs: readonly ProcEntry[], roots: readonly string[]
 }
 
 /** Starts watching; `stop` takes a last look and answers the lines to show, and has written them to observed.jsonl. */
-export function startObserver(world: World, { pass, label, listed = listedHere }: { pass: ReadonlyMap<string, string>; label: string; listed?: (argv: readonly string[]) => Promise<Listed> }) {
+export function startObserver(world: World, { pass, label, listed = listedHere }: { pass: ReadonlyMap<string, string>; label: string; listed?: Ask }) {
   const canary = world.env?.[CANARY_NAME] ?? '';
   const secrets = new Map([...Object.entries(collectEnvSecrets(process.env)), ...pass]);
   const { declared, unreadable } = declaredCredentials(world);
@@ -270,7 +274,7 @@ export function startObserver(world: World, { pass, label, listed = listedHere }
     if (engines.get(engine) === 'missing' || engines.get(engine) === 'hung') return;
 
     if (engines.get(engine) !== 'up') {
-      const info = await listed([command, 'info', '--format', '{{.ServerVersion}}']);
+      const info = await listed([command, 'info', '--format', '{{.ServerVersion}}'], { env: undefined });
 
       if (info.kind === 'failed' && info.timedOut) {
         engines.set(engine, 'hung');
@@ -283,7 +287,7 @@ export function startObserver(world: World, { pass, label, listed = listedHere }
       if (info.kind === 'missing') return;
     }
 
-    const lines = await listed([command, 'ps', '--filter', 'label=teamai.owner', '--format', '{{.ID}}\t{{.Names}}\t{{.Label "teamai.owner"}}']);
+    const lines = await listed([command, 'ps', '--filter', 'label=teamai.owner', '--format', '{{.ID}}\t{{.Names}}\t{{.Label "teamai.owner"}}'], { env: undefined });
 
     if (lines.kind !== 'ran') {
       unobserved.add(`${engine} containers, \`${engine} ps\` failed`);
@@ -295,19 +299,21 @@ export function startObserver(world: World, { pass, label, listed = listedHere }
       const [id = '', name = '', owner = ''] = line.split('\t');
 
       if (id === '' || !owners.has(owner)) continue;
-      const environs = await listed([command, 'exec', id, ...READ_ENVIRONS]);
+      const environs = await listed([command, 'exec', id, ...READ_ENVIRONS], { env: undefined });
 
       judge(`${engine}:${name}`, environs);
     }
   }));
 
-  const sbx = async (): Promise<void> => {
-    const out = await listed([PROVIDER_COMMANDS.sbx, 'ls', '--json']);
+  /** sbx keeps its sandboxes per HOME: each host install's are listed, and asked, in its own, as teamai asks sbx there. */
+  const sbx = (): Promise<void[]> => Promise.all(hostInstalls(world).map(async ({ at, home, env }) => {
+    const owner = journal(sandboxJournalRoot(home)).owner;
+    const out = await listed([PROVIDER_COMMANDS.sbx, 'ls', '--json'], { env });
 
     if (out.kind === 'missing') return;
 
     if (out.kind === 'failed') {
-      unobserved.add(sbxNotSignedIn(world.runId, out.why) ?? `sbx sandboxes, \`sbx ls\` failed (${out.why})`);
+      unobserved.add(sbxNotSignedIn(at, out.why) ?? `sbx sandboxes, \`sbx ls\` failed (${out.why})`);
 
       return;
     }
@@ -323,15 +329,13 @@ export function startObserver(world: World, { pass, label, listed = listedHere }
     const parsed = SbxListedSchema.safeParse(json);
 
     if (!parsed.success) {
-      unobserved.add(sbxNotSignedIn(world.runId, out.stdout) ?? 'sbx sandboxes, `sbx ls --json` printed a list this harness cannot read');
+      unobserved.add(sbxNotSignedIn(at, out.stdout) ?? 'sbx sandboxes, `sbx ls --json` printed a list this harness cannot read');
 
       return;
     }
 
     for (const sandbox of parsed.data) {
-      const owner = journalOfSandboxName(sandbox.name);
-
-      if (owner === undefined || !owners.has(owner)) continue;
+      if (journalOfSandboxName(sandbox.name) !== owner) continue;
 
       // `sbx exec` starts a stopped sandbox: only one listed as running is asked.
       if (sandbox.status !== 'running') {
@@ -339,11 +343,11 @@ export function startObserver(world: World, { pass, label, listed = listedHere }
         continue;
       }
 
-      const environs = await listed([PROVIDER_COMMANDS.sbx, 'exec', sandbox.name, ...READ_ENVIRONS]);
+      const environs = await listed([PROVIDER_COMMANDS.sbx, 'exec', sandbox.name, ...READ_ENVIRONS], { env });
 
       judge(`sbx:${sandbox.name}`, environs);
     }
-  };
+  }));
 
   /** On Linux, each bwrap whose arguments name a world path: the environment of its first descendant that is not bwrap. */
   const bwraps = (): void => {

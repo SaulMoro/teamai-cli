@@ -90,11 +90,11 @@ const CHEAPEST_MODEL = {
 } satisfies Record<(typeof TOOL_COMMANDS)[number], () => string | undefined>;
 
 /**
- * The line that says sbx is not signed in for world `runId`, when what sbx `said` is that refusal, which ends with the
- * command that signs in: `try: sbx login`. Doctor and the observer print the same line for it.
+ * The line that says sbx is not signed in for the install `at` names (`<run>` or `<run>@<member>`), when what sbx `said`
+ * is that refusal, which ends with the command that signs in: `try: sbx login`. Doctor and the observer print the same line for it.
  */
-export function sbxNotSignedIn(runId: string, said: string): string | undefined {
-  return /\bsbx login\b/.test(said) ? `sandbox sbx: installed, not signed in in this world; sign in with \`npm run -s verify -- sh ${runId} sbx login\`. Claims on it are UNVERIFIABLE until then` : undefined;
+export function sbxNotSignedIn(at: string, said: string): string | undefined {
+  return /\bsbx login\b/.test(said) ? `sandbox sbx: installed, not signed in in this world; sign in with \`npm run -s verify -- sh ${at} sbx login\`. Claims on it are UNVERIFIABLE until then` : undefined;
 }
 
 /** The line `doctor <run> --drivers` gives sbx from what `sbx ls --no-input` answered in world `runId`. */

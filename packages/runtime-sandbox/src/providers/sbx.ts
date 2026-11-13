@@ -32,7 +32,7 @@ import { cliOf, commandsOf, definedOnly, heldProbe, signalled, LAUNCHABLE, mount
 //  write. No credential goes in at create: each exec brings its own, by name, from this process's environment. A
 //  login stored with `sbx secret set` stays in the host's proxy, which injects it into the requests; the sandbox holds
 //  only the placeholder variables its agent reads, which an exec keeps unless teamai withholds them. The name is its
-//  id: `sbx ls` finds it again after a restart. A sandbox carries no label (sbx 0.50.1 `create` takes none), so
+//  id: `sbx ls` finds it again after a restart. A sandbox carries no label (sbx 0.53.0 `create` takes none), so
 //  its name carries the journal that owns it, the id a container's `teamai.owner` label carries, and an open sweeps the
 //  sandboxes `sbx ls` lists under this journal's prefix as it sweeps containers by their label. sbx's network policy
 //  lets a sandbox reach every host it allows, so this provider offers no judge, which must reach its model provider only.
@@ -76,6 +76,21 @@ const TEMPLATE_SIGN_IN = { claude: '.claude/.credentials.json' } satisfies Parti
 
 /** The notice sbx prints on stderr when an exec starts a sandbox it stopped while idle: sbx's line, not the step's. */
 const STARTED = /^[ \t]*✓ sandbox \S+ — started\r?\n/;
+
+/**
+ * The warm templates teamai saved (`teamai-warm:<key>`) that `sbx template ls --json` printed: the reference `sbx
+ * template rm` takes (`<repository>:<tag>`, by tag as sbx 0.53.0's help shows it) and the key; undefined when it printed
+ * something else.
+ */
+export function sbxWarmTemplatesListed(stdout: string): Array<{ ref: string; key: string }> | undefined {
+  try {
+    const listed = TemplatesSchema.safeParse(JSON.parse(stdout));
+
+    return listed.success ? listed.data.filter(({ repository }) => repository === WARM_REPOSITORY || repository.endsWith(`/${WARM_REPOSITORY}`)).map(({ repository, tag }) => ({ ref: `${repository}:${tag}`, key: tag })) : undefined;
+  } catch {
+    return undefined;
+  }
+}
 
 /** The sandbox names `sbx ls --json` printed, or undefined when it printed something else. */
 export function sbxNamesListed(stdout: string): string[] | undefined {
@@ -202,14 +217,9 @@ export function sbxProvider({ agent, owner, env, warm, profile }: { agent: strin
   /** Whether sbx keeps the warm template of `plan` already; a list sbx cannot give is taken as not, so it is saved again. */
   const isSaved = async (plan: WarmPlan): Promise<boolean> => {
     const ran = await cli(['template', 'ls', '--json'], { timeoutMs: COMMAND_MS, isListing: true });
+    const saved = ran.kind === 'ran' && ran.code === 0 ? sbxWarmTemplatesListed(ran.stdout) : undefined;
 
-    try {
-      const listed = ran.kind === 'ran' && ran.code === 0 ? TemplatesSchema.safeParse(JSON.parse(ran.stdout)) : undefined;
-
-      return listed?.success === true && listed.data.some(({ repository, tag }) => tag === plan.key && (repository === WARM_REPOSITORY || repository.endsWith(`/${WARM_REPOSITORY}`)));
-    } catch {
-      return false;
-    }
+    return saved?.some(({ key }) => key === plan.key) ?? false;
   };
 
   /** Saves the warm template of `plan` from `template`, prepared in a scratch sandbox on copies of the `cache` files. */

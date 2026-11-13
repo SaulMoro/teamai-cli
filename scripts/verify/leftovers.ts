@@ -286,9 +286,9 @@ async function rowsFor(tier: Tier): Promise<LeftoverKind[]> {
   const { places } = await import('./leftovers/places.js');
 
   if (tier === 'middle') return [processes, places];
-  const [{ containers }, { sbxSandboxes }, { remoteSandboxes }] = await Promise.all([import('./leftovers/containers.js'), import('./leftovers/sbx.js'), import('./leftovers/remote.js')]);
+  const [{ containers }, { sbxLeftovers }, { remoteSandboxes }] = await Promise.all([import('./leftovers/containers.js'), import('./leftovers/sbx.js'), import('./leftovers/remote.js')]);
 
-  return [processes, places, containers, sbxSandboxes, remoteSandboxes];
+  return [processes, places, containers, sbxLeftovers, remoteSandboxes];
 }
 
 /** The context every row reads, built once per ledger or cleanup. */

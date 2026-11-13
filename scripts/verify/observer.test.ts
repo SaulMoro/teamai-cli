@@ -13,6 +13,7 @@ const roots: string[] = [];
 
 afterEach(() => {
   vi.useRealTimers();
+  vi.unstubAllEnvs();
 
   for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true });
 });
@@ -134,21 +135,49 @@ describe('the sandbox observer', () => {
     const world = worldIn();
     const bin = path.join(world.dir, 'sbx-bin');
     fs.mkdirSync(bin);
-    // What sbx v0.51.0 answers `sbx ls --json` from a HOME that never signed in: exit 1, and this on stderr.
+    // What sbx v0.51.0 and v0.53.0 answer `sbx ls --json` from a HOME that never signed in: exit 1, and this on stderr.
     fs.writeFileSync(path.join(bin, 'sbx'), "#!/bin/sh\nprintf 'error: not signed in to Docker\\n  try: sbx login\\n' >&2\nexit 1\n", { mode: 0o755 });
+    // The harness's PATH too, so no container engine of this machine is asked.
     vi.stubEnv('PATH', bin);
+    const inWorld = { ...world, env: { ...world.env, HOME: world.home, PATH: bin } };
     const notSignedIn = `[verify] NOT OBSERVED: sandbox sbx: installed, not signed in in this world; sign in with \`npm run -s verify -- sh ${world.runId} sbx login\`. Claims on it are UNVERIFIABLE until then`;
 
-    try {
-      expect(await startObserver(world, { pass: new Map(), label: 'teamai workflow start' }).stop()).toEqual([notSignedIn]);
-    } finally {
-      vi.unstubAllEnvs();
-    }
+    expect(await startObserver(inWorld, { pass: new Map(), label: 'teamai workflow start' }).stop()).toEqual([notSignedIn]);
 
     // The same refusal printed on stdout with exit 0, which is not the list `--json` asks for.
     const printedRefusal = startObserver(world, { pass: new Map(), label: 'teamai workflow start', listed: ([command]) => Promise.resolve(command === 'sbx' ? printed('error: not signed in to Docker\n  try: sbx login\n') : missing) });
 
     expect(await printedRefusal.stop()).toEqual([notSignedIn]);
+  });
+
+  it("lists sbx sandboxes in the world's HOME, where sbx keeps them, as doctor asks there", async () => {
+    const world = worldIn();
+    const bin = path.join(world.dir, 'sbx-bin');
+    fs.mkdirSync(bin);
+    const name = `teamai-${journal(sandboxJournalRoot(world.home)).owner}-r0123abcd-a0123abcd`;
+    // sbx keeps its sandboxes per HOME: only the world's HOME lists the world's sandbox.
+    fs.writeFileSync(path.join(bin, 'sbx'), `#!/bin/sh\nif [ "$HOME" = '${world.home}' ]; then printf '[{"name":"${name}","status":"stopped"}]'; else printf '[]'; fi\n`, { mode: 0o755 });
+    vi.stubEnv('PATH', bin);
+    const inWorld = { ...world, env: { ...world.env, HOME: world.home, PATH: bin } };
+
+    expect(await startObserver(inWorld, { pass: new Map(), label: 'teamai workflow start' }).stop())
+      .toEqual([`[verify] NOT OBSERVED: sbx:${name}'s environment, sbx listed it as stopped, and only a running one is asked`]);
+  });
+
+  it("asks sbx in each member's HOME on this machine, and names that member in the sign-in it asks for", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'observer-bob-'));
+    roots.push(dir);
+    const bin = path.join(dir, 'bin');
+    fs.mkdirSync(bin);
+    const bob = { machine: 'host' as const, name: 'bob', home: path.join(dir, 'home'), project: path.join(dir, 'project'), tmp: path.join(dir, 'tmp'), writers: path.join(dir, 'writers.json'), env: { HOME: path.join(dir, 'home'), PATH: bin }, baseline: { files: {} } };
+    // Signed in in the world's HOME, which lists nothing, and not in bob's.
+    fs.writeFileSync(path.join(bin, 'sbx'), `#!/bin/sh\nif [ "$HOME" = '${bob.home}' ]; then printf 'error: not signed in to Docker\\n  try: sbx login\\n' >&2; exit 1; fi\nprintf '[]'\n`, { mode: 0o755 });
+    const world = worldIn([bob]);
+    vi.stubEnv('PATH', bin);
+    const inWorld = { ...world, env: { ...world.env, HOME: world.home, PATH: bin } };
+
+    expect(await startObserver(inWorld, { pass: new Map(), label: 'teamai workflow start' }).stop())
+      .toEqual([`[verify] NOT OBSERVED: sandbox sbx: installed, not signed in in this world; sign in with \`npm run -s verify -- sh ${world.runId}@bob sbx login\`. Claims on it are UNVERIFIABLE until then`]);
   });
 
   it('forgets why a read of a sandbox failed once a later look reads it', async () => {

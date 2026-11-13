@@ -224,14 +224,19 @@ export function watchSandboxes(world: Pick<World, 'home' | 'members'>, { start }
   };
 }
 
+/** The harness's own environment, which a probe of a world made before its env was kept gets. */
+function harnessEnvironment(): Record<string, string> {
+  return Object.fromEntries(Object.entries(process.env).flatMap(([name, value]) => (value === undefined ? [] : [[name, value]])));
+}
+
 /** Runs a probe `argv` on `target` and answers what it printed, unlogged: how the ledger reads a machine. */
 export function captureOn(world: World, target: Target, argv: readonly string[], { timeoutMs = 30_000 }: { timeoutMs?: number } = {}) {
   const place = placeOf(world, target);
   // From /, so the probe's own processes name no path of the world.
-  const { command, args, env } = commandOf(world, { ...place, env: place.env ?? Object.fromEntries(Object.entries(process.env).flatMap(([name, value]) => (value === undefined ? [] : [[name, value]]))) }, argv, { pass: new Map(), cwd: '/' });
-  const { code, stdout, why } = runProbe({ command, args, shown: argv, cwd: '/', env, timeoutMs, maxBuffer: 256 * 1024 ** 2 });
+  const { command, args, env } = commandOf(world, { ...place, env: place.env ?? harnessEnvironment() }, argv, { pass: new Map(), cwd: '/' });
+  const { code, stdout, why, errno } = runProbe({ command, args, shown: argv, cwd: '/', env, timeoutMs, maxBuffer: 256 * 1024 ** 2 });
 
-  return { code, stdout, why };
+  return { code, stdout, why, ...(errno !== undefined && { errno }) };
 }
 
 /** Each machine a world's commands run on: this one, whose process table every member on it shares, and each member's container. */
@@ -240,4 +245,28 @@ export function machinesOf(world: World): Array<{ label: string; target: Target;
     { label: 'this machine', target: { kind: 'world' }, platform: process.platform },
     ...(world.members ?? []).flatMap((member) => (member.machine === 'container' ? [{ label: `@${member.name}'s container`, target: { kind: 'member' as const, name: member.name }, platform: 'linux' as const }] : [])),
   ];
+}
+
+/**
+ * Each install of the world on this machine, its own and each host member's: the verb argument that names it (`<run>`
+ * or `<run>@<member>`), its HOME, the environment its commands get, and the command line that runs `argv` there from any
+ * environment, such as cleanup's. A program that keeps its state per HOME, as sbx keeps its sandboxes, is asked there,
+ * as teamai asks it. A world made before its environment was kept is asked with the harness's, as `captureOn` asks it.
+ */
+export function hostInstalls(world: World) {
+  const targets: Target[] = [{ kind: 'world' }, ...(world.members ?? []).flatMap((member): Target[] => (member.machine === 'host' ? [{ kind: 'member', name: member.name }] : []))];
+
+  return targets.map((target) => {
+    const place = placeOf(world, target);
+    const { env } = place;
+
+    return {
+      at: target.kind === 'world' ? world.runId : `${world.runId}@${target.name}`,
+      target,
+      home: place.home,
+      env: env ?? harnessEnvironment(),
+      // The kept environment holds no secret. A world made before it was kept runs it with the harness's, as it was asked.
+      commandLine: (argv: readonly string[]): string[] => (env === undefined ? [...argv] : ['env', '-i', ...Object.entries(env).map(([name, value]) => `${name}=${value}`), ...argv]),
+    };
+  });
 }
