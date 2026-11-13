@@ -74,7 +74,7 @@ async function mayRewriteConfig(force: boolean | undefined, question: string): P
   if (!isInteractive()) {
     log.warn(
       'No one is at a terminal to confirm rewriting the existing config, so init changed nothing. Run the same command with --force ' +
-        'to rewrite it: it keeps the settings init does not set, and --agent adds to the tools the config already sets up.',
+        'to rewrite it: it keeps the settings init does not set.',
     );
 
     return false;

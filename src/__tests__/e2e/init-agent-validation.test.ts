@@ -187,7 +187,8 @@ describe('init --agent validates ids against built-in and team agents', () => {
     const unconfirmed = initFor('codex');
 
     expect(unconfirmed.code, unconfirmed.output).toBe(0);
-    expect(unconfirmed.output).toContain('No one is at a terminal to confirm rewriting the existing config, so init changed nothing. Run the same command with --force');
+    expect(unconfirmed.output).toContain('No one is at a terminal to confirm rewriting the existing config, so init changed nothing. Run the same command with --force '
+      + 'to rewrite it: it keeps the settings init does not set.');
     expect(enabledAgents()).toEqual(['claude']);
 
     const forced = initFor('codex', '--force');
