@@ -2,7 +2,7 @@
 
 > Part of the [TeamAI CLI Usage Guide](../usage-guide.md).
 
-The `t3` [step runtime](workflow-advanced.md#driver-definitions-and-step-runtimes) runs each prompt step of a workflow as a [T3 Code](https://t3.codes) thread of its own. You can watch the agent work in the app, answer its approval requests, steer it with a message, or stop it. teamai still prepares the step's worktree, reads the result, and commits and pushes on your machine. Command steps and steps with `setup` run on this machine, as they do with `--driver local`. A prompt step on a tool T3 cannot run fails `tool_unavailable` with T3's reason.
+The `t3` [step runtime](workflow-advanced.md#driver-definitions-and-step-runtimes) runs each prompt step of a workflow as a [T3 Code](https://t3.codes) thread of its own. You can watch the agent work in the app, answer its approval requests, steer it with a message, or stop it. teamai still prepares the step's worktree, reads the result, and commits and pushes on your machine. Command steps run on this machine, as they do with `--driver local`. A prompt step on a tool T3 cannot run fails `tool_unavailable` with T3's reason.
 
 It ships with teamai as the executable `teamai-runtime-t3`. `--driver t3` uses the definition teamai ships:
 
@@ -86,7 +86,7 @@ teamai runs the first `t3` it finds: `$T3CODE_CLI_PATH` (T3 sets it in its own t
 
 ```text
 This thread runs step "review" of teamai workflow run r928e2fc23ab9bd62 (attempt a96c8bc03). It was started from
-the T3 thread <t3-thread://v2/88e28b29-…/thread-…>. Work only in this worktree. Do not run teamai workflow commands:
+the T3 thread <t3-thread://v2/88e28b29-…/thread-…>. Its shell has no TEAMAI_RUN_DIR: the run's scratch directory is ~/.teamai/projects/…/scratch. Work only in this worktree. Do not run teamai workflow commands:
 teamai commits, pushes and reports the step itself.
 
 Read README.md. Count its markdown sections …
@@ -180,7 +180,7 @@ teamai signs in again, this time with Full access (the pairing code also asks fo
 
 ## Pick the provider instance and the model
 
-The tools are the T3 provider instances that can run now, leaving out any you turned off for the project. A step that names no tool, in a definition that names none, runs on the tool of your T3 default model (the project's, else the global one). When a provider has several instances, `claude` and `codex` run on the instance of your T3 default model when it runs the provider's own binary (no Binary path, or one named `claude` or `codex`), else on the one named after the provider (`claudeAgent` for Claude, `codex` for Codex) whatever its Binary path, else on the first that runs the provider's own binary. An instance whose Binary path is a wrapper, such as a team tool's command, runs only that team tool, even when it is your T3 default; a step with no tool then runs on that team tool, or, when no team tool runs on it, as `claude` on the instance picked above. To run every prompt on one instance, for example a second Claude account, name it in your machine's config:
+The tools are the T3 provider instances that can run now, leaving out any you turned off for the project. A step that names no tool, in a definition that names none, runs on the tool of your T3 default model (the project's, else the global one). When a provider has several instances, `claude` and `codex` run on the instance of your T3 default model when it runs the provider's own binary (no Binary path, or one named `claude` or `codex`), else on the one named after the provider (`claudeAgent` for Claude, `codex` for Codex) whatever its Binary path, else on the first that runs the provider's own binary. An instance whose Binary path is a wrapper, such as a team tool's command, runs only that team tool, even when it is your T3 default; a step with no tool then runs on that team tool, or, when no team tool runs on it, as the provider's own tool (`claude` or `codex`) on the instance picked above. To run every prompt on one instance, for example a second Claude account, name it in your machine's config:
 
 ```yaml
 # ~/.teamai/config.yaml
@@ -320,7 +320,7 @@ In CI, or a run with `TEAMAI_MODE=unattended`, nobody can approve a sign-in or a
 {"error":{"code":"runtime_failed","message":"Runtime \"t3\" of driver \"teamai-t3\" did not start (login_required): teamai has no valid T3 Code sign-in for http://127.0.0.1:3773 and could not sign in through the t3 command (found no t3 command at $T3CODE_CLI_PATH (unset), on PATH, or at ~/.t3/bin/t3), and an unattended run cannot ask for one. Start any workflow with --driver t3 from a terminal on this machine once, approve teamai in the page T3 Code opens, then run this again."}}
 ```
 
-An unattended run's threads run in the mode above. A step whose agent asks for an approval anyway, or delegates a task that asks for one, is stopped, and fails `tool_failed` naming the thread. If T3 does not stop the thread, the step fails `cancel_failed` instead, and teamai keeps the step's place until a later `teamai workflow cancel` stops it. Interactive steps run only in attended runs.
+An unattended run's threads run in the mode above. A step whose agent asks for an approval anyway, or delegates a task that asks for one, is stopped, and fails `tool_failed` naming the thread. If T3 does not stop the thread, the step fails `runtime_lost` instead, naming `cancel_failed`, and teamai keeps the step's place until a later `teamai workflow cancel` stops it. Interactive steps run only in attended runs.
 
 ## Restart, cancel and retry
 
@@ -365,7 +365,7 @@ A thread a later step may continue stays active until teamai closes the earlier 
 
 ## Wake fleet members on linked machines
 
-A [fleet](workflow-advanced.md#run-steps-on-other-members-machines-fleet) entry whose `wake` uses `t3` starts a member when nobody takes an attempt it offered. T3 Code launches the member's thread on another machine linked to it.
+A [fleet](workflow-advanced.md#run-steps-on-other-members-machines-fleet) entry whose `wake` uses `t3` starts a member as soon as it offers an attempt that no member has taken yet. T3 Code launches the member's thread on another machine linked to it.
 
 To set it up:
 
@@ -400,7 +400,7 @@ No machine linked to T3 Code has https://github.com/acme/acme-app.git as a proje
 | `… (sign_in_too_narrow): T3 Code refused to start the step's thread in auto mode …` | teamai's sign-in allows less than the mode the thread runs in. | Remove `~/.teamai/runtime-state/t3/credentials.json` and run again: teamai signs in again; approve it with Auto access if T3 Code asks. Or set `runtime_mode`. |
 | `… (sign_in_too_narrow): teamai's T3 Code sign-in was approved without Full access, which runtime_mode full-access needs …` | Someone picked a narrower access than Full access in T3's sign-in page. | Start the workflow again and pick Full access, or remove `runtime_mode: full-access`. |
 | `… is not a project in T3 Code <machine>, and teamai could not add it (…)` | The checkout is not a T3 project, and `t3 project add` failed. The text in brackets says why. | Add it in T3 Code (Add project), or run `t3 project add <path>`. |
-| `T3 Code has no provider instance "claude-sandbox".` | `instance` names an instance T3 does not have, or one that is disabled. | Add or enable it in T3 Code under Settings → Providers, or remove `instance`. |
+| `T3 Code has no provider instance "claude-sandbox".` | `instance` names an instance T3 does not have. | Add it in T3 Code under Settings → Providers, or remove `instance`. |
 | `… No T3 Code provider instance runs acme-claude, and teamai cannot add one: T3 Code already has a provider instance "acme-claude" that runs another command …` | An instance of that name, yours, runs something else. teamai never changes it. | Point its Binary path at the tool's command, or map another instance with `instances`. |
 | `… T3 Code cannot run the provider instance "claude-work" for claude-work yet: Claude Code is not authenticated …` | The instance is there, and T3 Code's own check of it failed, such as a tool never signed in in the instance's home. | Do what T3 Code says, in the home the message names (for Claude, `CLAUDE_CONFIG_DIR=~/.claude-work claude auth login`), then retry the step. |
 | `… ended without writing the result file …` | The agent finished without writing its result. | Open the thread from the link in the message, then `teamai workflow retry <run> <step>`. |
@@ -417,6 +417,6 @@ No machine linked to T3 Code has https://github.com/acme/acme-app.git as a proje
 
 - A step's thread is a thread of its own, not a child of the thread that started the run, and so is a woken member's thread: T3 records no parent for either.
 - It takes no `credentials`. A thread's tool runs in T3 Code's environment, on T3 Code's own sign-in, so teamai refuses them for this runtime before a step runs: `NAME: env:VAR` with `t3 does not offer can.env, so it cannot keep a credential to the processes it is for`, and `<tool>: login` with `t3 launches agents its own way, in each tool's own home, so it brings no login`.
-- A read-only prompt step runs in the copy teamai keeps for it, as a `new` step does in its worktree. A `clone` or `team` step runs on its own folder, which teamai adds to T3 Code as a project. Once the folder is gone, the next T3 step that closes removes that project. A step with a `role`, `env` or `setup` goes to `local`.
+- A read-only prompt step runs in the copy teamai keeps for it, as a `new` step does in its worktree. A `clone` or `team` step runs on its own folder, which teamai adds to T3 Code as a project. Once the folder is gone, the next T3 step that closes removes that project. A prompt step with a `role`, `env` or `setup` runs only on another runtime of the definition that offers them, such as `tools`; `teamai-t3` lists none, so there it fails `requirement_unmet`.
 - T3 reports no token usage, so a `budget` in tokens cannot be checked here, and it cannot cap `max_turns`.
 - `permissions: unattended` steps are not offered. They need a thread whose tool runs in a sandbox, which a later version adds.
