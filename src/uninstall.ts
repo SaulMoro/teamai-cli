@@ -3496,29 +3496,26 @@ const FOLDER_FIELDS: ReadonlySet<string> = new Set(['skills', 'rules', 'agents']
 
 /**
  * The folders under `baseDir` the tool instances among `tools` take teamai's resources in, from their resolved
- * `toolPaths`: each folder a path names, and those above it up to its root, the instance's home there (`.acme-claude`).
- * Init makes them before anything is in them. Only a dotted root is taken, as init makes no other. An instance named
- * like a shipped tool adjusts that tool, and keeps its folders as it does.
+ * `toolPaths`: each folder a path in the instance's home there names (`.acme-claude`), and those above it up to that home.
+ * Init makes them before anything is in them. A path outside that home, and every path of an instance with no home of its
+ * own or one named like a shipped tool, is the shipped tool's, whose folders stay.
  */
 function instanceFoldersOf(tools: readonly string[], toolPaths: ReturnType<typeof scopedToolPaths>, baseDir: string): string[] {
-  const foldersOf = (field: string, relative: string): string[] => {
-    const segments = relative.split('/');
-
-    if (path.isAbsolute(relative) || !segments[0]?.startsWith('.') || segments.some((segment) => ['', '.', '..'].includes(segment))) return [];
-    const root = toolInstallRoot(relative).split('/').length;
-    const deepest = FOLDER_FIELDS.has(field) ? segments.length : segments.length - 1;
-
-    return Array.from({ length: Math.max(0, deepest - root + 1) }, (_, at) => path.join(baseDir, ...segments.slice(0, root + at)));
-  };
-
   return [...new Set(tools.flatMap((tool) => {
     const instance = toolOf(tool)?.instance;
 
-    if (instance === undefined || instance.name === instance.extends) return [];
-
+    if (instance?.home === undefined || instance.name === instance.extends) return [];
+    const home = instance.home.dir.split('/');
     const paths = toolPaths[tool] ?? {};
 
-    return [...TOOL_ROOT_FIELDS, 'mcpProject' as const].flatMap((field) => foldersOf(field, paths[field] ?? ''));
+    return [...TOOL_ROOT_FIELDS, 'mcpProject' as const].flatMap((field) => {
+      const segments = (paths[field] ?? '').split('/');
+
+      if (segments.length <= home.length || home.some((segment, at) => segments[at] !== segment) || segments.some((segment) => ['', '.', '..'].includes(segment))) return [];
+      const deepest = FOLDER_FIELDS.has(field) ? segments.length : segments.length - 1;
+
+      return Array.from({ length: deepest - home.length + 1 }, (_, at) => path.join(baseDir, ...segments.slice(0, home.length + at)));
+    });
   }))];
 }
 

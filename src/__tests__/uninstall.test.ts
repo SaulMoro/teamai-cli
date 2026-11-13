@@ -4597,6 +4597,27 @@ describe('uninstall', () => {
 
       expect(await fse.readdir(kept.folder)).toEqual(['notes.md']);
     });
+
+    it.each([
+      { instance: 'with no home of its own, which takes the paths of the tool it extends', file: 'schemaVersion: v1alpha1\nname: acme-claude\nextends: claude\n', root: '.claude' },
+      { instance: 'whose project MCP file is in the root of the tool it extends', file: 'schemaVersion: v1alpha1\nname: acme-cursor\nextends: cursor\nhome: { dir: .acme-cursor }\n', root: '.cursor' },
+    ])('keeps the shipped tool\'s folders an instance $instance shares', async ({ file, root }) => {
+      const { homeDir, repoPath } = await setupFixture(tmpDir);
+      vi.stubEnv('HOME', homeDir);
+      vi.stubEnv('SHELL', '/bin/zsh');
+      const projectRoot = path.join(tmpDir, 'workspace');
+      const name = /name: (\S+)/.exec(file)?.[1] ?? '';
+      await fse.outputFile(path.join(repoPath, 'teamai.yaml'), YAML.stringify(makeTeamConfig()));
+      await fse.outputFile(path.join(repoPath, 'tools', `${name}.yaml`), file);
+      await fse.ensureDir(path.join(projectRoot, root));
+      const localConfig = makeLocalConfig(projectRoot, repoPath, { scope: 'project', projectRoot, enabledAgents: [name] });
+      const { loadTeamConfig } = await import('../config.js');
+      mockAutoDetectInit.mockResolvedValue({ localConfig, teamConfig: await loadTeamConfig(repoPath, localConfig) });
+
+      await uninstall({ force: true });
+
+      expect(await fse.pathExists(path.join(projectRoot, root))).toBe(true);
+    });
   });
 
   describe('with two workspaces and no user scope', () => {
