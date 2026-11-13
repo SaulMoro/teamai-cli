@@ -176,6 +176,26 @@ describe('init --agent validates ids against built-in and team agents', () => {
     expect((YAML.parse(fs.readFileSync(configPath(fixture.home), 'utf8')) as { enabledAgents?: string[] }).enabledAgents).toEqual(['claude', 'acme-claude']);
   });
 
+  it('adds a tool on a repeated init once the rewrite is confirmed, and names --force when no one can confirm it', () => {
+    const fixture = newTeamRepo('repeated-agent');
+    const initFor = (agent: string, ...extra: string[]): Run => teamai([
+      'init', fixture.url, '--provider', 'git', '--agent', agent, '--scope', 'user', ...extra,
+    ], fixture.home, fixture.env);
+    const enabledAgents = (): string[] | undefined => (YAML.parse(fs.readFileSync(configPath(fixture.home), 'utf8')) as { enabledAgents?: string[] }).enabledAgents;
+    expect(initFor('claude').code).toBe(0);
+
+    const unconfirmed = initFor('codex');
+
+    expect(unconfirmed.code, unconfirmed.output).toBe(0);
+    expect(unconfirmed.output).toContain('No one is at a terminal to confirm rewriting the existing config, so init changed nothing. Run the same command with --force');
+    expect(enabledAgents()).toEqual(['claude']);
+
+    const forced = initFor('codex', '--force');
+
+    expect(forced.code, forced.output).toBe(0);
+    expect(enabledAgents()).toEqual(['claude', 'codex']);
+  });
+
   it('accepts every built-in tool id and every KNOWN_AGENTS id', () => {
     const fixture = newTeamRepo('known-agent-list');
     const ids = [...new Set([...Object.keys(TOOLS), ...KNOWN_AGENTS.map((agent) => agent.id)])];

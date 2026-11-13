@@ -64,6 +64,28 @@ async function settleModeSwitch(previous: LocalConfig | null, next: LocalConfig,
   }
 }
 
+/**
+ * Whether a re-init may rewrite the existing config: `--force` says yes, and a person at a terminal answers `question`.
+ * With no one to ask, the install stays as it is, which a script that re-runs init relies on, and the warning names --force.
+ */
+async function mayRewriteConfig(force: boolean | undefined, question: string): Promise<boolean> {
+  if (force) return true;
+
+  if (!isInteractive()) {
+    log.warn(
+      'No one is at a terminal to confirm rewriting the existing config, so init changed nothing. Run the same command with --force ' +
+        'to rewrite it: it keeps the settings init does not set, and --agent adds to the tools the config already sets up.',
+    );
+
+    return false;
+  }
+
+  if (await askConfirmation(question)) return true;
+  log.info('Aborted. Existing config is unchanged.');
+
+  return false;
+}
+
 /** Whether `scope`'s config file holds an install. ~/.teamai/config.yaml may hold only the member's own settings. */
 async function holdsInstallFor(scope: Scope, configPath: string): Promise<boolean> {
   return scope === 'user' ? hasUserScopeInstall() : pathExists(configPath);
@@ -950,14 +972,8 @@ export async function initHttp(
   // Re-init guard
   const existingConfigPath = path.join(teamaiHome, 'config.yaml');
 
-  if (await holdsInstallFor(scope, existingConfigPath) && !options.force) {
-    const confirmed = await askConfirmation(`teamai already initialized at ${existingConfigPath}. Overwrite? [y/N] `);
-
-    if (!confirmed) {
-      log.info('Aborted. Existing config is unchanged.');
-
-      return;
-    }
+  if (await holdsInstallFor(scope, existingConfigPath) && !await mayRewriteConfig(options.force, `teamai already initialized at ${existingConfigPath}. Overwrite? [y/N] `)) {
+    return;
   }
 
   const replacedFile = existingLocalConfig && await readConfigFile(existingConfigPath);
@@ -1586,17 +1602,9 @@ export async function initSelfMode(options: GlobalOptions & {
   if ((await pathExists(existingConfigPath)) || (await pathExists(legacyConfigPath))) {
     log.warn(`teamai is already initialized (workspace scope) at ${existingConfigPath}`);
 
-    if (options.force) {
-      log.info('Overwriting existing config (--force)');
-    } else {
-      const confirmed = await askConfirmation('Overwrite existing config? [y/N] ');
+    if (options.force) log.info('Overwriting existing config (--force)');
 
-      if (!confirmed) {
-        log.info('Aborted. Existing config is unchanged.');
-
-        return;
-      }
-    }
+    if (!await mayRewriteConfig(options.force, 'Overwrite existing config? [y/N] ')) return;
   }
 
   // Step 1: derive provider + remote from the business repo's origin.
@@ -2112,17 +2120,9 @@ export async function init(options: GlobalOptions & {
   if (await holdsInstallFor(scope, existingConfigPath)) {
     log.warn(`teamai is already initialized for ${installScopeName(scope)} scope at ${existingConfigPath}`);
 
-    if (options.force) {
-      log.info('Overwriting existing config (--force)');
-    } else {
-      const confirmed = await askConfirmation('Overwrite existing config? [y/N] ');
+    if (options.force) log.info('Overwriting existing config (--force)');
 
-      if (!confirmed) {
-        log.info('Aborted. Existing config is unchanged.');
-
-        return;
-      }
-    }
+    if (!await mayRewriteConfig(options.force, 'Overwrite existing config? [y/N] ')) return;
   }
 
   // Step 1: Get repo input (positional or --repo alias; prompt if neither)
