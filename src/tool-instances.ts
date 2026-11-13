@@ -14,7 +14,7 @@ import { writeJsonAtomic } from './utils/fs.js';
 import { log } from '@teamai/shared/log';
 import { errorOnce, warnOnce } from './utils/warn-once.js';
 import { parseYaml } from '@teamai/shared/yaml';
-import { readRegularFile } from '@teamai/shared/regular-file';
+import { readRegularFile, readRegularFileSync } from '@teamai/shared/regular-file';
 
 // ─── Tool instances ──────────────────────────────────────
 //
@@ -369,9 +369,12 @@ function trustFile(): string {
   return path.join(getTrustDir(), 'tools.json');
 }
 
-async function readTrust(): Promise<z.infer<typeof TrustFileSchema>> {
+type TrustFile = z.infer<typeof TrustFileSchema>;
+
+/** The acceptances `text`, the trust file's content, records; none for a file that is missing or does not parse. */
+function trustOf(text: string | undefined): TrustFile {
   try {
-    return TrustFileSchema.parse(JSON.parse(await readRegularFile(trustFile(), 'utf8')));
+    return TrustFileSchema.parse(JSON.parse(text ?? ''));
   } catch {
     return { accepted: [] };
   }
@@ -454,6 +457,35 @@ export async function acceptTeamCommand(
   };
 }
 
+async function readTrust(): Promise<TrustFile> {
+  return trustOf(await readRegularFile(trustFile(), 'utf8').catch(() => undefined));
+}
+
+/** The `tool` subject of `instance`'s command, which acceptance records by its name and file content. */
+function toolCommandOf(instance: ResolvedToolInstance & { readonly command: string }): TeamCommand {
+  return { kind: 'tool', name: instance.name, command: instance.command, file: instance.file, revision: instance.revision, extends: instance.extends };
+}
+
+/**
+ * The command `instance` sets when it may run here with no one to ask: a member's own instance's, or a team instance's
+ * whose file content a person accepted (`acceptToolCommand`). Undefined for any other, and for one that sets none. Read
+ * where nothing can ask, such as the session adapters, which then run the command of the tool it extends.
+ */
+export function acceptedCommandOf(instance: ResolvedToolInstance): string | undefined {
+  if (instance.source !== 'team' || instance.command === undefined) return instance.command;
+  let text: string | undefined;
+
+  try {
+    text = readRegularFileSync(trustFile(), 'utf8');
+  } catch {
+    text = undefined;
+  }
+
+  const subject = toolCommandOf({ ...instance, command: instance.command });
+
+  return trustOf(text).accepted.some((entry) => accepts(entry, subject) && entry.revision === instance.revision) ? instance.command : undefined;
+}
+
 /** Why a team instance's command did not run. */
 export interface UnacceptedCommand {
   readonly ok: false;
@@ -469,7 +501,7 @@ export async function acceptToolCommand(
   { ask }: { ask: ((question: string) => Promise<string | undefined>) | undefined },
 ): Promise<{ ok: true } | UnacceptedCommand> {
   if (instance.source !== 'team' || instance.command === undefined) return { ok: true };
-  const accepted = await acceptTeamCommand({ kind: 'tool', name: instance.name, command: instance.command, file: instance.file, revision: instance.revision, extends: instance.extends }, { ask });
+  const accepted = await acceptTeamCommand(toolCommandOf({ ...instance, command: instance.command }), { ask });
 
   return accepted.ok ? accepted : { ok: false, code: 'tool_not_accepted', message: accepted.message };
 }
