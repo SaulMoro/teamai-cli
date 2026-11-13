@@ -5,11 +5,11 @@ import { describe, expect, it, onTestFinished, vi } from 'vitest';
 import { runtimeCommand, runtimeLauncher } from '../workflow/steps/runtime-steps.js';
 import { stepLauncher } from '@teamai/runtime-tools';
 import { toolsLaunchDeps } from '../workflow/runtimes/sources.js';
-import { attemptRun, attemptRuntimePath, placesLockIn, type AttemptRun } from '../workflow/runtimes/attempt.js';
+import { attemptRun, attemptRuntimePath, type AttemptRun } from '../workflow/runtimes/attempt.js';
 import { acquireLock, releaseLock } from '../update.js';
 import type { DriverCan } from '../workflow/requirements.js';
 import { getDataHome, type LocalConfig } from '../types.js';
-import { AttemptIdSchema, attemptResultPath, attemptsDir, RunIdSchema } from '../workflow/store.js';
+import { AttemptIdSchema, attemptResultPath, attemptsDir, RunIdSchema, runsRemovalLockIn } from '../workflow/store.js';
 import type { StepRuntime } from '@teamai/runtime-protocol/step-runtime';
 import type { OpId } from '@teamai/runtime-protocol';
 
@@ -295,7 +295,7 @@ describe('an attempt\'s operations on a step runtime', () => {
   it('records the place it opens only once an uninstall beside it lets go of the places lock', async () => {
     const { run, config, done } = counted();
     onTestFinished(done);
-    const lock = placesLockIn(getDataHome(config));
+    const lock = runsRemovalLockIn(getDataHome(config));
     expect(await acquireLock(lock)).toBe(true);
     const record = attemptRuntimePath(config, RunIdSchema.parse('r0123abcd'), AttemptIdSchema.parse('a00000001'));
 
@@ -314,7 +314,7 @@ describe('an attempt\'s operations on a step runtime', () => {
     onTestFinished(done);
     const runDir = path.dirname(attemptsDir(config, RunIdSchema.parse('r0123abcd')));
     fs.mkdirSync(runDir, { recursive: true });
-    const lock = placesLockIn(getDataHome(config));
+    const lock = runsRemovalLockIn(getDataHome(config));
     expect(await acquireLock(lock)).toBe(true);
 
     const opened = run.open({ worktree: '/work', readonly: [], result: '/work/out', runDir: '/work/scratch', toolHome: {} });
@@ -331,7 +331,7 @@ describe('an attempt\'s operations on a step runtime', () => {
     onTestFinished(done);
     const dataHome = getDataHome(config);
     fs.mkdirSync(path.dirname(attemptsDir(config, RunIdSchema.parse('r0123abcd'))), { recursive: true });
-    const lock = placesLockIn(dataHome);
+    const lock = runsRemovalLockIn(dataHome);
     expect(await acquireLock(lock)).toBe(true);
 
     const opened = run.open({ worktree: '/work', readonly: [], result: '/work/out', runDir: '/work/scratch', toolHome: {} });

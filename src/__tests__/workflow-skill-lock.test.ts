@@ -192,6 +192,7 @@ describe('the driver lock of a run whose data home is reached through a symlink'
     fs.mkdirSync(path.join(root, 'real'));
     fs.symlinkSync(path.join(root, 'real'), path.join(root, 'link'));
     const dataHome = path.join(root, 'link', 'data');
+    fs.mkdirSync(dataHome);
     const config: LocalConfig = { repo: { kind: 'self', localPath: path.join(root, 'knowledge'), remote: 'local' }, username: 'test', scope: 'project', additionalRoles: [], projectRoot: root, dataHome };
     return { config, spelled: (run) => path.join(dataHome, 'workflows', 'runs', run, 'driver.lock') };
   }
@@ -223,5 +224,21 @@ describe('the driver lock of a run whose data home is reached through a symlink'
     expect(taken).toEqual({ kind: 'held', value: false });
     expect(await acquireLock(spelled(run))).toBe(true);
     await releaseLock(spelled(run));
+  });
+});
+
+describe('the driver lock of a run whose data home is not there', () => {
+  it('drives nothing and makes no data home, as after an uninstall of the scope', async () => {
+    const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-no-home-')));
+    roots.push(root);
+    const dataHome = path.join(root, 'data');
+    const config: LocalConfig = { repo: { kind: 'self', localPath: path.join(root, 'knowledge'), remote: 'local' }, username: 'test', scope: 'project', additionalRoles: [], projectRoot: root, dataHome };
+    const run = RunIdSchema.parse('r0123456789abcdef');
+    const body = vi.fn(async () => 'drove');
+
+    await expect(takeRunLock(config, run, body, { waitMs: 0 })).rejects.toThrow(`Run ${run} is not on this machine: its data home ${dataHome} is not there`);
+
+    expect(body).not.toHaveBeenCalled();
+    expect(fs.existsSync(dataHome)).toBe(false);
   });
 });

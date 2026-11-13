@@ -14,7 +14,7 @@ import type { LaunchTool } from '../../launch-registry.js';
 import { getDataHome, type LocalConfig } from '../../types.js';
 import { withFileLock } from '../../update.js';
 import { errnoCode, writeJsonAtomic } from '../../utils/fs.js';
-import { attemptDir, AttemptIdSchema, attemptResultPath, attemptsDir, RunIdSchema, type AttemptId, type RunId } from '../store.js';
+import { attemptDir, AttemptIdSchema, attemptResultPath, attemptsDir, RunIdSchema, RUNS_REMOVAL_LOCK_WAIT, runsRemovalLockIn, type AttemptId, type RunId } from '../store.js';
 import type { WorkflowFailure } from '../types.js';
 import type { SessionRef } from '../workspace.js';
 import { redact } from '@teamai/shared/redact';
@@ -165,16 +165,6 @@ export type AttemptPlacement =
   | { kind: 'in_process'; runtime: string; sessionHome?: z.infer<typeof ToolHomeSchema> }
   | { kind: 'unrecorded' }
   | { kind: 'unreadable'; why: string };
-
-/**
- * The lock of data home `dataHome` an attempt holds while it records the place it opens, and an uninstall holds from
- * its check that no place is open until it has removed the runs: so no place opens between the two.
- */
-export function placesLockIn(dataHome: string): string {
-  return path.join(dataHome, '.places-lock');
-}
-
-export const PLACES_LOCK_WAIT = { attempts: 50, delayMs: 200 } as const;
 
 /** Records that attempt `attempt` of run `run` runs in teamai's process, on `runtime` of driver `driver`. */
 export async function recordInProcessAttempt(config: LocalConfig, run: RunId, attempt: AttemptId, { runtime, driver }: { runtime: string; driver: string }): Promise<void> {
@@ -861,7 +851,7 @@ function attemptThrough({ config, run, attempt, sends, driver, sources, deadline
       if (before?.display) opening.display = before.display;
 
       if (before?.closeFailed) opening.closeFailed = before.closeFailed;
-      const lock = placesLockIn(getDataHome(config));
+      const lock = runsRemovalLockIn(getDataHome(config));
       const runDir = path.dirname(attemptsDir(config, run));
       const isRunRecorded = async (): Promise<boolean> => (await fs.stat(runDir).catch(() => undefined)) !== undefined;
       const wasRunRecorded = await isRunRecorded();
@@ -869,7 +859,7 @@ function attemptThrough({ config, run, attempt, sends, driver, sources, deadline
       // An uninstall holds this lock from its check that no place is open until it has removed the runs, so a run it
       // removed meanwhile is gone once this takes it, and a place recorded there would have no run to close it. A data
       // home it removed whole is not made again: only a run never recorded before needs it made.
-      const recorded = await withFileLock(lock, PLACES_LOCK_WAIT, async () => {
+      const recorded = await withFileLock(lock, RUNS_REMOVAL_LOCK_WAIT, async () => {
         if (wasRunRecorded && !await isRunRecorded()) return false;
         await save(opening);
 

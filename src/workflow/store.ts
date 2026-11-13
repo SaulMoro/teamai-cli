@@ -8,7 +8,7 @@ import { resolveReal } from '../utils/path-safety.js';
 import { redact, redactJson } from '@teamai/shared/redact';
 import { getDataHome, type LocalConfig } from '../types.js';
 import type { JsonValue } from '@teamai/shared/json';
-import { acquireLock, lockState, releaseLock } from '../update.js';
+import { acquireLock, lockState, releaseLock, withFileLock } from '../update.js';
 import { ArchivedPassSchema, FailureSchema, ReleasedTokensSchema, SessionContinuationSchema, StepStateSchema, StoppedAttemptSchema } from './step-state.js';
 import type { HandoffOwner } from './snapshot.js';
 import { uniqueOutcomes, WorkOutcomeSchema, type WorkOutcome } from '../outcomes.js';
@@ -87,6 +87,17 @@ export async function withCleanupLock<T>(config: LocalConfig, runId: string, act
 export function deliveryLockPath(config: LocalConfig, runId: string): string {
   return path.join(runsDir(config), `${runId}.delivery.lock`);
 }
+
+/**
+ * The lock of data home `dataHome` an uninstall holds from its last check that nothing of its runs is live until it has
+ * removed them. What an uninstall must see to refuse takes it as it starts: an attempt while it records the place it
+ * opens, a driver while it takes its run's `driver.lock`. So neither starts between the check and the removal.
+ */
+export function runsRemovalLockIn(dataHome: string): string {
+  return path.join(dataHome, '.places-lock');
+}
+
+export const RUNS_REMOVAL_LOCK_WAIT = { attempts: 50, delayMs: 200 } as const;
 
 export function driverLockPath(config: LocalConfig, runId: string): string {
   return path.join(runsDir(config), runId, 'driver.lock');
@@ -237,6 +248,20 @@ const LockOwnerSchema = z.object({ pid: z.number().int() });
 export type LockTaken<T> = { kind: 'held'; value: T } | { kind: 'busy'; error: { code: 'driver_running'; message: string } };
 
 /**
+ * A driver of run `run` found, as it took the run's lock, that the run, or the data home it was in, is gone: an
+ * uninstall of the scope removed them while this teamai, which had read its configuration before, waited to drive it.
+ * Nothing of the scope is left to drive, so it stops, and makes no data home again.
+ */
+export class RunRemovedError extends Error {
+  constructor(readonly run: RunId, { wasRecorded, dataHome }: { wasRecorded: boolean; dataHome: string }) {
+    super(wasRecorded
+      ? `Run ${run} was removed from this machine while teamai waited to drive it: an uninstall of this scope removed its runs, so nothing drives it here.`
+      : `Run ${run} is not on this machine: its data home ${dataHome} is not there, as after an uninstall of this scope, so nothing drives it here.`);
+    this.name = 'RunRemovedError';
+  }
+}
+
+/**
  * The runs of `runs`, a data home's `workflows/runs`, that a live process of this machine drives: those whose
  * `driver.lock` it holds, with its pid when the lock names one. None when the folder is not there.
  */
@@ -268,13 +293,17 @@ export async function runsDrivenIn(runs: string): Promise<Array<{ run: RunId; pi
 
 /**
  * Runs `body` holding `runs/<run>/driver.lock`, the one lock every driver of `run` on this machine takes, or answers
- * `busy` when another live process still holds it after `waitMs`. `waitMs: 0` tries once.
+ * `busy` when another live process still holds it after `waitMs`. `waitMs: 0` tries once. Each try is made under the
+ * data home's removal lock (`runsRemovalLockIn`), so an uninstall sees this driver, or removed the run before it: then
+ * it throws `RunRemovedError`, and makes no data home again.
  */
 export async function takeRunLock<T>(config: LocalConfig, run: RunId, body: (lock: RunLock) => Promise<T>, { waitMs }: { waitMs: number }): Promise<LockTaken<T>> {
   const lock = driverLockPath(config, run);
   const until = Date.now() + waitMs;
 
-  while (!await acquireLock(lock)) {
+  for (let tried = await tryDriverLock(config, run); tried !== 'held'; tried = await tryDriverLock(config, run)) {
+    if (tried !== 'busy') return tried;
+
     if (Date.now() >= until) {
       const owner = LockOwnerSchema.safeParse(parsedJson(await readRegularFile(lock, 'utf8').catch(() => null)));
 
@@ -291,6 +320,29 @@ export async function takeRunLock<T>(config: LocalConfig, run: RunId, body: (loc
   } finally {
     await releaseLock(lock);
   }
+}
+
+/**
+ * One try at run `run`'s `driver.lock`, made holding its data home's removal lock, which is taken without making the
+ * data home: `held`, `busy` while a live process holds it, or busy with why while the removal lock stays taken.
+ * Throws `RunRemovedError` when the run, or its data home, is gone.
+ */
+async function tryDriverLock(config: LocalConfig, run: RunId): Promise<'held' | 'busy' | Extract<LockTaken<never>, { kind: 'busy' }>> {
+  const dataHome = getDataHome(config);
+  const removal = runsRemovalLockIn(dataHome);
+  const isRecorded = async (): Promise<boolean> => (await fs.stat(runFilePath(config, run)).catch(() => undefined)) !== undefined;
+  const wasRecorded = await isRecorded();
+  const tried = await withFileLock(removal, RUNS_REMOVAL_LOCK_WAIT, async () => {
+    if (wasRecorded && !await isRecorded()) return 'removed';
+
+    return await acquireLock(driverLockPath(config, run)) ? 'held' : 'busy';
+  }, { createParent: false });
+
+  if (tried.held ? tried.value === 'removed' : tried.isDirectoryGone) throw new RunRemovedError(run, { wasRecorded, dataHome });
+
+  if (tried.held && tried.value !== 'removed') return tried.value;
+
+  return { kind: 'busy', error: { code: 'driver_running', message: `Run ${run} cannot be driven now: ${removal} stays taken, as an uninstall of this scope holds it while it removes the runs. Try again once the uninstall ends.` } };
 }
 
 /** `takeRunLock` for a caller whose body answers an envelope: a busy lock answers as the `driver_running` error. */

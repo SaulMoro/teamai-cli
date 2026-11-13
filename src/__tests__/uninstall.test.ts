@@ -69,8 +69,7 @@ import { type HookAdapterId } from '@teamai/tool-core/definition';
 import { TOOLS } from '../tools.js';
 import { renderWorkflowSkill } from '../workflow/discovery/render.js';
 import { newOpId } from '@teamai/runtime-protocol/step-runtime';
-import { placesLockIn } from '../workflow/runtimes/attempt.js';
-import { RunIdSchema, takeRunLock } from '../workflow/store.js';
+import { RunIdSchema, runsRemovalLockIn, takeRunLock } from '../workflow/store.js';
 
 // ─── Helpers ───────────────────────────────────────────
 
@@ -642,7 +641,7 @@ describe('uninstall', () => {
     vi.spyOn(cancelled, 'placesMaybeHeld').mockImplementation(async (runs) => {
       const held = await placesMaybeHeld(runs);
 
-      if (++checks === 2) opening = await withFileLock(placesLockIn(dataHome), { attempts: 2, delayMs: 20 }, () => fse.outputJson(record, { runtime: 'box', driver: 'box', phase: 'opening', open: { op: newOpId() } }));
+      if (++checks === 2) opening = await withFileLock(runsRemovalLockIn(dataHome), { attempts: 2, delayMs: 20 }, () => fse.outputJson(record, { runtime: 'box', driver: 'box', phase: 'opening', open: { op: newOpId() } }));
 
       return held;
     });
@@ -688,7 +687,7 @@ describe('uninstall', () => {
     uninstalled();
 
     expect(checks).toBe(2);
-    expect(await driving).toMatchObject({ kind: 'gone', error: { code: 'run_not_found', message: expect.stringContaining(`Run ${run} was removed`) } });
+    await expect(driving).rejects.toThrow(`Run ${run} was removed from this machine while teamai waited to drive it`);
     expect(await fse.pathExists(dataHome), 'data home').toBe(false);
   });
 

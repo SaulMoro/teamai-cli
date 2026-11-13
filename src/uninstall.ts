@@ -3689,9 +3689,9 @@ export async function uninstall(opts: UninstallOptions): Promise<void> {
     try {
       const removeAll = (): Promise<void> => removeConfirmed(localConfig, teamConfig, plan, agentKey, !!exclusionOnly);
 
-      // Again once confirmed: a run may have opened a place while the person answered.
+      // Again once confirmed: a run may have opened a place, or a driver started, while the person answered.
       if (!plan.includeShared) await removeAll();
-      else await whilePlacesLocked([getDataHome(localConfig)], async () => {
+      else await whileRunsLocked([getDataHome(localConfig)], async () => {
         if (!await refusedForLiveRuns(async () => [getDataHome(localConfig)])) await removeAll();
       });
     } finally {
@@ -3755,23 +3755,23 @@ async function refusedForLiveRuns(dataHomes: () => Promise<readonly string[]>, {
 }
 
 /**
- * Runs `body` holding the places lock of each of `dataHomes`, the one an attempt holds while it records the place it
- * opens, so no place opens between `body`'s check that none is open and its removal of the runs. Refuses when one stays
- * taken.
+ * Runs `body` holding the removal lock of each of `dataHomes` (`runsRemovalLockIn`), the one an attempt holds while it
+ * records the place it opens and a driver while it takes its run's lock, so neither starts between `body`'s check that
+ * nothing of the runs is live and its removal of them. Refuses when one stays taken.
  */
-async function whilePlacesLocked(dataHomes: readonly string[], body: () => Promise<void>): Promise<void> {
+async function whileRunsLocked(dataHomes: readonly string[], body: () => Promise<void>): Promise<void> {
   const { acquireLock, LockDirectoryGoneError, releaseLock } = await import('./update.js');
-  const { PLACES_LOCK_WAIT, placesLockIn } = await import('./workflow/runtimes/attempt.js');
+  const { RUNS_REMOVAL_LOCK_WAIT, runsRemovalLockIn } = await import('./workflow/store.js');
   const held: string[] = [];
 
   try {
     for (const dataHome of dataHomes) {
-      const lock = placesLockIn(dataHome);
+      const lock = runsRemovalLockIn(dataHome);
       let isHeld = false;
       let isGone = false;
 
       // A data home that is not there holds no run, and taking its lock does not make it.
-      for (let attempt = 0; attempt < PLACES_LOCK_WAIT.attempts && !isHeld && !isGone; attempt++) {
+      for (let attempt = 0; attempt < RUNS_REMOVAL_LOCK_WAIT.attempts && !isHeld && !isGone; attempt++) {
         try {
           isHeld = await acquireLock(lock, { createParent: false });
         } catch (error) {
@@ -3779,13 +3779,13 @@ async function whilePlacesLocked(dataHomes: readonly string[], body: () => Promi
           isGone = true;
         }
 
-        if (!isHeld && !isGone) await new Promise((resolve) => setTimeout(resolve, PLACES_LOCK_WAIT.delayMs));
+        if (!isHeld && !isGone) await new Promise((resolve) => setTimeout(resolve, RUNS_REMOVAL_LOCK_WAIT.delayMs));
       }
 
       if (isGone) continue;
 
       if (!isHeld) {
-        log.error(`Cannot uninstall: a step runtime is opening a place of a run in ${dataHome}, as ${lock} stays taken. Run \`teamai uninstall\` again once the run has its place.`);
+        log.error(`Cannot uninstall: a step runtime is opening a place of a run in ${dataHome}, or a driver is starting one, as ${lock} stays taken. Run \`teamai uninstall\` again once it has.`);
         process.exitCode = 1;
 
         return;
@@ -4181,7 +4181,7 @@ async function uninstallHomeOnly(opts: UninstallOptions): Promise<void> {
     return;
   }
 
-  await whilePlacesLocked(dataHomes, async () => {
+  await whileRunsLocked(dataHomes, async () => {
     if (!await refusedForLiveRuns(async () => dataHomes)) await removeHome(home, kept, keptOwn);
   });
 }
