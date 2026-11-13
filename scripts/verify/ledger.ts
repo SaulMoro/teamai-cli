@@ -544,9 +544,10 @@ async function reverseOf(world: World, place: LedgerPlace): Promise<{ leaks: str
 
 /** Uninstalls teamai in the world, writes the next LEDGER-<n>.md and returns whether it is clean. */
 export async function runLedger(world: World): Promise<boolean> {
-  // Before uninstall, which removes the records that say which runtimes the world's runs used.
-  const left = { title: '(f) What a driver left running', ...await leftoversSection(world) };
+  // Before uninstall, which removes the records that say which runtimes the world's runs used; observed after it.
+  const leftovers = await leftoversSection(world);
   const reverse = await reverseState(world);
+  const left = { title: '(f) What a driver left running', ...await leftovers.observe() };
   const sections = [teamRepo(world), worktrees(world), hostFiles(world), environment(world), reverse, left];
   const leaks = sections.reduce((sum, section) => sum + section.leaks.length, 0);
   const verdict = leaks === 0 ? 'CLEAN' : `${leaks} LEAK${leaks === 1 ? '' : 'S'}`;

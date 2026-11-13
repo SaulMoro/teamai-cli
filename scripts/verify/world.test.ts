@@ -5,7 +5,7 @@ import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { socketPathOf } from '../../packages/runtime-sandbox/src/attempt-socket.js';
-import { REPO_ROOT, rewriteLocked, updateWorld, worldCommandNames, worldEnv, worldTmpDir, writeCommandLog, type World } from './world.js';
+import { packCheckout, REPO_ROOT, rewriteLocked, updateWorld, worldCommandNames, worldEnv, worldTmpDir, writeCommandLog, type World } from './world.js';
 
 const roots: string[] = [];
 
@@ -294,4 +294,38 @@ describe('a rewrite of a file two commands of a world share', () => {
     expect(fs.readFileSync(file, 'utf8')).toBe('{}\n');
     expect(fs.existsSync(`${file}.lock`)).toBe(false);
   });
+});
+
+describe("a world's teamai package", () => {
+  /** Each file of the checkout's dist/ with the inode and time it was written, or that there is none. */
+  function checkoutDist(): Record<string, string> | 'none' {
+    const dist = path.join(REPO_ROOT, 'dist');
+
+    if (!fs.existsSync(dist)) return 'none';
+
+    return Object.fromEntries(fs.readdirSync(dist).map((name) => {
+      const stat = fs.statSync(path.join(dist, name));
+
+      return [name, `${stat.ino}:${stat.mtimeMs}`];
+    }));
+  }
+
+  /** The files of a tarball `npm pack` made, or would make from the checkout, outside dist/. */
+  const outsideDist = (files: string[]): string[] => files.filter((file) => !file.startsWith('dist/')).sort();
+
+  it("is built and packed apart from the checkout, whose dist/ an E2E run there may be loading, with the files the checkout's own pack holds", () => {
+    const into = fs.mkdtempSync(path.join(os.tmpdir(), 'world-pkg-'));
+    roots.push(into);
+    const before = checkoutDist();
+
+    const { tarball } = packCheckout({ into });
+
+    expect(checkoutDist()).toEqual(before);
+    const packed = spawnSync('tar', ['-tzf', tarball], { encoding: 'utf8' }).stdout.split('\n').filter(Boolean).map((file) => file.replace(/^package\//, ''));
+    expect(packed).toEqual(expect.arrayContaining(['dist/index.js', 'dist/cli.js', 'dist/runtime-sandbox.js', 'dist/runtime-t3.js', 'dist/runtime-paseo.js']));
+    const own = spawnSync('npm', ['pack', '--dry-run', '--json'], { cwd: REPO_ROOT, encoding: 'utf8' });
+    const ownFiles = (JSON.parse(own.stdout) as Array<{ files: Array<{ path: string }> }>)[0].files.map((file) => file.path);
+    expect(outsideDist(packed)).toEqual(outsideDist(ownFiles));
+    expect(fs.readdirSync(into)).toEqual([path.basename(tarball)]);
+  }, 180_000);
 });

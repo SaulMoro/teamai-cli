@@ -17,8 +17,12 @@
 //                       `stop-delay` holding a number of milliseconds makes `restart` (sbx: `stop`) wait that long
 //                       before it stops anything, as a daemon that is slow to answer; a file `stop-hold` holding a
 //                       number of milliseconds makes it wait that long once it stopped the processes, before it
-//                       answers, as an engine that restarts the container does; a file `delay-<command>`
+//                       answers, as an engine that restarts the container does; a file `rm-hold` holding a number of
+//                       milliseconds makes docker's `rm` wait that long once it stopped the processes, before the
+//                       container is gone, while another `rm` of it fails as already in progress; a file `delay-<command>`
 //                       holding a number of milliseconds makes that command (`run`, `rm`, …) wait that long first;
+//                       a file `save-hold` holding a number of milliseconds makes a `commit`, `build` or sbx `template save`
+//                       wait that long while it writes the image, as a save still on its way;
 //                       a file `format-fails` makes `ps --format` fail as an engine that cannot render it; a file
 //                       `version` holding a version makes `version` print it, as an upgraded engine does; a file
 //                       `create-hold` holding a number of milliseconds makes `run -d` wait that long after the container
@@ -126,6 +130,15 @@ function signalGroup(pgid, name) {
   try { process.kill(-pgid, name); } catch { /* gone */ }
 }
 
+/**
+ * Starts `container` again, as docker's `start` does. Docker Desktop (29.4.3) makes each bind source that is gone again,
+ * as an empty directory, before the container runs; podman refuses the start instead, which this does not model.
+ */
+function startContainer(container) {
+  // One a removal took meanwhile is not started.
+  if (writeContainer({ ...container, running: true }) && engine === 'docker') for (const { source } of container.mounts) fs.mkdirSync(source, { recursive: true });
+}
+
 /** Stops every process group an exec of the container whose directory is `dir` started, as a container stop does. */
 function killProcesses(dir) {
   let pids;
@@ -200,16 +213,47 @@ function savedDir(tag) {
   return path.join(state, 'saved', encodeURIComponent(tag));
 }
 
-/** Saves `home` as image `tag` on `base`, which holds its tools. */
-function saveImage(tag, base, home) {
-  const dir = savedDir(tag);
-  fs.rmSync(dir, { recursive: true, force: true });
-  fs.mkdirSync(dir, { recursive: true });
-  fs.writeFileSync(path.join(dir, 'base'), base);
+/**
+ * Saves `home`, and the build context `context` when given, as image `tag` on `base`, which holds its tools. The image
+ * appears whole, as an engine's tag does once its commit is done: a removal seen after it is not undone by the save.
+ */
+function saveImage(tag, base, home, context) {
+  const staged = path.join(state, 'saving', `${encodeURIComponent(tag)}-${process.pid}`);
+  fs.mkdirSync(staged, { recursive: true });
+  fs.writeFileSync(path.join(staged, 'base'), base);
+  fs.writeFileSync(path.join(staged, 'engine'), engine);
 
-  if (fs.existsSync(home)) fs.cpSync(home, path.join(dir, 'home'), { recursive: true, verbatimSymlinks: true });
+  if (fs.existsSync(home)) fs.cpSync(home, path.join(staged, 'home'), { recursive: true, verbatimSymlinks: true });
+
+  if (context !== undefined) fs.cpSync(context, path.join(staged, 'context'), { recursive: true });
+
+  waitAsLongAs('save-hold');
   fs.mkdirSync(path.join(state, 'pulled'), { recursive: true });
   fs.writeFileSync(path.join(state, 'pulled', encodeURIComponent(tag)), '');
+  fs.mkdirSync(path.join(state, 'saved'), { recursive: true });
+  fs.rmSync(savedDir(tag), { recursive: true, force: true });
+  fs.renameSync(staged, savedDir(tag));
+}
+
+/** The tags this engine saved: docker's, podman's and sbx's stores are their own. */
+function savedTags() {
+  const root = path.join(state, 'saved');
+
+  return (fs.existsSync(root) ? fs.readdirSync(root) : []).filter((name) => fs.readFileSync(path.join(root, name, 'engine'), 'utf8') === engine).map(decodeURIComponent);
+}
+
+/** Removes the image `tag` this engine saved; false when it saved none of that tag. */
+function removeSaved(tag) {
+  if (!savedTags().includes(tag)) return false;
+  fs.rmSync(savedDir(tag), { recursive: true, force: true });
+  fs.rmSync(path.join(state, 'pulled', encodeURIComponent(tag)), { force: true });
+
+  return true;
+}
+
+/** sbx 0.53's id of a template: `sha256:` and 64 hex. */
+function templateId(tag) {
+  return `sha256:${crypto.createHash('sha256').update(tag).digest('hex')}`;
 }
 
 /** The image whose tools `image` holds: itself, or a saved image's base. */
@@ -311,6 +355,14 @@ function docker() {
     }
 
     case 'image': {
+      if (rest[0] === 'rm') {
+        const [, tag] = rest;
+
+        if (!removeSaved(tag)) fail(engine === 'podman' ? `Error: ${tag}: image not known` : `Error response from daemon: No such image: ${tag}`);
+        process.stdout.write(`Untagged: ${tag}\n`);
+        break;
+      }
+
       const [, , , image] = rest;
 
       if (rest[0] !== 'inspect' || !pulled(image)) fail(`Error: No such image: ${image}`);
@@ -381,8 +433,7 @@ function docker() {
       const from = /^FROM\s+(\S+)/m.exec(fs.readFileSync(one(found, '-f'), 'utf8'))?.[1];
 
       if (from === undefined || toolsOf(from) === undefined) fail(`ERROR: failed to solve: ${from}: not found`);
-      saveImage(tag, from, path.join(state, 'no-home'));
-      fs.cpSync(context, path.join(savedDir(tag), 'context'), { recursive: true });
+      saveImage(tag, from, path.join(state, 'no-home'), context);
       process.stdout.write(`naming to ${tag} done\n`);
       break;
     }
@@ -448,7 +499,20 @@ function docker() {
       if (!container) fail(`Error response from daemon: No such container: ${positional[0]}`);
       killProcesses(path.join(containers, container.id));
       waitAsLongAs('stop-hold');
+      startContainer(container);
       process.stdout.write(`${positional[0]}\n`);
+      break;
+    }
+
+    case 'inspect': {
+      // The one template the container provider asks for: each bind mount's host path, one per line.
+      const { found, rest: positional } = options(rest, ['--type', '--format']);
+      const container = readContainer(positional[0]);
+
+      if (one(found, '--type') !== 'container' || !one(found, '--format')?.includes('.Mounts')) fail(`fake ${engine}: inspect answers only --type container --format with .Mounts`);
+
+      if (!container) fail(`Error: No such container: ${positional[0]}`);
+      process.stdout.write(container.mounts.map(({ source }) => `${source}\n`).join(''));
       break;
     }
 
@@ -457,6 +521,14 @@ function docker() {
       const container = readContainer(positional[0]);
 
       if (fs.existsSync(path.join(state, 'rm-fails'))) fail(`Error response from daemon: cannot remove container "${positional[0]}": could not kill: tried to kill container, but did not receive an exit event`);
+
+      if (container?.removing) fail(`Error response from daemon: removal of container ${container.id} is already in progress`);
+
+      if (container && fs.existsSync(path.join(state, 'rm-hold'))) {
+        writeContainer({ ...container, running: false, removing: true });
+        killProcesses(path.join(containers, container.id));
+        waitAsLongAs('rm-hold');
+      }
 
       if (!container || !removeContainer(container)) fail(`Error response from daemon: No such container: ${positional[0]}`);
       process.stdout.write(`${positional[0]}\n`);
@@ -558,16 +630,35 @@ function sbx() {
     case 'template': {
       const [action, ...more] = rest;
 
+      // sbx 0.53 lists a template under docker.io/library/<name>, and keeps a kit's base it assembled as
+      // sandbox-kit-assembled:<hash>, which a template saved from a sandbox of it shares its id with.
+      const kits = path.join(state, 'kits');
+
+      const listed = (ref, id) => {
+        const at = ref.lastIndexOf(':');
+
+        return { id, repository: ref.slice(0, at), tag: ref.slice(at + 1), digest: id, flavor: 'shell', created_at: '2026-11-13T10:58:00Z', size: 214908963 };
+      };
+
       if (action === 'ls') {
-        const saved = fs.existsSync(path.join(state, 'saved')) ? fs.readdirSync(path.join(state, 'saved')).map(decodeURIComponent) : [];
-        process.stdout.write(`${JSON.stringify([{ id: '4a94d9144a70', repository: 'docker.io/docker/sandbox-templates', tag: 'claude-code-docker' }, ...saved.map((tag) => ({ id: crypto.createHash('sha256').update(tag).digest('hex').slice(0, 12), repository: tag.split(':')[0], tag: tag.split(':')[1] }))])}\n`);
+        const assembled = fs.existsSync(kits) ? fs.readdirSync(kits).map((name) => listed(decodeURIComponent(name), fs.readFileSync(path.join(kits, name), 'utf8'))) : [];
+        process.stdout.write(`${JSON.stringify([listed('docker.io/docker/sandbox-templates:claude-code-docker', templateId('claude-code-docker')), ...savedTags().map((tag) => listed(`docker.io/library/${tag}`, templateId(tag))), ...assembled])}\n`);
       } else if (action === 'save') {
         const [name, tag] = more;
         const sandbox = readContainer(name);
 
         if (!sandbox) sbxFail(`sandbox '${name}' not found`, 'sbx ls');
         saveImage(tag, sandbox.image, path.join(containers, sandbox.id, 'home'));
+        fs.mkdirSync(kits, { recursive: true });
+        fs.writeFileSync(path.join(kits, encodeURIComponent(`docker.io/library/sandbox-kit-assembled:${crypto.createHash('sha256').update(sandbox.image).digest('hex').slice(0, 16)}`)), templateId(tag));
         process.stdout.write(`Saved sandbox ${name} as ${tag}\n`);
+      } else if (action === 'rm') {
+        const ref = more.find((arg) => arg !== '--force' && arg !== '-f') ?? '';
+        const kit = path.join(kits, encodeURIComponent(ref));
+
+        if (fs.existsSync(kit)) fs.rmSync(kit);
+        else if (!removeSaved(ref.replace(/^docker\.io\/library\//, ''))) fail(`error: cannot remove template "${ref}": delete template: image not found: request failed: 404 Not Found: no image "${ref}"`);
+        process.stdout.write(`Removed template ${ref}\n`);
       } else {
         fail(`fake sbx: unsupported template command ${action}`, 125);
       }

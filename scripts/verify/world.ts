@@ -331,6 +331,35 @@ export async function createWorld(): Promise<World> {
   }
 }
 
+/**
+ * Builds this checkout into a staging folder under `into` and packs it there; answers the tarball and the version it
+ * carries. The checkout's own dist/ stays as it is: a build there rewrites it while an E2E run of the checkout loads it.
+ */
+export function packCheckout({ into }: { into: string }) {
+  const staging = path.join(into, 'package');
+
+  const listed = z
+    .array(z.object({ files: z.array(z.object({ path: z.string() })) }))
+    .parse(JSON.parse(execFileSync('npm', ['pack', '--dry-run', '--json'], { cwd: REPO_ROOT, encoding: 'utf8', stdio: ['ignore', 'pipe', 'inherit'] })))[0];
+
+  // npm's own list of what the checkout ships, so its rules (`files`, README*, LICENSE, ...) are not restated here.
+  for (const { path: file } of listed.files) {
+    if (file.startsWith('dist/')) continue;
+    fs.mkdirSync(path.dirname(path.join(staging, file)), { recursive: true });
+    fs.copyFileSync(path.join(REPO_ROOT, file), path.join(staging, file));
+  }
+
+  execFileSync('npm', ['run', 'build', '--silent', '--', '--out-dir', path.join(staging, 'dist')], { cwd: REPO_ROOT, stdio: ['ignore', 'ignore', 'inherit'] });
+
+  const packed = z
+    .array(z.object({ filename: z.string(), version: z.string() }))
+    .parse(JSON.parse(execFileSync('npm', ['pack', '--json', '--pack-destination', into], { cwd: staging, encoding: 'utf8', stdio: ['ignore', 'pipe', 'inherit'] })))[0];
+
+  fs.rmSync(staging, { recursive: true, force: true });
+
+  return { tarball: path.join(into, packed.filename), version: packed.version };
+}
+
 async function buildWorld(runId: string, dir: string, tmp: string): Promise<World> {
   const at = (name: string): string => path.join(dir, name);
 
@@ -339,13 +368,8 @@ async function buildWorld(runId: string, dir: string, tmp: string): Promise<Worl
 
   const commit = git(REPO_ROOT, 'rev-parse', 'HEAD');
   const status = checkoutStatus();
-  execFileSync('npm', ['run', 'build', '--silent'], { cwd: REPO_ROOT, stdio: ['ignore', 'ignore', 'inherit'] });
-
-  const packed = z
-    .array(z.object({ filename: z.string(), version: z.string() }))
-    .parse(JSON.parse(execFileSync('npm', ['pack', '--json', '--pack-destination', at('pkg')], { cwd: REPO_ROOT, encoding: 'utf8', stdio: ['ignore', 'pipe', 'inherit'] })))[0];
-
-  const tarball = path.join(at('pkg'), packed.filename);
+  const packed = packCheckout({ into: at('pkg') });
+  const tarball = packed.tarball;
   execFileSync('npm', ['install', '--prefix', at('install'), '--no-audit', '--no-fund', '--prefer-offline', '--silent', tarball], {
     cwd: dir,
     stdio: ['ignore', 'ignore', 'inherit'],

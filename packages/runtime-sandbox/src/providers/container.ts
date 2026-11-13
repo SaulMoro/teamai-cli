@@ -2,6 +2,7 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { setTimeout as sleep } from 'node:timers/promises';
 import { readRegularFileSync, writeRegularFile } from '@teamai/shared/regular-file';
 import type { ContainerEngine, ProfileOption, WarmOptions } from '../options.js';
 import { PROVIDER_COMMANDS } from '../provider-commands.js';
@@ -10,7 +11,7 @@ import type { Can, ConfinedOffer, RuntimeFailure } from '@teamai/runtime-protoco
 import { ANY_HOST, EVIDENCE_DIR, FILTER_PORT, FILTER_SCRIPT, judgeTool, thisMachineFileRule, thisMachineRule } from '../judge.js';
 import { COMMAND_MS, handleOf, placeKeyOfHandle, type ExecEnd, type ExecSpec, type HostRoute, type PlaceKey, type Provider, type WarmedImage } from '../provider.js';
 import { offerSignedIn } from '../sign-in.js';
-import { isLeftBehind, oneBuildPerKey, planWarm, scratchOf, WARM_BY, warmFailed, type WarmPlan } from '../warm.js';
+import { isLeftBehind, oneBuildPerKey, planWarm, savedWarm, scratchOf, WARM_BY, warmFailed, type WarmPlan, type WarmRemoval } from '../warm.js';
 import { cliOf, commandsOf, definedOnly, heldProbe, signalled, LAUNCHABLE, mountsOf, unmountable, WORKSPACES, type Ran } from './cli.js';
 
 // ─── docker and podman ───────────────────────────────────
@@ -50,7 +51,8 @@ import { cliOf, commandsOf, definedOnly, heldProbe, signalled, LAUNCHABLE, mount
 //  Values never appear in an argv: `-e NAME` takes each from the engine CLI's own environment. Only the names an exec
 //  is given cross into the container, so nothing else of teamai's environment does. The container's processes run one
 //  exec at a time (teamai opens, execs, collects and closes each attempt in turn), so a stop restarts the container,
-//  which ends every process in it and keeps the container for the next exec.
+//  which ends every process in it and keeps the container for the next exec, while every path it mounts is still there.
+//  Once one is gone, the stop removes the container instead, since a start would make that path again.
 //
 
 /** The private home of the step's processes inside the container. */
@@ -155,6 +157,12 @@ function dnsStaysInside(version: string): boolean {
 
 /** Where a warm image's prepare runs, with the copies of the `cache` files mounted there. */
 const WARM_DIR = '/teamai-warm';
+
+/** The host path of each bind mount of a container, one per line. */
+const BIND_SOURCES = '{{range .Mounts}}{{if eq .Type "bind"}}{{println .Source}}{{end}}{{end}}';
+
+/** How often a removal another one is making is looked at until the container is gone. */
+const REMOVAL_POLL_MS = 200;
 
 /** Seconds a stop waits before the engine kills the container, well inside COMMAND_MS. */
 const STOP_GRACE = '5';
@@ -283,6 +291,8 @@ export function containerProvider({ engine, image, owner, host, warm, profile, s
   };
 
   /** Makes the warm image of `plan` from `image` with its `cache` files, in a scratch container or build. */
+  const records = savedWarm(warmRecords(state));
+
   const makeWarm = async (plan: WarmPlan): Promise<{ ok: true } | { ok: false; failure: RuntimeFailure }> => {
     const scratch = scratchOf(plan.cache);
 
@@ -349,7 +359,15 @@ export function containerProvider({ engine, image, owner, host, warm, profile, s
 
     if (!planned.ok) return planned;
     const { plan } = planned;
-    const made = await once(plan.key, async () => (await isPresent(plan.tag) ? { ok: true } : makeWarm(plan)));
+
+    const made = await once(plan.key, async () => {
+      if (await isPresent(plan.tag)) return { ok: true };
+      const built = await makeWarm(plan);
+
+      if (built.ok) records.record(plan.tag);
+
+      return built;
+    });
 
     return made.ok ? { ok: true, image: plan.tag } : made;
   };
@@ -366,6 +384,23 @@ export function containerProvider({ engine, image, owner, host, warm, profile, s
     if (tag === undefined) return sandboxFailed(`No warm image was made for attempt ${attempt} in this runtime, so no sandbox was made for it. Start the step again.`);
 
     return await isPresent(tag) ? { ok: true, image: tag } : sandboxFailed(`The warm image ${tag} was removed after it was made for attempt ${attempt}, so no sandbox was made for it. Start the step again, and teamai makes the image again.`);
+  };
+
+  const destroy: Provider['destroy'] = async (id) => {
+    const deadline = Date.now() + COMMAND_MS;
+    const removed = await cli(['rm', '--force', id], { timeoutMs: COMMAND_MS });
+
+    if (removed.kind === 'ran' && (removed.code === 0 || /no such container/i.test(removed.stderr))) return { ok: true };
+
+    // Another removal of it, such as a stop's while this is a close's, goes on in the engine: ok once it is gone.
+    while (removed.kind === 'ran' && /already in progress/i.test(removed.stderr) && Date.now() < deadline) {
+      await sleep(REMOVAL_POLL_MS);
+      const left = await cli(['inspect', '--type', 'container', '--format', BIND_SOURCES, id], { timeoutMs: Math.max(1, deadline - Date.now()) });
+
+      if (left.kind === 'ran' && left.code !== 0 && /no such container/i.test(left.stderr)) return { ok: true };
+    }
+
+    return { ok: false, failure: { code: 'sandbox_failed', message: `${engine} could not remove container ${id}: ${why(removed)}. Remove it with \`${engine} rm --force ${id}\`.` } };
   };
 
   const find: Provider['find'] = async (key) => {
@@ -570,20 +605,21 @@ export function containerProvider({ engine, image, owner, host, warm, profile, s
     },
 
     async stop(id) {
+      const unstopped = (ran: Ran) => ({ ok: false, failure: { code: 'sandbox_failed', message: `${engine} could not stop the processes in container ${id}: ${why(ran)}. They may still run; remove the container with \`${engine} rm --force ${id}\`.` } }) satisfies { ok: false; failure: RuntimeFailure };
+      // A start makes each bind source that is gone again, as an empty directory (Docker Desktop 29), or fails: a
+      // container whose place went is removed instead. A restart is one engine call, so the step's next exec never
+      // finds the container stopped.
+      const listed = await cli(['inspect', '--type', 'container', '--format', BIND_SOURCES, id], { timeoutMs: COMMAND_MS });
+
+      if (listed.kind !== 'ran' || listed.code !== 0) return unstopped(listed);
+
+      if (listed.stdout.split('\n').some((source) => source !== '' && !fs.existsSync(source))) return destroy(id);
       const restarted = await cli(['restart', '--time', STOP_GRACE, id], { timeoutMs: COMMAND_MS });
 
-      if (restarted.kind === 'ran' && restarted.code === 0) return { ok: true };
-
-      return { ok: false, failure: { code: 'sandbox_failed', message: `${engine} could not stop the processes in container ${id}: ${why(restarted)}. They may still run; remove the container with \`${engine} rm --force ${id}\`.` } };
+      return restarted.kind === 'ran' && restarted.code === 0 ? { ok: true } : unstopped(restarted);
     },
 
-    async destroy(id) {
-      const removed = await cli(['rm', '--force', id], { timeoutMs: COMMAND_MS });
-
-      if (removed.kind === 'ran' && (removed.code === 0 || /no such container/i.test(removed.stderr))) return { ok: true };
-
-      return { ok: false, failure: { code: 'sandbox_failed', message: `${engine} could not remove container ${id}: ${why(removed)}. Remove it with \`${engine} rm --force ${id}\`.` } };
-    },
+    destroy,
 
     name: handleOf,
     display: (key, warmed) => {
@@ -597,4 +633,40 @@ export function containerProvider({ engine, image, owner, host, warm, profile, s
       ? `remove it with \`${engine} rm --force ${handleOf(place)} ${filterOf(place)}\` and \`${engine} network rm ${networkOf(place)}\``
       : `remove it with \`${engine} rm --force ${handleOf(place)}\`, and its network filter, if it has one, with \`${engine} rm --force ${filterOf(place)}\` and \`${engine} network rm ${networkOf(place)}\``),
   };
+}
+
+/** Where the container provider of the journal state `state` records the warm images it saved. */
+function warmRecords(state: string): string {
+  return path.join(state, 'warm');
+}
+
+/** Each warm image `engine`'s provider recorded in `state` as one it saved, as `engine image <tag>`: asks the engine nothing. */
+export function warmImagesSaved({ engine, state }: { engine: ContainerEngine; state: string }): string[] {
+  return savedWarm(warmRecords(state)).tags().map((tag) => `${engine} image ${tag}`);
+}
+
+/**
+ * Removes each warm image `engine`'s provider recorded in `state` as one it saved, as `teamai uninstall` has the runtime
+ * do in the member's HOME; one already gone is forgotten. Nothing recorded, it runs no engine command.
+ */
+export async function removeWarmImages({ engine, state, env }: { engine: ContainerEngine; state: string; env: NodeJS.ProcessEnv }): Promise<WarmRemoval> {
+  const records = savedWarm(warmRecords(state));
+  const outcome: WarmRemoval = { removed: [], left: [] };
+  const tags = records.tags();
+
+  if (tags.length === 0) return outcome;
+  const { run: cli, why } = cliOf({ name: PROVIDER_COMMANDS[engine], env, notInstalled: `${engine} is not installed here, or not on PATH` });
+
+  for (const tag of tags) {
+    const ran = await cli(['image', 'rm', tag], { timeoutMs: COMMAND_MS });
+    // podman says `image not known`.
+    const isGone = ran.kind === 'ran' && (ran.code === 0 || /no such image|image not known/i.test(ran.stderr));
+
+    if (isGone) records.forget(tag);
+
+    if (isGone && ran.code === 0) outcome.removed.push(`Removed ${engine} image ${tag}, a warm image teamai's sandbox made.`);
+    else if (!isGone) outcome.left.push(`Could not remove ${engine} image ${tag}, a warm image teamai's sandbox made (${why(ran)}). Remove it with \`${engine} image rm ${tag}\` once ${engine} runs and no container uses it.`);
+  }
+
+  return outcome;
 }

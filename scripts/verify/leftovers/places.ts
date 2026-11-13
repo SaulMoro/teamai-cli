@@ -44,7 +44,7 @@ export const places: LeftoverKind = {
     unseen: 'cleanup could not read every attempt record of the world, so a place may still be open. Fix what failed, then run cleanup again',
   },
   async observe({ world, records }) {
-    const placements = await readPlacements(records.files);
+    const { placements } = records;
 
     const findings = records.files.flatMap((file, index) => {
       const place = placements[index] === undefined ? undefined : heldPlaceOf(placements[index]);

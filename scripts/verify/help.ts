@@ -15,7 +15,8 @@ const BASIC = `Verify a teamai change end to end: the real CLI, packed and insta
   npm run -s verify -- dir <run>|--all        the world's directory, or every live world
 
 A world holds a project repo with one commit, a bare team repo at ${TEAM_URL}, the npm pack tarball of
-this checkout installed on its own, a HOME and TMPDIR of its own, and a fake gh first on PATH: \`gh pr list\`
+this checkout installed on its own (built in the world's pkg/, never in the checkout's dist/, which an E2E run may
+be loading), a HOME and TMPDIR of its own, and a fake gh first on PATH: \`gh pr list\`
 prints fakes/gh-pr-list.json or [], anything else fails as when gh is not signed in, and each call goes to
 fakes/gh.log. Commands get an environment built from nothing: no tool home (CLAUDE_CONFIG_DIR, CODEX_HOME, ...)
 or TEAMAI_* variable of your shell reaches them. Set one on the command line when the claim needs it: \`sh <run> env CODEX_HOME=... teamai pull\`.

@@ -6,10 +6,12 @@
  * A world that ran no step runtime pays for the process check alone; the rows that ask an engine are loaded only once
  * the world's own records show a runtime outside teamai's process ran (`worldTier`).
  */
+import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { z } from 'zod';
+import type { AttemptPlacement } from '../../src/workflow/runtimes/attempt.js';
 import { ledgerRedactor } from './secrets.js';
 import { markDriverSeen, runProbe, runtimeStateDirs, worldHomes, WORLDS_ROOT, type World } from './world.js';
 
@@ -89,6 +91,8 @@ export interface Finding {
   readonly attribution: Attribution;
   /** The command that removes it, for a kind cleanup may remove; a process has none: cleanup never signals one. */
   readonly remove?: readonly string[];
+  /** What `remove` says on stderr, exiting non-zero, when it is gone already: cleanup takes that as removed. */
+  readonly gone?: RegExp;
   /** What the person does to end it, for a kind cleanup refuses over: its refusal prints it beside the finding. */
   readonly next?: string;
 }
@@ -124,13 +128,13 @@ export interface LeftoverKind {
  * of the world: `missing` when the command is not installed, `ran` with its exit code otherwise (null, and a NOT OBSERVED
  * reason, when it did not answer within `timeoutMs`).
  */
-export function probeHere(argv: readonly string[], { timeoutMs = 30_000 }: { timeoutMs?: number } = {}): { kind: 'missing' } | { kind: 'ran'; code: number | null; stdout: string; why: string } {
+export function probeHere(argv: readonly string[], { timeoutMs = 30_000 }: { timeoutMs?: number } = {}): { kind: 'missing' } | { kind: 'ran'; code: number | null; stdout: string; stderr: string; why: string } {
   const [command = 'true', ...args] = argv;
   const ran = runProbe({ command, args, cwd: os.tmpdir(), env: process.env, timeoutMs });
 
   if (ran.errno === 'ENOENT') return { kind: 'missing' };
 
-  return { kind: 'ran', code: ran.code, stdout: ran.stdout, why: ran.why };
+  return { kind: 'ran', code: ran.code, stdout: ran.stdout, stderr: ran.stderr, why: ran.why };
 }
 
 /** The data homes under `home` whose runs teamai keeps: user scope's ~/.teamai and each workspace's ~/.teamai/projects/<slug>, read with the product's own layout. */
@@ -151,6 +155,8 @@ export interface RecordScan {
   readonly files: readonly string[];
   readonly runs: readonly string[];
   readonly runtimeJournals: number;
+  /** Each file's placement, in the order of `files`, read with them: `teamai uninstall` removes the files. */
+  readonly placements: readonly AttemptPlacement[];
 }
 
 async function scanRecords(world: World): Promise<RecordScan> {
@@ -177,7 +183,9 @@ async function scanRecords(world: World): Promise<RecordScan> {
 
   const runtimeJournals = runtimeStateDirs(world).flatMap((state) => (fs.existsSync(state) ? fs.readdirSync(state) : [])).length;
 
-  return { files, runs, runtimeJournals };
+  const placements = files.length === 0 ? [] : await (await import('./leftovers/places.js')).readPlacements(files);
+
+  return { files, runs, runtimeJournals, placements };
 }
 
 const SpanSchema = z.object({
@@ -294,11 +302,10 @@ async function rowsFor(tier: Tier): Promise<LeftoverKind[]> {
 /** The context every row reads, built once per ledger or cleanup. */
 async function contextOf(world: World): Promise<{ context: LeftoverContext; tier: Tier }> {
   const records = await scanRecords(world);
-  const placements = records.files.length === 0 ? [] : await (await import('./leftovers/places.js')).readPlacements(records.files);
 
   const tier = worldTier({
-    inProcessRecords: placements.filter((placement) => placement.kind === 'in_process').length,
-    externalRecords: placements.filter((placement) => placement.kind !== 'in_process').length,
+    inProcessRecords: records.placements.filter((placement) => placement.kind === 'in_process').length,
+    externalRecords: records.placements.filter((placement) => placement.kind !== 'in_process').length,
     runtimeJournals: records.runtimeJournals,
     containerMembers: (world.members ?? []).filter((member) => member.machine === 'container').length,
     driverSeen: world.driverSeen === true,
@@ -321,24 +328,34 @@ export async function tiesOnThisMachine(world: World | undefined): Promise<{ sel
   };
 }
 
-/** Ledger section (f): each row the world's tier asks, its LEAK lines and notes. A world that ran no step runtime gets one line. */
-export async function leftoversSection(world: World): Promise<{ leaks: string[]; notes: string[] }> {
+/**
+ * Ledger section (f), in two steps: what ties the world is read when it is made, before `teamai uninstall` removes the
+ * records that say which runtimes the world's runs used; `observe`, called after uninstall, gives each row the world's tier
+ * asks, its LEAK lines and notes, so what uninstall removes is no LEAK. A world that ran no step runtime gets one line.
+ */
+export async function leftoversSection(world: World): Promise<{ observe(): Promise<{ leaks: string[]; notes: string[] }> }> {
   const { context, tier } = await contextOf(world);
-  const { mask, unmasked } = ledgerRedactor({ passedNames: world.passed ?? [], harnessEnv: process.env });
-  const leaks: string[] = [];
-  const notes: string[] = unmasked.length === 0 ? [] : [`not masked: ${unmasked.join(', ')}, which this shell does not set; run the ledger with each exported to mask its value in these lines`];
+  const rows = await rowsFor(tier);
 
-  for (const row of await rowsFor(tier)) {
-    const lines = linesOf(row.title, await row.observe(context), mask);
-    leaks.push(...lines.leaks);
+  return {
+    async observe() {
+      const { mask, unmasked } = ledgerRedactor({ passedNames: world.passed ?? [], harnessEnv: process.env });
+      const leaks: string[] = [];
+      const notes: string[] = unmasked.length === 0 ? [] : [`not masked: ${unmasked.join(', ')}, which this shell does not set; run the ledger with each exported to mask its value in these lines`];
 
-    // A world that ran no step runtime keeps its section to one line, unless the process check found something.
-    if (tier !== 'basic' || lines.leaks.length > 0 || lines.notes.some((note) => note.startsWith('NOT OBSERVED'))) notes.push(...lines.notes);
-  }
+      for (const row of rows) {
+        const lines = linesOf(row.title, await row.observe(context), mask);
+        leaks.push(...lines.leaks);
 
-  if (tier === 'basic') notes.push('no step runtime used');
+        // A world that ran no step runtime keeps its section to one line, unless the process check found something.
+        if (tier !== 'basic' || lines.leaks.length > 0 || lines.notes.some((note) => note.startsWith('NOT OBSERVED'))) notes.push(...lines.notes);
+      }
 
-  return { leaks, notes };
+      if (tier === 'basic') notes.push('no step runtime used');
+
+      return { leaks, notes };
+    },
+  };
 }
 
 /**
@@ -347,7 +364,17 @@ export async function leftoversSection(world: World): Promise<{ leaks: string[];
  */
 export type CleanupPlan =
   | { kind: 'refuse'; refusals: Array<{ why: string; items: string[] }> }
-  | { kind: 'remove'; removals: Array<{ what: string; command: readonly string[] }>; unobserved: string[] };
+  | { kind: 'remove'; removals: Array<{ what: string; command: readonly string[]; gone?: RegExp }>; unobserved: string[] };
+
+/** Runs one removal of a cleanup plan from the harness's environment: whether it removed it, or found it gone, or why it failed. */
+export function removeLeftover({ command, gone }: { command: readonly string[]; gone?: RegExp }): { ok: true; wasThere: boolean } | { ok: false; why: string } {
+  const [executable = 'true', ...args] = command;
+  const ran = spawnSync(executable, args, { encoding: 'utf8', stdio: ['ignore', 'ignore', 'pipe'], timeout: 60_000 });
+
+  if (ran.status === 0) return { ok: true, wasThere: true };
+
+  return gone !== undefined && gone.test(ran.stderr) ? { ok: true, wasThere: false } : { ok: false, why: ran.error?.message ?? ran.stderr.trim() };
+}
 
 /** The plan for what each row observed, judged by the row's `onCleanup`: only this world's own findings count. */
 export function cleanupPlan(rows: ReadonlyArray<{ onCleanup: CleanupRule; observed: readonly Observed[] }>): CleanupPlan {
@@ -372,7 +399,7 @@ export function cleanupPlan(rows: ReadonlyArray<{ onCleanup: CleanupRule; observ
             refuse(onCleanup.found, finding.next === undefined ? finding.what : `${finding.what}: ${finding.next}`);
             break;
           case 'remove':
-            if (finding.remove !== undefined) removals.push({ what: finding.what, command: finding.remove });
+            if (finding.remove !== undefined) removals.push({ what: finding.what, command: finding.remove, ...(finding.gone && { gone: finding.gone }) });
             break;
           case 'keep':
             break;

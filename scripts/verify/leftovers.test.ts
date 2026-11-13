@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { signalChild } from '@teamai/shared/process-group';
-import { attributeLeftover, cleanupPlan, linesOf, planCleanup, probeHere, worldTier, type WorldTies } from './leftovers.js';
+import { attributeLeftover, cleanupPlan, linesOf, planCleanup, probeHere, removeLeftover, worldTier, type WorldTies } from './leftovers.js';
 import type { World } from './world.js';
 
 const roots: string[] = [];
@@ -92,6 +92,229 @@ describe('what each row reads from what an engine or the process table printed',
   });
 });
 
+/** An image the fake engine keeps: its full id (hex), its tags (`<repo>:<none>` for one only a digest names), and its labels. */
+interface FakeImage {
+  readonly id: string;
+  readonly tags: string[];
+  readonly labels: Record<string, string>;
+  /** Removed by someone else right after an `image ls` listed it. */
+  readonly goesAfterListing?: boolean;
+}
+
+/** A network the fake engine keeps: its id, name and labels. */
+interface FakeNetwork {
+  readonly id: string;
+  readonly name: string;
+  readonly labels: Record<string, string>;
+}
+
+/**
+ * A container engine that answers `info`, `ps`, `network ls`, `image ls`, `image inspect` and `image rm`. As docker it
+ * answers as Docker 29.4.3 does: its `image ls` template has no `.Label`/`.Labels` (it fails on the first row, as the real
+ * one printed `can't evaluate field Label in type *formatter.imageContext`), its `network ls` has `.Label`, its `image
+ * inspect` gives `.Id` as `sha256:<hex>`, and it refuses to remove by id an image that more than one tag names. As podman
+ * it answers as podman's docs say: `network ls` has `.Labels`, a map, and no `.Label`; `image inspect` gives `.Id` as hex.
+ */
+function fakeEngine({ dir, engine = 'docker', images, networks = [] }: { dir: string; engine?: 'docker' | 'podman'; images: readonly FakeImage[]; networks?: readonly FakeNetwork[] }): { bin: string; images: () => FakeImage[] } {
+  const bin = path.join(dir, 'bin');
+  const state = path.join(dir, 'images.json');
+  fs.mkdirSync(bin, { recursive: true });
+  fs.writeFileSync(state, JSON.stringify(images));
+  fs.writeFileSync(path.join(bin, engine), `#!${process.execPath}
+const fs = require('node:fs');
+const engine = ${JSON.stringify(engine)};
+const networks = ${JSON.stringify(networks)};
+const state = ${JSON.stringify(state)};
+const images = JSON.parse(fs.readFileSync(state, 'utf8'));
+const args = process.argv.slice(2);
+const option = (name) => { const at = args.indexOf(name); return at === -1 ? undefined : args[at + 1]; };
+const render = (template, fields, context) => template.replace(/{{\\s*(.*?)\\s*}}/g, (whole, key) => {
+  if (key in fields) return fields[key];
+  process.stderr.write('template parsing error: template: :1:' + (template.indexOf(whole) + 2) + ': executing "" at <' + key.split(' ')[0] + '>: can\\'t evaluate field ' + key.split(' ')[0].slice(1) + ' in type *formatter.' + context + '\\n');
+  process.exit(1);
+});
+const find = (ref) => images.find((image) => image.tags.includes(ref) || image.tags.includes(ref + ':latest') || ('sha256:' + image.id).startsWith(ref) || (ref.length >= 12 && image.id.startsWith(ref)));
+const [verb, sub] = args;
+if (verb === 'info') { process.stdout.write(engine === 'docker' ? '29.4.3\\n' : '5.4.0\\n'); process.exit(0); }
+if (verb === 'ps') process.exit(0);
+if (verb === 'network' && sub === 'ls') {
+  const label = (option('--filter') ?? '').replace(/^label=/, '');
+  for (const network of networks.filter((one) => label in one.labels)) {
+    const owner = network.labels['teamai.owner'] ?? '';
+    process.stdout.write(render(option('--format'), engine === 'docker' ? { '.ID': network.id, '.Name': network.name, '.Label "teamai.owner"': owner } : { '.ID': network.id, '.Name': network.name, 'index .Labels "teamai.owner"': owner }, 'networkContext') + '\\n');
+  }
+  process.exit(0);
+}
+if (verb !== 'image') process.exit(1);
+if (sub === 'ls') {
+  const label = (option('--filter') ?? '').replace(/^label=/, '');
+  for (const image of images.filter((one) => label === '' || label in one.labels)) {
+    for (const name of image.tags.length === 0 ? ['<none>:<none>'] : image.tags) {
+      const [repository, tag] = name.split(':');
+      process.stdout.write(render(option('--format'), { '.ID': image.id.slice(0, 12), '.Repository': repository, '.Tag': tag }, 'imageContext') + '\\n');
+    }
+  }
+  fs.writeFileSync(state, JSON.stringify(images.filter((one) => one.goesAfterListing !== true)));
+  process.exit(0);
+}
+if (sub === 'inspect') {
+  let code = 0;
+  for (const ref of args.slice(4)) {
+    const image = find(ref);
+    if (image === undefined) { process.stderr.write('Error response from daemon: No such image: ' + ref + '\\n'); code = 1; continue; }
+    process.stdout.write(render(option('--format'), { '.Id': (engine === 'docker' ? 'sha256:' : '') + image.id, 'index .Config.Labels "teamai.owner"': image.labels['teamai.owner'] ?? '' }, 'imageInspect') + '\\n');
+  }
+  process.exit(code);
+}
+if (sub === 'rm') {
+  const ref = args[2];
+  if (ref.includes('<none>')) { process.stderr.write('Error response from daemon: invalid reference format\\n'); process.exit(1); }
+  const image = find(ref);
+  if (image === undefined) { process.stderr.write('Error response from daemon: No such image: ' + ref + '\\n'); process.exit(1); }
+  if (image.tags.includes(ref)) image.tags.splice(image.tags.indexOf(ref), 1);
+  else if (image.tags.length > 1) { process.stderr.write('Error response from daemon: conflict: unable to delete ' + ref + ' (must be forced) - image is referenced in multiple repositories\\n'); process.exit(1); }
+  else image.tags.length = 0;
+  fs.writeFileSync(state, JSON.stringify(image.tags.length === 0 ? images.filter((one) => one !== image) : images));
+  process.exit(0);
+}
+process.exit(1);
+`, { mode: 0o755 });
+
+  return { bin, images: () => JSON.parse(fs.readFileSync(state, 'utf8')) as FakeImage[] };
+}
+
+describe("the container engines' row of section (f)", () => {
+  async function observeContainers(images: readonly FakeImage[], { engine: name = 'docker', networks = [] }: { engine?: 'docker' | 'podman'; networks?: readonly FakeNetwork[] } = {}) {
+    const dir = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-verify-engine-')));
+    roots.push(dir);
+    const engine = fakeEngine({ dir, engine: name, images, networks });
+    // The fake docker alone: a podman of the host, as CI runners have in /usr/bin, would answer for its own state.
+    vi.stubEnv('PATH', engine.bin);
+    const world: World = {
+      runId: SELF.runId, dir, project: `${dir}/project`, team: `${dir}/team.git`, home: `${dir}/home`, tmp: `${dir}/tmp`, logs: `${dir}/logs`, bin: engine.bin,
+      build: { commit: 'c', dirty: false, version: '0.0.0', tarball: 't.tgz', sha256: 's', node: 'v20' },
+      createdAt: '2026-11-12T18:00:00.000Z',
+      baseline: { teamRefs: {}, checkoutStatus: [] },
+    };
+    const { containers } = await import('./leftovers/containers.js');
+
+    return { engine, observed: await containers.observe({ world, self: SELF, others: [OTHER], records: { files: [], runs: [], runtimeJournals: 0, placements: [] } }) };
+  }
+
+  it("lists on Docker 29 the images teamai labelled, each tied to the world whose journal owns it, and asks the engine nothing it cannot answer", async () => {
+    const { observed } = await observeContainers([
+      { id: 'a'.repeat(64), tags: ['teamai-warm:kmine'], labels: { 'teamai.owner': SELF.journals[0] ?? '' } },
+      { id: 'b'.repeat(64), tags: ['teamai-warm:ktheirs'], labels: { 'teamai.owner': OTHER.journals[0] ?? '' } },
+      { id: 'c'.repeat(64), tags: ['node:22-alpine'], labels: {} },
+    ]);
+
+    expect(observed.filter((seen) => seen.kind === 'not_observed')).toEqual([]);
+    expect(observed.flatMap((seen) => (seen.kind === 'observed' ? seen.findings : [])).map((finding) => [finding.what, finding.attribution.kind])).toEqual([
+      ['docker image teamai-warm:kmine', 'own'],
+      ['docker image teamai-warm:ktheirs', 'other_world'],
+    ]);
+  });
+
+  it.each(['docker', 'podman'] as const)("lists on %s the networks and images teamai labelled with the template that engine answers", async (engine) => {
+    const owner = { 'teamai.owner': SELF.journals[0] ?? '' };
+    const { observed } = await observeContainers([{ id: 'a'.repeat(64), tags: ['teamai-warm:kmine'], labels: owner }], { engine, networks: [{ id: 'n0123abcd', name: 'teamai-r1-a1-net', labels: owner }] });
+
+    expect(observed.filter((seen) => seen.kind === 'not_observed')).toEqual([]);
+    expect(observed.flatMap((seen) => (seen.kind === 'observed' ? seen.findings : [])).map((finding) => [finding.what, finding.attribution.kind])).toEqual([
+      [`${engine} network teamai-r1-a1-net`, 'own'],
+      [`${engine} image teamai-warm:kmine`, 'own'],
+    ]);
+  });
+
+  it("lists the world's images when another one goes between the listing and the look at its owner", async () => {
+    const { observed } = await observeContainers([
+      { id: 'a'.repeat(64), tags: ['teamai-warm:kmine'], labels: { 'teamai.owner': SELF.journals[0] ?? '' } },
+      { id: 'b'.repeat(64), tags: ['teamai-warm:ktheirs'], labels: { 'teamai.owner': OTHER.journals[0] ?? '' }, goesAfterListing: true },
+    ]);
+
+    expect(observed.filter((seen) => seen.kind === 'not_observed')).toEqual([]);
+    expect(observed.flatMap((seen) => (seen.kind === 'observed' ? seen.findings : [])).map((finding) => [finding.what, finding.attribution.kind])).toEqual([
+      ['docker image teamai-warm:kmine', 'own'],
+    ]);
+  });
+
+  it('removes on cleanup an image of the world that its repository names with no tag, by its id', async () => {
+    const { engine, observed } = await observeContainers([{ id: 'a'.repeat(64), tags: ['teamai-warm:<none>'], labels: { 'teamai.owner': SELF.journals[0] ?? '' } }]);
+    const findings = observed.flatMap((seen) => (seen.kind === 'observed' ? seen.findings : []));
+
+    expect(findings.map((finding) => [finding.what, finding.attribution.kind])).toEqual([['docker image teamai-warm:<none>', 'own']]);
+    expect(findings.map((finding) => removeLeftover({ command: finding.remove ?? [] }))).toEqual([{ ok: true, wasThere: true }]);
+    expect(engine.images()).toEqual([]);
+  });
+
+  it('removes on cleanup an image of the world that two tags name, one name at a time, where removal by id is refused', async () => {
+    const { engine, observed } = await observeContainers([
+      { id: 'a'.repeat(64), tags: ['teamai-warm:kmine', 'teamai-warm:kalias'], labels: { 'teamai.owner': SELF.journals[0] ?? '' } },
+      { id: 'c'.repeat(64), tags: ['node:22-alpine'], labels: {} },
+    ]);
+    const findings = observed.flatMap((seen) => (seen.kind === 'observed' ? seen.findings : []));
+
+    expect(findings.map((finding) => [finding.what, finding.attribution.kind])).toEqual([
+      ['docker image teamai-warm:kmine', 'own'],
+      ['docker image teamai-warm:kalias', 'own'],
+    ]);
+    expect(findings.map((finding) => removeLeftover({ command: finding.remove ?? [] }))).toEqual([{ ok: true, wasThere: true }, { ok: true, wasThere: true }]);
+    expect(engine.images().map((image) => image.tags)).toEqual([['node:22-alpine']]);
+  });
+
+  it('counts in the ledger only what is left once teamai uninstall ran, not the warm image uninstall removes', async () => {
+    const dir = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-verify-engine-')));
+    roots.push(dir);
+    const [{ journal }, { sandboxJournalRoot }] = await Promise.all([import('../../packages/runtime-sandbox/src/journal.js'), import('../../packages/runtime-sandbox/src/journal-root.js')]);
+    const owner = journal(sandboxJournalRoot(`${dir}/home`)).owner;
+    const engine = fakeEngine({ dir, images: [{ id: 'a'.repeat(64), tags: ['teamai-warm:kmine'], labels: { 'teamai.owner': owner } }] });
+    vi.stubEnv('PATH', `${engine.bin}:/usr/bin:/bin:/usr/sbin`);
+    const world: World = {
+      runId: SELF.runId, dir, project: `${dir}/project`, team: `${dir}/team.git`, home: `${dir}/home`, tmp: `${dir}/tmp`, logs: `${dir}/logs`, bin: engine.bin,
+      build: { commit: 'c', dirty: false, version: '0.0.0', tarball: 't.tgz', sha256: 's', node: 'v20' },
+      createdAt: '2026-11-12T18:00:00.000Z',
+      baseline: { teamRefs: {}, checkoutStatus: [] },
+      driverSeen: true,
+    };
+    const { leftoversSection } = await import('./leftovers.js');
+
+    const section = await leftoversSection(world);
+    // What uninstall does to the warm image it recorded making.
+    expect(removeLeftover({ command: ['docker', 'image', 'rm', 'teamai-warm:kmine'] })).toEqual({ ok: true, wasThere: true });
+
+    expect((await section.observe()).leaks).toEqual([]);
+  });
+
+  it("still says, once teamai uninstall removed the attempt records, that no observer read a closed sandbox's environment", async () => {
+    const dir = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-verify-engine-')));
+    roots.push(dir);
+    const engine = fakeEngine({ dir, images: [] });
+    vi.stubEnv('PATH', `${engine.bin}:/usr/bin:/bin:/usr/sbin`);
+    // The record of a docker sandbox's attempt that closed before the observer looked, where teamai keeps it in user scope.
+    const record = path.join(dir, 'home', '.teamai', 'workflows', 'runs', 'r0123abcd', 'attempts', 'a0123abcd', 'runtime.json');
+    const origin = { layer: 'personal', location: 'drivers/box.yaml', revision: 'r' };
+    fs.mkdirSync(path.dirname(record), { recursive: true });
+    fs.writeFileSync(record, JSON.stringify({
+      runtime: 'sandbox', driver: 'box', phase: 'closed', open: { op: 'op-0123abcd', handle: 'h' },
+      sources: [{ runtime: 'teamai-sandbox', ...origin, sandbox: { profile: 'box', ...origin, location: 'sandboxes/box.yaml', provider: 'docker', enforces: {} } }],
+    }));
+    const world: World = {
+      runId: SELF.runId, dir, project: `${dir}/project`, team: `${dir}/team.git`, home: `${dir}/home`, tmp: `${dir}/tmp`, logs: `${dir}/logs`, bin: engine.bin,
+      build: { commit: 'c', dirty: false, version: '0.0.0', tarball: 't.tgz', sha256: 's', node: 'v20' },
+      createdAt: '2026-11-12T18:00:00.000Z',
+      baseline: { teamRefs: {}, checkoutStatus: [] },
+      driverSeen: true,
+    };
+    const { leftoversSection } = await import('./leftovers.js');
+
+    const section = await leftoversSection(world);
+    // What uninstall does to the run records.
+    fs.rmSync(path.join(dir, 'home', '.teamai'), { recursive: true });
+
+    expect((await section.observe()).notes).toContain("NOT OBSERVED: run r0123abcd attempt a0123abcd's environment on docker, which no observer line read: its sandbox closed before the observer looked, or could not be read");
+  });
+});
+
 describe("the sbx row of section (f)", () => {
   it("lists a world's sbx sandboxes in its own HOME, where sbx keeps them, and removes them there", async () => {
     const dir = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-verify-sbx-')));
@@ -110,7 +333,7 @@ describe("the sbx row of section (f)", () => {
     };
     const { sbxLeftovers } = await import('./leftovers/sbx.js');
 
-    const [seen] = await sbxLeftovers.observe({ world, self: SELF, others: [], records: { files: [], runs: [], runtimeJournals: 0 } });
+    const [seen] = await sbxLeftovers.observe({ world, self: SELF, others: [], records: { files: [], runs: [], runtimeJournals: 0, placements: [] } });
 
     expect(seen?.kind === 'observed' ? seen.findings.map((finding) => [finding.what, finding.attribution.kind]) : seen).toEqual([[`sbx sandbox ${name}`, 'own']]);
     const [command = 'true', ...args] = (seen?.kind === 'observed' ? seen.findings[0]?.remove : undefined) ?? [];
@@ -119,18 +342,21 @@ describe("the sbx row of section (f)", () => {
     expect(fs.readFileSync(path.join(dir, 'removed'), 'utf8')).toBe(name);
   });
 
-  it("lists the warm templates teamai saved in a world's HOME, where sbx keeps its image store, and removes them there", async () => {
+  it("lists the warm templates teamai saved in a world's HOME, where sbx keeps its image store, and the kit templates sbx assembled there, and removes them there, one already gone too", async () => {
     const dir = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-verify-sbx-')));
     roots.push(dir);
     const bin = path.join(dir, 'bin');
     fs.mkdirSync(bin);
-    // sbx's own template and one the member saved stay; only teamai's warm template, `teamai-warm:<key>`, is teamai's.
+    // sbx's own template and one the member saved stay; teamai's warm template, `teamai-warm:<key>`, is teamai's, and the
+    // kit template sbx 0.53.0 assembled in the world's HOME for the sandbox it was saved from holds the same image.
     const templates = JSON.stringify([
-      { id: 'a'.repeat(64), repository: 'docker.io/docker/sandbox-templates', tag: 'claude-code-docker' },
-      { id: 'b'.repeat(64), repository: 'teamai-warm', tag: 'k0123abcd' },
-      { id: 'c'.repeat(64), repository: 'mine', tag: 'teamai-warm' },
+      { id: `sha256:${'a'.repeat(64)}`, repository: 'docker.io/docker/sandbox-templates', tag: 'claude-code-docker' },
+      { id: `sha256:${'b'.repeat(64)}`, repository: 'docker.io/library/teamai-warm', tag: 'k0123abcd' },
+      { id: `sha256:${'b'.repeat(64)}`, repository: 'docker.io/library/sandbox-kit-assembled', tag: '680a35427e6eced7' },
+      { id: `sha256:${'c'.repeat(64)}`, repository: 'mine', tag: 'teamai-warm' },
     ]);
-    fs.writeFileSync(path.join(bin, 'sbx'), `#!/bin/sh\n[ "$HOME" = '${dir}/home' ] || { printf '[]'; exit 0; }\ncase "$1 $2" in 'ls --json') printf '[]' ;; 'template ls') printf '%s' '${templates}' ;; 'template rm') printf '%s' "$3 $4" > '${dir}/removed' ;; *) exit 1 ;; esac\n`, { mode: 0o755 });
+    // A second removal of one answers as sbx 0.53.0 does for a template that is gone.
+    fs.writeFileSync(path.join(bin, 'sbx'), `#!/bin/sh\n[ "$HOME" = '${dir}/home' ] || { printf '[]'; exit 0; }\ncase "$1 $2" in 'ls --json') printf '[]' ;; 'template ls') printf '%s' '${templates}' ;; 'template rm') if grep -qxF "$4" '${dir}/removed' 2>/dev/null; then echo "error: cannot remove template \\"$4\\": delete template: image not found: request failed: 404 Not Found: no image \\"$4\\"" >&2; exit 1; fi; printf '%s\\n' "$4" >> '${dir}/removed' ;; *) exit 1 ;; esac\n`, { mode: 0o755 });
     const world: World = {
       runId: SELF.runId, dir, project: `${dir}/project`, team: `${dir}/team.git`, home: `${dir}/home`, tmp: `${dir}/tmp`, logs: `${dir}/logs`, bin: `${dir}/bin`,
       build: { commit: 'c', dirty: false, version: '0.0.0', tarball: 't.tgz', sha256: 's', node: 'v20' },
@@ -140,15 +366,19 @@ describe("the sbx row of section (f)", () => {
     };
     const { sbxLeftovers } = await import('./leftovers/sbx.js');
 
-    const observed = await sbxLeftovers.observe({ world, self: { ...SELF, paths: [dir] }, others: [], records: { files: [], runs: [], runtimeJournals: 0 } });
+    const observed = await sbxLeftovers.observe({ world, self: { ...SELF, paths: [dir] }, others: [], records: { files: [], runs: [], runtimeJournals: 0, placements: [] } });
     const findings = observed.flatMap((seen) => (seen.kind === 'observed' ? seen.findings : []));
 
     expect(observed.filter((seen) => seen.kind === 'not_observed')).toEqual([]);
-    expect(findings.map((finding) => [finding.what, finding.attribution.kind])).toEqual([['sbx template teamai-warm:k0123abcd', 'own']]);
-    const [command = 'true', ...args] = findings[0]?.remove ?? [];
+    expect(findings.map((finding) => [finding.what, finding.attribution.kind])).toEqual([
+      ['sbx template docker.io/library/teamai-warm:k0123abcd', 'own'],
+      ["sbx template docker.io/library/sandbox-kit-assembled:680a35427e6eced7 (sbx's own, which teamai uninstall leaves)", 'own'],
+    ]);
+
     // As cleanup runs it: from the harness's own environment, never asking before it removes.
-    expect(spawnSync(command, args).status).toBe(0);
-    expect(fs.readFileSync(path.join(dir, 'removed'), 'utf8')).toBe('--force teamai-warm:k0123abcd');
+    for (const finding of findings) expect(removeLeftover({ command: finding.remove ?? [], gone: finding.gone })).toEqual({ ok: true, wasThere: true });
+    expect(fs.readFileSync(path.join(dir, 'removed'), 'utf8')).toBe('docker.io/library/teamai-warm:k0123abcd\ndocker.io/library/sandbox-kit-assembled:680a35427e6eced7\n');
+    expect(removeLeftover({ command: findings[0]?.remove ?? [], gone: findings[0]?.gone })).toEqual({ ok: true, wasThere: false });
   });
 
   it("never takes the warm templates of the harness's HOME, where a world made before its env was kept is asked, for the world's", async () => {
@@ -157,8 +387,9 @@ describe("the sbx row of section (f)", () => {
     roots.push(dir, harnessHome);
     const bin = path.join(dir, 'bin');
     fs.mkdirSync(bin);
-    // The maintainer's own sbx, in the harness's HOME, keeps a warm template teamai saved for them outside any world.
-    fs.writeFileSync(path.join(bin, 'sbx'), `#!/bin/sh\n[ "$HOME" = '${harnessHome}' ] || { printf '[]'; exit 0; }\ncase "$1 $2" in 'ls --json') printf '[]' ;; 'template ls') printf '[{"repository":"teamai-warm","tag":"kmine"}]' ;; *) exit 1 ;; esac\n`, { mode: 0o755 });
+    // The maintainer's own sbx, in the harness's HOME, keeps a warm template teamai saved for them outside any world, and
+    // a kit template sbx assembled for a sandbox of theirs, which is no teamai's.
+    fs.writeFileSync(path.join(bin, 'sbx'), `#!/bin/sh\n[ "$HOME" = '${harnessHome}' ] || { printf '[]'; exit 0; }\ncase "$1 $2" in 'ls --json') printf '[]' ;; 'template ls') printf '[{"repository":"teamai-warm","tag":"kmine"},{"repository":"docker.io/library/sandbox-kit-assembled","tag":"2ba1c4db59226a62"}]' ;; *) exit 1 ;; esac\n`, { mode: 0o755 });
     vi.stubEnv('HOME', harnessHome);
     vi.stubEnv('PATH', `${bin}:/usr/bin:/bin`);
     const world: World = {
@@ -169,10 +400,13 @@ describe("the sbx row of section (f)", () => {
     };
     const { sbxLeftovers } = await import('./leftovers/sbx.js');
 
-    const observed = await sbxLeftovers.observe({ world, self: { ...SELF, paths: [dir] }, others: [], records: { files: [], runs: [], runtimeJournals: 0 } });
+    const observed = await sbxLeftovers.observe({ world, self: { ...SELF, paths: [dir] }, others: [], records: { files: [], runs: [], runtimeJournals: 0, placements: [] } });
     const findings = observed.flatMap((seen) => (seen.kind === 'observed' ? seen.findings : []));
 
-    expect(findings.map((finding) => [finding.what, finding.attribution.kind])).toEqual([['sbx template teamai-warm:kmine', 'ambiguous']]);
+    expect(findings.map((finding) => [finding.what, finding.attribution.kind])).toEqual([
+      ['sbx template teamai-warm:kmine', 'ambiguous'],
+      ["sbx template docker.io/library/sandbox-kit-assembled:2ba1c4db59226a62 (sbx's own, which teamai uninstall leaves)", 'unrelated'],
+    ]);
   });
 });
 
@@ -275,7 +509,7 @@ describe("a probe of an engine's listing", () => {
     fs.writeFileSync(engine, '#!/bin/sh\ntrap "" TERM\nexec sleep 30\n', { mode: 0o755 });
     const started = Date.now();
 
-    expect(probeHere([engine, 'ps'], { timeoutMs: 300 })).toEqual({ kind: 'ran', code: null, stdout: '', why: `NOT OBSERVED: ${engine} ps did not answer within 0.3 s` });
+    expect(probeHere([engine, 'ps'], { timeoutMs: 300 })).toEqual({ kind: 'ran', code: null, stdout: '', stderr: '', why: `NOT OBSERVED: ${engine} ps did not answer within 0.3 s` });
     expect(Date.now() - started).toBeLessThan(5_000);
   });
 });

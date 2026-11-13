@@ -1,8 +1,9 @@
+import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { describe, expect, it, onTestFinished, vi } from 'vitest';
-import { runtimeCommand, runtimeLauncher } from '../workflow/steps/runtime-steps.js';
+import { placeView, runtimeCommand, runtimeLauncher } from '../workflow/steps/runtime-steps.js';
 import { stepLauncher } from '@teamai/runtime-tools';
 import { toolsLaunchDeps } from '../workflow/runtimes/sources.js';
 import { attemptRun, attemptRuntimePath, type AttemptRun } from '../workflow/runtimes/attempt.js';
@@ -37,6 +38,28 @@ function commandRun(): { run: AttemptRun; execs: () => number } {
 
   return { run, execs: () => execs };
 }
+
+describe('the place a step runtime is given', () => {
+  // git keeps a linked worktree's record at <common git dir>/worktrees/<name>. Given again on its own, a runtime mounts
+  // it at its own path: Docker Desktop then refuses its removal while the container runs, and makes it again when the
+  // container starts after it went.
+  it('gives a linked worktree\'s git paths as its common git directory and its .git pointer, not git\'s record inside that directory', async () => {
+    const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-place-view-')));
+    onTestFinished(() => fs.rmSync(root, { recursive: true, force: true }));
+    const main = path.join(root, 'main');
+    const worktree = path.join(root, 'linked');
+    const git = (args: string[]): string => execFileSync('git', ['-C', main, ...args], { encoding: 'utf8', env: { ...process.env, GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: '/dev/null' } });
+    fs.mkdirSync(main);
+    git(['init', '-q', '-b', 'main']);
+    git(['-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-q', '--allow-empty', '-m', 'one']);
+    git(['worktree', 'add', '-q', '-b', 'side', worktree]);
+    const config: LocalConfig = { repo: { localPath: main, remote: 'local', kind: 'self' }, username: 'tester', scope: 'project', additionalRoles: [], projectRoot: main, dataHome: path.join(root, 'data') };
+
+    const view = await placeView(config, RunIdSchema.parse('r0123abcd'), { attempt: AttemptIdSchema.parse('a00000001') }, worktree);
+
+    expect(view.readonly.toSorted()).toEqual([path.join(main, '.git'), path.join(worktree, '.git')].toSorted());
+  });
+});
 
 describe('a command step on a step runtime', () => {
   const view = { worktree: '/work', readonly: [], result: '/work/out', runDir: '/work/scratch', toolHome: {} };

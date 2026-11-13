@@ -6,7 +6,7 @@ import { mayBeRunning } from '@teamai/shared/process-group';
 import type { JournalId } from '../journal.js';
 import type { ProfileOption, WarmOptions } from '../options.js';
 import { PROVIDER_COMMANDS } from '../provider-commands.js';
-import { oneBuildPerKey, planWarm, scratchOf, WARM_REPOSITORY, warmFailed, type WarmPlan } from '../warm.js';
+import { oneBuildPerKey, planWarm, savedWarm, scratchOf, WARM_REPOSITORY, warmFailed, type WarmPlan, type WarmRemoval } from '../warm.js';
 import { COMMAND_MS, journalPrefixOf, journalSandboxName, placeOfJournalSandbox, type ExecEnd, type ExecSpec, type PlaceKey, type Provider } from '../provider.js';
 import { offerSignedIn, type MissingCommand } from '../sign-in.js';
 import { cliOf, commandsOf, definedOnly, heldProbe, signalled, LAUNCHABLE, mountsOf, WORKSPACES, type Ran } from './cli.js';
@@ -57,8 +57,8 @@ const CLI_SETTING = /^(?:HOME|XDG_[A-Z_]+|SBX_[A-Z0-9_]*|DOCKER_[A-Z0-9_]*)$/;
 
 const ListedSchema = z.array(z.looseObject({ name: z.string() }));
 
-/** `sbx template ls --json`: each saved template's repository and tag (sbx 0.51.0). */
-const TemplatesSchema = z.array(z.looseObject({ repository: z.string(), tag: z.string() }));
+/** `sbx template ls --json`: each saved template's repository, tag and image id (sbx 0.51.0; the id as of 0.53.0). */
+const TemplatesSchema = z.array(z.looseObject({ repository: z.string(), tag: z.string(), id: z.string().optional() }));
 
 /** `sbx policy check network --json <target>`: whether the member's policy lets a sandbox reach it (sbx 0.51.0). */
 const CheckedSchema = z.object({ allowed: z.boolean() });
@@ -82,14 +82,35 @@ const STARTED = /^[ \t]*✓ sandbox \S+ — started\r?\n/;
  * template rm` takes (`<repository>:<tag>`, by tag as sbx 0.53.0's help shows it) and the key; undefined when it printed
  * something else.
  */
-export function sbxWarmTemplatesListed(stdout: string): Array<{ ref: string; key: string }> | undefined {
+export function sbxWarmTemplatesListed(stdout: string): Array<{ ref: string; key: string; id?: string }> | undefined {
+  return templatesNamed(stdout, WARM_REPOSITORY)?.map(({ ref, tag, id }) => ({ ref, key: tag, ...(id !== undefined && { id }) }));
+}
+
+/**
+ * The templates sbx 0.53.0 assembled from a kit (`sandbox-kit-assembled:<hash>`) that `sbx template ls --json` printed,
+ * sbx's own, made by any sandbox of a kit: a warm template saved from one shares its image id; undefined as above.
+ */
+export function sbxKitTemplatesListed(stdout: string): Array<{ ref: string; id?: string }> | undefined {
+  return templatesNamed(stdout, KIT_REPOSITORY)?.map(({ ref, id }) => ({ ref, ...(id !== undefined && { id }) }));
+}
+
+/** The repository sbx 0.53.0 keeps the templates it assembled from kits under. */
+const KIT_REPOSITORY = 'sandbox-kit-assembled';
+
+/** The templates of repository `name`, bare or under a registry, that `sbx template ls --json` printed. */
+function templatesNamed(stdout: string, name: string): Array<{ ref: string; tag: string; id?: string }> | undefined {
   try {
     const listed = TemplatesSchema.safeParse(JSON.parse(stdout));
 
-    return listed.success ? listed.data.filter(({ repository }) => repository === WARM_REPOSITORY || repository.endsWith(`/${WARM_REPOSITORY}`)).map(({ repository, tag }) => ({ ref: `${repository}:${tag}`, key: tag })) : undefined;
+    return listed.success ? listed.data.filter(({ repository }) => repository === name || repository.endsWith(`/${name}`)).map(({ repository, tag, id }) => ({ ref: `${repository}:${tag}`, tag, ...(id !== undefined && { id }) })) : undefined;
   } catch {
     return undefined;
   }
+}
+
+/** What sbx said: its `error: …` line and the `try: …` hint it adds, on one line. */
+function messageOf(ran: Ran): string {
+  return ran.kind !== 'ran' ? ran.message : ran.stderr.trim().split('\n').map((line) => line.trim()).filter((line) => line !== '' && !line.startsWith('✓')).slice(-2).join('; ');
 }
 
 /** The sandbox names `sbx ls --json` printed, or undefined when it printed something else. */
@@ -108,8 +129,9 @@ export function sbxNamesListed(stdout: string): string[] | undefined {
  * or kit every sandbox starts from; unset, each attempt's tool picks its template. `warm`: the recipe of the warm
  * template each attempt starts from, saved from that template.
  */
-export function sbxProvider({ agent, owner, env, warm, profile }: { agent: string | undefined; owner: JournalId; env: NodeJS.ProcessEnv; warm?: Extract<WarmOptions, { prepare: string }>; profile?: ProfileOption }): Provider {
+export function sbxProvider({ agent, owner, env, warm, profile, state }: { agent: string | undefined; owner: JournalId; env: NodeJS.ProcessEnv; warm?: Extract<WarmOptions, { prepare: string }>; profile?: ProfileOption; state: string }): Provider {
   const { run: cli, executable } = cliOf({ name: PROVIDER_COMMANDS.sbx, env, notInstalled: NOT_INSTALLED });
+  const records = savedWarm(warmRecords(state));
 
   /** `sbx exec`'s arguments and environment: the spec's names by name only, never sbx's own settings, which stay. */
   const execOf = (id: string, spec: ExecSpec, { isInteractive }: { isInteractive: boolean }) => {
@@ -127,9 +149,6 @@ export function sbxProvider({ agent, owner, env, warm, profile }: { agent: strin
 
   /** An attempt's sandbox name, which is also its id: `teamai-<journal>-<run>-<attempt>`. */
   const nameOf = (key: PlaceKey): string => journalSandboxName(owner, key);
-
-  /** What sbx said: its `error: …` line and the `try: …` hint it adds, on one line. */
-  const messageOf = (ran: Ran): string => (ran.kind !== 'ran' ? ran.message : ran.stderr.trim().split('\n').map((line) => line.trim()).filter((line) => line !== '' && !line.startsWith('✓')).slice(-2).join('; '));
 
   const unavailable = (message: string) => ({ ok: false, failure: { code: 'sandbox_unavailable', message } }) satisfies { ok: false; failure: RuntimeFailure };
 
@@ -262,7 +281,14 @@ export function sbxProvider({ agent, owner, env, warm, profile }: { agent: strin
     // sbx itself refuses a template removed since, which the creation's failure then names.
     if (creating) return { ok: true, args: ['-t', plan.tag] };
 
-    const made = await once(plan.key, async () => ((await isSaved(plan)) ? { ok: true } : makeWarm(plan, template, warm.prepare)));
+    const made = await once(plan.key, async () => {
+      if (await isSaved(plan)) return { ok: true };
+      const built = await makeWarm(plan, template, warm.prepare);
+
+      if (built.ok) records.record(plan.tag);
+
+      return built;
+    });
 
     return made.ok ? { ok: true, args: ['-t', plan.tag] } : made;
   };
@@ -462,4 +488,60 @@ export function sbxProvider({ agent, owner, env, warm, profile }: { agent: strin
 
     removal: (place) => `remove it with \`sbx rm --force ${nameOf(place)}\``,
   };
+}
+
+/** Where the sbx provider of the journal state `state` records the warm templates it saved. */
+function warmRecords(state: string): string {
+  return path.join(state, 'warm');
+}
+
+/** Each warm template the sbx provider recorded in `state` as one it saved, as `sbx template <tag>`: asks sbx nothing. */
+export function warmTemplatesSaved({ state }: { state: string }): string[] {
+  return savedWarm(warmRecords(state)).tags().map((tag) => `sbx template ${tag}`);
+}
+
+/**
+ * Removes each warm template the sbx provider recorded in `state` as one it saved, as `teamai uninstall` has the runtime
+ * do in the member's HOME, whose templates sbx keeps; one already gone is forgotten. A kit template of the same image
+ * id is named, never removed: it is sbx's, and other sandboxes start from it. Nothing recorded, it runs no sbx command.
+ */
+export async function removeWarmTemplates({ state, env }: { state: string; env: NodeJS.ProcessEnv }): Promise<WarmRemoval> {
+  const records = savedWarm(warmRecords(state));
+  const outcome: WarmRemoval = { removed: [], left: [] };
+  const tags = records.tags();
+
+  if (tags.length === 0) return outcome;
+  const { run: cli } = cliOf({ name: PROVIDER_COMMANDS.sbx, env, notInstalled: 'sbx is not installed here, or not on PATH' });
+  const listed = await cli(['template', 'ls', '--json'], { timeoutMs: COMMAND_MS, isListing: true });
+  const warmListed = listed.kind === 'ran' && listed.code === 0 ? sbxWarmTemplatesListed(listed.stdout) : undefined;
+  const kits = listed.kind === 'ran' && listed.code === 0 ? sbxKitTemplatesListed(listed.stdout) ?? [] : [];
+
+  if (warmListed === undefined) {
+    const said = listed.kind === 'ran' && listed.code === 0 ? 'it printed no list teamai reads' : messageOf(listed);
+
+    return { removed: [], left: tags.map((tag) => `Could not look for sbx template ${tag}, a warm template teamai's sandbox saved (${said}). Once \`sbx template ls\` answers, remove it with \`sbx template rm --force ${tag}\`.`) };
+  }
+
+  for (const tag of tags) {
+    const template = warmListed.find(({ key }) => `${WARM_REPOSITORY}:${key}` === tag);
+    const ran = template === undefined ? undefined : await cli(['template', 'rm', '--force', template.ref], { timeoutMs: COMMAND_MS });
+
+    if (template === undefined || ran === undefined) {
+      records.forget(tag);
+    } else if (ran.kind !== 'ran' || (ran.code !== 0 && !/image not found/i.test(ran.stderr))) {
+      outcome.left.push(`Could not remove sbx template ${template.ref}, a warm template teamai's sandbox saved (${messageOf(ran)}). Remove it with \`sbx template rm --force ${template.ref}\`.`);
+    } else {
+      // sbx 0.53.0 answers a template already gone `image not found: … 404 Not Found`.
+      records.forget(tag);
+
+      if (ran.code !== 0) continue;
+      outcome.removed.push(`Removed sbx template ${template.ref}, a warm template teamai's sandbox saved.`);
+
+      for (const kit of kits.filter(({ id }) => id !== undefined && id === template.id)) {
+        outcome.left.push(`sbx keeps the image of ${template.ref} as its template ${kit.ref} too, so removing it freed no disk. Remove that one with \`sbx template rm --force ${kit.ref}\` if no sandbox of yours starts from it.`);
+      }
+    }
+  }
+
+  return outcome;
 }

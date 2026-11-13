@@ -60,6 +60,10 @@ export interface FakeEngine {
   stopDelay(ms: number): void;
   /** Makes a stop wait `ms` once it stopped the processes, before it answers, as an engine that restarts the container. */
   stopHold(ms: number): void;
+  /** Makes docker's `rm` take `ms` once it stopped the processes, before the container is gone, as Docker Desktop's does. */
+  holdRemove(ms: number): void;
+  /** Makes each save of an image (`commit`, `build`, sbx `template save`) take `ms` while it writes the image. */
+  holdSave(ms: number): void;
   /** Makes every later run of `command` (`run`, `rm`, …) wait `ms` before it does anything; 0 lets it run at once again. */
   delay(command: string, ms: number): void;
   /** Makes `version` print `version`, as the engine upgraded to it. */
@@ -154,6 +158,12 @@ export function fakeEngine(dir: string): FakeEngine {
     stopHold(ms) {
       fs.writeFileSync(path.join(state, 'stop-hold'), String(ms));
     },
+    holdRemove(ms) {
+      fs.writeFileSync(path.join(state, 'rm-hold'), String(ms));
+    },
+    holdSave(ms) {
+      fs.writeFileSync(path.join(state, 'save-hold'), String(ms));
+    },
     upgrade(version) {
       fs.writeFileSync(path.join(state, 'version'), version);
     },
@@ -178,7 +188,7 @@ export function fakeEngine(dir: string): FakeEngine {
     ownedListings: () => (fs.existsSync(path.join(state, 'owned-listed')) ? fs.readFileSync(path.join(state, 'owned-listed'), 'utf8').length : 0),
     repair() {
       for (const name of fs.readdirSync(state)) {
-        if (['down', 'stop-lag', 'stop-delay', 'stop-hold', 'format-fails', 'create-hold', 'exec-hold', 'owned-hold', 'rm-fails', 'filter-fails'].includes(name) || name.startsWith('delay-')) fs.rmSync(path.join(state, name), { force: true });
+        if (['down', 'stop-lag', 'stop-delay', 'stop-hold', 'rm-hold', 'save-hold', 'format-fails', 'create-hold', 'exec-hold', 'owned-hold', 'rm-fails', 'filter-fails'].includes(name) || name.startsWith('delay-')) fs.rmSync(path.join(state, name), { force: true });
       }
     },
     failRemove(shouldFail) {

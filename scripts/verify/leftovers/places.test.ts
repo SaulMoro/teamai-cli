@@ -7,7 +7,7 @@ import { sandboxJournalRoot } from '../../../packages/runtime-sandbox/src/journa
 import { cleanupPlan, type LeftoverContext } from '../leftovers.js';
 import { startObserver } from '../observer.js';
 import type { World } from '../world.js';
-import { places } from './places.js';
+import { places, readPlacements } from './places.js';
 
 const roots: string[] = [];
 
@@ -43,8 +43,8 @@ function sandboxWorld(): World {
   };
 }
 
-function contextOf(files: string[], world: World = sandboxWorld()): LeftoverContext {
-  return { world, self: { runId: RUN, paths: [], journals: [], runs: [] }, others: [], records: { files, runs: ['r0123abcd'], runtimeJournals: 0 } };
+async function contextOf(files: string[], world: World = sandboxWorld()): Promise<LeftoverContext> {
+  return { world, self: { runId: RUN, paths: [], journals: [], runs: [] }, others: [], records: { files, runs: ['r0123abcd'], runtimeJournals: 0, placements: await readPlacements(files) } };
 }
 
 /** docker as the observer asks it: up, listing `containers` of `world`'s journal, and every exec printing one plain environment. */
@@ -75,12 +75,12 @@ function openT3Record(root: string, home: string, phase: string): string {
   return file;
 }
 
-function worldWithBob(): { root: string; context: (files: string[]) => LeftoverContext } {
+function worldWithBob(): { root: string; context: (files: string[]) => Promise<LeftoverContext> } {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'places-'));
   roots.push(root);
   const world = { runId: RUN, home: path.join(root, 'home'), members: [{ name: 'bob', home: path.join(root, 'members', 'bob', 'home') }] } as World;
 
-  return { root, context: (files) => ({ world, self: { runId: RUN, paths: [], journals: [], runs: [] }, others: [], records: { files, runs: ['r1'], runtimeJournals: 0 } }) };
+  return { root, context: async (files) => ({ world, self: { runId: RUN, paths: [], journals: [], runs: [] }, others: [], records: { files, runs: ['r1'], runtimeJournals: 0, placements: await readPlacements(files) } }) };
 }
 
 describe('cleanup while an attempt place is still open', () => {
@@ -89,7 +89,7 @@ describe('cleanup while an attempt place is still open', () => {
     const mine = openT3Record(root, path.join(root, 'home'), 'running');
     const bobs = openT3Record(root, path.join(root, 'members', 'bob', 'home'), 'running');
 
-    expect(cleanupPlan([{ onCleanup: places.onCleanup, observed: await places.observe(context([mine, bobs])) }])).toEqual({
+    expect(cleanupPlan([{ onCleanup: places.onCleanup, observed: await places.observe(await context([mine, bobs])) }])).toEqual({
       kind: 'refuse',
       refusals: [{
         why: 'an attempt place of the world is still open, or its record cannot be read, and that record, which cleanup would remove, is what closes it. Close each one as its line says, then run cleanup again',
@@ -104,7 +104,7 @@ describe('cleanup while an attempt place is still open', () => {
   it('refuses while a record cannot be read, since its place may be open, as uninstall does', async () => {
     const { root, context } = worldWithBob();
     const file = openT3Record(root, path.join(root, 'home'), 'garbled');
-    const plan = cleanupPlan([{ onCleanup: places.onCleanup, observed: await places.observe(context([file])) }]);
+    const plan = cleanupPlan([{ onCleanup: places.onCleanup, observed: await places.observe(await context([file])) }]);
 
     expect(plan.kind).toBe('refuse');
     expect(JSON.stringify(plan)).toContain(`close what it can with \`npm run -s verify -- teamai ${RUN} workflow cancel r1\`, or fix that record`);
@@ -113,7 +113,7 @@ describe('cleanup while an attempt place is still open', () => {
   it('goes on once every place is closed', async () => {
     const { root, context } = worldWithBob();
 
-    expect(cleanupPlan([{ onCleanup: places.onCleanup, observed: await places.observe(context([openT3Record(root, path.join(root, 'home'), 'closed')])) }]).kind).toBe('remove');
+    expect(cleanupPlan([{ onCleanup: places.onCleanup, observed: await places.observe(await context([openT3Record(root, path.join(root, 'home'), 'closed')])) }]).kind).toBe('remove');
   });
 });
 
@@ -123,7 +123,7 @@ describe("a sandboxed attempt's environment in section (f)", () => {
     const observer = startObserver(world, { pass: new Map(), label: 'teamai workflow start', listed: dockerListing(world, []) });
 
     expect(await observer.stop()).toEqual([]);
-    expect(await places.observe(contextOf([closedRecord('docker')], world))).toEqual([
+    expect(await places.observe(await contextOf([closedRecord('docker')], world))).toEqual([
       { kind: 'observed', findings: [], notes: ["NOT OBSERVED: run r0123abcd attempt a0123abcd's environment on docker, which no observer line read: its sandbox closed before the observer looked, or could not be read"] },
     ]);
   });
@@ -133,20 +133,20 @@ describe("a sandboxed attempt's environment in section (f)", () => {
     const observer = startObserver(world, { pass: new Map(), label: 'teamai workflow start', listed: dockerListing(world, ['teamai-r0123abcd-a0123abcd']) });
 
     expect(await observer.stop()).toEqual(['[verify] observed docker:teamai-r0123abcd-a0123abcd: env ok']);
-    expect(await places.observe(contextOf([closedRecord('docker')], world))).toEqual([{ kind: 'observed', findings: [], notes: [] }]);
+    expect(await places.observe(await contextOf([closedRecord('docker')], world))).toEqual([{ kind: 'observed', findings: [], notes: [] }]);
   });
 
   it("is NOT OBSERVED, and refuses no cleanup, when the observer's records cannot be read", async () => {
     const world = sandboxWorld();
     fs.mkdirSync(path.join(world.dir, 'observed.jsonl'));
-    const observed = await places.observe(contextOf([closedRecord('docker')], world));
+    const observed = await places.observe(await contextOf([closedRecord('docker')], world));
 
     expect(observed).toEqual([{ kind: 'observed', findings: [], notes: [expect.stringMatching(/^NOT OBSERVED: run r0123abcd attempt a0123abcd's environment on docker, since observed\.jsonl could not be read \(EISDIR/)] }]);
     expect(cleanupPlan([{ onCleanup: places.onCleanup, observed }]).kind).toBe('remove');
   });
 
   it('is NOT OBSERVED on a provider no observer reads', async () => {
-    expect(await places.observe(contextOf([closedRecord('seatbelt')]))).toEqual([
+    expect(await places.observe(await contextOf([closedRecord('seatbelt')]))).toEqual([
       { kind: 'observed', findings: [], notes: ["NOT OBSERVED: run r0123abcd attempt a0123abcd's environment on seatbelt, which no observer reads: the env check proves nothing for it"] },
     ]);
   });

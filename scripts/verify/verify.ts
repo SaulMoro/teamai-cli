@@ -1,9 +1,8 @@
-import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { helpFor } from './help.js';
 import { runLedger } from './ledger.js';
-import { planCleanup } from './leftovers.js';
+import { planCleanup, removeLeftover } from './leftovers.js';
 import { passedKeys, splitPassOption } from './secrets.js';
 import { addMember, ensureOrigin, memberLayout, parseMachine, removeMachines } from './members.js';
 import { memberOf, parseTarget, runOn } from './target.js';
@@ -50,16 +49,15 @@ async function cleanup(world: World): Promise<boolean> {
   for (const note of plan.unobserved) console.error(`NOT OBSERVED: ${note}; cleanup removed nothing of it.`);
 
   for (const removal of plan.removals) {
-    const [command = 'true', ...args] = removal.command;
-    const ran = spawnSync(command, args, { encoding: 'utf8', stdio: ['ignore', 'ignore', 'pipe'], timeout: 60_000 });
+    const removed = removeLeftover(removal);
 
-    if (ran.status !== 0) {
-      console.error(`Not cleaning ${world.runId}: removing ${removal.what} failed (${ran.error?.message ?? ran.stderr.trim()}). Its files are kept, so a ledger can still find it.`);
+    if (!removed.ok) {
+      console.error(`Not cleaning ${world.runId}: removing ${removal.what} failed (${removed.why}). Its files are kept, so a ledger can still find it.`);
 
       return false;
     }
 
-    console.log(`Removed ${removal.what}`);
+    console.log(removed.wasThere ? `Removed ${removal.what}` : `Already gone: ${removal.what}`);
   }
 
   const machines = removeMachines(world);

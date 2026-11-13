@@ -6,7 +6,7 @@
 
 ## 卸载
 
-`teamai uninstall` 删除 TeamAI 装上去的 Agent 资源。你自己建的文件会留下；只有把 TeamAI 写进去的部分去掉后整份文件空了，它才一起删掉。user scope 卸载会删除 `~/.teamai`，但保留其中你自己的 `drivers/`、`runtimes/`、`sandboxes/` 和 `tools/`，预览和输出都会列出保留了什么。它还会保留本机仍登记的项目的数据。请先逐个卸载项目，再在任何项目之外运行 `teamai uninstall`，移除剩余的共享数据。
+`teamai uninstall` 删除 TeamAI 装上去的 Agent 资源。你自己建的文件会留下；只有把 TeamAI 写进去的部分去掉后整份文件空了，它才一起删掉。user scope 卸载会删除 `~/.teamai`，但保留其中你自己的 `drivers/`、`runtimes/`、`sandboxes/` 和 `tools/`，预览和输出都会列出保留了什么。最后一次卸载还会删除 teamai 的沙箱记录过的预热镜像和 sbx 模板，留下的会列出来。它还会保留本机仍登记的项目的数据。请先逐个卸载项目，再在任何项目之外运行 `teamai uninstall`，移除剩余的共享数据。
 
 在项目中，卸载还会删除失败或取消的工作流运行保留下来的 worktree，前提是其中没有分支之外的内容：没有未提交的改动，也没有被 git 忽略的文件。这些分支会保留，运行的提交都在上面。没有运行 worktree 剩下后，它会删除 TeamAI 为它们做的设置：`.git/info/exclude` 中它的那一段、它打开的 `extensions.worktreeConfig`，以及空的 `.teamai/`。其他 worktree 会保留，例如有未提交改动、有被忽略的 `.env`、或 HEAD 不在任何分支上的。预览和输出会列出它，并给出删除它的 `git worktree remove --force` 命令；上面这些设置也随它保留。
 

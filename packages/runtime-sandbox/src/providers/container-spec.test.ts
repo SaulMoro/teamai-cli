@@ -164,7 +164,8 @@ for (const target of TARGETS) {
       return connection;
     }
 
-    interface Opened { connection: Connection; handle: string; worktree: string; git: string }
+    /** `git` is the common git directory, and `admin` git's record of the worktree inside it, which `git` mounts. */
+    interface Opened { connection: Connection; handle: string; worktree: string; git: string; admin: string }
 
     async function opened(extra: NodeJS.ProcessEnv = {}, credentials: Record<string, string> = {}): Promise<Opened> {
       const connection = start(extra);
@@ -173,15 +174,16 @@ for (const target of TARGETS) {
       const root = fs.mkdtempSync(path.join(dir, 'place-'));
       const worktree = path.join(root, 'worktree');
       const git = path.join(root, 'repo.git');
+      const admin = path.join(git, 'worktrees', 'worktree');
       fs.mkdirSync(worktree, { recursive: true });
-      fs.mkdirSync(git, { recursive: true });
+      fs.mkdirSync(admin, { recursive: true });
       fs.writeFileSync(path.join(git, 'HEAD'), 'ref: refs/heads/main\n');
       const op = newOp();
       connection.send({ type: 'open', op, run: RUN, attempt: ATTEMPT, credentials, view: { worktree, readonly: [git], result: path.join(root, 'out'), runDir: path.join(root, 'run'), toolHome: {} } });
       const accepted = await connection.next((message) => message.op === op && (message.event === 'accepted' || message.event === 'failed'));
       expect(await connection.next((message) => message.op === op && (message.event === 'ready' || message.event === 'failed'), 300_000)).toMatchObject({ event: 'ready' });
 
-      return { connection, handle: String(accepted.handle), worktree, git };
+      return { connection, handle: String(accepted.handle), worktree, git, admin };
     }
 
     async function exec({ connection, handle }: Opened, request: { script: string; cwd: string; env?: Record<string, string>; credentials?: Record<string, string> }, op = newOp()): Promise<{ end: Message; stdout: string; stderr: string }> {
@@ -260,6 +262,32 @@ for (const target of TARGETS) {
       expect(await exec(place, { script: 'echo again', cwd: place.worktree })).toMatchObject({ end: { event: 'exited', code: 0 }, stdout: 'again\n' });
       expect(fs.existsSync(path.join(place.worktree, 'late.txt'))).toBe(false);
       await close(place);
+    }, 600_000);
+
+    // Docker Desktop makes a bind source that is gone again, as an empty directory, whenever a container starts. sbx's
+    // stop is its own provider's.
+    it.runIf(target.engine !== 'sbx')('makes nothing of a place removed under a running step again when it stops the step', async () => {
+      // Docker Desktop's removal of a container goes on after its processes ended.
+      const slowRemoval = target.label.startsWith('fake') ? fakes : undefined;
+      slowRemoval?.holdRemove(1000);
+
+      try {
+        const place = await opened();
+        const op = newOp();
+        const ended = exec(place, { script: `echo started; ${waitFor(path.join(place.git, 'never'))}`, cwd: place.worktree }, op);
+        await place.connection.next((message) => message.op === op && message.event === 'output', 120_000);
+        // As `git worktree remove` takes a worktree: its directory, then git's record of it.
+        fs.rmSync(place.worktree, { recursive: true, force: true });
+        fs.rmSync(place.admin, { recursive: true, force: true });
+        place.connection.send({ type: 'cancel', op });
+
+        expect((await ended).end).toMatchObject({ event: 'cancelled' });
+        expect({ worktree: fs.existsSync(place.worktree), admin: fs.existsSync(place.admin) }).toEqual({ worktree: false, admin: false });
+        await close(place);
+        expect({ worktree: fs.existsSync(place.worktree), admin: fs.existsSync(place.admin) }).toEqual({ worktree: false, admin: false });
+      } finally {
+        slowRemoval?.repair();
+      }
     }, 600_000);
 
     // A daemon of the member's on this machine, such as Paseo's, may run what any local client asks, outside the
