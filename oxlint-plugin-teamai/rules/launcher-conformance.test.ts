@@ -10,6 +10,14 @@ rule.invalid('rejects a launcher cast to the port', `export const start = ((laun
 rule.invalid('rejects a launcher cast to the port through unknown', `export const start = ((launch) => run(launch)) as unknown as ToolLauncher;`);
 rule.invalid('rejects a launcher asserted with angle brackets', `export const start = <ToolLauncher>((launch) => run(launch));`);
 rule.invalid('rejects a cast to the port in an adapter too', `export function hostProcess(): ToolLauncher { return ((launch) => run(launch)) as ToolLauncher; }`, undefined, { filename: 'packages/runtime-tools/src/step.ts' });
+rule.invalid('rejects the port under an alias, which a cast to the alias forges', `type Port = ToolLauncher;\nexport const start = ((launch) => run(launch)) as Port;`);
+rule.invalid('rejects the port imported under another name', `import type { ToolLauncher as Port } from '@teamai/tool-launch/run-step-launch';\nexport const start = ((launch) => run(launch)) as Port;`);
+rule.invalid('rejects the port exported under another name', `export type { ToolLauncher as Port } from '@teamai/tool-launch/run-step-launch';`);
+rule.invalid('rejects an interface that extends the port', `interface Port extends ToolLauncher {}\nexport const start = ((launch) => run(launch)) as Port;`);
+rule.invalid('rejects a cast to the port through a namespace', `import type * as port from '@teamai/tool-launch/run-step-launch';\nexport const start = ((launch) => run(launch)) as port.ToolLauncher;`);
+rule.invalid('rejects a cast to never in a file that names the port', `export const start: ToolLauncher = ((launch) => run(launch)) as never;`);
+rule.invalid('rejects a cast to any in a file that imports the launch package', `import { runStepLaunch } from '@teamai/tool-launch/run-step-launch';\nawait runStepLaunch({ tool, input, start: ((launch) => run(launch)) as any });`);
+rule.valid('allows a cast to never in a file that uses no launcher', `export const empty = [] as never;`);
 rule.valid('allows the one launcher an adapter the suite runs on makes', `export function hostProcess(): ToolLauncher { return toolLauncher((launch) => run(launch)); }`, { filename: 'packages/runtime-tools/src/step.ts' });
 rule.valid('allows an adapter its launcher through a namespace import', `import * as launch from '@teamai/tool-launch/run-step-launch';\nexport function hostProcess() { return launch.toolLauncher((started) => run(started)); }`, { filename: 'packages/runtime-tools/src/step.ts' });
 rule.valid('allows a launcher a factory elsewhere returns, which only the mint could make', `export function boxProcess(): ToolLauncher { return hostProcess(); }`);
