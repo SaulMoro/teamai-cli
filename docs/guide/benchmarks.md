@@ -743,11 +743,11 @@ Each trial prompt runs with [`permissions: unattended`](workflow-advanced.md#una
 | `benchmark run` exits | When |
 | --- | --- |
 | 0 | The run succeeded, its report was written, and no gate below failed. |
-| 1 | The suite or the start was refused, the run timed out or was cancelled, or a `finally` step failed or was cancelled: the report, the `checks` gate when a check could not run, the `results` gate when no trial produced a result, or the `regression` gate when `--fail-on-regression` found a drop. |
+| 1 | The suite or the start was refused, the run timed out or was cancelled, or a `finally` step failed or was cancelled: the report, the `checks` gate when a check could not run, the `results` gate when no trial produced a result and a trial ended in an error, or the `regression` gate when `--fail-on-regression` found a drop. |
 
 A record still waiting for publication never changes the exit code.
 
-When every trial ended in an error or did not run, such as when no trial could open its sandbox, the run measured nothing. The results name each trial that ended in an error, with why. Then the `results` step fails, and `benchmark run` exits 1:
+When no trial produced a result and a trial ended in an error, such as when no trial could open its sandbox, the run measured nothing. The results name each trial that ended in an error, with why. A trial that a cancel or the run's timeout stopped did not end in an error of its own and is not named: the cancelled or timed out run already exits 1. Then the `results` step fails, and `benchmark run` exits 1:
 
 ```text
 No trial produced a result, so the run measured nothing. These trials ended with an error:
@@ -862,8 +862,8 @@ finally:
     if: steps.report.outputs.unchecked != ''
     command: node -e "process.stderr.write(process.env.UNCHECKED + '\n'); process.exit(1)"
     env: { UNCHECKED: "{{ steps.report.outputs.unchecked }}" }
-  # Fails when no trial produced a result, naming each trial that ended in an error as report's text does: the run
-  # measured nothing. Drop it to report such a run without failing.
+  # Fails when no trial produced a result and a trial ended in an error, naming each such trial as report's text does:
+  # the run measured nothing. Drop it to report such a run without failing.
   - id: results
     needs: [report]
     if: steps.report.outputs.unmeasured != ''
