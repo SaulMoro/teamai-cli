@@ -27,7 +27,7 @@ import { publishPendingRecords, publishRunRecords, queueRunRecord, runRecordStat
 import { resolveRetention, retentionEnds } from './retention.js';
 import {
   parseTemplate, renderLeaseText, renderStrings, renderText, stepExpressions, stepPaths, templatedTexts,
-  type StepExpression, type TemplateContext, type TemplateError,
+  type StepExpression, type TemplateError,
 } from './template.js';
 import { stageSettledEvidence } from './place/place.js';
 import { parseStepPath } from './step-path.js';
@@ -40,7 +40,7 @@ import {
 import { allowanceInUse, budgetSpent, countLateTokens, expire, itemsSpent, leaseDeadline, ownDeadline, spendAllowances, spentAllowances, startLimits, turnLimits } from './limits.js';
 import { addItems, afterStanding, expandItems, isItem, itemLimit, itemLimitMismatch, itemsAfter, itemsOf, itemsSettled, startedItems } from './fan-out.js';
 import { decideRound, decideStepLoop, exhaustedAtStart, firstPass, isUnder, loopSettled } from './loop.js';
-import { childScope, contextOf, finallyScope, insertChildren, localId, statesIn, stepDefinitions, topScope, type Scope } from './scope.js';
+import { childScope, contextOf, finallyScope, insertChildren, localId, locateStep, statesIn, stepDefinitions, topScope, type Scope } from './scope.js';
 import { confinedOf, contractClone, deliverableOf, deliveryTarget, isIsolated, isPublishContract, planWorkspace, plannedBranch, sessionOf, sharedWorkspace, stepRoleOf, workLeftUndelivered, type LeaseSession, type SessionRef, type WorkspaceContract, type WorkspacePlan, type WorkspaceRequest } from './workspace.js';
 import {
   deliverPr, deliveryFailure, findDelivered, reportedPrMismatch, type DeliveryJob,
@@ -244,71 +244,6 @@ function isMessage<Result extends object>(result: Result | string): result is st
 /** The workflow or inline step name used in engine and control diagnostics. */
 export function workflowLabel(scope: Scope): string {
   return 'name' in scope.definition ? `workflow "${scope.definition.name}"` : `step "${scope.prefix.slice(0, -1)}" inline workflow`;
-}
-
-/** The scope and definition of the step instance at `path`, or undefined when the run file does not describe it. */
-export function locateStep(run: RunState, path: string): { scope: Scope; step: WorkflowStep } | undefined {
-  const segments = parseStepPath(path);
-  let scope = run.definition.finally?.some((step) => step.id === segments[0]?.id) ? finallyScope(run) : topScope(run);
-
-  for (const [index, segment] of segments.entries()) {
-    const step = scope.definition.steps.find((item) => item.id === segment.id);
-
-    if (!step) return undefined;
-
-    if (index === segments.length - 1) return { scope, step };
-    const instance = `${scope.prefix}${segment.id}${segment.index === undefined ? '' : `[${segment.index}]`}`;
-    const states = statesIn(run, scope);
-    // statesIn holds no for_each item.
-    const state = (segment.index === undefined ? states : run.steps).find((item) => item.id === instance);
-    const child = state && childScope(run, scope, states, state, step);
-
-    if (!child) return undefined;
-    scope = child;
-  }
-
-  return undefined;
-}
-
-/**
- * The tokens the budgets around the step instance at `path` have left, each as the engine checks it while the steps
- * under it settle: the budget of each workflow the step is in, and of each `for_each` step whose item it is in, which
- * covers all its items. Undefined when none of them has a budget. A runtime that runs the step whole stops its steps
- * past it, as the engine stops them between steps it runs here. The step's own budget is not counted.
- */
-export function budgetLeft(run: RunState, path: string): number | undefined {
-  const segments = parseStepPath(path);
-  let scope = run.definition.finally?.some((step) => step.id === segments[0]?.id) ? finallyScope(run) : topScope(run);
-  const left: number[] = [];
-
-  for (const segment of segments) {
-    if (scope.budget !== undefined) left.push(scope.budget - budgetSpent(run, scope));
-    const step = scope.definition.steps.find((item) => item.id === segment.id);
-
-    if (!step) return undefined;
-    const fanned = run.steps.find((item) => item.id === `${scope.prefix}${segment.id}`);
-
-    if (segment.index !== undefined && step.budget !== undefined && step.onLimit !== 'end_turn' && fanned) left.push(step.budget.tokens - itemsSpent(run, fanned));
-    const instance = `${scope.prefix}${segment.id}${segment.index === undefined ? '' : `[${segment.index}]`}`;
-    const states = statesIn(run, scope);
-    // statesIn holds no for_each item.
-    const state = (segment.index === undefined ? states : run.steps).find((item) => item.id === instance);
-    const child = state && segment !== segments.at(-1) ? childScope(run, scope, states, state, step) : undefined;
-
-    if (segment !== segments.at(-1) && !child) return undefined;
-
-    if (child) scope = child;
-  }
-
-  return left.length === 0 ? undefined : Math.max(0, Math.min(...left));
-}
-
-/** The step instance at `path` and what its lease's templates read, or undefined when the run holds no such instance. */
-export function leaseContext(run: RunState, path: string): { step: WorkflowStep; context: TemplateContext; requires: InEffect } | undefined {
-  const located = locateStep(run, path);
-  const state = run.steps.find((item) => item.id === path);
-
-  return located && state ? { step: located.step, context: contextOf(located.scope, statesIn(run, located.scope), state), requires: mergeRequirements(located.scope.requires, located.step.requires) } : undefined;
 }
 
 /** The requirements in effect at each `from` step that runs the workflow producer `path` outputs. */

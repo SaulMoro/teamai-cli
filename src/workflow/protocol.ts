@@ -16,7 +16,7 @@ import { loadCachedWorkflow, loadWorkflowTree } from './cache.js';
 import { describeWorkflow, type WorkflowDescription } from './describe.js';
 import { ConfinedLeaseSchema, LeaseIdSchema, LeaseWireSchema } from './lease-wire.js';
 import { carriedRun, claimOffered, leaseRefusal, offerToPerson, reconcileTakenCopies, resumeRun, settledSteps, takeoverFor, takeoverRefusal, type Takeover } from './handoff.js';
-import { leaseNext, locateStep, parseNextPayload, parseReport, parseResponsePayload, reportable, reportAttempt, startRun, withIgnored, type NextOptions, type PersonHandoff, type ReportInput, type SoleDriver } from './engine.js';
+import { leaseNext, parseNextPayload, parseReport, parseResponsePayload, reportable, reportAttempt, startRun, withIgnored, type NextOptions, type PersonHandoff, type ReportInput, type SoleDriver } from './engine.js';
 import {
   abandonPlace, adoptedPlaceOf, finishPlace, keepPlace, releaseUnlaunchedPlace, placeHeldBy, placeLeaseOf, placeOf, placeRecorded, preparedClone, preparedCopyTeam, preparePlace, refuseDirtyAdoptedCommand, releasePlace, runPlaceSetup, stagePassEvidence, sweepClones, type PlaceLease,
   type PlacePrepared,
@@ -24,7 +24,7 @@ import {
 } from './place/place.js';
 import { cancelRun, respondProvenance, respondToHitl, retryStep, type CallerProvenance, type Via } from './run-controls.js';
 import { isUnder } from './loop.js';
-import { stepDefinitions } from './scope.js';
+import { locateStep, stepDefinitions } from './scope.js';
 import { StepModelSchema } from './step-model.js';
 import { AttemptIdSchema, readRun, RunIdSchema, withRunLock, type AttemptId, type RunId, type RunLock } from './store.js';
 import type { DriverCan } from './requirements.js';

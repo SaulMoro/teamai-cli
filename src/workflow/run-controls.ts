@@ -7,7 +7,7 @@ import { isJsonObject, type JsonValue } from '@teamai/shared/json';
 import { shellQuoteValue } from '../utils/shell-profile.js';
 import { agentEvidence, type AgentEvidence } from './attempt-marker.js';
 import {
-  error, finishRun, locateStep, ok, parseReads, reconcileRun, respondCommand, restartQueued, runData, withRun, workflowLabel,
+  error, finishRun, ok, parseReads, reconcileRun, respondCommand, restartQueued, runData, withRun, workflowLabel,
   type RunReads, type WorkflowResult,
 } from './engine.js';
 import { evaluateExpression, isRecord, isTruthy, pathValue } from './expression.js';
@@ -18,7 +18,7 @@ import { archiveUnder, isUnder } from './loop.js';
 import { spentTokens, startLimits } from './limits.js';
 import { publishRunRecords, removeQueuedEndRecord } from './records.js';
 import { resolveRetention, runRetainedUntil, type ResolvedRetention } from './retention.js';
-import { contextOf, localId, statesIn, type Scope } from './scope.js';
+import { contextOf, localId, locateStep, statesIn, type Scope } from './scope.js';
 import { attemptDir, AttemptIdSchema, isRunId, readRun, RunIdSchema, runScratchDir, withCleanupLock, type RunId } from './store.js';
 import { answerHitl, cancel, cancellable, redeliver, repend, resetIteration, resetPending, settled, start, stopAttempt, stopWhere, stopped, type HitlAnswer, type StepState } from './step-state.js';
 import { parseTemplate, templatePaths, templatedTexts } from './template.js';

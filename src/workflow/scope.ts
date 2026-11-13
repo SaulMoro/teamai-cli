@@ -326,3 +326,35 @@ function currentStep(step: StepState): ExpressionStep {
 
   return current;
 }
+
+/** The scope and definition of the step instance at `path`, or undefined when the run file does not describe it. */
+export function locateStep(run: RunState, path: string): { scope: Scope; step: WorkflowStep } | undefined {
+  const segments = parseStepPath(path);
+  let scope = run.definition.finally?.some((step) => step.id === segments[0]?.id) ? finallyScope(run) : topScope(run);
+
+  for (const [index, segment] of segments.entries()) {
+    const step = scope.definition.steps.find((item) => item.id === segment.id);
+
+    if (!step) return undefined;
+
+    if (index === segments.length - 1) return { scope, step };
+    const instance = `${scope.prefix}${segment.id}${segment.index === undefined ? '' : `[${segment.index}]`}`;
+    const states = statesIn(run, scope);
+    // statesIn holds no for_each item.
+    const state = (segment.index === undefined ? states : run.steps).find((item) => item.id === instance);
+    const child = state && childScope(run, scope, states, state, step);
+
+    if (!child) return undefined;
+    scope = child;
+  }
+
+  return undefined;
+}
+
+/** The step instance at `path` and what its lease's templates read, or undefined when the run holds no such instance. */
+export function leaseContext(run: RunState, path: string): { step: WorkflowStep; context: TemplateContext; requires: InEffect } | undefined {
+  const located = locateStep(run, path);
+  const state = run.steps.find((item) => item.id === path);
+
+  return located && state ? { step: located.step, context: contextOf(located.scope, statesIn(run, located.scope), state), requires: mergeRequirements(located.scope.requires, located.step.requires) } : undefined;
+}
