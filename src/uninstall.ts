@@ -4413,6 +4413,10 @@ async function removeHome(home: string, dataHomes: readonly string[], kept: Kept
     }
 
     const keep = [...kept.paths, ...keptOwn];
+    const runtimeState = runtimeStateRoot(getUserHome());
+
+    // Before the journal that records them goes with the home, as the last install's sweep does.
+    if (!keep.includes(runtimeState) && await pathExists(runtimeState)) await removeSandboxWarm(getUserHome());
 
     await removeAllBut(home, [...keep, ...await runsRemovalLocksOf(dataHomes)]);
     log.success(keep.length > 0 ? `Removed ${home}/ but ${keep.join(', ')}` : `Removed ${home}/`);
