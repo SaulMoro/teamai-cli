@@ -1440,6 +1440,7 @@ teamai workflow resume [--next]
 | `owner_active` | 所有者在最近一小时内写过这个仍在运行的运行，且没有人留给运行器接手，它的驱动可能正在执行步骤。带 `owner` 和 `wroteAt`。 | 请所有者停止驱动并发布。停止后执行 `resume <run> --claim --confirmed`；无人值守时，等这一小时过去。 |
 | `run_offered` | 对本安装实例留给运行器接手的运行，执行了不带认领的 `next`。 | 撤回待接手状态：`resume <run>`，或在 next 中加 `"claim": true`。 |
 | `driver_running` | 本机有该运行的本地驱动正在运行，或 skill 驱动正在本机执行它的某个步骤时，执行了 `publish`。 | 停止那个驱动，或等 skill 驱动报告该步骤后，再发布。 |
+| `place_kept` | 运行在本机为一个对话保留了位置，而它的步骤运行时无法关闭这个位置时，执行了 `publish`：接手运行的机器够不到它。什么都没有发布，运行留在本机。 | 在本机继续它，或者等它的步骤运行时能关闭这个位置后再发布。 |
 | `state_moved` | 本机准备认领或发布期间，运行发生了变化：认领时在 `teamai-reports` 上，发布时在本机上。没有认领或发布任何内容。 | 再认领一次，或再发布一次。 |
 | `state_conflict` | `teamai-reports` 上的状态比本机上次看到的更新。 | 执行 `resume <run>` 取得已发布的状态。 |
 | `run_not_published` | 没有人发布过该运行。 | 在有这个运行的机器上发布它。 |
@@ -1945,7 +1946,7 @@ teamai workflow start review --driver containers
 teamai 在运行开始或继续时读取每个变量一次。未设置的变量会在任何步骤运行前让启动停止：
 
 ```text
-{"error":{"code":"credential_missing","message":"Runtime \"sandbox\" of driver definition ~/.teamai/projects/…/team-repo/drivers/containers.yaml declares credential CLAUDE_CODE_OAUTH_TOKEN: env:CLAUDE_CODE_OAUTH_TOKEN, and CLAUDE_CODE_OAUTH_TOKEN is not set in your environment. Set CLAUDE_CODE_OAUTH_TOKEN, then start again."}}
+{"error":{"code":"credential_missing","message":"Runtime \"sandbox\" of driver definition drivers/containers.yaml in the team repo declares credential CLAUDE_CODE_OAUTH_TOKEN: env:CLAUDE_CODE_OAUTH_TOKEN, and CLAUDE_CODE_OAUTH_TOKEN is not set in your environment. Set CLAUDE_CODE_OAUTH_TOKEN, then start again."}}
 ```
 
 如果运行时条目没有声明任何凭据，既没有 `env:` 凭据也没有登录，它会按名字拿到你环境中已设置的工具登录变量：Claude 的 `CLAUDE_CODE_OAUTH_TOKEN`、`ANTHROPIC_API_KEY` 或 `ANTHROPIC_AUTH_TOKEN`（连同 `ANTHROPIC_BASE_URL`），Codex 的 `OPENAI_API_KEY` 或 `CODEX_API_KEY`，以及 CodeBuddy 的 `CODEBUDDY_API_KEY` 或 `CODEBUDDY_AUTH_TOKEN`。这样团队的定义只需写出工具，每个成员用自己的方式登录。这些值和其他凭据一样会被遮盖。teamai 只把它们发给自己运行工具进程并提供 `can.env` 的运行时，并且每个变量只发给它所登录的工具：同时设置了 `ANTHROPIC_API_KEY` 和 `OPENAI_API_KEY` 时，Claude 步骤只拿到 `ANTHROPIC_API_KEY`，Codex 步骤只拿到 `OPENAI_API_KEY`。以自己的方式启动代理的运行时在它运行代理的地方为其登录，teamai 不会发给它这些值；不过和所有运行时一样，它的进程仍以你的环境启动。

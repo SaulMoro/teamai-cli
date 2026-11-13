@@ -275,7 +275,7 @@ runtimes:
 
 ```text
 $ teamai workflow start fix --driver paseo-in-vm
-⚠ Runtime paseo of driver paseo-in-vm runs steps in full access on this machine, as /repo/drivers/paseo-in-vm.yaml sets: they run without asking for permission, an unattended run approves the runtime's own full-access sign-in where it asks for one, and teamai cannot prove any isolation. Their isolation is recorded as none.
+⚠ Runtime paseo of driver paseo-in-vm runs steps in full access on this machine, as drivers/paseo-in-vm.yaml in the team repo sets: they run without asking for permission, an unattended run approves the runtime's own full-access sign-in where it asks for one, and teamai cannot prove any isolation. Their isolation is recorded as none.
 ```
 
 A tool whose default, or whose `mode`, Paseo does not list for it is not offered. A judge starts in a mode that asks before it edits or runs anything:
