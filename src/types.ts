@@ -3473,26 +3473,23 @@ export function applyToolRoots(
   return out ?? toolPaths;
 }
 
+/**
+ * Every root a tool's `paths` hang off, user-scope ones included, not just the first one: a team that customized
+ * `toolPaths.claude` field by field may have spread them over several. A bare file name (`.claude.json`) is not under a root.
+ */
+export function toolPathRoots(paths: z.infer<typeof ToolPathsSchema>): Set<string> {
+  const roots = new Set<string>();
+
+  for (const value of [...TOOL_ROOT_FIELDS.map((field) => paths[field]), ...USER_SCOPE_ROOT_FIELDS.map((field) => paths.userScope?.[field])]) {
+    if (value?.includes('/')) roots.add(toolInstallRoot(value));
+  }
+
+  return roots;
+}
+
 /** `paths` with every root they hang off moved to `newRoot`, and a bare file name moved inside it (`relocateToolPaths`). */
 export function rerootToolPaths(paths: z.infer<typeof ToolPathsSchema>, newRoot: string): z.infer<typeof ToolPathsSchema> {
-  // Every root the tool's paths hang off, not just the first one: a team that
-  // customized `toolPaths.claude` field by field may have spread them over
-  // several. A bare file name (`.claude.json`) is not under a root.
-  const oldRoots = new Set<string>();
-
-  for (const field of TOOL_ROOT_FIELDS) {
-    const value = paths[field];
-
-    if (value?.includes('/')) oldRoots.add(toolInstallRoot(value));
-  }
-
-  for (const field of USER_SCOPE_ROOT_FIELDS) {
-    const value = paths.userScope?.[field];
-
-    if (value?.includes('/')) oldRoots.add(toolInstallRoot(value));
-  }
-
-  return relocateToolPaths(paths, oldRoots, newRoot);
+  return relocateToolPaths(paths, toolPathRoots(paths), newRoot);
 }
 
 /**

@@ -10,7 +10,7 @@ import { isSessionPlatform } from './session-flow/adapters/platform-facts.js';
 import { homeEnvOf } from './tool-home.js';
 import { homeVariables, isToolId, TOOL_ORDER, useToolInstances } from './tool-registry.js';
 import type { ToolId } from './tools.js';
-import { DEFAULT_TOOL_PATHS, getTeamaiHomeDir, rerootToolPaths, TOOL_ROOT_FIELDS, toolInstallRoot, ToolPathsSchema, type Scope, type TeamaiConfig } from './types.js';
+import { DEFAULT_TOOL_PATHS, getTeamaiHomeDir, rerootToolPaths, toolInstallRoot, toolPathRoots, ToolPathsSchema, type Scope, type TeamaiConfig } from './types.js';
 import { writeJsonAtomic } from './utils/fs.js';
 import { getUserHome } from '@teamai/shared/home';
 import { log } from '@teamai/shared/log';
@@ -324,25 +324,19 @@ export function defaultPathsOf(instance: ResolvedToolInstance): z.infer<typeof T
 }
 
 /**
- * Where `instance` reads a file the tool it extends reads at `relative`: under its own home when it has one, moved as
- * its tool paths are (`instancePaths`), so what teamai writes there is judged read. A path outside that tool's roots,
- * such as a project file at the root, stays as it is, and so does every path of an instance that sets its own paths,
- * which teamai writes to as they are.
+ * Where `instance` reads a file the tool it extends reads at `relative`, under the home or the project (`from`): under
+ * its own home when it has one, moved as its tool paths are (`instancePaths`), so what teamai writes there is judged
+ * read. A path outside that tool's roots, and a file at the project's root, stay as they are, and so does every path
+ * of an instance that sets its own paths, which teamai writes to as they are.
  */
-export function instanceReadPath(instance: ResolvedToolInstance, relative: string): string {
-  if (!instance.home || instance.paths || instance.name === instance.extends || !relative.includes('/')) return relative;
+export function instanceReadPath(instance: ResolvedToolInstance, { from, relative }: { from: 'home' | 'project'; relative: string }): string {
+  if (!instance.home || instance.paths || instance.name === instance.extends) return relative;
 
-  const shipped: z.infer<typeof ToolPathsSchema> = DEFAULT_TOOL_PATHS[instance.extends];
-
-  const roots = new Set(TOOL_ROOT_FIELDS.flatMap((field) => {
-    const value = shipped[field];
-
-    return value?.includes('/') ? [toolInstallRoot(value)] : [];
-  }));
-
+  // A bare file beside the tool's home (Claude Code's .claude.json) is inside a home that moved, as the instance's is.
+  if (!relative.includes('/')) return from === 'home' ? `${instance.home.dir}/${relative}` : relative;
   const root = toolInstallRoot(relative);
 
-  return roots.has(root) ? instance.home.dir + relative.slice(root.length) : relative;
+  return toolPathRoots(DEFAULT_TOOL_PATHS[instance.extends]).has(root) ? instance.home.dir + relative.slice(root.length) : relative;
 }
 
 /**

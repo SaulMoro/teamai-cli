@@ -393,6 +393,17 @@ describe('the home of an instance', () => {
     }
   });
 
+  it('reads, in user scope, the MCP servers teamai writes to the file inside its home, as the tool it extends reads its file beside its own home', async () => {
+    const { config } = await load(teamRepo({ 'tools/acme-claude.yaml': ACME_CLAUDE }));
+    const { installOf, locate, unreadWrites, writesOf } = await import('../locate.js');
+    fs.mkdirSync(path.join(home, '.acme-claude'), { recursive: true });
+    const install = installOf(config ?? { toolPaths: {} }, { repo: {}, scope: 'user' });
+    const where = await locate('acme-claude', 'mcp', install);
+
+    expect(writesOf(where).map((place) => place.path)).toEqual([path.join(home, '.acme-claude', '.claude.json')]);
+    expect(unreadWrites(where, undefined, { kind: 'anywhere' })).toEqual([]);
+  });
+
   it('reads where the tool it extends reads when it sets its own paths, which teamai writes to whole', async () => {
     const repo = teamRepo({ 'tools/acme-claude.yaml': `${ACME_CLAUDE}paths: { skills: .claude/skills, rules: .claude/rules }\n` });
     const { config } = await load(repo);

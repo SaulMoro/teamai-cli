@@ -641,7 +641,7 @@ function rootsOf(tool: string, install: Install, host: Host): Roots {
       return tool === 'copilot' && home ? join(home.dir, relative) : underHome(relative);
     },
     declared: (from, declared) => {
-      const relative = instance === undefined ? declared : instanceReadPath(instance, declared);
+      const relative = instance === undefined ? declared : instanceReadPath(instance, { from, relative: declared });
 
       if (from === 'project') return join(base, relative);
 
