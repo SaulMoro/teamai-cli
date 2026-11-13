@@ -1988,6 +1988,22 @@ describe('uninstall', () => {
       expect([await fse.pathExists(planted), await fse.pathExists(ran)]).toEqual([false, false]);
     });
 
+    // A run started inside a failed run's worktree puts its own worktree inside that one, which teamai's exclude block hides.
+    it('keeps a worktree holding another run\'s worktree it keeps, so the changes in that one stay', async () => {
+      const { worktrees: [outer] } = await projectWithRunWorktrees(['teamai/r0123456789abcdef/fail/p1']);
+      const { ensureWorktree } = await import('../workflow/worktree.js');
+      const inner = await ensureWorktree(outer, 'teamai/r1111111111111111/build/p1', 'HEAD');
+      if ('error' in inner) throw new Error(inner.error);
+      const precious = path.join(inner.dir, 'precious.txt');
+      await fse.writeFile(precious, 'mine\n');
+
+      await uninstall({ force: true });
+
+      expect([await fse.pathExists(outer), await fse.readFile(precious, 'utf8')]).toEqual([true, 'mine\n']);
+      const realOuter = path.join(await fse.realpath(path.dirname(outer)), path.basename(outer));
+      expect(vi.mocked(log.warn).mock.calls.map((call) => String(call[0])).find((line) => line.startsWith(`Kept the workflow run worktree ${realOuter}:`))).toContain('precious.txt');
+    });
+
     it.each([
       ['a file no commit holds', async (dir: string) => fse.writeFile(path.join(dir, 'notes.txt'), 'mine\n'), 'notes.txt'],
       ['an edit no commit holds', async (dir: string) => fse.appendFile(path.join(dir, 'work.txt'), 'more\n'), 'work.txt'],

@@ -737,15 +737,32 @@ async function listedWorktrees(checkout: string): Promise<{ dir: string; lines: 
   });
 }
 
-/** Each worktree teamai made for a workflow run in the repository of `checkout`, or why git could not list them. */
+/** Whether `other` is a worktree inside `dir`, which removing `dir` deletes with it. */
+function holds(dir: string, other: string): boolean {
+  return other.startsWith(dir + path.sep);
+}
+
+/**
+ * Each worktree teamai made for a workflow run in the repository of `checkout`, innermost first, the order they can be
+ * removed in, or why git could not list them. One holding a worktree that stays stays too: a run started in a run's
+ * worktree puts its own inside, where teamai's exclude block hides it from the outer one's status.
+ */
 export async function runWorktreesOf(checkout: string): Promise<{ worktrees: RunWorktree[] } | { error: string }> {
   const listed = await listedWorktrees(checkout);
 
   if ('error' in listed) return listed;
   const worktrees: RunWorktree[] = [];
 
-  for (const { dir, lines } of listed) {
-    if (worktreeCheckout(dir) !== undefined) worktrees.push(await runWorktreeAt(dir, lines));
+  for (const { dir, lines } of [...listed].sort((a, b) => b.dir.length - a.dir.length)) {
+    if (worktreeCheckout(dir) === undefined) continue;
+    const found = await runWorktreeAt(dir, lines);
+    // Innermost first, so each worktree inside this one is already sorted; one that is no run worktree stays.
+    const staying = listed.find((other) => holds(dir, other.dir) && !worktrees.some((sorted) => sorted.dir === other.dir && sorted.kind === 'removable'));
+
+    if (found.kind === 'removable' && staying !== undefined) {
+      const why = worktrees.find((sorted) => sorted.dir === staying.dir && sorted.kind === 'kept');
+      worktrees.push({ kind: 'kept', dir, why: `it holds the worktree ${staying.dir}, which stays${why?.kind === 'kept' ? ` (${why.why})` : ''}` });
+    } else worktrees.push(found);
   }
 
   return { worktrees };
@@ -789,6 +806,9 @@ export async function removeRunWorktree(checkout: string, worktree: Extract<RunW
   const now = entry === undefined ? undefined : await runWorktreeAt(entry.dir, entry.lines);
 
   if (now?.kind === 'kept') return { ok: false, reason: now.why };
+  const inside = listed.find(({ dir }) => holds(worktree.dir, dir));
+
+  if (inside !== undefined) return { ok: false, reason: `it holds the worktree ${inside.dir}, which stays` };
   const removed = now !== undefined && await pathExists(worktree.dir) ? await git(checkout, ['worktree', 'remove', '--force', worktree.dir]) : undefined;
   const pruned = await git(checkout, ['worktree', 'prune']);
 
