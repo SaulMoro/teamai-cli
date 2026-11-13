@@ -80,8 +80,17 @@ export async function removeTeamClone(main: string, dir: string): Promise<void> 
 
 rule.invalid('names a let-off function its file no longer declares, so the list only shrinks', inFunction('renamedAway', "await git(main, ['worktree', 'list']);"), (output) => {
   expect(output).toContain('removeDataCheckout');
-  expect(output).toContain('no longer declares');
+  expect(output).toContain('no longer removes one');
 }, { filename: 'src/workflow/place/data.ts' });
+
+rule.invalid('names a let-off function that no longer removes a worktree, so the list only shrinks', inFunction('removeDataCheckout', "await git(main, ['worktree', 'list']);"), (output) => {
+  expect(output).toContain('removeDataCheckout');
+  expect(output).toContain('no longer removes one');
+}, { filename: 'src/workflow/place/data.ts' });
+
+rule.valid('lets off an allowed function written as an arrow', `declare function git(cwd: string, args: string[]): Promise<{ code: number }>;
+export const removeDataCheckout = async (main: string): Promise<void> => { await git(main, ['worktree', 'prune']); };
+`, { filename: 'src/workflow/place/data.ts' });
 
 it('holds every file of this checkout but its tests, scripts and packages included', () => {
   const files = execFileSync('git', ['ls-files'], { cwd: REPO, encoding: 'utf8' }).split('\n').filter((file) => /\.[cm]?[jt]sx?$/.test(file));

@@ -83,8 +83,8 @@ export default defineRule({
 
     if (!inScope(relative)) return {};
     const allowed = ALLOWED.find(({ file }) => file === relative)?.functions ?? [];
-    /** @type {Set<string>} */
-    const declared = new Set();
+    /** @type {Set<string>} The allowed functions seen removing a worktree. */
+    const used = new Set();
 
     /**
      * Reports `node` when `args`, git's arguments, remove a worktree outside the functions this file is let.
@@ -95,13 +95,11 @@ export default defineRule({
       if (!removesWorktree(args)) return;
       const name = enclosingFunction(node);
 
-      if (name === undefined || !allowed.includes(name)) context.report({ node, message: MESSAGE });
+      if (name !== undefined && allowed.includes(name)) used.add(name);
+      else context.report({ node, message: MESSAGE });
     };
 
     return {
-      FunctionDeclaration(node) {
-        if (node.id) declared.add(node.id.name);
-      },
       ArrayExpression(node) {
         check(node, node.elements);
       },
@@ -109,8 +107,8 @@ export default defineRule({
         check(node, node.arguments);
       },
       'Program:exit'(node) {
-        for (const name of allowed.filter((listed) => !declared.has(listed))) {
-          context.report({ node, message: `oxlint-plugin-teamai/rules/worktree-removal.js lets ${name} in ${relative} remove worktrees, and ${relative} no longer declares it: point the entry at the function that does, or remove it.` });
+        for (const name of allowed.filter((listed) => !used.has(listed))) {
+          context.report({ node, message: `oxlint-plugin-teamai/rules/worktree-removal.js lets ${name} in ${relative} remove worktrees, and ${name} there no longer removes one: point the entry at the function that does, or remove it.` });
         }
       },
     };
