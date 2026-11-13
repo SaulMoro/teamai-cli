@@ -2043,6 +2043,36 @@ describe('uninstall', () => {
       expect(await fse.pathExists(path.join(projectRoot, '.git', 'worktrees'))).toBe(false);
     });
 
+    it('keeps a locked one whose directory is gone, as git keeps its record, and says so', async () => {
+      const { projectRoot, worktrees: [locked] } = await projectWithRunWorktrees(['teamai/r0123456789abcdef/fail/p1']);
+      git(projectRoot, 'worktree', 'lock', '--reason', 'on a USB disk', locked);
+      await fse.move(locked, `${locked}-unplugged`);
+
+      await uninstall({ force: true });
+
+      const realLocked = path.join(await fse.realpath(path.dirname(locked)), path.basename(locked));
+      expect(git(projectRoot, 'worktree', 'list', '--porcelain')).toContain(`worktree ${realLocked}\n`);
+      expect(vi.mocked(log.success).mock.calls.map((call) => String(call[0])).filter((line) => line.includes(realLocked))).toEqual([]);
+      expect(vi.mocked(log.warn).mock.calls.map((call) => String(call[0])).find((line) => line.startsWith(`Kept the workflow run worktree ${realLocked}:`))).toContain('on a USB disk');
+    });
+
+    it.skipIf(process.platform === 'win32' || process.getuid?.() === 0)('keeps the setup when git could not forget a gone worktree\'s record, and says why', async () => {
+      const { projectRoot, worktrees: [done] } = await projectWithRunWorktrees(['teamai/r0123456789abcdef/pair/p1']);
+      git(projectRoot, 'worktree', 'remove', '--force', done);
+      const records = path.join(projectRoot, '.git', 'worktrees');
+      await fse.ensureDir(path.join(records, path.basename(done)));
+      await fse.chmod(records, 0o500);
+
+      try {
+        await uninstall({ force: true });
+      } finally {
+        await fse.chmod(records, 0o700);
+      }
+
+      expect(vi.mocked(log.warn).mock.calls.map((call) => String(call[0])).find((line) => line.startsWith('Failed to remove the workflow worktree setup in'))).toContain('git did not forget the worktrees whose directory is gone');
+      expect(await fse.readFile(path.join(projectRoot, '.git', 'info', 'exclude'), 'utf8')).toContain('.teamai/workflow-worktrees/');
+    });
+
     it('names the command that removes a locked worktree it keeps', async () => {
       const { projectRoot, worktrees: [locked] } = await projectWithRunWorktrees(['teamai/r0123456789abcdef/fail/p1']);
       git(projectRoot, 'worktree', 'lock', '--reason', 'on a USB disk', locked);

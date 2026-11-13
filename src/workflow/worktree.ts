@@ -811,10 +811,12 @@ export async function runWorktreesOf(checkouts: readonly string[]): Promise<{ wo
 async function runWorktreeAt(dir: string, lines: readonly string[]): Promise<RunWorktree> {
   const branch = lines.find((line) => line.startsWith('branch refs/heads/'))?.slice('branch refs/heads/'.length);
 
-  if (!await pathExists(dir)) return { kind: 'removable', dir, ...branch !== undefined && { branch } };
   const locked = lines.find((line) => line === 'locked' || line.startsWith('locked '));
 
+  // Before the directory: git keeps a locked one's record whose directory is gone, such as one on a disk not plugged in.
   if (locked !== undefined) return { kind: 'kept', dir, why: `git keeps it locked${locked === 'locked' ? '' : ` (${locked.slice('locked '.length)})`}`, isLocked: true };
+
+  if (!await pathExists(dir)) return { kind: 'removable', dir, ...branch !== undefined && { branch } };
   const kept = (why: string): RunWorktree => ({ kind: 'kept', dir, why, isLocked: false });
 
   if (branch === undefined) return kept('its HEAD is detached, so no branch holds its commits');
@@ -1922,7 +1924,8 @@ export async function removeWorktree(main: string, dir: string): Promise<{ ok: t
 export async function forgetGoneWorktrees(main: string): Promise<{ ok: true } | { ok: false; reason: string }> {
   const pruned = await git(main, ['worktree', 'prune']);
 
-  return pruned.code === 0 ? { ok: true } : { ok: false, reason: `git did not forget the worktrees whose directory is gone (${pruned.stderr.trim() || 'git worktree prune failed'})` };
+  // prune exits 0 on a record it could not delete, and says so only on stderr.
+  return pruned.code === 0 && pruned.stderr.trim() === '' ? { ok: true } : { ok: false, reason: `git did not forget the worktrees whose directory is gone (${pruned.stderr.trim() || 'git worktree prune failed'})` };
 }
 
 const UnrestoredMarker = z.object({ branch: z.string(), commit: z.string(), step: z.string(), reason: z.string(), found: z.array(z.string()) });
