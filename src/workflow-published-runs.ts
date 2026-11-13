@@ -28,9 +28,11 @@ import { readRegularFile } from '@teamai/shared/regular-file';
 /**
  * Who would take an offered run: the calling process, as `invoke` judges it, whether a person answers what the run asks
  * them, as its driver finds out, and the driver it would drive the run with: the local driver with `--tools` `tools`,
- * answering optional gates when `autoApprove`, or the skill driver, whose session runs the prompt steps.
+ * answering optional gates when `autoApprove`, or the skill driver, whose session runs the prompt steps. `sandbox`: this
+ * host declares itself a sandbox (`--sandbox`); `sandboxRuntime`: the runtime of the definition `--driver` names that
+ * keeps each step in a sandbox, which takes a step that strictly needs one too.
  */
-export type Taker = { caller: InvokeCaller; hasPerson: boolean } & ({ driver: 'local'; tools: Record<string, string>; sandbox: boolean; autoApprove?: boolean } | { driver: 'skill' });
+export type Taker = { caller: InvokeCaller; hasPerson: boolean } & ({ driver: 'local'; tools: Record<string, string>; sandbox: boolean; sandboxRuntime?: string; autoApprove?: boolean } | { driver: 'skill' });
 
 /** Something the steps an offered run has left need that this machine lacks: why, as a clause, and what gives it. */
 export interface Lack {
@@ -169,7 +171,7 @@ async function offerOf(config: LocalConfig, snapshot: RunSnapshot, at: string, {
 
   const uses = { env: [...new Set(left.flatMap((run) => run.env))], prompts: left.flatMap((run) => (run.executor === 'prompt' ? [run.step] : [])) };
 
-  const isSandbox = taker.driver === 'local' && (taker.sandbox || config.workflows?.sandbox === true);
+  const isSandbox = taker.driver === 'local' && (taker.sandbox || taker.sandboxRuntime !== undefined || config.workflows?.sandbox === true);
   const sealed = taker.driver === 'local' && !isSandbox ? sandboxLacks(description.facts.held.filter((held) => isLeft(held.step, settled))) : [];
   const offer: Offer = { at, needs, mayNeed, uses, lacks: [...envLacks(left, env.facts), ...labelLacks(left, config.workflows?.labels), ...toolLacksOf(left), ...sealed] };
 
@@ -274,7 +276,7 @@ function sandboxLacks(held: WorkflowDescription['facts']['held']): Lack[] {
 
   return [{
     reason: `${listOf(steps)} need${steps.length > 1 ? '' : 's'} a sandbox, which this machine does not declare`,
-    fix: 'pass --sandbox on a disposable host, such as a CI runner or a container, or set workflows.sandbox: true',
+    fix: 'pass --sandbox on a disposable host, such as a CI runner or a container, set workflows.sandbox: true, or take it with a --driver whose runtime is a sandbox',
   }];
 }
 
