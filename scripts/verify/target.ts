@@ -224,11 +224,16 @@ export function watchSandboxes(world: Pick<World, 'home' | 'members'>, { start }
   };
 }
 
+/** The harness's own environment, which a probe of a world made before its env was kept gets. */
+function harnessEnvironment(): Record<string, string> {
+  return Object.fromEntries(Object.entries(process.env).flatMap(([name, value]) => (value === undefined ? [] : [[name, value]])));
+}
+
 /** Runs a probe `argv` on `target` and answers what it printed, unlogged: how the ledger reads a machine. */
 export function captureOn(world: World, target: Target, argv: readonly string[], { timeoutMs = 30_000 }: { timeoutMs?: number } = {}) {
   const place = placeOf(world, target);
   // From /, so the probe's own processes name no path of the world.
-  const { command, args, env } = commandOf(world, { ...place, env: place.env ?? Object.fromEntries(Object.entries(process.env).flatMap(([name, value]) => (value === undefined ? [] : [[name, value]]))) }, argv, { pass: new Map(), cwd: '/' });
+  const { command, args, env } = commandOf(world, { ...place, env: place.env ?? harnessEnvironment() }, argv, { pass: new Map(), cwd: '/' });
   const { code, stdout, why } = runProbe({ command, args, shown: argv, cwd: '/', env, timeoutMs, maxBuffer: 256 * 1024 ** 2 });
 
   return { code, stdout, why };
@@ -240,4 +245,19 @@ export function machinesOf(world: World): Array<{ label: string; target: Target;
     { label: 'this machine', target: { kind: 'world' }, platform: process.platform },
     ...(world.members ?? []).flatMap((member) => (member.machine === 'container' ? [{ label: `@${member.name}'s container`, target: { kind: 'member' as const, name: member.name }, platform: 'linux' as const }] : [])),
   ];
+}
+
+/**
+ * Each install of the world on this machine, its own and each host member's: the verb argument that names it (`<run>`
+ * or `<run>@<member>`), its HOME, and the environment its commands get. A program that keeps its state per HOME, as sbx
+ * keeps its sandboxes, is asked there, as teamai asks it, never in the harness's HOME.
+ */
+export function hostInstalls(world: World): Array<{ at: string; target: Target; home: string; env: Readonly<Record<string, string>> }> {
+  const targets: Target[] = [{ kind: 'world' }, ...(world.members ?? []).flatMap((member): Target[] => (member.machine === 'host' ? [{ kind: 'member', name: member.name }] : []))];
+
+  return targets.map((target) => {
+    const place = placeOf(world, target);
+
+    return { at: target.kind === 'world' ? world.runId : `${world.runId}@${target.name}`, target, home: place.home, env: place.env ?? harnessEnvironment() };
+  });
 }
