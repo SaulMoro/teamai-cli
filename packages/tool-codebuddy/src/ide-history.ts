@@ -22,7 +22,7 @@
  */
 
 import { assertSafeSessionFileId } from '@teamai/tool-core/sessions/ids';
-import { readRegularFileSync, writeNewFileSync } from '@teamai/shared/regular-file';
+import { readRegularFileSync, writeRegularFileSync } from '@teamai/shared/regular-file';
 import * as crypto from 'node:crypto';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
@@ -541,13 +541,13 @@ function writeIndex(historyDir: string, data: IdeIndex): void {
   // Back up before writing, matching the IDE's own .index_bak.json convention
   if (fs.existsSync(idxPath)) {
     try {
-      writeNewFileSync(path.join(historyDir, '.index_bak.json'), readRegularFileSync(idxPath));
+      writeRegularFileSync(path.join(historyDir, '.index_bak.json'), readRegularFileSync(idxPath));
     } catch {
       // A failed backup must not block the write
     }
   }
 
-  writeNewFileSync(idxPath, JSON.stringify(data, null, 2));
+  writeRegularFileSync(idxPath, JSON.stringify(data, null, 2));
 }
 
 function upsertConversation(historyDir: string, conv: IdeConversation): void {
@@ -742,7 +742,7 @@ export function writeIdeSession(session: Session, cwd: string): IdeSyncResult {
       }
 
       fs.mkdirSync(msgDir, { recursive: true });
-      writeNewFileSync(marker, new Date().toISOString());
+      writeRegularFileSync(marker, new Date().toISOString());
 
       // Write image assets: put them in <convDir>/assets/ like native storage, and reference them
       // in messages as codebuddy-asset://assets/<name>. If one asset fails, degrade only that image
@@ -767,10 +767,10 @@ export function writeIdeSession(session: Session, cwd: string): IdeSyncResult {
             if (path.relative(assetsDir, dest).startsWith('..')) throw new Error('unsafe asset name');
 
             if (asset.sourcePath && fs.existsSync(asset.sourcePath)) {
-              writeNewFileSync(dest, readRegularFileSync(asset.sourcePath));
+              writeRegularFileSync(dest, readRegularFileSync(asset.sourcePath));
               ok = true;
             } else if (asset.data) {
-              writeNewFileSync(dest, Buffer.from(asset.data, 'base64'));
+              writeRegularFileSync(dest, Buffer.from(asset.data, 'base64'));
               ok = true;
             }
           } catch {
@@ -810,7 +810,7 @@ export function writeIdeSession(session: Session, cwd: string): IdeSyncResult {
       const messageIndex: Array<{ id: string; type: 'text'; role: IdeMessageFile['role']; isComplete: true }> = [];
 
       for (const m of messages) {
-        writeNewFileSync(path.join(msgDir, `${m.id}.json`), JSON.stringify(m, null, 2));
+        writeRegularFileSync(path.join(msgDir, `${m.id}.json`), JSON.stringify(m, null, 2));
         messageIndex.push({ id: m.id, type: 'text', role: m.role, isComplete: true });
       }
 
@@ -820,13 +820,13 @@ export function writeIdeSession(session: Session, cwd: string): IdeSyncResult {
 
       if (fs.existsSync(convIdxPath)) {
         try {
-          writeNewFileSync(path.join(convDir, '.index_bak.json'), readRegularFileSync(convIdxPath));
+          writeRegularFileSync(path.join(convDir, '.index_bak.json'), readRegularFileSync(convIdxPath));
         } catch {
           // A failed backup must not block the write
         }
       }
 
-      writeNewFileSync(convIdxPath, JSON.stringify({ messages: messageIndex, requests }, null, 2));
+      writeRegularFileSync(convIdxPath, JSON.stringify({ messages: messageIndex, requests }, null, 2));
 
       upsertConversation(historyDir, conv);
       synced++;

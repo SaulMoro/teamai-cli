@@ -206,9 +206,37 @@ export async function writeRegularFile(file: string, data: string | Uint8Array, 
   }
 }
 
+/** `writeRegularFile` for a caller that cannot await: the same open and check, so `file` is written in place, never removed first. */
+export function writeRegularFileSync(file: string, data: string | Uint8Array, { mode }: { mode?: number } = {}): void {
+  let fd: number;
+
+  try {
+    // oxlint-disable-next-line teamai/regular-file-reads, teamai/step-path-writes -- the helper's own open: nonblocking, and its descriptor is checked before a byte is written
+    fd = fs.openSync(file, NONBLOCKING_CREATE | fs.constants.O_WRONLY | fs.constants.O_TRUNC, mode);
+  } catch (error) {
+    // A FIFO no process reads, or a device with nothing behind it.
+    if (error instanceof Error && 'code' in error && error.code === 'ENXIO') throw new NotRegularFileError(file, fs.statSync(file), 'write');
+
+    if (error instanceof Error && 'code' in error && error.code === 'ELOOP') throw new NotRegularFileError(file, fs.lstatSync(file), 'write');
+    throw error;
+  }
+
+  try {
+    const stats = fs.fstatSync(fd);
+
+    if (!stats.isFile()) throw new NotRegularFileError(file, stats, 'write');
+    // oxlint-disable-next-line teamai/step-path-writes -- writes the descriptor checked above, not a path
+    fs.writeFileSync(fd, data);
+  } finally {
+    fs.closeSync(fd);
+  }
+}
+
 /**
  * Writes `data` to `file` as a new file, for a caller that cannot await `writeRegularFile`: what is at `file` (a file, a
- * FIFO, a link) is removed first, and the create fails rather than open whatever appears there meanwhile.
+ * FIFO, a link) is removed first, and the create fails rather than open whatever appears there meanwhile. Only for a
+ * file nothing reads while it is written, such as a temporary one renamed into place: a reader can find it missing,
+ * and a second writer fails. `writeRegularFileSync` writes in place.
  */
 export function writeNewFileSync(file: string, data: string | Uint8Array, { mode }: { mode?: number } = {}): void {
   fs.rmSync(file, { force: true });

@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { appendRegularFile, copyRegularFile, copyRegularTree, moveRegularTree, NotRegularFileError, openRegularFile, openRegularFileForWrite, readRegularFile, readRegularFileNoLink, readRegularFileSync, writeRegularFile } from './regular-file.js';
+import { appendRegularFile, copyRegularFile, copyRegularTree, moveRegularTree, NotRegularFileError, openRegularFile, openRegularFileForWrite, readRegularFile, readRegularFileNoLink, readRegularFileSync, writeRegularFile, writeRegularFileSync } from './regular-file.js';
 
 const dirs: string[] = [];
 const readers: ChildProcess[] = [];
@@ -125,12 +125,21 @@ describe.skipIf(process.platform === 'win32')('writing to a file a step may have
     fs.writeFileSync(kept, 'old and longer\n');
     const created = path.join(dir, 'credentials.json');
 
+    const keptSync = path.join(dir, 'index.json');
+    fs.writeFileSync(keptSync, 'old and longer\n');
+    const inode = fs.statSync(keptSync).ino;
+    const createdSync = path.join(dir, 'view.json');
+
     await writeRegularFile(kept, '{}\n');
     await writeRegularFile(created, Buffer.from('secret'), { mode: 0o600 });
+    writeRegularFileSync(keptSync, '{}\n');
+    writeRegularFileSync(createdSync, 'secret', { mode: 0o600 });
 
     expect(fs.readFileSync(kept, 'utf8')).toBe('{}\n');
     expect(fs.readFileSync(created, 'utf8')).toBe('secret');
     expect(fs.statSync(created).mode & 0o777).toBe(0o600);
+    expect([fs.readFileSync(keptSync, 'utf8'), fs.statSync(keptSync).ino]).toEqual(['{}\n', inode]);
+    expect(fs.statSync(createdSync).mode & 0o777).toBe(0o600);
   });
 
   it('refuses a link at the target in a write, an append and an open, leaving what it points at as it was, and creates nothing through a dangling one', async () => {
@@ -144,6 +153,7 @@ describe.skipIf(process.platform === 'win32')('writing to a file a step may have
     fs.symlinkSync(missing, dangling);
 
     await expect(writeRegularFile(planted, '{}')).rejects.toMatchObject({ kind: 'a link', message: `${planted} is a link, not a regular file, so teamai does not write it` });
+    expect(() => writeRegularFileSync(planted, '{}')).toThrow(expect.objectContaining({ kind: 'a link' }));
     await expect(appendRegularFile(planted, 'line\n')).rejects.toMatchObject({ kind: 'a link' });
     await expect(openRegularFileForWrite(planted, { append: true, read: true })).rejects.toMatchObject({ kind: 'a link' });
     await expect(appendRegularFile(dangling, 'line\n')).rejects.toMatchObject({ kind: 'a link' });
@@ -155,6 +165,7 @@ describe.skipIf(process.platform === 'win32')('writing to a file a step may have
     const at = fifo();
 
     expect(await settledSoon(at, () => writeRegularFile(at, '{}'))).toMatchObject({ rejected: { kind: 'a pipe' } });
+    expect(await settledSoon(at, async () => writeRegularFileSync(at, '{}'))).toMatchObject({ rejected: { kind: 'a pipe' } });
   });
 
   it('refuses a FIFO no one reads at once, saying what is there, instead of waiting for a reader', async () => {

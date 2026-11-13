@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { z } from 'zod';
 import { OpIdSchema, OpStateSchema, RuntimeOptionsSchema, type OpId } from '@teamai/runtime-protocol';
-import { readRegularFileSync, writeNewFileSync } from '@teamai/shared/regular-file';
+import { readRegularFileSync, writeNewFileSync, writeRegularFileSync } from '@teamai/shared/regular-file';
 import { HostRouteSchema } from './provider.js';
 
 // ─── The journal ─────────────────────────────────────────
@@ -157,13 +157,13 @@ export function journal(root: string) {
     saveExec: (op: OpId, record: ExecRecord): void => {
       // Indexed before it is written, so no record of the handle is ever left out of its index.
       fs.mkdirSync(indexDir(record.handle), { recursive: true });
-      writeNewFileSync(path.join(indexDir(record.handle), op), '');
+      writeRegularFileSync(path.join(indexDir(record.handle), op), '');
       write(opFile(op), record);
     },
     opsOf,
     cancel: (op: OpId): void => {
       fs.mkdirSync(path.dirname(cancelFile(op)), { recursive: true });
-      writeNewFileSync(cancelFile(op), '');
+      writeRegularFileSync(cancelFile(op), '');
     },
     isCancelled: (op: OpId): boolean => fs.existsSync(cancelFile(op)),
     /** Removes everything kept for `handle`, its place last, so a close a crash interrupted is made again. */
