@@ -17,7 +17,7 @@ import { attemptEnv } from '../../attempt-marker.js';
 import { runConfinedStep, type ConfinedStepEnd, type ConfinedStepLease } from '../../confined-step.js';
 import { STALE_WINDOW_MS } from '../../handoff.js';
 import { commandEnd, continuedAttempt, refuseDirtyAdoptedCommand, type WorkflowClient } from '../../protocol.js';
-import { attemptDir, runnerAlive, withRunnerLock, type AttemptId, type RunId, type RunLock } from '../../store.js';
+import { attemptDir, RunRemovedError, runnerAlive, withRunnerLock, type AttemptId, type RunId, type RunLock } from '../../store.js';
 import type { WorkflowFailure } from '../../types.js';
 import { SESSION_HOST_PROFILES } from './session-host-profiles.js';
 import { childTitle, writeSkillState, readSkillState, type AttemptState, type Dispatch, type ReportBody, type SkillState } from './skill-state.js';
@@ -110,7 +110,7 @@ async function runAttempt(context: SkillContext, run: RunId, attempt: AttemptId)
       // attempt is reported or stopped, and each check renews this install's hold on the run, so nobody takes over a run
       // whose step runs here.
       if (stage.kind === 'gone' && stage.status === 'offered') {
-        await whileOpen(context, run, attempt, { work: new Promise<never>(() => {}), phases: ['offered', 'dispatched'], owned: true });
+        await whileOpen(context, run, attempt, { work: new Promise<never>(() => {}), stop: async () => {}, phases: ['offered', 'dispatched'], owned: true });
       }
 
       if (stage.kind === 'gone') return { data: { runner: { attempt, status: stage.status } } };
@@ -411,9 +411,10 @@ async function check(context: SkillContext, lock: RunLock, attempt: AttemptId, {
 /**
  * Waits for `work`, which runs outside the run lock, checking the run every `RUNNER_POLL_MS` and at `expiresAt`, since
  * a cancel or a deadline reaches only the engine. Undefined once a check finds the attempt out of `phases`: stopped; with
- * `owned`, also once another install took the run over or the session called nothing for the stale window.
+ * `owned`, also once another install took the run over or the session called nothing for the stale window. A check that
+ * finds the run removed from this machine stops `work` with `stop`, then throws, since nothing drives it here.
  */
-async function whileOpen<T>(context: SkillContext, run: RunId, attempt: AttemptId, input: { work: Promise<T>; phases: readonly AttemptState['phase'][]; owned?: boolean; expiresAt?: string }): Promise<T | undefined> {
+async function whileOpen<T>(context: SkillContext, run: RunId, attempt: AttemptId, input: { work: Promise<T>; stop: () => Promise<unknown>; phases: readonly AttemptState['phase'][]; owned?: boolean; expiresAt?: string }): Promise<T | undefined> {
   for (;;) {
     const checking = new AbortController();
     const ended = await Promise.race([input.work.then((value) => ({ value })), context.runners.sleep(checkIn(context, input.expiresAt), checking.signal).then(() => undefined)]);
@@ -421,7 +422,12 @@ async function whileOpen<T>(context: SkillContext, run: RunId, attempt: AttemptI
 
     if (ended) return ended.value;
 
-    if (!(await locked(context, run, (lock) => check(context, lock, attempt, { phases: input.phases, owned: input.owned === true }))).open) return undefined;
+    const checked = await locked(context, run, (lock) => check(context, lock, attempt, { phases: input.phases, owned: input.owned === true })).catch(async (error: unknown) => {
+      if (error instanceof RunRemovedError) await input.stop();
+      throw error;
+    });
+
+    if (!checked.open) return undefined;
   }
 }
 
@@ -432,12 +438,14 @@ async function whileOpen<T>(context: SkillContext, run: RunId, attempt: AttemptI
 async function setUp(context: SkillContext, run: RunId, attempt: AttemptId, prepared: Extract<Stage, { kind: 'prepared' }>): Promise<WorkflowFailure | undefined> {
   const stop = new AbortController();
   const setup = context.client.setup(run, attempt, prepared.mode, stop.signal);
-  const ended = await whileOpen(context, run, attempt, { work: setup.then((failure) => ({ failure })), phases: ['preparing', 'running'], expiresAt: prepared.expiresAt });
+  const stopSetup = async (): Promise<WorkflowFailure | undefined> => {
+    stop.abort();
 
-  if (ended) return ended.failure;
-  stop.abort();
+    return await setup;
+  };
+  const ended = await whileOpen(context, run, attempt, { work: setup.then((failure) => ({ failure })), stop: stopSetup, phases: ['preparing', 'running'], expiresAt: prepared.expiresAt });
 
-  return setup;
+  return ended ? ended.failure : await stopSetup();
 }
 
 /**
@@ -446,7 +454,7 @@ async function setUp(context: SkillContext, run: RunId, attempt: AttemptId, prep
  */
 async function runCommand(context: SkillContext, run: RunId, attempt: AttemptId, stage: Extract<Stage, { kind: 'run' }>): Promise<GroupedCommandExit> {
   const command = context.runners.command({ run, attempt, command: stage.command, cwd: stage.dir, env: { ...stage.env, ...attemptEnv(context.config, run, attempt, stage.mode) } });
-  const exited = (await whileOpen(context, run, attempt, { work: command.exit, phases: ['running'], expiresAt: stage.expiresAt })) ?? (await command.stop());
+  const exited = (await whileOpen(context, run, attempt, { work: command.exit, stop: command.stop, phases: ['running'], expiresAt: stage.expiresAt })) ?? (await command.stop());
   const output = redact(exited.output, { envSecrets: context.env.secrets, patterns: false });
   await writeFileAtomic(path.join(attemptDir(context.config, run, attempt), 'output.log'), output);
 
@@ -460,12 +468,14 @@ async function runCommand(context: SkillContext, run: RunId, attempt: AttemptId,
 async function runConfinedHere(context: SkillContext, run: RunId, attempt: AttemptId, stage: Extract<Stage, { kind: 'confined' }>): Promise<ConfinedStepEnd> {
   const stop = new AbortController();
   const work = runConfinedStep({ config: context.config, run, lease: stage.lease, signal: stop.signal, secrets: context.env.secrets });
-  const ended = await whileOpen(context, run, attempt, { work, phases: ['running'], expiresAt: stage.expiresAt });
+  const stopStep = async (): Promise<ConfinedStepEnd> => {
+    stop.abort();
 
-  if (ended) return ended;
-  stop.abort();
+    return await work;
+  };
+  const ended = await whileOpen(context, run, attempt, { work, stop: stopStep, phases: ['running'], expiresAt: stage.expiresAt });
 
-  return work;
+  return ended ?? await stopStep();
 }
 
 /** Under the lock: stores the report of the confined run (C13), or gives up a stopped attempt (C9), then sends it. */
