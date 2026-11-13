@@ -175,7 +175,7 @@ describe("the container engines' row of section (f)", () => {
     };
     const { containers } = await import('./leftovers/containers.js');
 
-    return { engine, observed: await containers.observe({ world, self: SELF, others: [OTHER], records: { files: [], runs: [], runtimeJournals: 0 } }) };
+    return { engine, observed: await containers.observe({ world, self: SELF, others: [OTHER], records: { files: [], runs: [], runtimeJournals: 0, placements: [] } }) };
   }
 
   it("lists on Docker 29 the images teamai labelled, each tied to the world whose journal owns it, and asks the engine nothing it cannot answer", async () => {
@@ -229,6 +229,35 @@ describe("the container engines' row of section (f)", () => {
 
     expect((await section.observe()).leaks).toEqual([]);
   });
+
+  it("still says, once teamai uninstall removed the attempt records, that no observer read a closed sandbox's environment", async () => {
+    const dir = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-verify-engine-')));
+    roots.push(dir);
+    const engine = fakeDocker29(dir, []);
+    vi.stubEnv('PATH', `${engine.bin}:/usr/bin:/bin:/usr/sbin`);
+    // The record of a docker sandbox's attempt that closed before the observer looked, where teamai keeps it in user scope.
+    const record = path.join(dir, 'home', '.teamai', 'workflows', 'runs', 'r0123abcd', 'attempts', 'a0123abcd', 'runtime.json');
+    const origin = { layer: 'personal', location: 'drivers/box.yaml', revision: 'r' };
+    fs.mkdirSync(path.dirname(record), { recursive: true });
+    fs.writeFileSync(record, JSON.stringify({
+      runtime: 'sandbox', driver: 'box', phase: 'closed', open: { op: 'op-0123abcd', handle: 'h' },
+      sources: [{ runtime: 'teamai-sandbox', ...origin, sandbox: { profile: 'box', ...origin, location: 'sandboxes/box.yaml', provider: 'docker', enforces: {} } }],
+    }));
+    const world: World = {
+      runId: SELF.runId, dir, project: `${dir}/project`, team: `${dir}/team.git`, home: `${dir}/home`, tmp: `${dir}/tmp`, logs: `${dir}/logs`, bin: engine.bin,
+      build: { commit: 'c', dirty: false, version: '0.0.0', tarball: 't.tgz', sha256: 's', node: 'v20' },
+      createdAt: '2026-11-12T18:00:00.000Z',
+      baseline: { teamRefs: {}, checkoutStatus: [] },
+      driverSeen: true,
+    };
+    const { leftoversSection } = await import('./leftovers.js');
+
+    const section = await leftoversSection(world);
+    // What uninstall does to the run records.
+    fs.rmSync(path.join(dir, 'home', '.teamai'), { recursive: true });
+
+    expect((await section.observe()).notes).toContain("NOT OBSERVED: run r0123abcd attempt a0123abcd's environment on docker, which no observer line read: its sandbox closed before the observer looked, or could not be read");
+  });
 });
 
 describe("the sbx row of section (f)", () => {
@@ -249,7 +278,7 @@ describe("the sbx row of section (f)", () => {
     };
     const { sbxLeftovers } = await import('./leftovers/sbx.js');
 
-    const [seen] = await sbxLeftovers.observe({ world, self: SELF, others: [], records: { files: [], runs: [], runtimeJournals: 0 } });
+    const [seen] = await sbxLeftovers.observe({ world, self: SELF, others: [], records: { files: [], runs: [], runtimeJournals: 0, placements: [] } });
 
     expect(seen?.kind === 'observed' ? seen.findings.map((finding) => [finding.what, finding.attribution.kind]) : seen).toEqual([[`sbx sandbox ${name}`, 'own']]);
     const [command = 'true', ...args] = (seen?.kind === 'observed' ? seen.findings[0]?.remove : undefined) ?? [];
@@ -282,7 +311,7 @@ describe("the sbx row of section (f)", () => {
     };
     const { sbxLeftovers } = await import('./leftovers/sbx.js');
 
-    const observed = await sbxLeftovers.observe({ world, self: { ...SELF, paths: [dir] }, others: [], records: { files: [], runs: [], runtimeJournals: 0 } });
+    const observed = await sbxLeftovers.observe({ world, self: { ...SELF, paths: [dir] }, others: [], records: { files: [], runs: [], runtimeJournals: 0, placements: [] } });
     const findings = observed.flatMap((seen) => (seen.kind === 'observed' ? seen.findings : []));
 
     expect(observed.filter((seen) => seen.kind === 'not_observed')).toEqual([]);
@@ -316,7 +345,7 @@ describe("the sbx row of section (f)", () => {
     };
     const { sbxLeftovers } = await import('./leftovers/sbx.js');
 
-    const observed = await sbxLeftovers.observe({ world, self: { ...SELF, paths: [dir] }, others: [], records: { files: [], runs: [], runtimeJournals: 0 } });
+    const observed = await sbxLeftovers.observe({ world, self: { ...SELF, paths: [dir] }, others: [], records: { files: [], runs: [], runtimeJournals: 0, placements: [] } });
     const findings = observed.flatMap((seen) => (seen.kind === 'observed' ? seen.findings : []));
 
     expect(findings.map((finding) => [finding.what, finding.attribution.kind])).toEqual([

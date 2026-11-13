@@ -11,6 +11,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { z } from 'zod';
+import type { AttemptPlacement } from '../../src/workflow/runtimes/attempt.js';
 import { ledgerRedactor } from './secrets.js';
 import { markDriverSeen, runProbe, runtimeStateDirs, worldHomes, WORLDS_ROOT, type World } from './world.js';
 
@@ -154,6 +155,8 @@ export interface RecordScan {
   readonly files: readonly string[];
   readonly runs: readonly string[];
   readonly runtimeJournals: number;
+  /** Each file's placement, in the order of `files`, read with them: `teamai uninstall` removes the files. */
+  readonly placements: readonly AttemptPlacement[];
 }
 
 async function scanRecords(world: World): Promise<RecordScan> {
@@ -180,7 +183,9 @@ async function scanRecords(world: World): Promise<RecordScan> {
 
   const runtimeJournals = runtimeStateDirs(world).flatMap((state) => (fs.existsSync(state) ? fs.readdirSync(state) : [])).length;
 
-  return { files, runs, runtimeJournals };
+  const placements = files.length === 0 ? [] : await (await import('./leftovers/places.js')).readPlacements(files);
+
+  return { files, runs, runtimeJournals, placements };
 }
 
 const SpanSchema = z.object({
@@ -297,11 +302,10 @@ async function rowsFor(tier: Tier): Promise<LeftoverKind[]> {
 /** The context every row reads, built once per ledger or cleanup. */
 async function contextOf(world: World): Promise<{ context: LeftoverContext; tier: Tier }> {
   const records = await scanRecords(world);
-  const placements = records.files.length === 0 ? [] : await (await import('./leftovers/places.js')).readPlacements(records.files);
 
   const tier = worldTier({
-    inProcessRecords: placements.filter((placement) => placement.kind === 'in_process').length,
-    externalRecords: placements.filter((placement) => placement.kind !== 'in_process').length,
+    inProcessRecords: records.placements.filter((placement) => placement.kind === 'in_process').length,
+    externalRecords: records.placements.filter((placement) => placement.kind !== 'in_process').length,
     runtimeJournals: records.runtimeJournals,
     containerMembers: (world.members ?? []).filter((member) => member.machine === 'container').length,
     driverSeen: world.driverSeen === true,
