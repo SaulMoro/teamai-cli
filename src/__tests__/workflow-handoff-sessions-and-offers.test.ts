@@ -17,7 +17,8 @@ import { pendingRecords, queueRunRecord } from '../workflow/records.js';
 import { runLocalDriver } from '../workflow/drivers/local/local-driver.js';
 import { cancelRun } from '../workflow/run-controls.js';
 import { type StepLauncher } from '@teamai/runtime-tools';
-import { installOwner, readRun } from '../workflow/store.js';
+import { AttemptIdSchema, installOwner, readRun, RunIdSchema } from '../workflow/store.js';
+import { attemptRuntimePath } from '../workflow/runtimes/attempt.js';
 import { PublishedRuns, type Taker } from '../workflow-published-runs.js';
 import type { WorkflowDefinition, WorkflowEnvelope } from '../workflow/types.js';
 import { worktreePath } from '../workflow/worktree.js';
@@ -800,6 +801,30 @@ describe('offering a run to a runner (#1390)', () => {
     expect(published).toMatchObject({ owner: { user: 'alice' } });
     expect(published).not.toHaveProperty('offered');
     expect(published).not.toHaveProperty('repository');
+  });
+
+  it('publishes no run while a place held here for a conversation cannot be closed, and keeps that place', async () => {
+    const acme = team();
+    const alice = await acme.member('alice');
+    const runId = await start(alice);
+    await runStep(alice, runId);
+    const run = await readRun(alice.config, runId);
+    const one = typeof run === 'object' ? run.steps[0] : undefined;
+    const attempt = AttemptIdSchema.parse(one && 'attempt' in one ? one.attempt : undefined);
+    // Step one's place is held for its conversation on a step runtime whose driver this machine no longer has, so
+    // nothing here can close it.
+    const runtime = attemptRuntimePath(alice.config, RunIdSchema.parse(runId), attempt);
+    fs.mkdirSync(path.dirname(runtime), { recursive: true });
+    fs.writeFileSync(runtime, JSON.stringify({
+      runtime: 'toy', driver: 'gone', phase: 'collected', open: { op: 'op-0123456789abcdef', handle: 'toy-held' }, prompt: { op: 'op-fedcba9876543210' },
+      heldFor: { conversation: { tool: 'claude', id: 'session-one' }, workspace: 'shared' },
+    }));
+
+    const published = await publishRun(alice.config, runId, { env: {}, checkout: alice.checkout });
+
+    expect(published).toMatchObject({ ok: false, error: { code: 'place_kept', message: expect.stringContaining(`attempt ${attempt}`) } });
+    expect(originFile(acme.origin, `workflows/runs/${runId}/state.json`)).toBeNull();
+    expect(JSON.parse(fs.readFileSync(runtime, 'utf8'))).toMatchObject({ phase: 'collected', heldFor: { conversation: { id: 'session-one' } } });
   });
 
   it('refuses a next of the earlier owner once its reports checkout shows another install claimed the run', async () => {
