@@ -514,6 +514,20 @@ describe('benchmark plan run', () => {
     expect(unmeasuredOf(run)).toEqual([]);
   });
 
+  it('names a trial that broke, and none that the cancel of the run stopped', async () => {
+    const { config, runId } = await startFix({ arms: 2 });
+    const failed = await leasePrompt(config, runId);
+    await reportAttempt(config, runId, { ...failed, outcome: 'failed', driver, failure: { code: 'sandbox_failed', message: 'The attempt socket is too long.' } });
+    LeaseSchema.parse(await leaseNext(config, runId, driver, { can, prepare: true }));
+
+    await cancelRun(config, runId, {});
+
+    const run = await readRun(config, runId);
+    if (typeof run !== 'object') throw new Error(`run ${runId} is ${run}`);
+    expect(recordOf(run).trials.map(({ result }) => result)).toEqual(['error', 'error']);
+    expect(unmeasuredOf(run)).toEqual(['Trial 1/2 t01 a01: sandbox_failed: The attempt socket is too long.']);
+  });
+
   it('leaves a trial whose work succeeded and whose check could not run to the unchecked checks, though no trial produced a result', async () => {
     const { config, runId } = await startFix();
     const prompt = await leasePrompt(config, runId);

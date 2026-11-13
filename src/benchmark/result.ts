@@ -460,8 +460,8 @@ const MEASURED: ReadonlySet<TrialResult> = new Set(['passed', 'failed', 'unscore
 /**
  * A line for each of the record's `trials` whose work ended in an error, with why, when none produced a result: every
  * trial is `error` or `not_run`, so the run measured nothing. A trial whose work succeeded and whose check could not run
- * is left to `uncheckedChecks`. Empty once any trial passed, failed or is unscored. teamai's benchmark workflow fails
- * its `results` gate on them.
+ * is left to `uncheckedChecks`, and one whose work the run's cancel or timeout stopped did not break. Empty once any
+ * trial passed, failed or is unscored. teamai's benchmark workflow fails its `results` gate on them.
  */
 export function unmeasuredTrials(run: RunState, trials: BenchmarkRecord['trials']): string[] {
   if (trials.some(({ result }) => MEASURED.has(result))) return [];
@@ -469,7 +469,7 @@ export function unmeasuredTrials(run: RunState, trials: BenchmarkRecord['trials'
   return trials.flatMap((trial) => {
     const work = run.steps.find((state) => state.id === trial.step);
 
-    if (trial.result !== 'error' || work?.status === 'succeeded') return [];
+    if (trial.result !== 'error' || work?.status === 'succeeded' || work?.status === 'cancelled') return [];
 
     return [`Trial ${trial.order}/${trials.length} ${trial.task} ${trial.arm}: ${whyErrored(workOf(run, trial.step), work)}`];
   });
