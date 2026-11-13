@@ -1974,6 +1974,8 @@ describe('uninstall', () => {
       const realRoot = await fse.realpath(projectRoot);
       expect(printed.filter((line) => line.includes('Workflow worktree setup in'))).toEqual([`   Workflow worktree setup in ${realRoot}, with no workflow worktree left:`]);
       expect(printed.filter((line) => line.includes('extensions.worktreeConfig'))).toHaveLength(1);
+      // A run waiting at a gate keeps its worktree as well: the preview does not call every one failed.
+      expect(printed).toContain('   Worktrees teamai made for workflow runs (2), whose commits stay on their branches:');
 
       await uninstall({ force: true });
 

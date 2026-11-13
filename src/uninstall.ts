@@ -209,7 +209,7 @@ interface RemovalPlan {
   /** teamai's git hook in the project repository: config sections and hook scripts holding its block. */
   gitHook: { repoDir: string; entries: string[]; checkouts?: string[] } | null;
   /**
-   * The worktrees failed and cancelled workflow runs kept in this project's checkouts, each with a checkout of its
+   * The worktrees workflow runs kept in this project's checkouts, a failed, cancelled or waiting one's, each with a checkout of its
    * repository: a removable one goes, its branch staying; a kept one is named with the command that removes it.
    */
   runWorktrees: Array<{ checkout: string; worktree: RunWorktree }>;
@@ -2198,7 +2198,7 @@ function printSummary(plan: RemovalPlan, agentFilter?: string): void {
   const removableRunWorktrees = plan.runWorktrees.flatMap(({ worktree }) => (worktree.kind === 'removable' ? [worktree] : []));
 
   if (removableRunWorktrees.length > 0) {
-    console.log(`   Worktrees of failed or cancelled workflow runs (${removableRunWorktrees.length}), whose commits stay on their branches:`);
+    console.log(`   Worktrees teamai made for workflow runs (${removableRunWorktrees.length}), whose commits stay on their branches:`);
 
     for (const { dir, branch } of removableRunWorktrees) console.log(`     ${dir}${branch === undefined ? '   (already gone: git\'s record of it)' : `   (branch ${branch} stays)`}`);
     console.log('');
