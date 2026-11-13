@@ -1,4 +1,5 @@
 import fs from 'node:fs';
+import path from 'node:path';
 import {
   CANCEL_FAILED, PromptResultSchema, RUN_DIR_ENV, WORKFLOW_DIR_ENV,
   type ConfinedPrompt, type OpId, type OpState, type PromptLease, type PromptResult, type RuntimeDisplay, type RuntimeFailure, type RuntimeRequest,
@@ -589,13 +590,23 @@ export function conversations({ serving, adder }: { serving: Serving; adder: Ins
       // The session is in the tool home of the instance the thread runs on, or through a sandbox in the attempt's, which is
       // the scoring and resume store.
       const instanceId = instanceIdOf(s, thread);
-      const toolHome = driver && (toolHomes?.[DRIVERS[driver].homeEnv] ?? (instanceId !== undefined ? instanceToolHome(readSettings(options.t3Home), { instanceId, driver, userHome: options.t3UserHome }) : undefined));
+      const attemptHome = driver && toolHomes?.[DRIVERS[driver].homeEnv];
+      const toolHome = driver && (attemptHome ?? (instanceId !== undefined ? instanceToolHome(readSettings(options.t3Home), { instanceId, driver, userHome: options.t3UserHome }) : undefined));
       // A new thread never resumes the session the lease names (T3 starts each with a new one), so that session, of an
       // earlier thread in this folder the step did not go on in, is not this one's.
       const other = thread.turnOf ? undefined : request.lease.resume;
       const id = driver && toolHome !== undefined ? await sessionSince({ driver, toolHome, cwd, since: thread.launchedAt, ...(other !== undefined && { other }) }) : undefined;
 
-      if (!driver || toolHome === undefined || !id) return stopped({ op: request.op, state: 'failed', failure: { code: 'tool_failed', message: `${where} finished, but ${thread.tool} kept no session for ${cwd}${toolHome === undefined ? '' : ` in ${toolHome}`}, so the step cannot be scored or resumed.` } });
+      if (!driver || toolHome === undefined || !id) {
+        // T3 runs the tool in the instance's home path, else in the home its own server's environment names, which
+        // teamai cannot read: only the setting makes the two agree.
+        const named = driver && attemptHome === undefined && instanceId !== undefined && toolHome !== undefined
+          ? ` teamai looks for it in the home path of T3 provider instance "${instanceId}", else in ~/${DRIVERS[driver].home} of the user T3 Code runs as (${toolHome}). If the T3 server runs ${thread.tool} with a ${DRIVERS[driver].homeEnv} of its own, set providerInstances.${instanceId}.config.homePath to that directory in ${path.join(options.t3Home, 'userdata', 'settings.json')} (Settings → Providers in T3 Code), then retry the step.`
+          : '';
+
+        return stopped({ op: request.op, state: 'failed', failure: { code: 'tool_failed', message: `${where} finished, but ${thread.tool} kept no session for ${cwd}${toolHome === undefined ? '' : ` in ${toolHome}`}, so the step cannot be scored or resumed.${named}` } });
+      }
+
       // teamai reads a tool instance's session only in the home named here: it knows no default home for it.
       const kept = { tool: thread.tool, id, ...((thread.tool !== DRIVERS[driver].tool || !isDefaultToolHome(driver, toolHome)) && { home: toolHome }) };
 

@@ -594,6 +594,18 @@ describe('teamai-runtime-t3', () => {
       expect(await ended(runtime, 'op-00000012')).toMatchObject({ event: 'failed', failure: { code: 'tool_failed', message: expect.stringContaining(`claude kept no session for ${worktree} in ${path.join(t3.home, '.claude')}, so the step cannot be scored or resumed.`) } });
     });
 
+    it('says where it looked for the session, and the T3 setting that names another home, when the tool kept none there', async () => {
+      t3.config({ agent: { output: { verdict: 'approve' }, noSession: true } });
+      const { runtime, handle } = await opened();
+
+      runtime.send(prompt(handle, 'op-0000fe22'));
+      const end = await ended(runtime, 'op-0000fe22');
+      const { message } = z.object({ failure: z.object({ message: z.string() }) }).parse(end).failure;
+
+      expect(message).toContain(`teamai looks for it in the home path of T3 provider instance "claudeAgent", else in ~/.claude of the user T3 Code runs as (${path.join(t3.home, '.claude')}).`);
+      expect(message).toContain(`If the T3 server runs claude with a CLAUDE_CONFIG_DIR of its own, set providerInstances.claudeAgent.config.homePath to that directory in ${path.join(t3.t3Home, 'userdata', 'settings.json')} (Settings → Providers in T3 Code), then retry the step.`);
+    });
+
     it('stops the thread on cancel and ends cancelled once its run has ended', async () => {
       t3.config({ agent: { hold: true, output: {} } });
       const { runtime, handle } = await opened();
