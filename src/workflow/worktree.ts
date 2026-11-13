@@ -658,7 +658,6 @@ const WORKTREE_CONFIG_OWNED = 'teamai.worktreeconfig';
  * them, and `extensions.worktreeConfig` when teamai turned it on and no worktree has a configuration of its own. Nothing while a TeamAI worktree
  * of the repository is left, since it still needs them. Returns what it removed, or with `dryRun` what it would.
  */
-
 export async function removeWorktreeSetup(checkout: string, { dryRun = false, gone = [] }: { dryRun?: boolean; gone?: readonly string[] } = {}): Promise<string[]> {
   const listed = await git(checkout, ['worktree', 'list', '--porcelain']);
 
