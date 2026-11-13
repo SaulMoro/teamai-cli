@@ -96,8 +96,9 @@ function onEngine(engine: (typeof CONTAINER_ENGINES)[number], self: WorldTies, o
   const images = labelledImages(command);
 
   if (images.kind === 'listed') {
-    // By name: an engine refuses to remove by id an image that more than one name holds. An untagged one goes by its id.
-    findings.push(...images.images.map((one) => ({ what: `${engine} image ${one.name}`, attribution: tie(one.owner, [], []), remove: [command, 'image', 'rm', one.name === '<none>:<none>' ? one.id : one.name] })));
+    // By name: an engine refuses to remove by id an image that more than one name holds. One with no tag, which `ls`
+    // shows as `<repo>:<none>` or `<none>:<none>`, goes by its id.
+    findings.push(...images.images.map((one) => ({ what: `${engine} image ${one.name}`, attribution: tie(one.owner, [], []), remove: [command, 'image', 'rm', one.name.endsWith(':<none>') ? one.id : one.name] })));
   } else {
     unobserved.push({ kind: 'not_observed', what: `${engine} images`, why: images.why });
   }

@@ -92,7 +92,7 @@ describe('what each row reads from what an engine or the process table printed',
   });
 });
 
-/** An image the fake engine keeps: its full id (hex), its tags, and its labels. */
+/** An image the fake engine keeps: its full id (hex), its tags (`<repo>:<none>` for one only a digest names), and its labels. */
 interface FakeImage {
   readonly id: string;
   readonly tags: string[];
@@ -150,6 +150,7 @@ if (sub === 'inspect') {
 }
 if (sub === 'rm') {
   const ref = args[2];
+  if (ref.includes('<none>')) { process.stderr.write('Error response from daemon: invalid reference format\\n'); process.exit(1); }
   const image = find(ref);
   if (image === undefined) { process.stderr.write('Error response from daemon: No such image: ' + ref + '\\n'); process.exit(1); }
   if (image.tags.includes(ref)) image.tags.splice(image.tags.indexOf(ref), 1);
@@ -206,6 +207,15 @@ describe("the container engines' row of section (f)", () => {
     expect(observed.flatMap((seen) => (seen.kind === 'observed' ? seen.findings : [])).map((finding) => [finding.what, finding.attribution.kind])).toEqual([
       ['docker image teamai-warm:kmine', 'own'],
     ]);
+  });
+
+  it('removes on cleanup an image of the world that its repository names with no tag, by its id', async () => {
+    const { engine, observed } = await observeContainers([{ id: 'a'.repeat(64), tags: ['teamai-warm:<none>'], labels: { 'teamai.owner': SELF.journals[0] ?? '' } }]);
+    const findings = observed.flatMap((seen) => (seen.kind === 'observed' ? seen.findings : []));
+
+    expect(findings.map((finding) => [finding.what, finding.attribution.kind])).toEqual([['docker image teamai-warm:<none>', 'own']]);
+    expect(findings.map((finding) => removeLeftover({ command: finding.remove ?? [] }))).toEqual([{ ok: true, wasThere: true }]);
+    expect(engine.images()).toEqual([]);
   });
 
   it('removes on cleanup an image of the world that two tags name, one name at a time, where removal by id is refused', async () => {
