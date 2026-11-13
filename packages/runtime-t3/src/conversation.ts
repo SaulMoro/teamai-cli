@@ -7,11 +7,12 @@ import {
 import type { OpEnd } from '@teamai/runtime-kit/ledger';
 import { WRAPPER_PREFIX } from '@teamai/runtime-kit/outer';
 import { NotRegularFileError, readRegularFileSync } from '@teamai/shared/regular-file';
+import { stepUsage } from '@teamai/tool-core/step-usage';
 import type { InstanceAdder } from './instances.js';
 import { unreadableFailure, type LaunchRecord, type OpRecord, type PlaceRecord, type ThreadRecord } from './journal.js';
 import { JUDGE_KEPT, JudgeCopyFailed, JudgeReleased, judged, launchJudge } from './judge.js';
 import type { Reach, Reached, Serving, Session } from './runtime.js';
-import { driverOf, isDefaultToolHome, sessionSince, stepUsage, DRIVERS } from './sessions.js';
+import { driverOf, isDefaultToolHome, sessionSince, DRIVERS } from './sessions.js';
 import { instanceToolHome, projectSettings, readSettings, type ModelSelection, type T3RuntimeMode } from './settings.js';
 import { driverOfProvider } from './tool-instances.js';
 import { T3Error, USAGE_LIMIT_TITLE, type Environment, type Launch, type ListedThread, type NewThread, type StepMode, type Provider, type T3, type ThreadShell, type Waited, isActive } from './t3.js';
@@ -610,8 +611,9 @@ export function conversations({ serving, adder }: { serving: Serving; adder: Ins
       // teamai reads a tool instance's session only in the home named here: it knows no default home for it.
       const kept = { tool: thread.tool, id: found.id, ...((thread.tool !== DRIVERS[driver].tool || !isDefaultToolHome(driver, toolHome)) && { home: toolHome }) };
       // A turn journaled before it carried its send time cannot be told from the earlier steps' requests, so it reports none.
-      const sentAt = thread.turnOf?.sentAt;
-      const usage = !thread.turnOf ? await stepUsage({ driver, session: found }) : sentAt === undefined ? undefined : await stepUsage({ driver, session: found, turnSentAt: sentAt });
+      const turnSentAt = thread.turnOf?.sentAt;
+      const { transcript } = found;
+      const usage = transcript !== undefined && (!thread.turnOf || turnSentAt !== undefined) ? await stepUsage({ format: DRIVERS[driver].tokens, transcriptPath: transcript, sessionId: found.id, ...(turnSentAt !== undefined && { turnSentAt }) }) : undefined;
 
       return stopped({ op: request.op, state: 'finished', session: kept, result: written.result, ...(usage && { usage }), ...(request.confined && { confined: JUDGE_KEPT }), ...(thread.turnOf && { resumed: true }) });
     }

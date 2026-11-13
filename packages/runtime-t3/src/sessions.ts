@@ -1,15 +1,11 @@
 import path from 'node:path';
-import type { PromptUsageSchema } from '@teamai/runtime-protocol';
 import { ClaudeCodeAdapter } from '@teamai/tool-core/formats/claude-code';
-import { readClaudeJsonl } from '@teamai/tool-core/formats/claude-jsonl';
 import { CodexAdapter } from '@teamai/tool-core/formats/codex';
-import { readCodexRollout } from '@teamai/tool-core/formats/codex-rollout';
-import { addTokenUsage, type TokenReading, type TokenSource, type TokenUsage } from '@teamai/tool-core/tokens';
+import type { StepTokenFormat } from '@teamai/tool-core/step-usage';
 import { HOST_PROCESSES } from '@teamai/shared/exec';
 import { getUserHome } from '@teamai/shared/home';
 import type { SessionHost } from '@teamai/tool-core/sessions/platform';
 import type { AgentAdapter } from '@teamai/tool-core/sessions/base';
-import type { z } from 'zod';
 
 // ─── The tool session a T3 thread ran ───
 //
@@ -24,27 +20,22 @@ import type { z } from 'zod';
 // The runtime only reads sessions, and only writing one runs a tool's CLI, so each tool is its own command here.
 const SESSION_READER_HOST: SessionHost = { processes: HOST_PROCESSES, executablesOf: (tool) => [tool] };
 
-type PromptUsage = z.infer<typeof PromptUsageSchema>;
-
 /**
  * The T3 provider drivers this runtime runs, each with the teamai tool it is, its name in T3, its tool's home under a
- * user's home, the variable that moves that home, the store its sessions are in under a tool home, and how its
- * transcript records tokens: the reader of its format, and the tokens as the tool's own end-of-run usage reports them,
- * which is what a step that runs the tool on this machine reports.
+ * user's home, the variable that moves that home, the store its sessions are in under a tool home, and the format its
+ * transcript records tokens in.
  */
 export const DRIVERS = {
   claudeAgent: {
     tool: 'claude', label: 'Claude', home: '.claude', homeEnv: 'CLAUDE_CONFIG_DIR', sessions: (toolHome: string) => new ClaudeCodeAdapter('claude-code', path.join(toolHome, 'projects')),
-    tokens: { read: readClaudeJsonl, reported: (tokens: TokenUsage): PromptUsage => ({ input: tokens.input, output: tokens.output, cachedInput: tokens.cacheRead }) },
+    tokens: 'claude-jsonl',
   },
   codex: {
     tool: 'codex', label: 'Codex', home: '.codex', homeEnv: 'CODEX_HOME', sessions: (toolHome: string) => new CodexAdapter('codex', path.join(toolHome, 'sessions'), SESSION_READER_HOST),
-    // Codex counts cached input inside its input tokens.
-    tokens: { read: readCodexRollout, reported: (tokens: TokenUsage): PromptUsage => ({ input: tokens.input + tokens.cacheRead + tokens.cacheCreation, output: tokens.output, cachedInput: tokens.cacheRead }) },
+    tokens: 'codex-rollout',
   },
 } as const satisfies Record<string, {
-  tool: string; label: string; home: string; homeEnv: string; sessions(toolHome: string): AgentAdapter;
-  tokens: { read(source: TokenSource): Promise<TokenReading>; reported(tokens: TokenUsage): PromptUsage };
+  tool: string; label: string; home: string; homeEnv: string; sessions(toolHome: string): AgentAdapter; tokens: StepTokenFormat;
 }>;
 
 export type Driver = keyof typeof DRIVERS;
@@ -91,24 +82,4 @@ export async function sessionSince({ driver, toolHome, cwd, since, other }: { dr
   const first = started.sort((a, b) => Date.parse(a.createdAt) - Date.parse(b.createdAt))[0];
 
   return first && { id: first.sessionId, ...(first.filePath !== undefined && { transcript: first.filePath }) };
-}
-
-/**
- * The tokens the step billed in `session`, as its tool's own end-of-run usage reports them: every request of the
- * session for a thread the step launched, and only those at or after `turnSentAt` for a turn it sent to an earlier
- * step's thread, whose session holds that step's requests too. Undefined when the transcript cannot be read or records
- * no request in that span, or, for a turn, records a request without the time that would place it in or out of the turn:
- * the step then reports no usage, never zero.
- */
-export async function stepUsage({ driver, session, turnSentAt }: { driver: Driver; session: KeptSession; turnSentAt?: number }): Promise<PromptUsage | undefined> {
-  if (session.transcript === undefined) return undefined;
-  const format = DRIVERS[driver].tokens;
-  // A Codex turn's usage may land just after T3 shows the run ended, so the read waits for it as for a Stop hook.
-  const { requests } = await format.read({ transcriptPath: session.transcript, sessionId: session.id, settled: false });
-  const billed = requests.map((request) => ({ tokens: request.tokens, at: Date.parse(request.timestamp) }));
-
-  if (turnSentAt !== undefined && billed.some(({ at }) => Number.isNaN(at))) return undefined;
-  const own = billed.filter(({ at }) => turnSentAt === undefined || at >= turnSentAt).map(({ tokens }) => tokens);
-
-  return own.length === 0 ? undefined : format.reported(own.reduce((sum, tokens) => addTokenUsage(sum, tokens)));
 }

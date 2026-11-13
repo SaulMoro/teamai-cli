@@ -19,7 +19,7 @@ import { notOffered } from './offer.js';
 import type { Following, ProcessState } from './process-state.js';
 import { isPaseoTool, type EnsureProvider, type PaseoTool } from './providers.js';
 import { handOver, throughOf, type Through } from './sandbox.js';
-import { stepUsage } from './usage.js';
+import { sessionUsage } from './usage.js';
 
 // ─── One Paseo agent's life ──────────────────────────────
 //
@@ -408,7 +408,7 @@ export function conversations(state: ProcessState, { ensureProvider }: { ensureP
     const turn = kept?.kind === 'agent' ? kept.turn : record.turn;
 
     if (!target || session.home === undefined || !isOnThisMachine(live.url) || (turn && turn.sentAt === undefined)) return { session };
-    const usage = await stepUsage({ tool: target.tool, toolHome: session.home, cwd: record.cwd, sessionId: session.id, ...(turn?.sentAt !== undefined && { turnSentAt: turn.sentAt }) });
+    const usage = await sessionUsage({ tool: target.tool, toolHome: session.home, cwd: record.cwd, sessionId: session.id, ...(turn?.sentAt !== undefined && { turnSentAt: turn.sentAt }) });
 
     return { session, ...(usage && { usage }) };
   };
