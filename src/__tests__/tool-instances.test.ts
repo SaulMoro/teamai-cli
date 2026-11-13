@@ -392,6 +392,19 @@ describe('the home of an instance', () => {
       expect(unreadWrites(where, undefined, session), resource).toEqual([]);
     }
   });
+
+  it('reads where the tool it extends reads when it sets its own paths, which teamai writes to whole', async () => {
+    const repo = teamRepo({ 'tools/acme-claude.yaml': `${ACME_CLAUDE}paths: { skills: .claude/skills, rules: .claude/rules }\n` });
+    const { config } = await load(repo);
+    const { installOf, locate, unreadWrites, writesOf } = await import('../locate.js');
+    const project = path.join(root, 'project');
+    fs.mkdirSync(path.join(project, '.claude'), { recursive: true });
+    const install = installOf(config ?? { toolPaths: {} }, { repo: {}, scope: 'project', projectRoot: project });
+    const where = await locate('acme-claude', 'rules', install);
+
+    expect(writesOf(where).map((place) => place.path)).toEqual([path.join(project, '.claude', 'rules')]);
+    expect(unreadWrites(where, undefined, { kind: 'within', root: project })).toEqual([]);
+  });
 });
 
 describe('personal tool instances', () => {

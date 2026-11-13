@@ -325,11 +325,12 @@ export function defaultPathsOf(instance: ResolvedToolInstance): z.infer<typeof T
 
 /**
  * Where `instance` reads a file the tool it extends reads at `relative`: under its own home when it has one, moved as
- * its tool paths are (`defaultPathsOf`), so what teamai writes there is judged read. A path outside that tool's roots,
- * such as a project file at the root, stays as it is.
+ * its tool paths are (`instancePaths`), so what teamai writes there is judged read. A path outside that tool's roots,
+ * such as a project file at the root, stays as it is, and so does every path of an instance that sets its own paths,
+ * which teamai writes to as they are.
  */
 export function instanceReadPath(instance: ResolvedToolInstance, relative: string): string {
-  if (!instance.home || instance.name === instance.extends || !relative.includes('/')) return relative;
+  if (!instance.home || instance.paths || instance.name === instance.extends || !relative.includes('/')) return relative;
 
   const shipped: z.infer<typeof ToolPathsSchema> = DEFAULT_TOOL_PATHS[instance.extends];
 
