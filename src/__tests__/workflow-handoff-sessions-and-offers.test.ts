@@ -4,6 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it, onTestFinished, vi } from 'vitest';
 import { listHandoffs, listLocalRuns, workflowRunDetail } from '../dashboard/workflow-runs.js';
+import { selfImprovementView } from '../dashboard/self-improvement.js';
 import { getAdapter } from '../session-flow/adapters/index.js';
 import { AgentSession } from '../session-flow/agent-session.js';
 import type { LocalConfig } from '../types.js';
@@ -1275,6 +1276,23 @@ steps:
     // Its details show no step as this copy last kept it open, and nothing this machine's runtimes held back.
     const statuses = async (run: string) => new Set((await workflowRunDetail(alice.config, 'local', run))?.steps.map((step) => step.status));
     expect([await statuses(local), await statuses(held), await statuses(ended)]).toEqual([new Set(['pending']), new Set(['elsewhere']), new Set(['elsewhere'])]);
+  });
+
+  it('shows the self-improvement loop a run of it another install ended as it ended there', async () => {
+    const acme = team({ 'teamai-self-improvement': BUILD.replace('name: build', 'name: teamai-self-improvement') });
+    const alice = await acme.member('alice');
+    const bob = await acme.member('bob');
+    const started = await startRun(alice.config, 'teamai-self-improvement', {}, { secrets: {} });
+    if ('error' in started) throw new Error(started.error.message);
+    const run = String(started.data.run);
+    await publishRun(alice.config, run, { env: {}, checkout: alice.checkout });
+    await claimRun(bob.config, run, { checkout: bob.checkout });
+    await cancelRun(bob.config, run, {});
+
+    await reportsBranch.readableReportsWorktree(alice.config);
+    const { runs } = await selfImprovementView({ config: alice.config, refresh: false });
+
+    expect(runs.map((shown) => [shown.run, shown.status])).toEqual([[run, 'cancelled']]);
   });
 
   it('shows the dashboard each run handed over, with what a runner would need, marking the ones this install published', async () => {
