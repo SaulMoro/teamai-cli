@@ -326,6 +326,23 @@ describe('an attempt\'s operations on a step runtime', () => {
     expect(fs.existsSync(runDir)).toBe(false);
   });
 
+  it('leaves no data home behind when an uninstall removed it while the open waited on the places lock', async () => {
+    const { run, config, done } = counted();
+    onTestFinished(done);
+    const dataHome = getDataHome(config);
+    fs.mkdirSync(path.dirname(attemptsDir(config, RunIdSchema.parse('r0123abcd'))), { recursive: true });
+    const lock = placesLockIn(dataHome);
+    expect(await acquireLock(lock)).toBe(true);
+
+    const opened = run.open({ worktree: '/work', readonly: [], result: '/work/out', runDir: '/work/scratch', toolHome: {} });
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    fs.rmSync(dataHome, { recursive: true, force: true });
+    await releaseLock(lock);
+
+    await expect(opened).resolves.toMatchObject({ ok: false, failure: { message: expect.stringContaining('its run was removed while it waited') } });
+    expect(fs.existsSync(dataHome)).toBe(false);
+  });
+
   it('sends no exec when the step is stopped while the attempt records the exec it is about to send', async () => {
     const { run, execs, done } = counted();
     onTestFinished(done);
