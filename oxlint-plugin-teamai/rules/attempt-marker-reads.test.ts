@@ -17,6 +17,7 @@ invalid('rejects reading the marker off process.env', `${IMPORTED}export const m
 invalid('rejects splitting the marker of an env a function is given', `${IMPORTED}export const run = (env: NodeJS.ProcessEnv) => (env[ATTEMPT_ENV] ?? '').split('/')[0];`);
 invalid('rejects the marker read under another name', `import { ATTEMPT_ENV as MARKER } from '../launch-context.js';\nexport const marker = (env: NodeJS.ProcessEnv) => env[MARKER];`);
 invalid('rejects the marker taken apart from an env', `${IMPORTED}export const marker = (env: NodeJS.ProcessEnv) => { const { [ATTEMPT_ENV]: value } = env; return value; };`);
+invalid('rejects removing the marker by taking it apart, and names the helper that removes it', `${IMPORTED}export const { [ATTEMPT_ENV]: _marker, ...unmarked } = process.env;`, (output) => expect(output).toContain('withoutAgentEvidence'));
 invalid('rejects the marker read by its spelling', `export const marker = (env: NodeJS.ProcessEnv) => env['TEAMAI_WORKFLOW_ATTEMPT'];`, (output) => expect(output).toContain(MESSAGE));
 invalid('rejects a read in a folder no rule names yet', `${IMPORTED}export const marker = process.env[ATTEMPT_ENV];`, undefined, { filename: 'src/brand-new-area/reader.ts' });
 invalid("rejects a read in a package module that shares a reader's file name", `import { ATTEMPT_ENV } from 'teamai/launch-context';\nexport const marker = process.env[ATTEMPT_ENV];`, undefined, { filename: 'packages/brand-new/src/launch-context.ts' });
