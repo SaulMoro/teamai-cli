@@ -662,6 +662,9 @@ describe('the tools launcher', () => {
 
     expect(await hostLauncher(missing, () => 'claude').run('claude', run))
       .toMatchObject({ started: false, failure: { code: 'tool_unavailable' } });
+    // An instance that runs the shipped command misses that command, not one named after itself.
+    expect(await hostLauncher(missing, () => '/opt/tools/claude').run('claude', { ...run, instance: { name: 'claude-work' } }))
+      .toMatchObject({ started: false, failure: { code: 'tool_unavailable', message: 'The claude executable is not available on PATH' } });
     expect(await hostLauncher(missingBehindShell, () => 'claude').run('claude', run))
       .toMatchObject({ started: false, failure: { code: 'tool_unavailable' } });
     expect(await hostLauncher(throws, () => 'claude').run('claude', run))

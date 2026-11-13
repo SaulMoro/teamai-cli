@@ -466,7 +466,8 @@ export async function runStepLaunch({ tool, input, start, canReattach = false, l
       started: false,
       exitCode: completed.exitCode,
       failure: completed.error?.code === 'ENOENT'
-        ? { code: 'tool_unavailable', message: `The ${name} executable is not available on PATH` }
+        // The command it ran, which an instance of the tool may share: not the tool's name.
+        ? { code: 'tool_unavailable', message: `The ${path.basename(tool.executable)} executable is not available on PATH` }
         // Stopped while its runtime opened the place or set it up: a cancel, not a launch that failed.
         : stopCause === 'aborted' ? stoppedBeforeStart(name) : { code: 'tool_failed', message: `${name} could not be started` },
     };
