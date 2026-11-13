@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { environmentNotes, instanceHomesIn, isEmptyInstanceHome, isToolOwnState, ownStateOf } from './ledger.js';
+import { environmentNotes, ledgerRules, toolInstancesIn } from './ledger.js';
 
 const roots: string[] = [];
 
@@ -37,7 +37,7 @@ describe("a tool's own state file in a ledger's section (e)", () => {
     ['home/.codebuddy.json', '{"projects":{"/w/project":{"mcpServers":{"docs":{"command":"node"}}}}}', false],
     ['home/.other.json', '{}', false],
   ])('judges %s holding %s as the tool\'s own: %s', (entry, text, own) => {
-    expect(isToolOwnState(entry, text)).toBe(own);
+    expect(ledgerRules([]).isToolOwnState(entry, text)).toBe(own);
   });
 });
 
@@ -99,7 +99,7 @@ describe("another program's own state in a ledger's section (e)", () => {
     ['home/.cache/teamai/opencode/log/x.log', sha, undefined],
     ['home/.local/share/opencode/teamai-hooks.ts', sha, undefined],
   ])('judges %s holding %s as the state of %o', (entry, value, own) => {
-    expect(ownStateOf(entry, value)).toEqual(own);
+    expect(ledgerRules([]).ownStateOf(entry, value)).toEqual(own);
   });
 });
 
@@ -121,18 +121,43 @@ describe("a tool instance's home in a ledger's section (e)", () => {
     return home;
   }
 
-  it('reads the home of every instance the install declares, before uninstall removes the records', async () => {
-    expect([...await instanceHomesIn(homeWithInstances())].sort()).toEqual(['home/.acme-claude', 'home/.beta', 'home/.own', 'home/.own/codex']);
+  it('reads every instance the install declares, with its home as teamai joins it to HOME', async () => {
+    const instances = await toolInstancesIn(homeWithInstances());
+
+    expect(instances.map((instance) => [instance.name, instance.home?.dir]).sort()).toEqual([['acme-claude', '.acme-claude'], ['beta-claude', '.beta'], ['own-codex', '.own/codex']]);
   });
 
+  const sha = 'f'.repeat(64);
+
+  // What a step run as acme-claude leaves in its home after uninstall, judged as Claude's own home is.
   it.each([
-    ['an empty instance home', 'home/.acme-claude', { 'home/.acme-claude': 'dir' }, true],
-    ['the empty folders that hold one', 'home/.own', { 'home/.own': 'dir', 'home/.own/codex': 'dir' }, true],
-    ['an instance home with a file left in it', 'home/.acme-claude', { 'home/.acme-claude': 'dir', 'home/.acme-claude/settings.json': 'f'.repeat(64) }, false],
-    ['a folder holding a non-empty instance home', 'home/.own', { 'home/.own': 'dir', 'home/.own/codex': 'dir', 'home/.own/codex/x': 'f'.repeat(64) }, false],
-    ['a folder no instance names', 'home/.other', { 'home/.other': 'dir' }, false],
-    ['a file named like an instance home', 'home/.acme-claude', { 'home/.acme-claude': 'f'.repeat(64) }, false],
-  ])('judges %s as an empty instance home: %s', (_case, entry, after, empty) => {
-    expect(isEmptyInstanceHome(entry, after, new Set(['home/.acme-claude', 'home/.own', 'home/.own/codex']))).toBe(empty);
+    ['home/.acme-claude/projects/-w-project/s.jsonl', sha, { kind: 'state', owner: 'the tool', dir: 'home/.acme-claude' }],
+    ['home/.acme-claude/projects', 'dir', { kind: 'state', owner: 'the tool', dir: 'home/.acme-claude' }],
+    ['home/.own/codex/sessions/2026/11/13/rollout.jsonl', sha, { kind: 'state', owner: 'the tool', dir: 'home/.own/codex' }],
+    // What teamai writes there, where Claude reads it in its own home: never the tool's.
+    ['home/.acme-claude/settings.json', sha, undefined],
+    ['home/.acme-claude/skills/hello-world/SKILL.md', sha, undefined],
+    ['home/.acme-claude/.claude.json', sha, undefined],
+    ['home/.acme-claude/teamai-hooks.json', sha, undefined],
+  ])('judges %s holding %s in an instance home as the state of %o', async (entry, value, own) => {
+    const rules = ledgerRules(await toolInstancesIn(homeWithInstances()));
+
+    expect(rules.ownStateOf(entry, value)).toEqual(own);
+  });
+
+  it("keeps an instance's home and its project folder as it keeps its tool's, and its state file as the tool's own while it holds no server", async () => {
+    const rules = ledgerRules(await toolInstancesIn(homeWithInstances()));
+
+    expect(['home/.acme-claude', 'home/.own', 'home/.own/codex', 'project/.acme-claude', 'home/.claude'].map((entry) => rules.knownLeftover(entry))).toEqual(['dir', 'dir', 'dir', 'dir', 'dir']);
+    expect(rules.isToolOwnState('home/.acme-claude/.claude.json', '{"numStartups":1}')).toBe(true);
+    expect(rules.isToolOwnState('home/.acme-claude/.claude.json', '{"mcpServers":{"docs":{"command":"node"}}}')).toBe(false);
+  });
+
+  it('excuses nothing in the home of an instance it could not read', () => {
+    const rules = ledgerRules([]);
+
+    expect(rules.knownLeftover('home/.acme-claude')).toBeUndefined();
+    expect(rules.ownStateOf('home/.acme-claude/projects/-w-project/s.jsonl', sha)).toBeUndefined();
+    expect(rules.isToolOwnState('home/.acme-claude/.claude.json', '{"numStartups":1}')).toBe(false);
   });
 });

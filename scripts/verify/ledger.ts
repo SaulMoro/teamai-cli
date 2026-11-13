@@ -11,8 +11,8 @@ import { descriptorOf, TOOL_ORDER } from '../../src/tool-registry.js';
 import type { ToolId } from '../../src/tools.js';
 import { z } from 'zod';
 import { defaultToolHome, envToolHome, toolHome } from '../../src/tool-home.js';
-import { detectToolRoot, LocalConfigSchema, RELOCATABLE_TOOLS, TeamaiConfigBaseSchema } from '../../src/types.js';
-import { teamToolInstances } from '../../src/tool-instances.js';
+import { detectToolRoot, LocalConfigSchema, RELOCATABLE_TOOLS, TeamaiConfigBaseSchema, type ToolPathsSchema } from '../../src/types.js';
+import { defaultPathsOf, instanceHomeDir, instanceReadPath, teamToolInstances, type ResolvedToolInstance } from '../../src/tool-instances.js';
 import { projectsRootDir } from '../../src/utils/partition.js';
 import { parseYaml } from '@teamai/shared/yaml';
 import { MCP_SERVER_KEY } from '../../src/resources/mcp-format.js';
@@ -135,7 +135,7 @@ function namingWorld(dir: string, world: World, since: number, found: string[], 
   }
 }
 
-function hostFiles(world: World): Section {
+function hostFiles(world: World, instances: readonly ResolvedToolInstance[]): Section {
   const leaks: string[] = [];
   const notes: string[] = [];
   const before = new Set(world.baseline.checkoutStatus);
@@ -148,7 +148,7 @@ function hostFiles(world: World): Section {
   const realHome = os.homedir();
   const since = Date.parse(world.createdAt);
   // Every tool home TOOLS knows: default, recorded, and moved by this shell's env (also a relocated tool root), so a new tool is checked without editing this list.
-  const homes = [...new Set([path.join(realHome, '.teamai'), ...TOOL_ORDER.flatMap((tool) => [defaultToolHome(tool, { home: realHome, path }), toolHome(tool), envToolHome(tool)?.dir ?? []].flat()), ...Object.keys(RELOCATABLE_TOOLS).flatMap((tool) => detectToolRoot(tool) ?? [])])];
+  const homes = [...new Set([path.join(realHome, '.teamai'), ...TOOL_ORDER.flatMap((tool) => [defaultToolHome(tool, { home: realHome, path }), toolHome(tool), envToolHome(tool)?.dir ?? []].flat()), ...Object.keys(RELOCATABLE_TOOLS).flatMap((tool) => detectToolRoot(tool) ?? []), ...instances.flatMap((instance) => (instance.home === undefined ? [] : [path.join(realHome, instance.home.dir), instanceHomeDir(instance.home, instance.extends)]))])];
   const found: string[] = [];
   const unreadable: string[] = [];
 
@@ -184,18 +184,8 @@ const KNOWN_LEFTOVERS_ISSUE = 'https://github.com/Tencent/teamai-cli/issues/1808
 
 // Each with what it holds: a sha256, `dir`, or `any` where the content names this machine or is a log.
 
-/** Each tool's home under HOME, its parents included, and the top directory of each project path teamai writes for a tool. */
-const TOOL_DIRS = [
-  ...TOOL_ORDER.flatMap((tool) => descriptorOf(tool).home.dir.split('/').map((_, i, parts) => `home/${parts.slice(0, i + 1).join('/')}`)),
-  ...Object.values(TeamaiConfigBaseSchema.shape.toolPaths.parse(undefined)).flatMap((paths) =>
-    [paths.skills, paths.rules, paths.settings, paths.agents, paths.mcpProject].flatMap((dir) => (dir?.includes('/') ? [`project/${dir.split('/')[0]}`] : []))),
-];
-
-const KNOWN_LEFTOVERS = new Map([
-  // A tool's own directory stays: teamai removes what it put inside, not the
-  // directory the tool reads. Removing ~/.claude stopped Claude's MCP config
-  // from being written in the mcp-uninstall e2e, so uninstall leaves it (#1808).
-  ...TOOL_DIRS.map((dir) => [dir, 'dir'] as const),
+/** teamai's own leftovers, which no tool reads. */
+const TEAMAI_LEFTOVERS: readonly (readonly [string, string])[] = [
   // debug.log stays: an uninstall that failed is explained there, and that
   // record is worth more than the file, so ~/.teamai stays to hold it (#1808).
   ['home/.teamai', 'dir'],
@@ -209,22 +199,29 @@ const KNOWN_LEFTOVERS = new Map([
   // The skills a session used, kept across log truncation (usage-tracker.ts `updateKnownSkills`).
   ['home/.teamai/known-skills.json', 'any'],
   ['home/.teamai/state.json', 'any'],
-  // teamai starts Codex's app-server to trust its hooks (#955), and Codex writes its own files where teamai writes:
-  // its system skills, and the table of hook approvals that taking teamai's out leaves empty.
-  ['home/.codex/skills', 'dir'],
-  ['home/.codex/config.toml', createHash('sha256').update('[hooks.state]\n').digest('hex')],
-]);
+];
+
+/**
+ * What a shipped tool writes for itself where teamai writes, as that tool has it in HOME: each file with what it holds,
+ * and the directories it leaves with everything in them. teamai starts Codex's app-server to trust its hooks (#955), and
+ * Codex writes its system skills, and the table of hook approvals that taking teamai's out leaves empty.
+ */
+const TOOL_LEFTOVERS: Partial<Record<ToolId, { readonly files: readonly (readonly [string, string])[]; readonly dirs: readonly string[] }>> = {
+  codex: {
+    files: [['home/.codex/skills', 'dir'], ['home/.codex/config.toml', createHash('sha256').update('[hooks.state]\n').digest('hex')]],
+    dirs: ['home/.codex/skills/.system'],
+  },
+};
 
 /** The part of an install's config.yaml that names its team repo. */
 const InstallRepo = z.object({ repo: LocalConfigSchema.shape.repo });
 
 /**
- * The home of each tool instance an install under `home` declares, its parents included, as `home/…` entries: those of
- * the team repo each data home's config names, every namespace's, and the member's own in ~/.teamai/tools. Read before
- * `teamai uninstall`, which removes those records. Like a shipped tool's home (TOOL_DIRS), it stays once teamai took
- * out what it put in it, but only empty: `isEmptyInstanceHome`.
+ * Each tool instance an install under `home` declares: those of the team repo each data home's config names, every
+ * namespace's, and the member's own in ~/.teamai/tools, with its home as teamai joins it to HOME. Read before
+ * `teamai uninstall`, which removes those records. An instance it cannot read is judged as no tool's: what it left is a LEAK.
  */
-export async function instanceHomesIn(home: string): Promise<ReadonlySet<string>> {
+export async function toolInstancesIn(home: string): Promise<ResolvedToolInstance[]> {
   const projects = projectsRootDir(home);
   const dataHomes = [path.join(home, '.teamai'), ...(fs.existsSync(projects) ? fs.readdirSync(projects).map((slug) => path.join(projects, slug)) : [])];
 
@@ -232,7 +229,6 @@ export async function instanceHomesIn(home: string): Promise<ReadonlySet<string>
     const file = path.join(dataHome, 'config.yaml');
     let text: unknown;
 
-    // A config the ledger cannot read excuses no instance's home, which then stays a LEAK.
     try {
       text = parseYaml(fs.readFileSync(file, 'utf8'));
     } catch {
@@ -250,19 +246,9 @@ export async function instanceHomesIn(home: string): Promise<ReadonlySet<string>
     teamToolInstances({ root: path.join(home, '.teamai'), namespaces: async () => [] }),
   ]);
 
-  // `.acme/`, `./.acme` and `.acme` name one folder, as teamai joins it to HOME.
-  const homeDirs = instances.flat().flatMap((instance) => (instance.home === undefined ? [] : [path.posix.normalize(instance.home.dir).replace(/\/+$/, '')]));
-
-  return new Set(homeDirs.flatMap((dir) => dir.split('/').map((_, i, parts) => `home/${parts.slice(0, i + 1).join('/')}`)));
+  // `.acme/`, `./.acme` and `.acme` name one folder.
+  return instances.flat().map((instance) => (instance.home === undefined ? instance : { ...instance, home: { ...instance.home, dir: path.posix.normalize(instance.home.dir).replace(/\/+$/, '') } }));
 }
-
-/** Whether `entry`, left behind, is one of `homes` holding nothing but the empty instance homes below it. */
-export function isEmptyInstanceHome(entry: string, after: Readonly<Record<string, string>>, homes: ReadonlySet<string>): boolean {
-  return homes.has(entry) && after[entry] === 'dir' && Object.entries(after).every(([inner, value]) => !inner.startsWith(`${entry}/`) || (homes.has(inner) && value === 'dir'));
-}
-
-/** Directories left with everything in them: session ids name what is in them, or Codex installs them. */
-const KNOWN_LEFTOVER_DIRS = ['home/.teamai/sessions', 'home/.codex/skills/.system'];
 
 const Base = z.enum(['home', 'project']);
 
@@ -287,23 +273,48 @@ function toolReads(tool: ToolId): string[] {
   return paths;
 }
 
-const TOOL_READS = [...new Set(TOOL_ORDER.flatMap(toolReads))];
+/**
+ * A tool as the ledger judges it: a shipped tool in its own home, or an instance of one in another. An instance is the
+ * tool it extends reading another home, so every rule of that tool holds for it with its paths placed as the instance
+ * reads them (`instanceReadPath`).
+ */
+interface ToolView {
+  readonly tool: ToolId;
+  /** Its home under HOME. */
+  readonly home: string;
+  /** Where teamai delivers its resources, as its tool paths say. */
+  readonly paths: z.infer<typeof ToolPathsSchema>;
+  /** `entry`, a `home/…` or `project/…` path the shipped tool reads, as this one reads it. */
+  readonly placed: (entry: string) => string;
+}
 
-const TEAMAI_HOME_WRITES = TOOL_READS.filter((read) => read.startsWith('home/'));
+const SHIPPED_PATHS = TeamaiConfigBaseSchema.shape.toolPaths.parse(undefined);
 
-/** A tool's home under HOME holds the tool's own state (sessions, caches, the runtime of a Codex teamai starts to trust its hooks) beside what teamai writes there. */
-const TOOL_HOMES = [...new Set(TOOL_ORDER.map((tool) => `home/${descriptorOf(tool).home.dir}`))];
+const SHIPPED_VIEWS: readonly ToolView[] = TOOL_ORDER.map((tool) => ({ tool, home: descriptorOf(tool).home.dir, paths: SHIPPED_PATHS[tool] ?? {}, placed: (entry) => entry }));
+
+/** The view of `instance`; none for one with no home of its own, which reads where its tool does. */
+function instanceView(instance: ResolvedToolInstance): ToolView[] {
+  if (instance.home === undefined || instance.name === instance.extends) return [];
+
+  const placed = (entry: string): string => {
+    const [base, ...rest] = entry.split('/');
+
+    return base === 'home' || base === 'project' ? `${base}/${instanceReadPath(instance, { from: base, relative: rest.join('/') })}` : entry;
+  };
+
+  return [{ tool: instance.extends, home: instance.home.dir, paths: instance.paths ?? defaultPathsOf(instance), placed }];
+}
 
 /**
- * Each tool's own state file beside its home (`home.stateFiles`), with the key the tool's user MCP servers sit under,
- * where teamai may have written them: Claude's ~/.claude.json is both.
+ * Each state file of `tool` beside its home (`home.stateFiles`), as a `home/…` entry, with the key the tool's user MCP
+ * servers sit under, where teamai may have written them: Claude's ~/.claude.json is both.
  */
-const TOOL_STATE_FILES = new Map(TOOL_ORDER.flatMap((tool) => {
+function stateFilesOf(tool: ToolId): [string, string | undefined][] {
   const { home, mcp }: Pick<ToolDescriptor, 'home' | 'mcp'> = descriptorOf(tool);
   const servers = mcp.user instanceof Object && mcp.user.format !== 'codex' ? MCP_SERVER_KEY[mcp.user.format] : undefined;
 
-  return (home.stateFiles ?? []).map((file): [string, string | undefined] => [`home/${file}`, servers]);
-}));
+  return (home.stateFiles ?? []).map((file) => [`home/${file}`, servers]);
+}
 
 /** Whether `text` names teamai beyond the harness's own paths: every world's directory and TMPDIR hold `teamai-verify`. */
 function mentionsTeamai(text: string): boolean {
@@ -315,9 +326,9 @@ function mentionsTeamai(text: string): boolean {
  * name of teamai, and no non-empty object under the key the tool's MCP servers sit under, at any depth, where a server
  * teamai wrote would be. Text that is not JSON holds something of teamai's, as far as the ledger can tell.
  */
-export function isToolOwnState(entry: string, text: string): boolean {
-  if (!TOOL_STATE_FILES.has(entry) || mentionsTeamai(text)) return false;
-  const servers = TOOL_STATE_FILES.get(entry);
+function isToolOwnState(stateFiles: ReadonlyMap<string, string | undefined>, entry: string, text: string): boolean {
+  if (!stateFiles.has(entry) || mentionsTeamai(text)) return false;
+  const servers = stateFiles.get(entry);
 
   if (servers === undefined) return true;
   let parsed: JsonValue;
@@ -346,11 +357,10 @@ const SBX_OWN = ['analyticskit', 'auth-ambiguous-refresh', 'auth-cooldown', 'loc
 
 /**
  * Where a program keeps state of its own, which teamai writes none of: `dir` names it in a note, `paths` are its own.
- * `makesDir`: the program makes those folders, and those that hold them, too; a tool's home is #1808's (KNOWN_LEFTOVERS).
+ * `makesDir`: the program makes those folders, and those that hold them, too; a tool's home is #1808's (`knownLeftover`).
  * Never a whole store a teamai run fills, such as sbx's images and sandbox disks: what is left there stays a LEAK.
  */
-const OWN_STATE = [
-  ...TOOL_HOMES.map((dir) => ({ owner: 'the tool', dir, paths: [dir], makesDir: false })),
+const PROGRAMS_STATE = [
   // T3 Code checkpoints the project a thread of a teamai run works in, under refs/t3.
   { owner: 'T3 Code', dir: 'project/.git/refs/t3', paths: ['project/.git/refs/t3'], makesDir: true },
   // OpenCode's own folders under the XDG folders of a HOME that sets none, as its home under ~/.config is: v2.3.0 makes
@@ -362,19 +372,8 @@ const OWN_STATE = [
   { owner: 'sbx', dir: 'home/Library/Caches/com.docker.sandboxes', paths: ['policykit', 'unleash-toggles-production.json'].map((own) => `home/Library/Caches/com.docker.sandboxes/sandboxes/${own}`), makesDir: true },
 ];
 
-/**
- * Whose own state the entry left behind with `value` is, and the folder a note names; or the owner of a folder made only
- * to hold such state, whose other contents are judged on their own; undefined when it may be teamai's.
- */
-export function ownStateOf(entry: string, value: string | undefined): { kind: 'state'; owner: string; dir: string } | { kind: 'folder'; owner: string } | undefined {
-  if (teamaiPlace(entry, value)) return undefined;
-  const state = OWN_STATE.find(({ paths, makesDir }) => paths.some((own) => entry.startsWith(`${own}/`) || (makesDir && entry === own)));
-
-  if (state !== undefined) return { kind: 'state', owner: state.owner, dir: state.dir };
-  const folder = value === 'dir' ? OWN_STATE.find(({ paths, makesDir }) => makesDir && paths.some((own) => own.startsWith(`${entry}/`))) : undefined;
-
-  return folder === undefined ? undefined : { kind: 'folder', owner: folder.owner };
-}
+/** Whose own state an entry left behind is, or the owner of a folder made only to hold such state. */
+type OwnState = { kind: 'state'; owner: string; dir: string } | { kind: 'folder'; owner: string };
 
 /** A run's branch, which a run that succeeded keeps as its result (docs/guide/workflow.md, The branches a run leaves). */
 const RUN_BRANCH = /^project\/\.git\/refs\/heads\/teamai(\/r[0-9a-f]{16}(\/[^/]+(\/p\d+)?)?)?$/;
@@ -407,29 +406,94 @@ const TEAMAI_ROOTS = ['home/.teamai', 'project/.teamai'];
 /** The member's own folders in ~/.teamai, which teamai reads and never writes, so uninstall keeps them. */
 const MEMBERS_OWN = Object.values(PERSONAL_DIRS).map((dir) => `home/.teamai/${dir}`);
 
-/** Each project path teamai delivers a tool's resources to, and those TOOLS says a tool reads there. */
-const TEAMAI_PROJECT_WRITES = [...new Set([
-  ...Object.values(TeamaiConfigBaseSchema.shape.toolPaths.parse(undefined)).flatMap((paths) =>
-    [paths.skills, paths.rules, paths.settings, paths.agents, paths.mcpProject, paths.claudemd].flatMap((write) => (write === undefined ? [] : [`project/${write}`]))),
-  ...TOOL_READS.filter((read) => read.startsWith('project/')),
-])];
-
 /** Where teamai hides what it adds to the project, beside the member's own patterns. */
 const GIT_EXCLUDE = 'project/.git/info/exclude';
 
-/** The files teamai writes its part into beside a tool's own settings, never a resource it delivers into a folder. */
-const SHARED_FILES = new Set([...TEAMAI_HOME_WRITES, ...TEAMAI_PROJECT_WRITES, GIT_EXCLUDE]);
+/** How the ledger judges what an install left: the shipped tools' rules, and each instance's, derived from its tool's. */
+export interface LedgerRules {
+  /**
+   * Whose own state the entry left behind with `value` is, and the folder a note names; or the owner of a folder made
+   * only to hold such state, whose other contents are judged on their own; undefined when it may be teamai's.
+   */
+  ownStateOf(entry: string, value: string | undefined): OwnState | undefined;
+  /**
+   * Whether `text`, the file at `entry`, is a tool's own state file (`home.stateFiles`) holding nothing of teamai's: no
+   * name of teamai, and no non-empty object under the key the tool's MCP servers sit under, at any depth, where a server
+   * teamai wrote would be. Text that is not JSON holds something of teamai's, as far as the ledger can tell.
+   */
+  isToolOwnState(entry: string, text: string): boolean;
+  /**
+   * Where teamai writes, which neither a member's command nor a tool's home excuses: an agent's session runs teamai's
+   * hooks, which pull, and teamai names what it adds elsewhere in a tool's home, such as an adapter, after itself.
+   * Of git's settings, teamai writes its own, the worktree extension and a hooks path to its hooks.
+   */
+  isTeamaiPlace(entry: string, value: string | undefined): boolean;
+  /** The files teamai writes its part into beside a tool's own settings, never a resource it delivers into a folder. */
+  isSharedFile(entry: string): boolean;
+  /** What `entry` is known to hold when uninstall leaves it (#1808): a sha256, `dir`, or `any`. */
+  knownLeftover(entry: string): string | undefined;
+  /** Directories left with everything in them: session ids name what is in them, or the tool installs them. */
+  readonly knownLeftoverDirs: readonly string[];
+}
 
-/**
- * Where teamai writes, which neither a member's command nor a tool's home excuses: an agent's session runs teamai's
- * hooks, which pull, and teamai names what it adds elsewhere in a tool's home, such as an adapter, after itself.
- * Of git's settings, teamai writes its own, the worktree extension and a hooks path to its hooks.
- */
-function teamaiPlace(entry: string, value: string | undefined): boolean {
-  return [...TEAMAI_ROOTS, ...TEAMAI_HOME_WRITES, ...TEAMAI_PROJECT_WRITES, GIT_EXCLUDE].some((write) => entry === write || entry.startsWith(`${write}/`))
+/** The rules for an install that declares `instances`: the shipped tools', and each instance's as its tool's. */
+export function ledgerRules(instances: readonly ResolvedToolInstance[]): LedgerRules {
+  const views = [...SHIPPED_VIEWS, ...instances.flatMap(instanceView)];
+  const reads = [...new Set(views.flatMap((view) => toolReads(view.tool).map(view.placed)))];
+  const homeWrites = reads.filter((read) => read.startsWith('home/'));
+
+  const projectWrites = [...new Set([
+    ...views.flatMap(({ paths }) => [paths.skills, paths.rules, paths.settings, paths.agents, paths.mcpProject, paths.claudemd].flatMap((write) => (write === undefined ? [] : [`project/${write}`]))),
+    ...reads.filter((read) => read.startsWith('project/')),
+  ])];
+
+  const writes = [...TEAMAI_ROOTS, ...homeWrites, ...projectWrites, GIT_EXCLUDE];
+  const sharedFiles = new Set([...homeWrites, ...projectWrites, GIT_EXCLUDE]);
+
+  // Each tool's own state file beside its home (`home.stateFiles`): Claude's ~/.claude.json, inside an instance's moved home.
+  const stateFiles = new Map(views.flatMap((view) => stateFilesOf(view.tool).map(([file, servers]): [string, string | undefined] => [view.placed(file), servers])));
+
+  // A tool's home under HOME holds the tool's own state (sessions, caches, the runtime of a Codex teamai starts to trust its hooks) beside what teamai writes there.
+  const ownState = [...[...new Set(views.map((view) => `home/${view.home}`))].map((dir) => ({ owner: 'the tool', dir, paths: [dir], makesDir: false })), ...PROGRAMS_STATE];
+
+  // A tool's own directory stays: teamai removes what it put inside, not the directory the tool reads. Removing ~/.claude
+  // stopped Claude's MCP config from being written in the mcp-uninstall e2e, so uninstall leaves it (#1808). So do the
+  // folders above it, and the top directory of each project path teamai writes for a tool.
+  const toolDirs = views.flatMap((view) => [
+    ...view.home.split('/').map((_, i, parts) => `home/${parts.slice(0, i + 1).join('/')}`),
+    ...[view.paths.skills, view.paths.rules, view.paths.settings, view.paths.agents, view.paths.mcpProject].flatMap((dir) => (dir?.includes('/') ? [`project/${dir.split('/')[0]}`] : [])),
+  ]);
+
+  const known = new Map<string, string>([
+    ...toolDirs.map((dir) => [dir, 'dir'] as const),
+    ...TEAMAI_LEFTOVERS,
+    ...views.flatMap((view) => (TOOL_LEFTOVERS[view.tool]?.files ?? []).map(([entry, holds]) => [view.placed(entry), holds] as const)),
+  ]);
+
+  const knownLeftoverDirs = ['home/.teamai/sessions', ...views.flatMap((view) => (TOOL_LEFTOVERS[view.tool]?.dirs ?? []).map(view.placed))];
+
+  const isTeamaiPlace = (entry: string, value: string | undefined): boolean =>
+    writes.some((write) => entry === write || entry.startsWith(`${write}/`))
     || entry.split('/').some((segment) => /^teamai([-_.]|$)/i.test(segment))
     || /#((.*\.)?teamai|extensions\.worktreeconfig$)/i.test(entry)
     || (/#core\.hookspath$/i.test(entry) && /teamai/i.test(value ?? ''));
+
+  return {
+    ownStateOf(entry, value) {
+      if (isTeamaiPlace(entry, value)) return undefined;
+      const state = ownState.find(({ paths, makesDir }) => paths.some((own) => entry.startsWith(`${own}/`) || (makesDir && entry === own)));
+
+      if (state !== undefined) return { kind: 'state', owner: state.owner, dir: state.dir };
+      const folder = value === 'dir' ? ownState.find(({ paths, makesDir }) => makesDir && paths.some((own) => own.startsWith(`${entry}/`))) : undefined;
+
+      return folder === undefined ? undefined : { kind: 'folder', owner: folder.owner };
+    },
+    isToolOwnState: (entry, text) => isToolOwnState(stateFiles, entry, text),
+    isTeamaiPlace,
+    isSharedFile: (entry) => sharedFiles.has(entry),
+    knownLeftover: (entry) => (knownLeftoverDirs.includes(entry) ? 'any' : known.get(entry)),
+    knownLeftoverDirs,
+  };
 }
 
 /** One install the ledger uninstalls and compares: the world's own, or a member's, whose lines start with `@<name> `. */
@@ -457,13 +521,13 @@ function entryPath(place: LedgerPlace, entry: string): string {
 }
 
 /** A way in has a way out: after `teamai uninstall` each install's HOME and project match the snapshot taken when it was made. */
-async function reverseState(world: World): Promise<Section> {
+async function reverseState(world: World, instances: ReadonlyMap<string, readonly ResolvedToolInstance[]>): Promise<Section> {
   const title = '(e) After teamai uninstall';
   const leaks: string[] = [];
   const notes: string[] = [];
 
   for (const place of ledgerPlaces(world)) {
-    const reversed = await reverseOf(world, place);
+    const reversed = await reverseOf(world, place, ledgerRules(instances.get(place.label) ?? []));
     leaks.push(...reversed.leaks.map((line) => `${place.label}${line}`));
     notes.push(...reversed.notes.map((line) => `${place.label}${line}`));
   }
@@ -471,7 +535,7 @@ async function reverseState(world: World): Promise<Section> {
   return { title, leaks, notes };
 }
 
-async function reverseOf(world: World, place: LedgerPlace): Promise<{ leaks: string[]; notes: string[] }> {
+async function reverseOf(world: World, place: LedgerPlace, rules: LedgerRules): Promise<{ leaks: string[]; notes: string[] }> {
   if (place.baseline === undefined) return { leaks: ['this world has no snapshot to compare: make a new world'], notes: [] };
   const before = place.baseline;
   // Uninstall drops a clone's registrations with it, so a worktree outside HOME and the project is listed first.
@@ -486,7 +550,6 @@ async function reverseOf(world: World, place: LedgerPlace): Promise<{ leaks: str
     ),
   );
 
-  const instanceHomes = await instanceHomesIn(place.home);
   const { exit: status } = await runOn(world, place.target, ['teamai', 'uninstall', '--force'], { pass: new Map() });
   const after = worldFiles(place);
   const leaks = status === 0 ? [] : [`teamai uninstall exited ${status}`];
@@ -508,7 +571,7 @@ async function reverseOf(world: World, place: LedgerPlace): Promise<{ leaks: str
   const remoteTips = new Set(Object.entries(after).flatMap(([entry, value]) => (REMOTE_REF.test(entry) && value !== 'dir' ? [value] : [])));
 
   for (const entry of [...new Set([...Object.keys(before), ...Object.keys(after)])].sort()) {
-    if (before[entry] === after[entry] || under(entry, [...leaked, ...KNOWN_LEFTOVER_DIRS])) continue;
+    if (before[entry] === after[entry] || under(entry, [...leaked, ...rules.knownLeftoverDirs])) continue;
     const change = before[entry] === undefined ? 'left behind' : after[entry] === undefined ? 'removed' : 'changed';
     const writer = writers[entry];
 
@@ -518,24 +581,24 @@ async function reverseOf(world: World, place: LedgerPlace): Promise<{ leaks: str
     }
 
     // A tool's sessions, or a member's own commit: left as a member's program left it, whatever teamai did in between.
-    if (writer !== undefined && writer.value === (after[entry] ?? null) && !teamaiPlace(entry, after[entry])) {
+    if (writer !== undefined && writer.value === (after[entry] ?? null) && !rules.isTeamaiPlace(entry, after[entry])) {
       excuse(`left as ${writer.program} wrote it, so not teamai's`, entry);
       continue;
     }
 
     // A file teamai shares with a tool, such as Claude's ~/.claude.json, which keeps the tool's state once teamai's part is out.
-    if (writer !== undefined && writer.value === after[entry] && /^[0-9a-f]{64}$/.test(after[entry]) && SHARED_FILES.has(entry) && !namesTeamai(entry)) {
+    if (writer !== undefined && writer.value === after[entry] && /^[0-9a-f]{64}$/.test(after[entry]) && rules.isSharedFile(entry) && !namesTeamai(entry)) {
       excuse(`left as ${writer.program} wrote it, with nothing of teamai's in it`, entry);
       continue;
     }
 
     // A tool writes its own state there whether teamai launched it or the member did: what teamai adds is its servers.
-    if (change === 'left behind' && /^[0-9a-f]{64}$/.test(after[entry] ?? '') && isToolOwnState(entry, fs.readFileSync(entryPath(place, entry), 'utf8'))) {
+    if (change === 'left behind' && /^[0-9a-f]{64}$/.test(after[entry] ?? '') && rules.isToolOwnState(entry, fs.readFileSync(entryPath(place, entry), 'utf8'))) {
       excuse("the tool's own state file, with no MCP server and nothing else of teamai's in it", entry);
       continue;
     }
 
-    const own = change === 'left behind' ? ownStateOf(entry, after[entry]) : undefined;
+    const own = change === 'left behind' ? rules.ownStateOf(entry, after[entry]) : undefined;
 
     if (own?.kind === 'state') {
       excuse(`${own.owner}'s own state in ${own.dir}, where teamai writes none of it`, entry);
@@ -580,12 +643,7 @@ async function reverseOf(world: World, place: LedgerPlace): Promise<{ leaks: str
       continue;
     }
 
-    if (change === 'left behind' && isEmptyInstanceHome(entry, after, instanceHomes)) {
-      notes.push(`${entry} left behind empty, a tool instance's home, known: ${KNOWN_LEFTOVERS_ISSUE}`);
-      continue;
-    }
-
-    const known = KNOWN_LEFTOVER_DIRS.includes(entry) ? 'any' : KNOWN_LEFTOVERS.get(entry);
+    const known = rules.knownLeftover(entry);
 
     if (change === 'left behind' && (known === 'any' || known === after[entry])) notes.push(`${entry} left behind, known: ${KNOWN_LEFTOVERS_ISSUE}`);
     else {
@@ -605,9 +663,11 @@ async function reverseOf(world: World, place: LedgerPlace): Promise<{ leaks: str
 export async function runLedger(world: World): Promise<boolean> {
   // Before uninstall, which removes the records that say which runtimes the world's runs used; observed after it.
   const leftovers = await leftoversSection(world);
-  const reverse = await reverseState(world);
+  // The tool instances each install declares, read before uninstall too: their homes are judged as their tools' are.
+  const instances = new Map(await Promise.all(ledgerPlaces(world).map(async (place) => [place.label, await toolInstancesIn(place.home)] as const)));
+  const reverse = await reverseState(world, instances);
   const left = { title: '(f) What a driver left running', ...await leftovers.observe() };
-  const sections = [teamRepo(world), worktrees(world), hostFiles(world), environment(world), reverse, left];
+  const sections = [teamRepo(world), worktrees(world), hostFiles(world, [...instances.values()].flat()), environment(world), reverse, left];
   const leaks = sections.reduce((sum, section) => sum + section.leaks.length, 0);
   const verdict = leaks === 0 ? 'CLEAN' : `${leaks} LEAK${leaks === 1 ? '' : 'S'}`;
 
