@@ -663,6 +663,23 @@ describe('doctor --fix past workflows.retention', () => {
     expect(fs.existsSync(outer)).toBe(false);
   });
 
+  it('runs no program a step planted in the config of a worktree it removes', async () => {
+    const { config, cwd, root, runId } = await fixture(NO_DELIVERY.replace("writeFileSync('join.txt', 'J')", "writeFileSync('join.txt', 'J'); process.exit(1)"));
+    expect(await runLocalDriver(config, runId, cwd)).toMatchObject({ data: { done: { outcome: 'failed' } } });
+    const dir = git(cwd, ['worktree', 'list', '--porcelain']).split('\n').filter((line) => line.startsWith('worktree ')).map((line) => line.slice('worktree '.length)).find((at) => at !== cwd) ?? '';
+    const ran = path.join(root, 'planted-ran');
+    const program = path.join(root, 'planted.sh');
+    fs.writeFileSync(program, `#!/bin/sh\ntouch '${ran}'\n`, { mode: 0o755 });
+    git(cwd, ['config', 'extensions.worktreeConfig', 'true']);
+    git(dir, ['config', '--worktree', 'core.fsmonitor', program]);
+    vi.spyOn(log, 'warn');
+
+    const swept = await sweepLeftovers(config, null, { now: Date.parse((await state(config, runId)).updatedAt) + 14 * DAY, checkout: cwd });
+
+    expect([fs.existsSync(ran), fs.existsSync(dir)]).toEqual([false, false]);
+    expect(swept.swept).toEqual([expect.objectContaining({ run: runId, worktrees: [dir], failed: [] })]);
+  });
+
   it('deletes again what a succeeded run could not delete as it settled', async () => {
     const { config, cwd, origin, runId } = await fixture(NO_DELIVERY);
     const hook = path.join(origin, 'hooks', 'pre-receive');
