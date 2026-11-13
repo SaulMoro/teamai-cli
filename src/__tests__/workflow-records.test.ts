@@ -137,6 +137,14 @@ describe('#1083 workflow run records', () => {
     expect(record).not.toHaveProperty('workspace');
   });
 
+  it('publishes the driver definition a run was driven with beside the driver kind, by its name only', () => {
+    const run = runState({ status: 'running', driveOptions: { driver: 'boxed', tools: { default: 'claude' }, sandbox: true } });
+
+    expect(buildStartRecord(run, driver, 'tester').driver).toEqual({ kind: 'local', definition: 'boxed' });
+    expect(buildEndRecord({ ...run, status: 'succeeded' }, driver, 'tester').driver).toEqual({ kind: 'local', definition: 'boxed' });
+    expect(buildEndRecord(runState(), driver, 'tester').driver).toEqual({ kind: 'local' });
+  });
+
   it('reads and merges queued records published before and after source provenance', async () => {
     const { config } = testConfig();
     const teamRevision = '0123456789abcdef0123456789abcdef01234567';

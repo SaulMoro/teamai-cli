@@ -342,6 +342,15 @@ describe('dashboard workflow runs', () => {
         .toEqual([['build', 'succeeded'], ['skip-me', 'skipped']]);
     });
 
+    it('names a record\'s driver by the driver definition it ran on, and by its kind when it ran on none', async () => {
+      const config = scope('http');
+      publish(config, record('r0000000000000001', { driver: { kind: 'local', definition: 'boxed' } }));
+      publish(config, record('r0000000000000002', { startedAt: '2026-10-01T09:00:00.000Z' }));
+
+      expect((await listReportedRuns(config)).map((row) => [row.run, row.driver])).toEqual([['r0000000000000001', 'boxed'], ['r0000000000000002', 'local']]);
+      expect((await workflowRunDetail(config, 'reported', 'r0000000000000001'))?.run.driver).toBe('boxed');
+    });
+
     it('reads where a record\'s definition came from, and drops an origin it cannot read', async () => {
       const config = scope('http');
       publish(config, record('r0000000000000002', { workflow: 'teamai-share-session', origin: { source: 'default', teamaiVersion: '0.22.0' }, startedAt: '2026-10-02T10:00:00.000Z' }));

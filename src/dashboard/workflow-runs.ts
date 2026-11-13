@@ -84,7 +84,7 @@ const RecordSchema: z.ZodType<ReadRecord> = RunRecordFieldsSchema.extend({
   sourceHash: z.string().optional(),
   teamRevision: z.string().optional(),
   origin: RunOriginSchema.optional().catch(undefined),
-  driver: z.object({ kind: z.string() }).optional(),
+  driver: z.object({ kind: z.string(), definition: z.string().optional().catch(undefined) }).optional(),
   end: z.string().optional(),
   startedAt: z.string(),
   durationMs: z.number().optional(),
@@ -107,6 +107,7 @@ interface RunRow {
   workflow: string;
   /** The name people use for the workflow, which the page shows first; absent when it has none, and in older records. */
   alias?: string;
+  /** The driver definition the run ran on, else the driver's kind. */
   driver?: string;
   status: WorkflowRunRecord['status'];
   end?: string;
@@ -217,7 +218,7 @@ function rowOf(record: ReadRecord): RunRow {
     run: record.run,
     workflow: record.workflow,
     alias: record.alias,
-    driver: record.driver?.kind,
+    driver: record.driver?.definition ?? record.driver?.kind,
     status: record.status,
     end: record.end,
     startedAt: record.startedAt,

@@ -63,10 +63,10 @@ export type WorkflowRunRecord = {
   /** Whether the run executed the team's workflow or teamai's default, with its version. Absent on runs started before it was recorded. */
   origin?: RunOrigin;
   /**
-   * Driver kind only. The workspace is a local path (banned, #1083) and the
-   * hostname is machine-identifying (#1126 review) — neither is published.
+   * Driver kind, and the driver definition the run was driven with by its canonical name, absent for plain `local`. The
+   * workspace is a local path (banned, #1083) and the hostname is machine-identifying (#1126 review): neither is published.
    */
-  driver?: { kind: string };
+  driver?: { kind: string; definition?: string };
   status: RunStatus;
   /** The named end the run reached, when it reached one. */
   end?: string;
@@ -166,8 +166,8 @@ export function buildStartRecord(
   now: Date = new Date(),
 ): CurrentWorkflowRunRecord {
   // A start record may have no driver yet (a remote driver leases later); the end record always carries the driver
-  // that completed the run. Kind only: the workspace is a banned local path and the hostname is machine-identifying
-  // (#1126 review).
+  // that completed the run. Kind and definition only: the workspace is a banned local path and the hostname is
+  // machine-identifying (#1126 review).
   return definedFields<CurrentWorkflowRunRecord>({
     schemaVersion: 'v1alpha1',
     run: run.id,
@@ -179,7 +179,7 @@ export function buildStartRecord(
     runMode: run.runMode || undefined,
     origin: run.origin || undefined,
     isolated: isIsolated(run) ? true : undefined,
-    driver: driver ? { kind: driver.kind } : undefined,
+    driver: driver ? { kind: driver.kind, ...(run.driveOptions?.driver !== undefined && { definition: run.driveOptions.driver }) } : undefined,
     status: 'running',
     startedAt: run.createdAt,
     username,
