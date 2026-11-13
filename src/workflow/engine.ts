@@ -55,7 +55,7 @@ import {
 } from './requirements.js';
 import { knownSecrets, resolveWorkflowEnv, secretKey, type WorkflowEnv } from '../env-resolution.js';
 import { TeamPin } from './team-pin.js';
-import { deliveryLockPath, generateRunId, installOwner, isRunId, readAttemptOutcomes, readRun, runScratchDir, updateRun } from './store.js';
+import { deliveryLockPath, generateRunId, installOwner, isRunId, readAttemptOutcomes, readRun, runScratchDir, updateRun, type RunLock } from './store.js';
 import { cleanUpSucceededRun } from './leftovers.js';
 import { withFileLock } from '../update.js';
 import { admitWorkflow, heldSecret, type Admitted } from './admission.js';
@@ -2162,6 +2162,8 @@ type WaitData = { reason: string; delivering?: string[]; held?: Held[] };
 
 /** What a driver tells `next` besides who it is. */
 export interface NextOptions {
+  /** The driver lock of the run its caller holds for its whole drive, as teamai's local driver does (`isLeasedUnderLock`). */
+  drivesUnder?: RunLock;
   /**
    * The attempts of its open leases the driver is still running. An open lease it does not list is handed back to it.
    */
@@ -2383,6 +2385,9 @@ export async function leaseNext(config: LocalConfig, runId: string, driver: Driv
   const settle: Settle = (run, now) => {
     restartQueued(run, driver, unstarted, now);
     run.takesWhole = options.can?.workflow === true || options.alone?.offers.some((offer) => offer.can.workflow === true) === true;
+
+    if (options.drivesUnder?.run === run.id) run.isLeasedUnderLock = true;
+    else delete run.isLeasedUnderLock;
     let reconciled = reconcileRun(run, now);
 
     // A workflow a step produced is known only now: refused as a start refuses one it knows, the run settles again, and a

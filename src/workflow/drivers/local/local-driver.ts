@@ -1277,7 +1277,7 @@ async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, given: 
       for (const entry of defined.runtimes) if (entry.kind === 'external') rememberSecrets(entry.masks, turn.secrets);
 
       const ask = (slot: RuntimeSlot, take: boolean, listed: string[]): Promise<WorkflowEnvelope> => leaseNext(config, runId, driver, {
-        running: listed, queued: held.map((lease) => lease.attempt), canTakeLease: take, can: slot.can, autoApprove: options.autoApprove, runMode: mode, handoff, relay, base, env: turn, alone: { ...sole, offering: slot.use }, prepare: true, isOneAtATime, toolFor: toolForOn(slot.can.default_tool),
+        drivesUnder: lock, running: listed, queued: held.map((lease) => lease.attempt), canTakeLease: take, can: slot.can, autoApprove: options.autoApprove, runMode: mode, handoff, relay, base, env: turn, alone: { ...sole, offering: slot.use }, prepare: true, isOneAtATime, toolFor: toolForOn(slot.can.default_tool),
         limitedTools: limitedOn(slot), ...(answerToolNow !== undefined && { answerTool: answerToolNow }),
       });
 

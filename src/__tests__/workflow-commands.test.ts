@@ -24,7 +24,7 @@ import { log, setStderrOnly } from '@teamai/shared/log';
 import { acquireLock, releaseLock } from '../update.js';
 import { leaseNext, startRun } from '../workflow/engine.js';
 import { publishRun, resumeRun } from '../workflow/handoff.js';
-import { driverLockPath, readRun, runFilePath, runsDir } from '../workflow/store.js';
+import { driverLockPath, readRun, runFilePath, RunIdSchema, runsDir, takeRunLock } from '../workflow/store.js';
 import { benchmarkRun, selfImprovementRun, workflowCancel, workflowNext, workflowPublish, workflowReport, workflowRespond, workflowResume, workflowRetry, workflowStart } from '../workflow-commands.js';
 import { driverIdentity } from '../driver-identity.js';
 import { loadLocalConfigForScope } from '../config.js';
@@ -1446,7 +1446,8 @@ finally:
     { by: 'that no driver took', driver: undefined },
   ])('ends a run $by at once, and names each finally step no driver ran', async ({ driver: leasing }) => {
     const { config, runId } = await startTidied();
-    if (leasing) expect(await leaseNext(config, runId, leasing)).toMatchObject({ data: { lease: { step: 'work' } } });
+    // As the local driver leases: under the run's driver lock, which it lets go as it stops.
+    if (leasing) expect(await takeRunLock(config, RunIdSchema.parse(runId), (lock) => leaseNext(config, runId, leasing, { drivesUnder: lock }), { waitMs: 0 })).toMatchObject({ value: { data: { lease: { step: 'work' } } } });
 
     expect(await capture(() => workflowCancel(runId))).toMatchObject({ data: { cancelled: { steps: expect.arrayContaining(['tidy']) }, run: { status: 'cancelled' } } });
 
@@ -1456,12 +1457,16 @@ finally:
     } } });
   });
 
-  it('leaves the finally steps of a run another driver drives to that driver, which runs them on its next lease', async () => {
+  it.each([
+    { by: 'another driver', driver: script },
+    // workflow next --json takes any kind, and the guide's own example calls its driver local.
+    { by: 'a driver of its own that calls itself local on this machine', driver: driverIdentity('local', '/ci') },
+  ])('leaves the finally steps of a run $by drives to that driver, which runs them on its next lease', async ({ driver: leasing }) => {
     const { config, runId } = await startTidied();
-    expect(await leaseNext(config, runId, script)).toMatchObject({ data: { lease: { step: 'work' } } });
+    expect(await leaseNext(config, runId, leasing)).toMatchObject({ data: { lease: { step: 'work' } } });
 
     expect(await capture(() => workflowCancel(runId))).toMatchObject({ data: { run: { status: 'running', finalizing: { outcome: 'cancelled' } } } });
 
-    expect(await capture(() => workflowNext(runId, { json: JSON.stringify({ driver: script }) }))).toMatchObject({ data: { lease: { step: 'tidy' } } });
+    expect(await capture(() => workflowNext(runId, { json: JSON.stringify({ driver: leasing }) }))).toMatchObject({ data: { lease: { step: 'tidy' } } });
   });
 });

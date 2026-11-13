@@ -497,6 +497,12 @@ export interface RunState {
    * once it is false, such a step starts at reconcile as every other workflow step does. Local run state only.
    */
   takesWhole?: boolean;
+  /**
+   * Set while the latest driver that called next held this machine's driver lock of the run for its whole drive, as
+   * teamai's local driver does. A driver that sends its identity through `workflow next` holds no such lock, whatever
+   * kind it names. Local run state only.
+   */
+  isLeasedUnderLock?: true;
   /** The end this run reached, set when it settles. */
   end?: string;
   /** Set while the run's `finally` steps run, from when its steps end until it settles. Its status stays `running`. */
