@@ -8,7 +8,7 @@ import { answerCancel, answerQuestion, cancelAttempt, claimAttempt, expireClaim,
 import { startGroupedCommand } from '../workflow/shell-command.js';
 import { publishRun } from '../workflow/handoff.js';
 import { definitionHash } from '../workflow/snapshot.js';
-import { attemptDir, AttemptIdSchema, installOwner, readRun, RunIdSchema, runScratchDir, takeRunLock, type AttemptId, type RunId } from '../workflow/store.js';
+import { attemptDir, AttemptIdSchema, installOwner, readRun, RunIdSchema, runFilePath, runScratchDir, takeRunLock, type AttemptId, type RunId } from '../workflow/store.js';
 import { memberPlace, takeFleetAttempt, type MemberPlace } from '../workflow/fleet/member.js';
 import type { OpenedDriver, OpenedRuntime } from '../workflow/runtimes/sources.js';
 import { CANCEL_WRITE_MS, cancelFleetAttempt, fleetStepRuntime, shadowedFleetEntries } from '../workflow/fleet/owner.js';
@@ -1245,6 +1245,12 @@ describe('a restarted member', () => {
 
     bob.config.workflows = { tools: {}, ...bob.config.workflows, retention: '1s' };
     await new Promise((resolve) => setTimeout(resolve, 1_100));
+    // The run's owner on this machine, in the same data home: the attempt's folder is its record, which its own
+    // retention ends.
+    fs.copyFileSync(runFilePath(alice.config, run), runFilePath(bob.config, run));
+    expect(await take()).toEqual({ data: { idle: { offered: 0 } } });
+    expect(fs.existsSync(attemptDir(bob.config, run, offered.attempt))).toBe(true);
+    fs.rmSync(runFilePath(bob.config, run));
     expect(await take()).toEqual({ data: { idle: { offered: 0 } } });
     expect(fs.existsSync(attemptDir(bob.config, run, offered.attempt))).toBe(false);
   }, 60_000);

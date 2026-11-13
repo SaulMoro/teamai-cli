@@ -43,7 +43,7 @@ import { z } from 'zod';
 import { commandOutputs } from '../protocol.js';
 import { parseStepPath } from '../step-path.js';
 import { attemptEnv } from '../attempt-marker.js';
-import { attemptDir, attemptOutDir, attemptResultPath, keepAttemptStdout, readRun, RunIdSchema, takeRunLock, type AttemptId, type RunId, type RunLock } from '../store.js';
+import { attemptDir, attemptOutDir, attemptResultPath, keepAttemptStdout, readRun, runFilePath, RunIdSchema, takeRunLock, type AttemptId, type RunId, type RunLock } from '../store.js';
 import { isWorkflowFile, stepWorkflow, workflowRunBy, type RunState, type WorkflowDefinition, type WorkflowEnvelope, type WorkflowFailure, type WorkflowStep } from '../types.js';
 import { envAdvice, envScopeOf, lackedLabels, lacksTool, mergeRequirements, requiredEnvKeys, type EnvScope, type InEffect, type TurnLimits } from '../requirements.js';
 import { launchToolFor, promptOfferOf, promptRuntimeOn, runPromptStep, type PromptOffer, type StagedLease } from '../steps/prompt.js';
@@ -433,9 +433,11 @@ function endedAt(record: Extract<FleetRecord, { state: 'finished' | 'expired' | 
 
 /**
  * Removes the directory a member kept attempt `attempt` of run `run` in, with the run's own folders once they hold
- * nothing else: a member holds no record of the run, so nothing else ends them.
+ * nothing else: a member holds no record of the run, so nothing else ends them. A member sharing its data home with
+ * the run's owner removes nothing: the folder is the owner's record too, which its retention ends.
  */
 async function removeEndedAttempt(config: LocalConfig, run: RunId, attempt: AttemptId): Promise<void> {
+  if (await fs.stat(runFilePath(config, run)).catch(() => undefined)) return;
   const dir = attemptDir(config, run, attempt);
   await fs.rm(dir, { recursive: true, force: true });
 
