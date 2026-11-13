@@ -293,11 +293,12 @@ export async function takeFleetAttempt(config: LocalConfig, input: { pool: strin
   const offers: Offered[] = [];
 
   // An offer of a kind of step this member's driver does not run, or that needs a label where it would run it does not
-  // declare, is another member's to take.
+  // declare, is another member's to take. One of a run whose record this data home holds is its owner's, as one of its
+  // own id is: what a claim keeps of the attempt here, such as its runtime record, is the owner's too.
   for (const offer of offersAmong(records, { pool, repository })) {
     const at = place[offer.lease.kind];
 
-    if (offer.owner.id === member.id || at === undefined) continue;
+    if (offer.owner.id === member.id || at === undefined || await holdsRunRecord(config, offer.run)) continue;
     const lacks = await lackedFor(config, offer, at);
 
     if (lacks !== undefined) {
@@ -432,12 +433,19 @@ function endedAt(record: Extract<FleetRecord, { state: 'finished' | 'expired' | 
 }
 
 /**
+ * Whether this data home holds run `run`'s record, as the data home of the run's owner does. A record that cannot be
+ * read for another reason than its absence counts as held, so the member leaves the run alone.
+ */
+async function holdsRunRecord(config: LocalConfig, run: RunId): Promise<boolean> {
+  return fs.lstat(runFilePath(config, run)).then(() => true, (error: unknown) => errnoCode(error) !== 'ENOENT');
+}
+
+/**
  * Removes the directory a member kept attempt `attempt` of run `run` in, with the run's own folders once they hold
- * nothing else: a member holds no record of the run, so nothing else ends them. A member sharing its data home with
- * the run's owner removes nothing: the folder is the owner's record too, which its retention ends.
+ * nothing else: a member holds no record of the run, so nothing else ends them. A member never claims a run whose
+ * record its data home holds, so the folder is never the owner's.
  */
 async function removeEndedAttempt(config: LocalConfig, run: RunId, attempt: AttemptId): Promise<void> {
-  if (await fs.stat(runFilePath(config, run)).catch(() => undefined)) return;
   const dir = attemptDir(config, run, attempt);
   await fs.rm(dir, { recursive: true, force: true });
 
