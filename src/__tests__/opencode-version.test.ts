@@ -1,25 +1,21 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { afterEach, describe, expect, it, vi } from 'vitest';
-import { installFakeOpencode, setFakeOpencodeVersion } from '@teamai/tool-opencode/testing';
+import { afterEach, describe, expect, it } from 'vitest';
+import { installFakeOpencode } from '@teamai/tool-opencode/testing';
 import { opencodeMajorVersion } from '../opencode-version.js';
 
 const made: string[] = [];
 
 /** A fake `opencode` in a directory of its own that prints `version`, and its path: the probe caches by binary. */
 function opencodePrinting(version: string): string {
-  const dir = installFakeOpencode();
-  const dataHome = fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-opencode-version-'));
-  made.push(dir, dataHome);
-  setFakeOpencodeVersion(dataHome, version);
-  vi.stubEnv('XDG_DATA_HOME', dataHome);
+  const dir = installFakeOpencode({ version });
+  made.push(dir);
 
   return path.join(dir, 'opencode');
 }
 
 afterEach(() => {
-  vi.unstubAllEnvs();
   for (const dir of made.splice(0)) fs.rmSync(dir, { recursive: true, force: true });
 });
 
