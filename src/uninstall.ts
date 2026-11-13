@@ -3781,6 +3781,8 @@ export async function uninstall(opts: UninstallOptions): Promise<void> {
 
     printSummary(plan, agentKey);
 
+    if (plan.includeShared) await printSandboxWarm(getUserHome());
+
     if (exclusionOnly) {
       log.info(plan.sharedRetentionOnly
         ? `Exclude ${agentKey} from this project; everything it shares stays with the tool still reading it.`
@@ -3834,6 +3836,37 @@ export async function uninstall(opts: UninstallOptions): Promise<void> {
 
 /** How a member finds and removes by hand the warm images and sbx templates the sandbox runtime saved. */
 const WARM_BY_HAND = 'List them with `docker image ls teamai-warm`, `podman image ls teamai-warm` and `sbx template ls`, and remove each teamai-warm one with `docker image rm`, `podman image rm` or `sbx template rm --force`.';
+
+/**
+ * Lists, for the preview, the warm images and sbx templates the sandbox runtime saved in `home`: outside ~/.teamai,
+ * they go with the last install on it.
+ */
+async function printSandboxWarm(home: string): Promise<void> {
+  const runtime = teamaiBin('teamai-runtime-sandbox');
+
+  if (runtime === undefined || !await pathExists(runtimeStateRoot(home))) return;
+  const heading = "   Warm images and sbx templates teamai's sandbox made, which the last install on this machine removes:";
+  let listed: Awaited<ReturnType<typeof execCommand>>;
+
+  try {
+    listed = await execCommand(process.execPath, [runtime, 'remove-warm', '--dry-run'], { env: { ...process.env, HOME: home }, timeoutMs: 60_000 });
+  } catch (e) {
+    console.log(`${heading} teamai could not list them (${e instanceof Error ? e.message : String(e)}).`);
+
+    return;
+  }
+
+  const saved = listed.stdout.split('\n').filter((line) => line.trim() !== '');
+
+  if (listed.code !== 0) {
+    console.log(`${heading} teamai could not list them (exit code ${listed.code}: ${listed.stderr.trim()}).`);
+  } else if (saved.length > 0) {
+    console.log(heading);
+
+    for (const line of saved) console.log(`     ${line}`);
+    console.log('');
+  }
+}
 
 /**
  * Has the sandbox runtime remove, in `home`, the warm images and sbx templates it saved there, before the journal that
@@ -4327,6 +4360,8 @@ async function uninstallHomeOnly(opts: UninstallOptions): Promise<void> {
   // Read before anything is deleted, as for a user-scope uninstall (#1025).
   const kept = await keptForProjects();
   printKeptForProjects(kept);
+
+  if (!kept.paths.includes(runtimeStateRoot(getUserHome()))) await printSandboxWarm(getUserHome());
 
   if (opts.dryRun) {
     await refusedForLiveRuns(() => removedDataHomes(home, kept), { dryRun: true });

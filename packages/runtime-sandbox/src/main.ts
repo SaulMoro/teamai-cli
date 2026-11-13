@@ -10,9 +10,9 @@ import type { RuntimeMessage } from '@teamai/runtime-protocol';
 import type { ParsedOptions } from './options.js';
 import { unreachable, type Provider } from './provider.js';
 import { bwrap } from './providers/bwrap.js';
-import { containerProvider, removeWarmImages } from './providers/container.js';
+import { containerProvider, removeWarmImages, warmImagesSaved } from './providers/container.js';
 import { nativeProvider } from './providers/native.js';
-import { removeWarmTemplates, sbxProvider } from './providers/sbx.js';
+import { removeWarmTemplates, sbxProvider, warmTemplatesSaved } from './providers/sbx.js';
 import { seatbelt } from './providers/seatbelt.js';
 import { vercelProvider } from './providers/vercel.js';
 import { serve } from './runtime.js';
@@ -51,7 +51,16 @@ const wrapper = calledAs.startsWith(WRAPPER_PREFIX)
   ? { name: calledAs.slice(WRAPPER_PREFIX.length), args: process.argv.slice(2) }
   : mode === 'tool-exec' && wrapped !== undefined ? { name: wrapped, args: process.argv.slice(4) } : undefined;
 
-if (wrapper === undefined && mode === 'remove-warm') {
+if (wrapper === undefined && mode === 'remove-warm' && wrapped === '--dry-run') {
+  // An uninstall's preview: each warm image and template this journal's providers saved, a line each, asking no engine.
+  const saved = PLATFORM === 'win32' ? [] : [
+    ...warmImagesSaved({ engine: 'docker', state: path.join(journalRoot, 'docker') }),
+    ...warmImagesSaved({ engine: 'podman', state: path.join(journalRoot, 'podman') }),
+    ...warmTemplatesSaved({ state: path.join(journalRoot, 'sbx') }),
+  ];
+
+  for (const line of saved) process.stdout.write(`${line}\n`);
+} else if (wrapper === undefined && mode === 'remove-warm') {
   // `teamai uninstall` runs it in the member's HOME: each warm image and template this journal's providers saved is
   // removed, a line on stdout each, and one that stays is named on stderr with how to remove it. Windows runs none.
   const removals = PLATFORM === 'win32' ? [] : await Promise.all([

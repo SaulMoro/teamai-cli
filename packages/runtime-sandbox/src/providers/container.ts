@@ -640,6 +640,11 @@ function warmRecords(state: string): string {
   return path.join(state, 'warm');
 }
 
+/** Each warm image `engine`'s provider recorded in `state` as one it saved, as `engine image <tag>`: asks the engine nothing. */
+export function warmImagesSaved({ engine, state }: { engine: ContainerEngine; state: string }): string[] {
+  return savedWarm(warmRecords(state)).tags().map((tag) => `${engine} image ${tag}`);
+}
+
 /**
  * Removes each warm image `engine`'s provider recorded in `state` as one it saved, as `teamai uninstall` has the runtime
  * do in the member's HOME; one already gone is forgotten. Nothing recorded, it runs no engine command.

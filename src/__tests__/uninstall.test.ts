@@ -552,7 +552,8 @@ describe('uninstall', () => {
 
   /**
    * Stands in for the sandbox runtime this install ships: it records what it was asked, in which HOME, and whether its
-   * journal under `runtimeState` was still there, then says it removed one warm image and could not remove another.
+   * journal under `runtimeState` was still there, then lists one warm image for a preview, or says it removed one and
+   * could not remove another.
    */
   async function standInSandboxRuntime(runtimeState: string): Promise<string> {
     const asked = path.join(tmpDir, 'asked.json');
@@ -560,6 +561,7 @@ describe('uninstall', () => {
     onTestFinished(() => { sandboxRuntime.bin = undefined; });
     await fse.writeFile(sandboxRuntime.bin, `import fs from 'node:fs';
 fs.writeFileSync(${JSON.stringify(asked)}, JSON.stringify({ args: process.argv.slice(2), home: process.env.HOME, journal: fs.existsSync(${JSON.stringify(path.join(runtimeState, 'sandbox'))}) }));
+if (process.argv.includes('--dry-run')) { console.log('docker image teamai-warm:0123456789abcdef'); process.exit(0); }
 console.log('Removed docker image teamai-warm:0123456789abcdef, a warm image teamai made.');
 console.error('Could not remove podman image teamai-warm:fedcba9876543210: podman is not running. Remove it with \`podman image rm teamai-warm:fedcba9876543210\`.');
 `);
@@ -582,6 +584,25 @@ console.error('Could not remove podman image teamai-warm:fedcba9876543210: podma
     expect(vi.mocked(log.success).mock.calls.map(([line]) => String(line))).toContain('Removed docker image teamai-warm:0123456789abcdef, a warm image teamai made.');
     expect(vi.mocked(log.warn).mock.calls.map(([line]) => String(line))).toContain('Could not remove podman image teamai-warm:fedcba9876543210: podman is not running. Remove it with `podman image rm teamai-warm:fedcba9876543210`.');
     expect(await fse.pathExists(runtimeState), 'runtime state').toBe(false);
+  });
+
+  it("lists in the preview the warm images the sandbox runtime saved, which the uninstall removes outside ~/.teamai, and removes nothing", async () => {
+    const { homeDir, repoPath, teamaiHome } = await setupFixture(tmpDir);
+    vi.stubEnv('HOME', homeDir);
+    const runtimeState = path.join(teamaiHome, 'runtime-state');
+    await fse.outputJson(path.join(runtimeState, 'sandbox', 'docker', 'warm', 'teamai-warm%3A0123456789abcdef'), {});
+    const asked = await standInSandboxRuntime(runtimeState);
+    const localConfig = makeLocalConfig(homeDir, repoPath, { scope: 'project', projectRoot: homeDir, dataHome: path.join(teamaiHome, 'projects', 'current') });
+    mockAutoDetectInit.mockResolvedValue({ localConfig, teamConfig: makeTeamConfig() });
+    const printed: string[] = [];
+    const logSpy = vi.spyOn(console, 'log').mockImplementation((line?: unknown) => { printed.push(String(line ?? '')); });
+    onTestFinished(() => { logSpy.mockRestore(); });
+
+    await uninstall({ dryRun: true });
+
+    expect(await fse.readJson(asked)).toEqual({ args: ['remove-warm', '--dry-run'], home: homeDir, journal: true });
+    expect(printed).toEqual(expect.arrayContaining(["   Warm images and sbx templates teamai's sandbox made, which the last install on this machine removes:", '     docker image teamai-warm:0123456789abcdef']));
+    expect(await fse.pathExists(runtimeState), 'runtime state').toBe(true);
   });
 
   it('has the sandbox runtime remove the warm images it saved when no configuration is found, before the home goes', async () => {

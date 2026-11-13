@@ -495,6 +495,11 @@ function warmRecords(state: string): string {
   return path.join(state, 'warm');
 }
 
+/** Each warm template the sbx provider recorded in `state` as one it saved, as `sbx template <tag>`: asks sbx nothing. */
+export function warmTemplatesSaved({ state }: { state: string }): string[] {
+  return savedWarm(warmRecords(state)).tags().map((tag) => `sbx template ${tag}`);
+}
+
 /**
  * Removes each warm template the sbx provider recorded in `state` as one it saved, as `teamai uninstall` has the runtime
  * do in the member's HOME, whose templates sbx keeps; one already gone is forgotten. A kit template of the same image

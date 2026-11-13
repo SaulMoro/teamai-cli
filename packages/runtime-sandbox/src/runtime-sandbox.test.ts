@@ -3181,8 +3181,8 @@ describe('a warm image', () => {
   });
 
   /** What `teamai uninstall` has the runtime remove, run in the member's HOME. */
-  const removeWarm = (): { status: number | null; stdout: string; stderr: string } => {
-    const ran = spawnSync(process.execPath, [executable, 'remove-warm'], { env: { ...engine.env(), HOME: path.join(dir, 'home') }, encoding: 'utf8', timeout: 60_000 });
+  const removeWarm = (...args: string[]): { status: number | null; stdout: string; stderr: string } => {
+    const ran = spawnSync(process.execPath, [executable, 'remove-warm', ...args], { env: { ...engine.env(), HOME: path.join(dir, 'home') }, encoding: 'utf8', timeout: 60_000 });
 
     return { status: ran.status, stdout: ran.stdout, stderr: ran.stderr };
   };
@@ -3206,17 +3206,23 @@ describe('a warm image', () => {
   /** The sbx kit template a warm template saved from a sandbox of agent claude shares its image with. */
   const KIT = 'docker.io/library/sandbox-kit-assembled:' + crypto.createHash('sha256').update('claude').digest('hex').slice(0, 16);
 
-  it.each<{ options: Message; removed: (tag: string) => string; left: (tag: string) => string }>([
-    { options: { provider: 'docker', image: IMAGE }, removed: (tag) => `Removed docker image ${tag}, a warm image teamai's sandbox made.\n`, left: () => '' },
-    { options: { provider: 'podman', image: IMAGE }, removed: (tag) => `Removed podman image ${tag}, a warm image teamai's sandbox made.\n`, left: () => '' },
+  it.each<{ options: Message; listed: (tag: string) => string; removed: (tag: string) => string; left: (tag: string) => string }>([
+    { options: { provider: 'docker', image: IMAGE }, listed: (tag) => `docker image ${tag}\n`, removed: (tag) => `Removed docker image ${tag}, a warm image teamai's sandbox made.\n`, left: () => '' },
+    { options: { provider: 'podman', image: IMAGE }, listed: (tag) => `podman image ${tag}\n`, removed: (tag) => `Removed podman image ${tag}, a warm image teamai's sandbox made.\n`, left: () => '' },
     {
       options: { provider: 'sbx', agent: 'claude' },
+      listed: (tag) => `sbx template ${tag}\n`,
       removed: (tag) => `Removed sbx template docker.io/library/${tag}, a warm template teamai's sandbox saved.\n`,
       left: (tag) => `sbx keeps the image of docker.io/library/${tag} as its template ${KIT} too, so removing it freed no disk. Remove that one with \`sbx template rm --force ${KIT}\` if no sandbox of yours starts from it.\n`,
     },
-  ])('removes on $options.provider, as teamai is uninstalled, the warm image it made, naming it, and asks the engine nothing once none is left', async ({ options, removed, left }) => {
+  ])('removes on $options.provider, as teamai is uninstalled, the warm image it made, naming it, and asks the engine nothing once none is left', async ({ options, listed, removed, left }) => {
     const tag = await warmedAndClosed(options);
+    const made = engine.calls().length;
 
+    // What an uninstall's preview lists: the image, asking the engine nothing and removing nothing.
+    expect(removeWarm('--dry-run')).toEqual({ status: 0, stdout: listed(tag), stderr: '' });
+    expect(engine.calls().slice(made)).toEqual([]);
+    expect(engine.savedImages()).toEqual([tag]);
     expect(removeWarm()).toEqual({ status: 0, stdout: removed(tag), stderr: left(tag) });
     expect(engine.savedImages()).toEqual([]);
 
