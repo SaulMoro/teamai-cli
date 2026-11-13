@@ -235,6 +235,20 @@ describe('session list --finished', () => {
     expect(await listed(config, {}, { TEAMAI_WORKFLOW_ATTEMPT: 'r0000000000000000/a00000001' })).toMatchObject({ ok: false, code: 'run_not_found' });
   });
 
+  it('refuses an attempt marker that names more than one run and attempt, rather than read the scope of its first run', async () => {
+    const config = await team({}, { scoring: { sessions: true } });
+    capturedSession(IDLE, 'attended');
+    const runId = String(data(await startRun(config, 'teamai-finished-sessions', { publish: 'policy', scorers: [] }, { secrets: {}, startedBy: 'person' })).run);
+    const { attempt } = data(await leaseNext(config, runId, { kind: 'external', machine: 'm1', workspace: root })).lease as { attempt: string };
+
+    expect(await listed(config, {}, { TEAMAI_WORKFLOW_ATTEMPT: `${runId}/${attempt}` })).toMatchObject({ ok: true, list: [{ session: IDLE }] });
+    expect(await listed(config, {}, { TEAMAI_WORKFLOW_ATTEMPT: `${runId}/${attempt}/x` })).toEqual({
+      ok: false,
+      code: 'invalid_arguments',
+      message: `TEAMAI_WORKFLOW_ATTEMPT is "${runId}/${attempt}/x", not <run>/<attempt>, so this listing names no run whose scope to read. A workflow step sets it; unset it to list this scope's sessions.`,
+    });
+  });
+
   it('lists every finished session for the scorers a person names, with policies off, unsampled and as a named demand', async () => {
     const config = await team({ 'scorers/rare.md': SCORER.replace('samplingRate: 100', 'samplingRate: 0').replace('sessions: true\n', '') });
     capturedSession(IDLE, 'attended');
