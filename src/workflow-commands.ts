@@ -1643,10 +1643,10 @@ async function resumeOffered(runId: string | undefined, options: ResumeOptions, 
   }
 
   // A runtime of the definition named that keeps each step in a sandbox takes a step strictly needing one, as --sandbox does.
-  const sandboxRuntime = defined.opened?.runtimes.find((entry) => entry.kind === 'external' && entry.can.isolation === 'sandbox')?.use;
+  const hasSandboxRuntime = defined.opened?.runtimes.some((entry) => entry.kind === 'external' && entry.can.isolation === 'sandbox') === true;
 
   try {
-    await takeNext(loaded, taker.driver === 'local' && sandboxRuntime !== undefined ? { ...taker, sandboxRuntime } : taker, options, defined.opened);
+    await takeNext(loaded, taker.driver === 'local' && hasSandboxRuntime ? { ...taker, sandbox: true } : taker, options, defined.opened);
   } finally {
     await closeDriver(defined.opened);
   }

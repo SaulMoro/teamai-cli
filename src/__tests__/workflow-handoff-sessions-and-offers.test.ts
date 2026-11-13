@@ -1136,9 +1136,6 @@ steps:
     }]);
     expect(PublishedRuns.candidates(runs, { repository: 'github.com/acme/app', hasPerson: false, self })).toEqual([]);
     expect((await publishedRuns(runner, runnerTaker('unattended', { sandbox: true })))[0]?.offer?.lacks).toEqual([]);
-    // A driver given with --driver whose runtime keeps each step in a sandbox takes it, without --sandbox on this host.
-    const boxed = { ...runnerTaker('unattended'), sandboxRuntime: 'docker-box' };
-    expect((await publishedRuns(runner, boxed))[0]?.offer?.lacks).toEqual([]);
   });
 
   it('names one --tools default=<tool> for every prompt step left with no tool configured here, whichever agent each runs', async () => {
