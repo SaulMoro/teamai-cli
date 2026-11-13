@@ -79,7 +79,8 @@ const STARTED = /^[ \t]*✓ sandbox \S+ — started\r?\n/;
 
 /**
  * The warm templates teamai saved (`teamai-warm:<key>`) that `sbx template ls --json` printed: the reference `sbx
- * template rm` takes and the key; undefined when it printed something else.
+ * template rm` takes (`<repository>:<tag>`, by tag as sbx 0.53.0's help shows it) and the key; undefined when it printed
+ * something else.
  */
 export function sbxWarmTemplatesListed(stdout: string): Array<{ ref: string; key: string }> | undefined {
   try {

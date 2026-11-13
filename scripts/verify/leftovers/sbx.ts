@@ -53,9 +53,9 @@ export const sbxLeftovers: LeftoverKind = {
       const listed = captureOn(context.world, install.target, [command, 'ls', '--json']);
       const of = install.at === context.world.runId ? '' : ` of ${install.at}`;
 
-      if (listed.errno === 'ENOENT') return [{ kind: 'observed', findings: [], notes: [`sbx sandboxes${of}: sbx not installed here`] }];
+      if (listed.errno === 'ENOENT') return [{ kind: 'observed', findings: [], notes: [`sbx sandboxes and templates${of}: sbx not installed here`] }];
 
-      // Sandboxes go first: cleanup removes in this order, and a template a sandbox still runs from may not go before it.
+      // Sandboxes go first: cleanup removes in this order, so no sandbox of the world still runs from a template it removes.
       return [sandboxesOn(context, install, listed, of), templatesOn(context, install, of)];
     }));
   },
