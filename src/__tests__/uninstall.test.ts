@@ -560,6 +560,19 @@ describe('uninstall', () => {
     expect(await fse.pathExists(trust)).toBe(false);
   });
 
+  it('keeps the record of accepted team tools and runtimes when a user-scope uninstall keeps a project that reads it', async () => {
+    const { homeDir, repoPath, teamaiHome } = await setupFixture(tmpDir);
+    vi.stubEnv('HOME', homeDir);
+    const accepted = path.join(teamaiHome, 'trust', 'runtimes.json');
+    await fse.outputJson(accepted, { accepted: [] });
+    await installAnotherProject(homeDir, tmpDir);
+    mockAutoDetectInit.mockResolvedValue({ localConfig: makeLocalConfig(homeDir, repoPath), teamConfig: makeTeamConfig() });
+
+    await uninstall({ force: true });
+
+    expect(await fse.pathExists(accepted)).toBe(true);
+  });
+
   it('keeps the record of accepted team tools and runtimes while another project on this machine still reads it', async () => {
     const { homeDir, repoPath, teamaiHome } = await setupFixture(tmpDir);
     vi.stubEnv('HOME', homeDir);

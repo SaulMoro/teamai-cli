@@ -949,6 +949,8 @@ async function keptForProjects(): Promise<KeptForProjects> {
     bridgedTeamHookDir(),
     // What the step runtimes keep for every project's runs, the journal of a place one still has open among it.
     runtimeStateRoot(getUserHome()),
+    // The member's answers to running a team file's command, which every project's runs read.
+    getTrustDir(),
     ...await secretsFor(readers),
     ...await sourceRecordsFor(readers),
   ];
