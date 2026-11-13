@@ -25,7 +25,7 @@ import { failedCommand, placeView, runtimeCommand, runtimeSetup, runtimeStepEnv,
 import { attemptRun, credentialSecrets, HeldPlace, isExecRuntimeTool, readAttemptPlacement, recordInProcessAttempt, attemptRuntimePath, maskAttemptResults, type AttemptRun, type RuntimeOrigin } from '../../runtimes/attempt.js';
 import { answerCallTool, hostStepRuntime } from '../../runtimes/host.js';
 import { writeHeldSteps, type HeldSteps } from '../../runtimes/held.js';
-import { closeAfterSweep, endLeftLogins, stopLeftInProcess, stopOnRecordedDriver } from '../../runtimes/cancelled.js';
+import { closeAfterSweep, endLeftLogins, releaseHeldPlaces, stopLeftInProcess, stopOnRecordedDriver } from '../../runtimes/cancelled.js';
 import { loginHolder } from '../../runtimes/login.js';
 import { toolsLaunchDeps, type EngineOptions, type OpenedDriver } from '../../runtimes/sources.js';
 import { newOpId, type ExecAnswer, type ExecQuestion, type StepRuntime } from '@teamai/runtime-protocol/step-runtime';
@@ -924,21 +924,16 @@ async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, given: 
     return state !== 'missing' && state !== 'corrupt' ? { continued: continuedConversations(state), workspace: sharedWorkspace(state, step) } : { continued: [], workspace: undefined };
   };
 
-  /**
-   * Closes each place held open for a conversation (`HeldPlace`) that `continued` no longer names in its workspace, or, without it, every
-   * one: on its runtime of this driver, else through the driver its record names, as a killed teamai's are.
-   */
-  const releaseHeld = async (continued?: ReturnType<typeof continuedConversations>): Promise<void> => {
-    for (const { attempt, record } of await HeldPlace.toRelease(config, runId, continued)) {
+  /** Closes the places held for a conversation that `continued` no longer names, or, without it, every one, on this driver's runtime where it has it. */
+  const releaseHeld = (continued?: ReturnType<typeof continuedConversations>): Promise<void> => releaseHeldPlaces(config, runId, {
+    checkout: root,
+    continued,
+    live: (record) => {
       const slot = record.driver === defined.driver ? slots.find((candidate) => candidate.kind === 'external' && candidate.use === record.runtime) : undefined;
 
-      const notClosed = slot
-        ? await attemptRun({ config, run: runId, attempt, runtime: slot.runtime, driver: defined.driver }).close()
-        : await stopOnRecordedDriver(config, runId, attempt, { checkout: root });
-
-      if (notClosed) log.warn(notClosed.message);
-    }
-  };
+      return slot?.kind === 'external' ? slot.runtime : undefined;
+    },
+  });
 
   const abandon = async (attempt: AttemptId): Promise<void> => {
     await abandonPlace({ config, lock, attempt });

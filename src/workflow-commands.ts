@@ -31,7 +31,7 @@ import { LOCAL_DRIVER, parseDriver, type Driver, type DriverName } from './workf
 import { checkDriver, disposeDriver, openDriver, type OpenedDriver } from './workflow/runtimes/sources.js';
 import { sessionAppOf } from './workflow/session-apps.js';
 import { resolveDriver } from './workflow/runtimes/definitions.js';
-import { stopCancelledAttempts } from './workflow/runtimes/cancelled.js';
+import { releaseHeldPlaces, stopCancelledAttempts } from './workflow/runtimes/cancelled.js';
 import type { SoleDriver } from './workflow/engine.js';
 import { driverIdentity } from './driver-identity.js';
 import { getBusinessRoot, getDataHome, usesBranchWorktree, type LocalConfig, type TeamaiConfig } from './types.js';
@@ -1389,7 +1389,14 @@ export async function workflowPublish(runId: string, options: { sessions?: boole
 
   // A driver of the run running a step here answers driver_running, since a runner could take the offered run and run
   // that step a second time; and no driver of it starts here until the offer is up.
-  const taken = await whileNoDriverHere(loaded.config, run.data, () => publishRun(loaded.config, run.data, { checkout: process.cwd(), sessions: options.sessions ? resumableSessions : undefined }));
+  const taken = await whileNoDriverHere(loaded.config, run.data, async () => {
+    const offer = await publishRun(loaded.config, run.data, { checkout: process.cwd(), sessions: options.sessions ? resumableSessions : undefined });
+
+    // The run goes on on another machine, which cannot reach a conversation a driver here held.
+    if (offer.ok && offer.value.offered) await releaseHeldPlaces(loaded.config, run.data, { checkout: process.cwd() });
+
+    return offer;
+  });
 
   if (taken.kind === 'busy') {
     writeEnvelope({ error: taken.error }, secrets);

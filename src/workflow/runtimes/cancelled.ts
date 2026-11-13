@@ -8,11 +8,13 @@ import { existingCheckout } from '../run-location.js';
 import { errnoCode } from '../../utils/fs.js';
 import { attemptDir, AttemptIdSchema, attemptsDir, attemptsDirIn, readRun, RunIdSchema, type AttemptId, type RunId, type RunLock } from '../store.js';
 import { knownSecrets } from '../../env-resolution.js';
-import { attemptRun, attemptRuntimeFile, attemptRuntimePath, attemptToolHome, isPlaceLeftOpen, maskAttemptResults, readAttemptPlacement, readAttemptPlacementAt, releaseAttemptRuntime, type AttemptPlacement, type AttemptRuntimeRecord } from './attempt.js';
+import { attemptRun, attemptRuntimeFile, attemptRuntimePath, attemptToolHome, HeldPlace, isPlaceLeftOpen, maskAttemptResults, readAttemptPlacement, readAttemptPlacementAt, releaseAttemptRuntime, type AttemptPlacement, type AttemptRuntimeRecord } from './attempt.js';
 import { endLogin, LOGIN_TOOLS, loginHolder, type LoginTool } from './login.js';
 import { disposeDriver, openDriver } from './sources.js';
 import { retryCommand } from './retry-command.js';
 import { CANCEL_FAILED } from '@teamai/runtime-protocol';
+import type { StepRuntime } from '@teamai/runtime-protocol/step-runtime';
+import type { DriverCan } from '../requirements.js';
 import { stopRecordedGroup } from '@teamai/shared/process-group';
 
 // ─── What cancelled attempts left on their step runtimes ─
@@ -265,6 +267,26 @@ async function endLeftLogin(config: LocalConfig, tool: LoginTool, { run, attempt
   log.info(`Released the ${tool} login teamai keeps, which attempt ${attempt} of run ${run} held.`);
 
   return true;
+}
+
+/**
+ * Closes each place of run `run` held open for a conversation (`HeldPlace`) that `continued` no longer names in its
+ * workspace, or, without it, every one: on the runtime `live` gives for its record, else through the driver its record
+ * names, as a killed teamai's are. A driver calls it as a step settles and at the run's end, and every offer of the run
+ * on teamai-reports calls it, since the machine that takes the run cannot reach a conversation held here.
+ */
+export async function releaseHeldPlaces(config: LocalConfig, run: RunId, { checkout, continued, live }: {
+  checkout: string;
+  continued?: Parameters<typeof HeldPlace.toRelease>[2];
+  /** The runtime a driver still has open for the place `record` names, which closes it without opening the driver again. */
+  live?: (record: AttemptRuntimeRecord) => StepRuntime<DriverCan> | undefined;
+}): Promise<void> {
+  for (const { attempt, record } of await HeldPlace.toRelease(config, run, continued)) {
+    const runtime = live?.(record);
+    const notClosed = runtime ? await attemptRun({ config, run, attempt, runtime, driver: record.driver }).close() : await stopOnRecordedDriver(config, run, attempt, { checkout });
+
+    if (notClosed) log.warn(notClosed.message);
+  }
 }
 
 /**
