@@ -78,22 +78,26 @@ describe("another program's own state in a ledger's section (e)", () => {
     [`${SBX}/sandboxes/settings.json`, sha, undefined],
     ['home/Library/Preferences', 'dir', undefined],
     ['home/Library/Preferences/com.example.plist', sha, undefined],
-    // What OpenCode v2.3.0 makes for itself on any start, `opencode --version` included, in a HOME with no XDG variable:
-    // its binary cache, its log, its repos folder and its state folder.
+    // OpenCode's own folders under the XDG folders of a HOME that sets none, as v2.3.0 fills them: on any start,
+    // `opencode --version` included, and in a session a step opens (its database, shell and snapshot folders).
     ['home/.cache/opencode/bin', 'dir', { kind: 'state', owner: 'OpenCode', dir: 'home/.cache/opencode' }],
     ['home/.local/share/opencode/log/opencode.log', sha, { kind: 'state', owner: 'OpenCode', dir: 'home/.local/share/opencode' }],
     ['home/.local/share/opencode/repos', 'dir', { kind: 'state', owner: 'OpenCode', dir: 'home/.local/share/opencode' }],
+    ['home/.local/share/opencode/opencode.db', sha, { kind: 'state', owner: 'OpenCode', dir: 'home/.local/share/opencode' }],
+    ['home/.local/share/opencode/snapshot/cb253d22366577419c7461916f9a348b44041300', 'dir', { kind: 'state', owner: 'OpenCode', dir: 'home/.local/share/opencode' }],
     ['home/.local/state/opencode', 'dir', { kind: 'state', owner: 'OpenCode', dir: 'home/.local/state/opencode' }],
+    ['home/.local/state/opencode/prompt-history.jsonl', sha, { kind: 'state', owner: 'OpenCode', dir: 'home/.local/state/opencode' }],
     // The folders that hold them are judged by what they hold.
     ['home/.cache', 'dir', { kind: 'folder', owner: 'OpenCode' }],
-    ['home/.local/share/opencode', 'dir', { kind: 'folder', owner: 'OpenCode' }],
+    ['home/.local/share', 'dir', { kind: 'folder', owner: 'OpenCode' }],
     ['home/.local', 'dir', { kind: 'folder', owner: 'OpenCode' }],
-    // Nothing else there: not another file of OpenCode's, nor another program's in the same folders.
-    ['home/.local/share/opencode/opencode.db', sha, undefined],
-    ['home/.cache/opencode/version', sha, undefined],
-    ['home/.local/share/other/x.log', sha, undefined],
+    // Nothing beyond OpenCode's own folders: not what its TUI keeps elsewhere, nor another program's beside them.
+    ['home/.local/share/opentui/tree-sitter', 'dir', undefined],
+    ['home/Library/Caches/bun', 'dir', undefined],
+    ['home/.local/share/opencode-other/x.log', sha, undefined],
     ['home/.local/bin', 'dir', undefined],
     ['home/.cache/teamai/opencode/log/x.log', sha, undefined],
+    ['home/.local/share/opencode/teamai-hooks.ts', sha, undefined],
   ])('judges %s holding %s as the state of %o', (entry, value, own) => {
     expect(ownStateOf(entry, value)).toEqual(own);
   });
