@@ -18,7 +18,8 @@ import type { SessionSubject } from './scorers/label.js';
 import { appendEvent, dataHomeKey } from './dashboard-collector.js';
 import { ATTEMPT_ENV, LAUNCHED_BY_ENV, sessionRun, type SessionRun } from './launch-context.js';
 import { learningIdOf } from './outcomes.js';
-import { appendAttemptOutcome, RunIdSchema } from './workflow/store.js';
+import { attemptMarker, markedAttempt } from './workflow/attempt-marker.js';
+import { appendAttemptOutcome } from './workflow/store.js';
 import { pendingLearningsDir, queueWriteRefusal, savePendingLearning } from './utils/pending-learnings.js';
 import { publishQueuedLearnings } from './utils/learnings-publish.js';
 import { indexableLearningsRoots } from './utils/learnings-roots.js';
@@ -204,13 +205,12 @@ async function recordLearningOutcome(localConfig: LocalConfig, session: Contribu
  */
 async function ownSessionRun(localConfig: LocalConfig): Promise<SessionRun> {
   const run = sessionRun(process.env);
-  const marker = process.env[ATTEMPT_ENV];
+  const marked = markedAttempt(process.env);
 
-  if (!marker || process.env[LAUNCHED_BY_ENV]) return run;
-  const runId = RunIdSchema.safeParse(marker.split('/')[0]);
+  if (!marked || process.env[LAUNCHED_BY_ENV]) return run;
   const { sessionDrivesRun } = await import('./workflow/drivers/skill/skill-driver.js');
 
-  return runId.success && await sessionDrivesRun(localConfig, runId.data) ? { runMode: run.runMode } : run;
+  return await sessionDrivesRun(localConfig, marked.run) ? { runMode: run.runMode } : run;
 }
 
 /**
@@ -219,13 +219,21 @@ async function ownSessionRun(localConfig: LocalConfig): Promise<SessionRun> {
  */
 async function recordStepOutcome(localConfig: LocalConfig, marker: string, relPath: string): Promise<void> {
   const id = learningIdOf(relPath);
+  const marked = markedAttempt(process.env);
+
+  if (!marked) {
+    log.warn(`Learning ${id} is not recorded on a workflow step: ${ATTEMPT_ENV} is "${marker}", not <run>/<attempt>.`);
+
+    return;
+  }
+
   // The scope the run is in: in a step's clone, this command's own scope is the clone's install, which holds no run.
   const { findAttemptRun } = await import('./workflow/run-location.js');
   const found = await findAttemptRun(process.env);
   let recorded: Awaited<ReturnType<typeof appendAttemptOutcome>>;
 
   try {
-    recorded = await appendAttemptOutcome('error' in found ? localConfig : found.config, marker, { kind: 'learning', id });
+    recorded = await appendAttemptOutcome('error' in found ? localConfig : found.config, marked, { kind: 'learning', id });
   } catch (e) {
     log.warn(`Learning ${id} is not recorded on workflow attempt ${marker}: ${e instanceof Error ? e.message : String(e)}`);
 
@@ -234,10 +242,6 @@ async function recordStepOutcome(localConfig: LocalConfig, marker: string, relPa
 
   switch (recorded) {
     case 'appended': return;
-    case 'bad_marker':
-      log.warn(`Learning ${id} is not recorded on a workflow step: ${ATTEMPT_ENV} is "${marker}", not <run>/<attempt>.`);
-
-      return;
     case 'unknown_run':
       log.warn(`Learning ${id} is not recorded on workflow attempt ${marker}: this scope holds no such run. Run teamai contribute in the step's checkout, or pass --scope with the scope the run started in.`);
 
@@ -453,7 +457,7 @@ export async function contribute(
     }
 
     if (session) await recordLearningOutcome(localConfig, session, relPath);
-    const attempt = process.env[ATTEMPT_ENV];
+    const attempt = attemptMarker(process.env);
 
     if (attempt) await recordStepOutcome(localConfig, attempt, relPath);
   } catch (e) {
