@@ -11,7 +11,10 @@ import { descriptorOf, TOOL_ORDER } from '../../src/tool-registry.js';
 import type { ToolId } from '../../src/tools.js';
 import { z } from 'zod';
 import { defaultToolHome, envToolHome, toolHome } from '../../src/tool-home.js';
-import { detectToolRoot, RELOCATABLE_TOOLS, TeamaiConfigBaseSchema } from '../../src/types.js';
+import { detectToolRoot, LocalConfigSchema, RELOCATABLE_TOOLS, TeamaiConfigBaseSchema } from '../../src/types.js';
+import { teamToolInstances } from '../../src/tool-instances.js';
+import { projectsRootDir } from '../../src/utils/partition.js';
+import { parseYaml } from '@teamai/shared/yaml';
 import { MCP_SERVER_KEY } from '../../src/resources/mcp-format.js';
 import type { ToolDescriptor } from '@teamai/tool-core/definition';
 import { isJsonObject, parseJson, type JsonValue } from '@teamai/shared/json';
@@ -211,6 +214,49 @@ const KNOWN_LEFTOVERS = new Map([
   ['home/.codex/skills', 'dir'],
   ['home/.codex/config.toml', createHash('sha256').update('[hooks.state]\n').digest('hex')],
 ]);
+
+/** The part of an install's config.yaml that names its team repo. */
+const InstallRepo = z.object({ repo: LocalConfigSchema.shape.repo });
+
+/**
+ * The home of each tool instance an install under `home` declares, its parents included, as `home/…` entries: those of
+ * the team repo each data home's config names, every namespace's, and the member's own in ~/.teamai/tools. Read before
+ * `teamai uninstall`, which removes those records. Like a shipped tool's home (TOOL_DIRS), it stays once teamai took
+ * out what it put in it, but only empty: `isEmptyInstanceHome`.
+ */
+export async function instanceHomesIn(home: string): Promise<ReadonlySet<string>> {
+  const projects = projectsRootDir(home);
+  const dataHomes = [path.join(home, '.teamai'), ...(fs.existsSync(projects) ? fs.readdirSync(projects).map((slug) => path.join(projects, slug)) : [])];
+
+  const teamRepos = dataHomes.flatMap((dataHome) => {
+    const file = path.join(dataHome, 'config.yaml');
+    let text: unknown;
+
+    // A config the ledger cannot read excuses no instance's home, which then stays a LEAK.
+    try {
+      text = parseYaml(fs.readFileSync(file, 'utf8'));
+    } catch {
+      return [];
+    }
+
+    const config = InstallRepo.safeParse(text);
+
+    return config.success ? [config.data.repo.localPath] : [];
+  });
+
+  const instances = await Promise.all([
+    ...[...new Set(teamRepos)].map((root) => teamToolInstances({ root, namespaces: async () => 'legacy' })),
+    // The member's own folder has the team root's layout, with no namespaces.
+    teamToolInstances({ root: path.join(home, '.teamai'), namespaces: async () => [] }),
+  ]);
+
+  return new Set(instances.flat().flatMap((instance) => instance.home?.dir.split('/').map((_, i, parts) => `home/${parts.slice(0, i + 1).join('/')}`) ?? []));
+}
+
+/** Whether `entry`, left behind, is one of `homes` holding nothing but the empty instance homes below it. */
+export function isEmptyInstanceHome(entry: string, after: Readonly<Record<string, string>>, homes: ReadonlySet<string>): boolean {
+  return homes.has(entry) && after[entry] === 'dir' && Object.entries(after).every(([inner, value]) => !inner.startsWith(`${entry}/`) || (homes.has(inner) && value === 'dir'));
+}
 
 /** Directories left with everything in them: session ids name what is in them, or Codex installs them. */
 const KNOWN_LEFTOVER_DIRS = ['home/.teamai/sessions', 'home/.codex/skills/.system'];
@@ -437,6 +483,7 @@ async function reverseOf(world: World, place: LedgerPlace): Promise<{ leaks: str
     ),
   );
 
+  const instanceHomes = await instanceHomesIn(place.home);
   const { exit: status } = await runOn(world, place.target, ['teamai', 'uninstall', '--force'], { pass: new Map() });
   const after = worldFiles(place);
   const leaks = status === 0 ? [] : [`teamai uninstall exited ${status}`];
@@ -527,6 +574,11 @@ async function reverseOf(world: World, place: LedgerPlace): Promise<{ leaks: str
 
     if (change === 'left behind' && RUN_BRANCH.test(entry)) {
       if (after[entry] !== 'dir') notes.push(`${entry.slice('project/.git/refs/heads/'.length)} left behind: a run's result branch, the member's to keep`);
+      continue;
+    }
+
+    if (change === 'left behind' && isEmptyInstanceHome(entry, after, instanceHomes)) {
+      notes.push(`${entry} left behind empty, a tool instance's home, known: ${KNOWN_LEFTOVERS_ISSUE}`);
       continue;
     }
 

@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { environmentNotes, isToolOwnState, ownStateOf } from './ledger.js';
+import { environmentNotes, instanceHomesIn, isEmptyInstanceHome, isToolOwnState, ownStateOf } from './ledger.js';
 
 const roots: string[] = [];
 
@@ -100,5 +100,37 @@ describe("another program's own state in a ledger's section (e)", () => {
     ['home/.local/share/opencode/teamai-hooks.ts', sha, undefined],
   ])('judges %s holding %s as the state of %o', (entry, value, own) => {
     expect(ownStateOf(entry, value)).toEqual(own);
+  });
+});
+
+describe("a tool instance's home in a ledger's section (e)", () => {
+  /** A HOME whose workspace install's team repo declares acme-claude, and whose member declares their own nested one. */
+  function homeWithInstances(): string {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'ledger-inst-'));
+    roots.push(home);
+    const dataHome = path.join(home, '.teamai', 'projects', 'w-project-0123456789abcdef');
+    const team = path.join(dataHome, 'team-repo');
+    fs.mkdirSync(path.join(team, 'tools'), { recursive: true });
+    fs.writeFileSync(path.join(team, 'tools', 'acme-claude.yaml'), 'schemaVersion: v1alpha1\nname: acme-claude\nextends: claude\nhome: { dir: .acme-claude, env: ACME_CLAUDE_CONFIG_DIR }\n');
+    fs.writeFileSync(path.join(dataHome, 'config.yaml'), `repo:\n  localPath: ${team}\n  remote: https://teamai.test/team/repo.git\nscope: workspace\nenabledAgents:\n  - claude\n  - acme-claude\n`);
+    fs.mkdirSync(path.join(home, '.teamai', 'tools', 'own-codex'), { recursive: true });
+    fs.writeFileSync(path.join(home, '.teamai', 'tools', 'own-codex', 'TOOL.yaml'), 'schemaVersion: v1alpha1\nname: own-codex\nextends: codex\nhome: { dir: .own/codex }\n');
+
+    return home;
+  }
+
+  it('reads the home of every instance the install declares, before uninstall removes the records', async () => {
+    expect([...await instanceHomesIn(homeWithInstances())].sort()).toEqual(['home/.acme-claude', 'home/.own', 'home/.own/codex']);
+  });
+
+  it.each([
+    ['an empty instance home', 'home/.acme-claude', { 'home/.acme-claude': 'dir' }, true],
+    ['the empty folders that hold one', 'home/.own', { 'home/.own': 'dir', 'home/.own/codex': 'dir' }, true],
+    ['an instance home with a file left in it', 'home/.acme-claude', { 'home/.acme-claude': 'dir', 'home/.acme-claude/settings.json': 'f'.repeat(64) }, false],
+    ['a folder holding a non-empty instance home', 'home/.own', { 'home/.own': 'dir', 'home/.own/codex': 'dir', 'home/.own/codex/x': 'f'.repeat(64) }, false],
+    ['a folder no instance names', 'home/.other', { 'home/.other': 'dir' }, false],
+    ['a file named like an instance home', 'home/.acme-claude', { 'home/.acme-claude': 'f'.repeat(64) }, false],
+  ])('judges %s as an empty instance home: %s', (_case, entry, after, empty) => {
+    expect(isEmptyInstanceHome(entry, after, new Set(['home/.acme-claude', 'home/.own', 'home/.own/codex']))).toBe(empty);
   });
 });
