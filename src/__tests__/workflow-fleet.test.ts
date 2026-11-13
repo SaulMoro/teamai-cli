@@ -1262,6 +1262,12 @@ describe('a restarted member', () => {
 
     bob.config.workflows = { tools: {}, ...bob.config.workflows, retention: '1s' };
     await new Promise((resolve) => setTimeout(resolve, 1_100));
+    // The run's record reached this data home after the claim, as a takeover into it brings it: the attempt's folder is
+    // the record's, which its own retention ends.
+    fs.copyFileSync(runFilePath(alice.config, run), runFilePath(bob.config, run));
+    expect(await take()).toEqual({ data: { idle: { offered: 0 } } });
+    expect(fs.existsSync(attemptDir(bob.config, run, offered.attempt))).toBe(true);
+    fs.rmSync(runFilePath(bob.config, run));
     expect(await take()).toEqual({ data: { idle: { offered: 0 } } });
     expect(fs.existsSync(attemptDir(bob.config, run, offered.attempt))).toBe(false);
   }, 60_000);
