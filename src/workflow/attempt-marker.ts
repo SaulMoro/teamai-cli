@@ -17,9 +17,10 @@ export function attemptEnv(config: LocalConfig, run: string, attempt: string, mo
 }
 
 /**
- * What the process of a `command` step gets: `attemptEnv`, and the command-step marker naming the same attempt. Every
- * driver launches a command step with it, and nothing else: a prompt step's tool, setup, or a step kind added later gets
- * `attemptEnv` alone, so `isCommandStep` holds for none of them. A driver that itself runs inside another attempt, as
+ * What the process of a `command` step gets: `attemptEnv`, and the command-step marker naming the same attempt. The local
+ * driver, the skill runner and a fleet member's host command launch a command step with it, and nothing else: a prompt
+ * step's tool, setup, a runtime's command, a `--json` driver's lease or a step kind added later gets `attemptEnv` alone,
+ * so `isCommandStep` holds for none of them. A driver that itself runs inside another attempt, as
  * the run a step's command started does, gives no marker either: that run is part of the step, one level deep.
  */
 export function commandStepEnv(config: LocalConfig, run: string, attempt: string, mode: RunMode): ReturnType<typeof attemptEnv> & Partial<Record<typeof STEP_COMMAND_ENV, string>> {

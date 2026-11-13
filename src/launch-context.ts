@@ -81,8 +81,9 @@ export function resolveRunMode(env: NodeJS.ProcessEnv): RunMode {
 export const ATTEMPT_ENV = 'TEAMAI_WORKFLOW_ATTEMPT';
 
 /**
- * The variable every driver sets only in the process of a `command` step, to the same `<run>/<attempt>` as
- * {@link ATTEMPT_ENV}: the one process of an attempt whose shortcut command may run its own run as part of the step.
+ * The variable set only in the process of a `command` step that the local driver, a skill driver's runner or a fleet
+ * member runs on its own machine (`commandStepEnv`), to the same `<run>/<attempt>` as {@link ATTEMPT_ENV}: the one
+ * process of an attempt whose shortcut command may run its own run as part of the step.
  */
 export const STEP_COMMAND_ENV = 'TEAMAI_WORKFLOW_STEP_COMMAND';
 
