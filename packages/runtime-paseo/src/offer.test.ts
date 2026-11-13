@@ -33,6 +33,18 @@ describe('teamai-runtime-paseo', () => {
     expect(declaredExec('paseo')).toBe(z.object({ can: z.object({ exec: z.boolean() }) }).parse(reply).can.exec);
   });
 
+  // Every success report of its prompt steps then carries their tokens, read from the session on this machine.
+  it.each<{ when: string; models: Record<string, string[]>; claudeHome: boolean; url?: (url: string) => string; tokens: boolean }>([
+    { when: 'reports tokens when it runs only Claude and Codex, whose sessions it reads on a daemon on this machine', models: { claude: ['claude-opus-5-5'], codex: ['gpt-6.1-sol'] }, claudeHome: true, tokens: true },
+    { when: 'reports no tokens when it also runs OpenCode, whose session database it does not read', models: { claude: ['claude-opus-5-5'], opencode: ['opencode/beam-free'] }, claudeHome: true, tokens: false },
+    { when: 'reports no tokens when Claude does not say which home keeps its sessions', models: { claude: ['claude-opus-5-5'] }, claudeHome: false, tokens: false },
+    { when: 'reports no tokens on a daemon on another host', models: { claude: ['claude-opus-5-5'] }, claudeHome: true, url: (url) => url.replace('127.0.0.1', '0.0.0.0'), tokens: false },
+  ])('$when', async ({ models, claudeHome, url, tokens }) => {
+    behave({ models, codex_login: 'signed_in', ...(claudeHome && { claude_home: path.join(dir, 'daemon-user', '.claude') }) });
+
+    expect(await ready(start(), url ? { options: { url: url(daemon.url) } } : {})).toMatchObject({ ok: true, can: { tools: Object.keys(models), tokens } });
+  });
+
   it('offers neither a step nor a judge on a tool installed but signed out, which Paseo still calls available, and names it unavailable with how to sign it in', async () => {
     behave({ models: { claude: ['claude-opus-5-5'], opencode: ['opencode/beam-free'] }, sign_in: { claude: 'signed_out' } });
 

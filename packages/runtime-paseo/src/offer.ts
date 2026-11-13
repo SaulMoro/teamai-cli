@@ -1,7 +1,9 @@
 import path from 'node:path';
 import { fitReason, type ConfinedKept, type InitInstance, type RuntimeFailure, type RuntimeMessage } from '@teamai/runtime-protocol';
+import { isOnThisMachine } from './daemon/address.js';
 import type { InstalledTool, Target } from './daemon/connect.js';
 import { CONFINED_MODES, isPaseoTool, PASEO_TOOLS, type ProviderToAdd } from './providers.js';
+import { readsTokens } from './usage.js';
 
 // ─── What this daemon can run ────────────────────────────
 //
@@ -87,7 +89,7 @@ export function checkOf(found: Found): Extract<RuntimeMessage, { type: 'init' }>
 
 /** What the runtime offers of what init found, for a run in `mode`. */
 export function offerOf(found: Found & { mode: 'attended' | 'unattended' }): Offered {
-  const { installed, instances, mode } = found;
+  const { installed, instances, mode, url } = found;
   const { tools, unavailable } = runnableOf(found);
   const notices: string[] = [];
 
@@ -133,19 +135,24 @@ export function offerOf(found: Found & { mode: 'attended' | 'unattended' }): Off
   // The tools the member opted into a mode that never asks: teamai warns once and records their steps' isolation none.
   const permissions = Object.fromEntries(tools.flatMap(({ name, stepMode }) => (stepMode.kind === 'bypass' ? [[name, 'full-access' as const]] : [])));
 
+  // A step reports the tokens its session's transcript records, which the runtime reads on a daemon on this machine, for
+  // Claude in the home its diagnostic or its provider names, and for Codex in the home that holds the session's rollout.
+  // With any other tool offered, not every success report would carry its tokens.
+  const reportsTokens = isOnThisMachine(url) && tools.length > 0
+    && tools.every((entry) => readsTokens(entry.tool) && (entry.tool !== 'claude' || (entry.kind === 'runs' && (entry.home !== undefined || entry.providerHome !== undefined))));
+
   const init: Offered['init'] = {
     type: 'init', ok: true, prompt: true, conversations: true,
     ...(judges.length > 0 && { confinedPrompt: true }),
     ...(Object.keys(unavailable).length > 0 && { unavailable }),
     ...(Object.keys(permissions).length > 0 && { permissions }),
     can: {
-      // tokens: Paseo reports a turn's usage without the tokens written to the prompt cache, so a budget would undercount.
       // unattended: a step that may run without asking needs a strict sandbox, which the daemon's host is not, so none
       // starts here, not even in a mode the member opted into that never asks.
       // hitl: in an attended run, a person works through an interactive step in its agent in the Paseo app.
       // role: Paseo runs a project's worktree setup only in a worktree it creates itself, or when asked to run it; this
       // runtime only opens the copy teamai prepared, so nothing delivers the member's own resources over the role's.
-      exec: false, setup: false, hitl: mode === 'attended', unattended: false, env: false, tokens: false, max_turns: false, workspace: ['read-only', 'new', 'continue', 'clone', 'team'], role: true, tools: tools.map(({ name }) => name),
+      exec: false, setup: false, hitl: mode === 'attended', unattended: false, env: false, tokens: reportsTokens, max_turns: false, workspace: ['read-only', 'new', 'continue', 'clone', 'team'], role: true, tools: tools.map(({ name }) => name),
       ...(judges.length > 0 && { confined: [{ ...CONFINED_KEPT, tools: judges }] }),
     },
   };

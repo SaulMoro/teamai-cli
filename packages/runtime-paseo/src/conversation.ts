@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import { createHash } from 'node:crypto';
 import path from 'node:path';
 import {
-  CANCEL_FAILED, PromptResultSchema, PromptSessionSchema, RUN_DIR_ENV, WORKFLOW_DIR_ENV, type OpId, type OpState, type PromptResult, type RuntimeDisplay,
+  CANCEL_FAILED, PromptResultSchema, PromptSessionSchema, type PromptUsageSchema, RUN_DIR_ENV, WORKFLOW_DIR_ENV, type OpId, type OpState, type PromptResult, type RuntimeDisplay,
   type RuntimeFailure, type RuntimeRequest,
 } from '@teamai/runtime-protocol';
 import type { OpEnd } from '@teamai/runtime-kit/ledger';
@@ -12,12 +12,14 @@ import { isUsageLimitText } from '@teamai/tool-core/usage-limit';
 import { JsonValueSchema } from '@teamai/shared/json';
 import { extractReply } from '@teamai/tool-core/reply';
 import type { z } from 'zod';
+import { isOnThisMachine } from './daemon/address.js';
 import type { Creation, Daemon, Model, Target, WaitEnd } from './daemon/connect.js';
 import { resolvedDir, type AgentCreate, type AgentPrompt, type Conversation, type Place, type PromptRecord } from './journal.js';
 import { notOffered } from './offer.js';
 import type { Following, ProcessState } from './process-state.js';
 import { isPaseoTool, type EnsureProvider, type PaseoTool } from './providers.js';
 import { handOver, throughOf, type Through } from './sandbox.js';
+import { stepUsage } from './usage.js';
 
 // ─── One Paseo agent's life ──────────────────────────────
 //
@@ -392,6 +394,23 @@ export function conversations(state: ProcessState, { ensureProvider }: { ensureP
     const home = through?.home ?? (target && live.sessionHome(target.tool, id, { claudeHome: sessionHomes.get(tool), providerHome: providerHomes.get(tool), homeDir: homeDirs.get(tool) ?? '.codex', since }));
 
     return { tool, id, ...(home !== undefined && { home }) };
+  };
+
+  /**
+   * A finished prompt's session, and the tokens its step billed there, which the runtime reads only on a daemon on this
+   * machine, where the session's home is. A turn sent to an agent that already ran counts from its send on, as journaled
+   * just before the send; one journaled without that time cannot be told from the earlier steps' requests, and reports none.
+   */
+  const finishedOf = async (live: Daemon, op: OpId, record: AgentPrompt, ended: { id: string; createdAt: string | undefined; through: Through | undefined }): Promise<{ session: z.infer<typeof PromptSessionSchema>; usage?: z.infer<typeof PromptUsageSchema> }> => {
+    const session = sessionOf(live, { tool: record.tool, ...ended });
+    const target = targets.get(record.tool);
+    const kept = journal.prompt(op);
+    const turn = kept?.kind === 'agent' ? kept.turn : record.turn;
+
+    if (!target || session.home === undefined || !isOnThisMachine(live.url) || (turn && turn.sentAt === undefined)) return { session };
+    const usage = await stepUsage({ tool: target.tool, toolHome: session.home, cwd: record.cwd, sessionId: session.id, ...(turn?.sentAt !== undefined && { turnSentAt: turn.sentAt }) });
+
+    return { session, ...(usage && { usage }) };
   };
 
   /** What the run's details show of a prompt's agent: its title, a link that opens it in Paseo, and where it runs. */
@@ -796,7 +815,7 @@ export function conversations(state: ProcessState, { ensureProvider }: { ensureP
 
     // A turn of an agent the prompt did not create is sent once, unless a stop came first: its record says so before it is sent.
     if (record.turn && current?.kind === 'agent' && !current.sent && !journal.isCancelled(op) && !closeStops.has(op) && waiting.get(op) === following) {
-      journal.savePrompt(op, { ...current, sent: true });
+      journal.savePrompt(op, { ...current, sent: true, turn: { ...record.turn, sentAt: Date.now() } });
 
       try {
         await live.send(create.agentId, record.turn.prompt);
@@ -928,7 +947,7 @@ export function conversations(state: ProcessState, { ensureProvider }: { ensureP
               return;
             }
 
-            settle(op, { op, state: 'finished', session: sessionOf(live, { tool: record.tool, id: session, createdAt: end.final?.createdAt, through }), result: { output }, confined: record.answer.kept }, following);
+            settle(op, { op, state: 'finished', ...(await finishedOf(live, op, record, { id: session, createdAt: end.final?.createdAt, through })), result: { output }, confined: record.answer.kept }, following);
 
             return;
           }
@@ -970,7 +989,7 @@ export function conversations(state: ProcessState, { ensureProvider }: { ensureP
             return;
           }
 
-          settle(op, { op, state: 'finished', session: sessionOf(live, { tool: record.tool, id: session, createdAt: end.final?.createdAt, through }), result, ...(record.turn && { resumed: true }) }, following);
+          settle(op, { op, state: 'finished', ...(await finishedOf(live, op, record, { id: session, createdAt: end.final?.createdAt, through })), result, ...(record.turn && { resumed: true }) }, following);
 
           return;
         }

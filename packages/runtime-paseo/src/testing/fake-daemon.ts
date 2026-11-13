@@ -6,6 +6,8 @@ import path from 'node:path';
 import {
   SessionInboundMessageSchema, WSInboundMessageSchema, WSOutboundMessageSchema, type CreationSnapshot, type WorkspaceDescriptorPayload,
 } from '@getpaseo/protocol/messages';
+import { entriesUnder } from '@teamai/shared/entries-under';
+import { encodeCwdClaude } from '@teamai/tool-core/sessions/fs';
 import { WebSocket, WebSocketServer } from 'ws';
 import { z } from 'zod';
 
@@ -136,6 +138,12 @@ const BehaviourSchema = z.object({
   forget_creates: z.array(z.string()).default([]),
   /** The provider reports no session id once the agent is done. */
   no_session: z.boolean().default(false),
+  /**
+   * The tokens each turn of the agent bills, which its tool records in its session's own usage lines: a Claude agent's
+   * assistant message in its transcript under `claude_home`, a Codex agent's response record in its rollout under
+   * `codex_home`, with the thread's running total.
+   */
+  usage: z.object({ input: z.number(), output: z.number(), cache_read: z.number() }).optional(),
   /** The provider fails the agent with this error. */
   error: z.string().optional(),
   /** The daemon refuses a cancel with this error, and the agent goes on. */
@@ -234,6 +242,54 @@ const AgentRecordSchema = z.object({
 });
 
 type AgentRecord = z.infer<typeof AgentRecordSchema>;
+
+/**
+ * A Codex agent's turn in its session's rollout, as Codex writes one: the first turn starts the rollout
+ * (`sessions/<yyyy>/<mm>/<dd>/rollout-<time>-<session id>.jsonl`), and a later turn goes on in it. With `usage`, the
+ * turn's response record bills it, counting cached input inside the input tokens, beside the thread's running total.
+ */
+function writeRollout(agent: AgentRecord, home: string, sessionId: string): void {
+  const at = new Date();
+  const sessions = path.join(home, 'sessions');
+  const kept = fs.existsSync(sessions) ? entriesUnder(sessions).find(({ entry }) => entry.isFile() && entry.name.endsWith(`-${sessionId}.jsonl`))?.relative : undefined;
+  const day = path.join(sessions, String(at.getFullYear()), String(at.getMonth() + 1).padStart(2, '0'), String(at.getDate()).padStart(2, '0'));
+  const file = kept === undefined ? path.join(day, `rollout-${at.toISOString().slice(0, 19).replaceAll(':', '-')}-${sessionId}.jsonl`) : path.join(sessions, kept);
+  const { usage } = agent.behaviour;
+  const turn = kept === undefined ? 1 : fs.readFileSync(file, 'utf8').split('"token_usage_record"').length;
+
+  const counted = (times: number, billed: NonNullable<typeof usage>) => ({
+    input_tokens: (billed.input + billed.cache_read) * times, cached_input_tokens: billed.cache_read * times, cache_write_input_tokens: 0,
+    output_tokens: billed.output * times, reasoning_output_tokens: 0, total_tokens: (billed.input + billed.cache_read + billed.output) * times,
+  });
+
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.appendFileSync(file, [
+    ...(kept === undefined ? [{ timestamp: at.toISOString(), type: 'session_meta', payload: { id: sessionId, cwd: agent.cwd } }] : []),
+    { timestamp: at.toISOString(), type: 'turn_context', payload: { turn_id: `turn-${turn}`, cwd: agent.cwd, model: agent.model ?? 'gpt-6.1-sol' } },
+    ...(usage ? [{ timestamp: at.toISOString(), type: 'token_usage_record', payload: { thread_id: sessionId, session_id: sessionId, response_id: `resp_${turn}`, usage: counted(1, usage), thread_token_usage: counted(turn, usage) } }] : []),
+  ].map((line) => `${JSON.stringify(line)}\n`).join(''));
+}
+
+/**
+ * A Claude agent's turn in its session's transcript, as Claude Code writes one in `projects/<encoded cwd>/<session>.jsonl`
+ * under its config directory: the prompt, then the assistant's message, which bills `usage` when the turn has one.
+ */
+function writeClaudeTranscript(agent: AgentRecord, home: string, sessionId: string): void {
+  const dir = path.join(home, 'projects', encodeCwdClaude(agent.cwd));
+  const file = path.join(dir, `${sessionId}.jsonl`);
+  const turn = fs.existsSync(file) ? fs.readFileSync(file, 'utf8').split('"type":"assistant"').length : 1;
+  const at = new Date().toISOString();
+  const { usage } = agent.behaviour;
+  const message = { role: 'assistant', model: agent.model ?? 'claude-opus-5-5', content: [{ type: 'text', text: agent.behaviour.reply }] };
+  fs.mkdirSync(dir, { recursive: true });
+  fs.appendFileSync(file, [
+    { type: 'user', sessionId, cwd: agent.cwd, timestamp: at, message: { role: 'user', content: agent.prompt } },
+    {
+      type: 'assistant', sessionId, cwd: agent.cwd, timestamp: at, requestId: `req_${turn}`,
+      message: usage ? { id: `msg_${turn}`, ...message, usage: { input_tokens: usage.input, output_tokens: usage.output, cache_read_input_tokens: usage.cache_read, cache_creation_input_tokens: 0 } } : message,
+    },
+  ].map((line) => `${JSON.stringify(line)}\n`).join(''));
+}
 
 /** The Claude launch options of a create: the tools it may use without asking. */
 const AllowedSchema = z.looseObject({ allowedTools: z.array(z.string()) });
@@ -352,12 +408,9 @@ export async function startFakeDaemon({ state, port, socket: socketPath }: { sta
 
       Object.assign(agent, { status: 'idle', sessionId: does.no_session ? null : agent.sessionId ?? `fake-session-${agent.id}` });
 
-      if (baseOf(agent.provider) === 'codex' && does.codex_home !== undefined && agent.sessionId) {
-        const at = new Date();
-        const day = path.join(does.codex_home, 'sessions', String(at.getFullYear()), String(at.getMonth() + 1).padStart(2, '0'), String(at.getDate()).padStart(2, '0'));
-        fs.mkdirSync(day, { recursive: true });
-        fs.writeFileSync(path.join(day, `rollout-${at.toISOString().slice(0, 19).replaceAll(':', '-')}-${agent.sessionId}.jsonl`), `${JSON.stringify({ type: 'session_meta', payload: { id: agent.sessionId, cwd: agent.cwd } })}\n`);
-      }
+      if (baseOf(agent.provider) === 'codex' && does.codex_home !== undefined && agent.sessionId) writeRollout(agent, does.codex_home, agent.sessionId);
+
+      if (baseOf(agent.provider) === 'claude' && does.claude_home !== undefined && agent.sessionId) writeClaudeTranscript(agent, does.claude_home, agent.sessionId);
 
       if (baseOf(agent.provider) === 'opencode' && does.opencode_data_home !== undefined && agent.sessionId) {
         fs.mkdirSync(path.join(does.opencode_data_home, 'opencode'), { recursive: true });

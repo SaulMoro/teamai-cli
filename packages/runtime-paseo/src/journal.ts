@@ -135,9 +135,11 @@ const PromptRecordSchema = z.discriminatedUnion('kind', [
     /**
      * For a prompt sent as a new turn of an agent it did not create: the turn, and whose agent that is, the earlier prompt
      * whose conversation it continues, or the session Paseo imported for it, which the lease resumes. `create` is that
-     * agent's: the earlier prompt's create, which stays that prompt's, or the one the import stands for.
+     * agent's: the earlier prompt's create, which stays that prompt's, or the one the import stands for. `sentAt`: when the
+     * turn was journaled sent, just before the send, from which on the session's requests are the turn's; absent until
+     * then, and from a record kept before it was, whose turn reports no tokens.
      */
-    turn: z.object({ prompt: z.string(), of: z.union([z.strictObject({ op: OpIdSchema }), z.strictObject({ session: z.string() })]) }).optional(),
+    turn: z.object({ prompt: z.string(), of: z.union([z.strictObject({ op: OpIdSchema }), z.strictObject({ session: z.string() })]), sentAt: z.number().optional() }).optional(),
     outcome: OpStateSchema.optional(),
   }),
 ]);

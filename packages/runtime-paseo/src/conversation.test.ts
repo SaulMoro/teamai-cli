@@ -155,6 +155,33 @@ describe('teamai-runtime-paseo', () => {
     expect('session' in unseen && unseen.session).not.toHaveProperty('home');
   });
 
+  // Each tool reports its tokens as its own end-of-run usage counts them: Claude's input leaves the cache out, Codex's
+  // counts cached input inside it.
+  it.each([
+    { tool: 'claude', home: 'claude_home', env: {}, usage: { input: 1_200, output: 340, cachedInput: 18_000 } },
+    { tool: 'codex', home: 'codex_home', env: { codex_login: 'signed_in' }, usage: { input: 19_200, output: 340, cachedInput: 18_000 } },
+  ] as const)('reports the tokens the $tool session\'s transcript records for the step', async ({ tool, home, env, usage }) => {
+    const elsewhere = path.join(dir, 'daemon-user', `.${tool}`);
+    behave({ output: { verdict: 'approve' }, [home]: elsewhere, ...env, usage: { input: 1_200, output: 340, cache_read: 18_000 } });
+    const runtime = start({ CODEX_HOME: elsewhere });
+    await ready(runtime);
+    runtime.send(promptRequest(await opened(runtime), 'op-0000000b', { tool, model: undefined }));
+
+    expect(await runtime.next(isEnd('op-0000000b'))).toMatchObject({ event: 'finished', session: { tool }, usage });
+  });
+
+  it('reports no tokens from a daemon on another host, whose session home is not on this machine', async () => {
+    behave({ output: { verdict: 'approve' }, claude_home: path.join(dir, 'daemon-user', '.claude'), usage: { input: 1_200, output: 340, cache_read: 18_000 } });
+    // 0.0.0.0 reaches the fake on this machine, but names no loopback address, as a daemon on another host is named.
+    const remote = start();
+    await ready(remote, { options: { url: daemon.url.replace('127.0.0.1', '0.0.0.0') } });
+    remote.send(promptRequest(await opened(remote), 'op-0000000b'));
+    const end = await remote.next(isEnd('op-0000000b'));
+
+    expect(end).toMatchObject({ event: 'finished', session: { tool: 'claude' } });
+    expect(end).not.toHaveProperty('usage');
+  });
+
   it('names as an OpenCode step\'s session home the data directory whose store the step wrote, over one that only held a store from before', async () => {
     // teamai's own OpenCode left a store in its data directory before the step; the daemon's OpenCode writes in $HOME's.
     const stale = path.join(dir, 'teamai-data');
@@ -1158,6 +1185,21 @@ describe('a prompt that continues an earlier prompt\'s conversation', () => {
     expect(creates()).toHaveLength(1);
     expect(received().filter((request) => request.type === 'send_agent_message_request')).toEqual([expect.objectContaining({ agentId: agent, text: expect.stringContaining('Fix what the review found.') })]);
     expect(noticesOf(runtime, 'op-0000000d')).toEqual([]);
+  });
+
+  it('reports only the tokens of its own turn, not those of the earlier step in the same session', async () => {
+    behave({ output: { verdict: 'request-changes' }, claude_home: path.join(dir, 'daemon-user', '.claude'), usage: { input: 1_200, output: 340, cache_read: 18_000 } });
+    const runtime = start();
+    await ready(runtime);
+    const review = await opened(runtime);
+    runtime.send(promptRequest(review, 'op-0000000b'));
+    expect(await runtime.next(isEnd('op-0000000b'))).toMatchObject({ event: 'finished', usage: { input: 1_200, output: 340, cachedInput: 18_000 } });
+    const fix = await opened(runtime, { attempt: 'a0123abce', op: 'op-0000000c' });
+
+    behave({ output: { fixed: true }, claude_home: path.join(dir, 'daemon-user', '.claude'), usage: { input: 1_200, output: 340, cache_read: 18_000 } });
+    runtime.send(fixing(fix, 'op-0000000d', review, 'op-0000000b'));
+
+    expect(await runtime.next(isEnd('op-0000000d'))).toMatchObject({ event: 'finished', resumed: true, usage: { input: 1_200, output: 340, cachedInput: 18_000 } });
   });
 
   // A step of a named child workflow may go on from the step beside its enclosing one, and each has its own workflow folder.
