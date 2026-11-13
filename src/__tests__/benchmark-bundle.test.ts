@@ -210,8 +210,11 @@ describe('the workflow a benchmark plan prints', () => {
     } });
   });
 
-  it("takes a plan with no numeric schemaVersion, as a team's own workflow may print under that name, for no outdated plan", async () => {
-    const { run } = await plannedRun(suiteOf(), { outputsOf: (bundle) => ({ definition: { ...bundle, workflows: {} }, plan: { trials: ['hello'] } }) });
+  it.each([
+    ['no schemaVersion', { trials: ['hello'] }],
+    ['a schemaVersion and no suite', { schemaVersion: 1, trials: ['hello'] }],
+  ])("takes a plan with %s, as a team's own workflow may print under that name, for no outdated plan", async (_, printed) => {
+    const { run } = await plannedRun(suiteOf(), { outputsOf: (bundle) => ({ definition: { ...bundle, workflows: {} }, plan: printed }) });
 
     expect(outdatedBenchmarkPlan(run)).toBeUndefined();
     expect(planOfRun(run, 'trials.r1.t01.a01.check')).toMatchObject({ failure: { code: 'run_unreadable' } });

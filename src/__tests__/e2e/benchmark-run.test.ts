@@ -222,12 +222,12 @@ describe('a team benchmark workflow', () => {
 
 /** A team benchmark workflow whose plan step prints a plan of a schemaVersion no teamai reads, and a bundle of `steps`. */
 function futurePlan(steps: ReadonlyArray<Record<string, unknown>>): string {
-  const printed = { definition: { definition: { schemaVersion: 'v1alpha1', name: 'future', description: 'A newer plan.', steps } }, plan: { schemaVersion: 99 } };
+  const printed = { definition: { definition: { schemaVersion: 'v1alpha1', name: 'future', description: 'A newer plan.', steps } }, plan: { schemaVersion: 99, suite: { name: 'fix' } } };
   return RELAXED.replace('command: teamai benchmark plan "$SUITE"', `command: node -e 'process.stdout.write(process.argv[1])' '${JSON.stringify(printed)}'`);
 }
 
 const StepsSchema = z.object({ steps: z.array(z.object({ id: z.string(), status: z.string(), message: z.string().optional() }).passthrough()) }).passthrough();
-const FUTURE = 'measures a benchmark plan of schemaVersion 99, which the teamai that started it froze, and this teamai reads only schemaVersion 3, so the run cannot go on here. Run it with the teamai that started it, or start the suite again with teamai benchmark run <suite>.';
+const FUTURE = 'measures a benchmark plan of schemaVersion 99, which the teamai that started it froze, and this teamai reads only schemaVersion 3, so the run cannot go on here. Run it with the teamai that started it, or start the suite again with teamai benchmark run fix.';
 
 describe('a plan of an unknown schemaVersion', () => {
   it('runs none of the steps it planned, and benchmark run exits 1 naming teamai benchmark run', async () => {
