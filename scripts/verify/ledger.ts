@@ -203,6 +203,8 @@ const KNOWN_LEFTOVERS = new Map([
   ['home/.teamai/dashboard/session-owners.jsonl', 'any'],
   ['home/.teamai/dashboard/events.jsonl', 'any'],
   ['home/.teamai/dashboard/requests.jsonl', 'any'],
+  // The skills a session used, kept across log truncation (usage-tracker.ts `updateKnownSkills`).
+  ['home/.teamai/known-skills.json', 'any'],
   ['home/.teamai/state.json', 'any'],
   // teamai starts Codex's app-server to trust its hooks (#955), and Codex writes its own files where teamai writes:
   // its system skills, and the table of hook approvals that taking teamai's out leaves empty.
@@ -284,6 +286,41 @@ export function isToolOwnState(entry: string, text: string): boolean {
   };
 
   return !holds(parsed);
+}
+
+/**
+ * What sbx v0.51.0 and v0.53.0 write for themselves on macOS in a HOME they are asked `sbx ls` or `sbx template ls`
+ * from while not signed in there, and what v0.53.0 adds for `sbx secret ls`, which teamai asks once `sbx ls` answers:
+ * its update check, and its feature toggles in its cache. Anything else of it stays a LEAK.
+ */
+const SBX_OWN = ['analyticskit', 'auth-ambiguous-refresh', 'auth-cooldown', 'locks', 'settings.json.lock', 'sandboxd/client.log', 'sandboxd/update-state.json'];
+
+/**
+ * Where a program keeps state of its own, which teamai writes none of: `dir` names it in a note, `paths` are its own.
+ * `makesDir`: the program makes those folders, and those that hold them, too; a tool's home is #1808's (KNOWN_LEFTOVERS).
+ * Never a whole store a teamai run fills, such as sbx's images and sandbox disks: what is left there stays a LEAK.
+ */
+const OWN_STATE = [
+  ...TOOL_HOMES.map((dir) => ({ owner: 'the tool', dir, paths: [dir], makesDir: false })),
+  // T3 Code checkpoints the project a thread of a teamai run works in, under refs/t3.
+  { owner: 'T3 Code', dir: 'project/.git/refs/t3', paths: ['project/.git/refs/t3'], makesDir: true },
+  // Teamai's sandbox runtime, doctor, the observer and section (f) all ask sbx in a world's HOME.
+  { owner: 'sbx', dir: 'home/Library/Application Support/com.docker.sandboxes', paths: SBX_OWN.map((own) => `home/Library/Application Support/com.docker.sandboxes/sandboxes/${own}`), makesDir: true },
+  { owner: 'sbx', dir: 'home/Library/Caches/com.docker.sandboxes', paths: ['policykit', 'unleash-toggles-production.json'].map((own) => `home/Library/Caches/com.docker.sandboxes/sandboxes/${own}`), makesDir: true },
+];
+
+/**
+ * Whose own state the entry left behind with `value` is, and the folder a note names; or the owner of a folder made only
+ * to hold such state, whose other contents are judged on their own; undefined when it may be teamai's.
+ */
+export function ownStateOf(entry: string, value: string | undefined): { kind: 'state'; owner: string; dir: string } | { kind: 'folder'; owner: string } | undefined {
+  if (teamaiPlace(entry, value)) return undefined;
+  const state = OWN_STATE.find(({ paths, makesDir }) => paths.some((own) => entry.startsWith(`${own}/`) || (makesDir && entry === own)));
+
+  if (state !== undefined) return { kind: 'state', owner: state.owner, dir: state.dir };
+  const folder = value === 'dir' ? OWN_STATE.find(({ paths, makesDir }) => makesDir && paths.some((own) => own.startsWith(`${entry}/`))) : undefined;
+
+  return folder === undefined ? undefined : { kind: 'folder', owner: folder.owner };
 }
 
 /** A run's branch, which a run that succeeded keeps as its result (docs/guide/workflow.md, The branches a run leaves). */
@@ -444,10 +481,14 @@ async function reverseOf(world: World, place: LedgerPlace): Promise<{ leaks: str
       continue;
     }
 
-    if (change === 'left behind' && under(entry, TOOL_HOMES) && !teamaiPlace(entry, after[entry])) {
-      excuse(`the tool's own state in ${TOOL_HOMES.find((dir) => entry.startsWith(`${dir}/`)) ?? entry}, where teamai writes none of it`, entry);
+    const own = change === 'left behind' ? ownStateOf(entry, after[entry]) : undefined;
+
+    if (own?.kind === 'state') {
+      excuse(`${own.owner}'s own state in ${own.dir}, where teamai writes none of it`, entry);
       continue;
     }
+
+    if (own?.kind === 'folder') continue;
 
     if (REMOTE_REF.test(entry)) {
       excuse("git's copy of what the remote holds", entry);

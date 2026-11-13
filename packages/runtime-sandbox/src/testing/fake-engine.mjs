@@ -522,7 +522,7 @@ function proxyEnv() {
   return env;
 }
 
-/** Answers as sbx 0.50.1, with its messages: `error: …` then `  try: …`. */
+/** Answers as sbx 0.50.1, with its messages: `error: …` then `  try: …`, the shape sbx 0.53.0 still prints. */
 function sbx() {
   const sbxFail = (message, hint, code = 1) => fail(`error: ${message}${hint ? `\n  try: ${hint}` : ''}`, code);
 
@@ -547,7 +547,8 @@ function sbx() {
     }
 
     case 'secret': {
-      // `sbx secret ls --global --json`, as sbx 0.51.0 prints it: each stored secret's scope, type and service, its value masked.
+      // `sbx secret ls --global --json`, as sbx 0.51.0 prints it (0.53.0 prints the same four keys): each stored secret's
+      // scope, type and service, its value masked.
       if (rest[0] !== 'ls' || !rest.includes('--json')) fail(`fake sbx: unsupported secret command ${rest.join(' ')}`, 125);
       const stored = fs.existsSync(path.join(state, 'secrets')) ? fs.readdirSync(path.join(state, 'secrets')) : [];
       process.stdout.write(`${JSON.stringify({ secrets: stored.map((name) => ({ scope: 'global', type: 'service', name, secret: '********' })), custom_secrets: [], shadowed_services: [], env_only_count: 0 })}\n`);

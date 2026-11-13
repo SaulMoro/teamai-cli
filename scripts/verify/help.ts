@@ -32,8 +32,9 @@ Verdicts, reported with the combination and entry point (VERIFIED: claude x git 
   UNVERIFIABLE  a prerequisite is missing (a tool, a sign-in, Windows), or a part says NOT OBSERVED; name it
 A fix is proved by a pair: FAILED in a world built from main, VERIFIED in a world built from the change.
 
-Run ledger after the last run, before cleanup. Paste the verdict, the commands, build.json's line from the run's
-first output, and the ledger's last line into the PR's real-CLI record.
+Run ledger after the last run, before cleanup. It uninstalls teamai, which removes the run records under the world's
+HOME: read what a claim needs from a run's record first. Paste the verdict, the commands, build.json's line from the
+run's first output, and the ledger's last line into the PR's real-CLI record.
 
 More:
   npm run -s verify -- help drivers           where a step runs: each driver's entry point and the end state that proves
@@ -61,9 +62,9 @@ A ledger section or an observer line that says NOT OBSERVED proves nothing for t
                     (f) no teamai container left. An engine that is installed but not running is NOT OBSERVED in
                     (f), since its stopped containers and images outlive it: start it before the ledger
     sbx             a microVM per attempt named teamai-<journal>-...; needs sbx signed in and a policy that lets the
-                    step reach what it needs; ends: env ok, (f) no teamai sbx sandbox left. A world's HOME starts
-                    signed out: \`doctor <run> --drivers\` says so, and \`sh <run> sbx login\` signs in there. Until
-                    then a sbx claim is UNVERIFIABLE
+                    step reach what it needs; ends: env ok, (f) no teamai sbx sandbox or template left. A
+                    world's HOME starts signed out: \`doctor <run> --drivers\` says so, and \`sh <run> sbx login\`
+                    signs in there. Until then a sbx claim is UNVERIFIABLE
     bwrap           Linux only; the observer reads the first process under bwrap; ends: env ok, no world process left
     seatbelt        macOS; no observer reads a seatbelt step's environment, so the env part proves nothing for it,
                     and (f) says NOT OBSERVED for each attempt that ran on it
