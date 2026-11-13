@@ -135,7 +135,7 @@ describe('the sandbox observer', () => {
     const world = worldIn();
     const bin = path.join(world.dir, 'sbx-bin');
     fs.mkdirSync(bin);
-    // What sbx v0.51.0 answers `sbx ls --json` from a HOME that never signed in: exit 1, and this on stderr.
+    // What sbx v0.51.0 and v0.53.0 answer `sbx ls --json` from a HOME that never signed in: exit 1, and this on stderr.
     fs.writeFileSync(path.join(bin, 'sbx'), "#!/bin/sh\nprintf 'error: not signed in to Docker\\n  try: sbx login\\n' >&2\nexit 1\n", { mode: 0o755 });
     // The harness's PATH too, so no container engine of this machine is asked.
     vi.stubEnv('PATH', bin);

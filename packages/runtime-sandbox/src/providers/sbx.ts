@@ -32,7 +32,7 @@ import { cliOf, commandsOf, definedOnly, heldProbe, signalled, LAUNCHABLE, mount
 //  write. No credential goes in at create: each exec brings its own, by name, from this process's environment. A
 //  login stored with `sbx secret set` stays in the host's proxy, which injects it into the requests; the sandbox holds
 //  only the placeholder variables its agent reads, which an exec keeps unless teamai withholds them. The name is its
-//  id: `sbx ls` finds it again after a restart. A sandbox carries no label (sbx 0.50.1 `create` takes none), so
+//  id: `sbx ls` finds it again after a restart. A sandbox carries no label (sbx 0.53.0 `create` takes none), so
 //  its name carries the journal that owns it, the id a container's `teamai.owner` label carries, and an open sweeps the
 //  sandboxes `sbx ls` lists under this journal's prefix as it sweeps containers by their label. sbx's network policy
 //  lets a sandbox reach every host it allows, so this provider offers no judge, which must reach its model provider only.
