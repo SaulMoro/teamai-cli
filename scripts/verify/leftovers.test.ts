@@ -101,19 +101,29 @@ interface FakeImage {
   readonly goesAfterListing?: boolean;
 }
 
+/** A network the fake engine keeps: its id, name and labels. */
+interface FakeNetwork {
+  readonly id: string;
+  readonly name: string;
+  readonly labels: Record<string, string>;
+}
+
 /**
- * A `docker` that answers `info`, `ps`, `network ls`, `image ls`, `image inspect` and `image rm` as Docker 29.4.3 does:
- * its `image ls` template has no `.Label`/`.Labels` (it fails on the first row, as the real one printed
- * `can't evaluate field Label in type *formatter.imageContext`), its `image inspect` gives `.Id` as `sha256:<hex>`, and it
- * refuses to remove by id an image that more than one tag names.
+ * A container engine that answers `info`, `ps`, `network ls`, `image ls`, `image inspect` and `image rm`. As docker it
+ * answers as Docker 29.4.3 does: its `image ls` template has no `.Label`/`.Labels` (it fails on the first row, as the real
+ * one printed `can't evaluate field Label in type *formatter.imageContext`), its `network ls` has `.Label`, its `image
+ * inspect` gives `.Id` as `sha256:<hex>`, and it refuses to remove by id an image that more than one tag names. As podman
+ * it answers as podman's docs say: `network ls` has `.Labels`, a map, and no `.Label`; `image inspect` gives `.Id` as hex.
  */
-function fakeDocker29(dir: string, images: readonly FakeImage[]): { bin: string; images: () => FakeImage[] } {
+function fakeEngine({ dir, engine = 'docker', images, networks = [] }: { dir: string; engine?: 'docker' | 'podman'; images: readonly FakeImage[]; networks?: readonly FakeNetwork[] }): { bin: string; images: () => FakeImage[] } {
   const bin = path.join(dir, 'bin');
   const state = path.join(dir, 'images.json');
   fs.mkdirSync(bin, { recursive: true });
   fs.writeFileSync(state, JSON.stringify(images));
-  fs.writeFileSync(path.join(bin, 'docker'), `#!${process.execPath}
+  fs.writeFileSync(path.join(bin, engine), `#!${process.execPath}
 const fs = require('node:fs');
+const engine = ${JSON.stringify(engine)};
+const networks = ${JSON.stringify(networks)};
 const state = ${JSON.stringify(state)};
 const images = JSON.parse(fs.readFileSync(state, 'utf8'));
 const args = process.argv.slice(2);
@@ -125,8 +135,16 @@ const render = (template, fields, context) => template.replace(/{{\\s*(.*?)\\s*}
 });
 const find = (ref) => images.find((image) => image.tags.includes(ref) || image.tags.includes(ref + ':latest') || ('sha256:' + image.id).startsWith(ref) || (ref.length >= 12 && image.id.startsWith(ref)));
 const [verb, sub] = args;
-if (verb === 'info') { process.stdout.write('29.4.3\\n'); process.exit(0); }
-if (verb === 'ps' || (verb === 'network' && sub === 'ls')) process.exit(0);
+if (verb === 'info') { process.stdout.write(engine === 'docker' ? '29.4.3\\n' : '5.4.0\\n'); process.exit(0); }
+if (verb === 'ps') process.exit(0);
+if (verb === 'network' && sub === 'ls') {
+  const label = (option('--filter') ?? '').replace(/^label=/, '');
+  for (const network of networks.filter((one) => label in one.labels)) {
+    const owner = network.labels['teamai.owner'] ?? '';
+    process.stdout.write(render(option('--format'), engine === 'docker' ? { '.ID': network.id, '.Name': network.name, '.Label "teamai.owner"': owner } : { '.ID': network.id, '.Name': network.name, 'index .Labels "teamai.owner"': owner }, 'networkContext') + '\\n');
+  }
+  process.exit(0);
+}
 if (verb !== 'image') process.exit(1);
 if (sub === 'ls') {
   const label = (option('--filter') ?? '').replace(/^label=/, '');
@@ -144,7 +162,7 @@ if (sub === 'inspect') {
   for (const ref of args.slice(4)) {
     const image = find(ref);
     if (image === undefined) { process.stderr.write('Error response from daemon: No such image: ' + ref + '\\n'); code = 1; continue; }
-    process.stdout.write(render(option('--format'), { '.Id': 'sha256:' + image.id, 'index .Config.Labels "teamai.owner"': image.labels['teamai.owner'] ?? '' }, 'imageInspect') + '\\n');
+    process.stdout.write(render(option('--format'), { '.Id': (engine === 'docker' ? 'sha256:' : '') + image.id, 'index .Config.Labels "teamai.owner"': image.labels['teamai.owner'] ?? '' }, 'imageInspect') + '\\n');
   }
   process.exit(code);
 }
@@ -166,10 +184,10 @@ process.exit(1);
 }
 
 describe("the container engines' row of section (f)", () => {
-  async function observeContainers(images: readonly FakeImage[]) {
+  async function observeContainers(images: readonly FakeImage[], { engine: name = 'docker', networks = [] }: { engine?: 'docker' | 'podman'; networks?: readonly FakeNetwork[] } = {}) {
     const dir = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-verify-engine-')));
     roots.push(dir);
-    const engine = fakeDocker29(dir, images);
+    const engine = fakeEngine({ dir, engine: name, images, networks });
     // The fake docker alone: a podman of the host, as CI runners have in /usr/bin, would answer for its own state.
     vi.stubEnv('PATH', engine.bin);
     const world: World = {
@@ -194,6 +212,17 @@ describe("the container engines' row of section (f)", () => {
     expect(observed.flatMap((seen) => (seen.kind === 'observed' ? seen.findings : [])).map((finding) => [finding.what, finding.attribution.kind])).toEqual([
       ['docker image teamai-warm:kmine', 'own'],
       ['docker image teamai-warm:ktheirs', 'other_world'],
+    ]);
+  });
+
+  it.each(['docker', 'podman'] as const)("lists on %s the networks and images teamai labelled with the template that engine answers", async (engine) => {
+    const owner = { 'teamai.owner': SELF.journals[0] ?? '' };
+    const { observed } = await observeContainers([{ id: 'a'.repeat(64), tags: ['teamai-warm:kmine'], labels: owner }], { engine, networks: [{ id: 'n0123abcd', name: 'teamai-r1-a1-net', labels: owner }] });
+
+    expect(observed.filter((seen) => seen.kind === 'not_observed')).toEqual([]);
+    expect(observed.flatMap((seen) => (seen.kind === 'observed' ? seen.findings : [])).map((finding) => [finding.what, finding.attribution.kind])).toEqual([
+      [`${engine} network teamai-r1-a1-net`, 'own'],
+      [`${engine} image teamai-warm:kmine`, 'own'],
     ]);
   });
 
@@ -238,7 +267,7 @@ describe("the container engines' row of section (f)", () => {
     roots.push(dir);
     const [{ journal }, { sandboxJournalRoot }] = await Promise.all([import('../../packages/runtime-sandbox/src/journal.js'), import('../../packages/runtime-sandbox/src/journal-root.js')]);
     const owner = journal(sandboxJournalRoot(`${dir}/home`)).owner;
-    const engine = fakeDocker29(dir, [{ id: 'a'.repeat(64), tags: ['teamai-warm:kmine'], labels: { 'teamai.owner': owner } }]);
+    const engine = fakeEngine({ dir, images: [{ id: 'a'.repeat(64), tags: ['teamai-warm:kmine'], labels: { 'teamai.owner': owner } }] });
     vi.stubEnv('PATH', `${engine.bin}:/usr/bin:/bin:/usr/sbin`);
     const world: World = {
       runId: SELF.runId, dir, project: `${dir}/project`, team: `${dir}/team.git`, home: `${dir}/home`, tmp: `${dir}/tmp`, logs: `${dir}/logs`, bin: engine.bin,
@@ -259,7 +288,7 @@ describe("the container engines' row of section (f)", () => {
   it("still says, once teamai uninstall removed the attempt records, that no observer read a closed sandbox's environment", async () => {
     const dir = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-verify-engine-')));
     roots.push(dir);
-    const engine = fakeDocker29(dir, []);
+    const engine = fakeEngine({ dir, images: [] });
     vi.stubEnv('PATH', `${engine.bin}:/usr/bin:/bin:/usr/sbin`);
     // The record of a docker sandbox's attempt that closed before the observer looked, where teamai keeps it in user scope.
     const record = path.join(dir, 'home', '.teamai', 'workflows', 'runs', 'r0123abcd', 'attempts', 'a0123abcd', 'runtime.json');

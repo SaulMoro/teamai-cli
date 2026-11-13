@@ -85,7 +85,9 @@ function onEngine(engine: (typeof CONTAINER_ENGINES)[number], self: WorldTies, o
     remove: [command, 'rm', '-f', one.id],
   }));
 
-  const networks = probeHere([command, 'network', 'ls', '--filter', `label=${OWNER}`, '--format', `{{.ID}}\t{{.Name}}\t{{.Label "${OWNER}"}}`]);
+  // docker's `network ls` gives one label as `.Label`; podman's has no `.Label`, and gives `.Labels` as a map.
+  const networkOwner = engine === 'docker' ? `{{.Label "${OWNER}"}}` : `{{index .Labels "${OWNER}"}}`;
+  const networks = probeHere([command, 'network', 'ls', '--filter', `label=${OWNER}`, '--format', `{{.ID}}\t{{.Name}}\t${networkOwner}`]);
 
   if (networks.kind === 'ran' && networks.code === 0) {
     findings.push(...parseLabelled(networks.stdout).map((one) => ({ what: `${engine} network ${one.name}`, attribution: tie(one.owner, [], []), remove: [command, 'network', 'rm', one.id] })));
