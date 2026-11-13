@@ -88,11 +88,11 @@ export interface ResolvedDriver {
   name: string;
   definition: DriverDefinition;
   source: DefinitionSource;
-  /** The file it was read from, for messages; for `host`, which no file holds, what it is. */
-  file: string;
+  /** Where a message names it: its file's path in the team repo, the member's file, or teamai's; for `host`, what it is. */
+  location: string;
   /** The config whose team repo holds the definition's team runtimes. */
   config: LocalConfig;
-  /** For `host`: the files named host that teamai did not read, which a run's open says once. */
+  /** For `host`: where the definitions named host are that teamai did not read, which a run's open says once. */
   unread?: string[];
 }
 
@@ -109,18 +109,18 @@ async function readText(file: string): Promise<string | undefined> {
 
 type Refused = { ok: false; failure: WorkflowFailure };
 
-function invalid(file: string, reason: string): Refused {
-  return { ok: false, failure: { code: 'driver_invalid', message: `Driver definition ${file} is not valid: ${reason}. Fix the file and start again.` } };
+function invalid(location: string, reason: string): Refused {
+  return { ok: false, failure: { code: 'driver_invalid', message: `Driver definition ${location} is not valid: ${reason}. Fix the file and start again.` } };
 }
 
-/** Parses the definition in `file`, which must be named after it, or says why it cannot run. */
-export function parseDriverDefinition(file: string, text: string): { ok: true; definition: DriverDefinition } | { ok: false; failure: WorkflowFailure } {
+/** Parses the definition in `file`, which must be named after it, or says why it cannot run, naming it by `location`. */
+export function parseDriverDefinition(file: string, text: string, location = file): { ok: true; definition: DriverDefinition } | { ok: false; failure: WorkflowFailure } {
   let raw: unknown;
 
   try {
     raw = parseYaml(text);
   } catch (error) {
-    return invalid(file, `it is not YAML (${error instanceof Error ? error.message : String(error)})`);
+    return invalid(location, `it is not YAML (${error instanceof Error ? error.message : String(error)})`);
   }
 
   const parsed = DriverDefinitionSchema.safeParse(raw);
@@ -128,28 +128,30 @@ export function parseDriverDefinition(file: string, text: string): { ok: true; d
   if (!parsed.success) {
     const issue = parsed.error.issues[0];
 
-    return invalid(file, `${issue?.path.join('.') || '(root)'}: ${issue?.message ?? 'unknown problem'}`);
+    return invalid(location, `${issue?.path.join('.') || '(root)'}: ${issue?.message ?? 'unknown problem'}`);
   }
 
   const definition = parsed.data;
   const stem = path.basename(file) === DRIVER_MARKER ? path.basename(path.dirname(file)) : path.basename(file, '.yaml');
 
-  if (definition.name !== stem) return invalid(file, `its name is "${definition.name}", and a definition is named after its file or its folder, "${stem}"`);
+  if (definition.name !== stem) return invalid(location, `its name is "${definition.name}", and a definition is named after its file or its folder, "${stem}"`);
   const named = definitionName(definition.name);
 
-  if (!named.ok) return invalid(file, named.reason);
+  if (!named.ok) return invalid(location, named.reason);
 
   return { ok: true, definition };
 }
 
-/** The definition in `file`, of `source`, read for `config`, or why it cannot run. */
-async function readDefinition(file: string, source: DefinitionSource, config: LocalConfig): Promise<{ ok: true; driver: ResolvedDriver } | { ok: false; failure: WorkflowFailure }> {
+/** The definition `item` holds, read for `config`, or why it cannot run. */
+async function readDefinition(item: LayerItem, config: LocalConfig): Promise<{ ok: true; driver: ResolvedDriver } | { ok: false; failure: WorkflowFailure }> {
+  const file = definitionFile(item);
+  const location = definitionLocation(item);
   const text = await readText(file);
 
-  if (text === undefined) return invalid(file, 'it cannot be read as a file of its own');
-  const parsed = parseDriverDefinition(file, text);
+  if (text === undefined) return invalid(location, 'it cannot be read as a file of its own');
+  const parsed = parseDriverDefinition(file, text, location);
 
-  return parsed.ok ? { ok: true, driver: { name: parsed.definition.name, definition: parsed.definition, source, file, config } } : parsed;
+  return parsed.ok ? { ok: true, driver: { name: parsed.definition.name, definition: parsed.definition, source: SOURCE_OF[item.layer], location, config: item.layer === 'team' ? item.config : config } } : parsed;
 }
 
 const SOURCE_OF = { personal: 'personal', team: 'team', teamai: 'shipped' } as const satisfies Record<Layer, DefinitionSource>;
@@ -159,8 +161,19 @@ function definitionFile(item: LayerItem): string {
   return item.form === 'folder' ? path.join(item.at, DRIVER_MARKER) : item.at;
 }
 
+/** Where a message names `location` of `layer`: a path in the team repo says so, the member's and teamai's say it themselves. */
+function inLayer(layer: Layer, location: string): string {
+  return layer === 'team' ? `${location} in the team repo` : location;
+}
+
+/** Where a message names the definition file of `item`, never by its path in the team clone. */
+function definitionLocation(item: LayerItem): string {
+  return inLayer(item.layer, item.form === 'folder' && /[\\/]$/.test(item.location) ? `${item.location}${DRIVER_MARKER}` : item.location);
+}
+
 /** The failure of a lookup of driver `name` that the first layer holding it refused. */
-function refusalOf(name: string, { refusal, layer, location }: Extract<LayerFind, { kind: 'refused' }>): WorkflowFailure {
+function refusalOf(name: string, { refusal, layer, location: at }: Extract<LayerFind, { kind: 'refused' }>): WorkflowFailure {
+  const location = inLayer(layer, at);
   const fix = layer === 'personal' ? 'Fix it, and start again.' : 'Fix it, push it, run teamai pull, and start again.';
 
   switch (refusal.kind) {
@@ -211,12 +224,12 @@ async function hostDriver(config: LocalConfig, { personal, user }: { personal: b
   const teams = await Promise.all([config, ...(user ? [user] : [])].map(async (scope) => {
     const found = await findInLayers('drivers', [HOST_DRIVER], { personal: false, teams: [scope], teamai: false });
 
-    if (found.kind === 'found') return [definitionFile(found.item)];
+    if (found.kind === 'found') return [definitionLocation(found.item)];
 
-    return found.kind === 'refused' && (found.refusal.kind === 'duplicate' || found.refusal.kind === 'two-namespaces') ? [found.refusal.first, found.refusal.second] : [];
+    return found.kind === 'refused' && (found.refusal.kind === 'duplicate' || found.refusal.kind === 'two-namespaces') ? [found.refusal.first, found.refusal.second].map((at) => inLayer('team', at)) : [];
   }));
 
-  return { name: HOST_DRIVER, definition: HOST_DEFINITION, source: 'builtin', file: 'teamai\'s built-in host driver', config, unread: [...own, ...teams.flat()] };
+  return { name: HOST_DRIVER, definition: HOST_DEFINITION, source: 'builtin', location: 'teamai\'s built-in host driver', config, unread: [...own, ...teams.flat()] };
 }
 
 /**
@@ -234,12 +247,8 @@ export async function resolveDriver(config: LocalConfig, name: string, { persona
   const found = await findInLayers('drivers', name === LOCAL_DRIVER ? [`${SHIPPED_PREFIX}${LOCAL_DRIVER}`] : namesOf(name), { personal, teams: [config, ...(user ? [user] : [])] });
 
   switch (found.kind) {
-    case 'found': {
-      const { item } = found;
-      const read = await readDefinition(definitionFile(item), SOURCE_OF[item.layer], item.layer === 'team' ? item.config : config);
-
-      return read.ok ? { ok: true, driver: read.driver } : read;
-    }
+    case 'found':
+      return await readDefinition(found.item, config);
 
     case 'refused':
       return { ok: false, failure: refusalOf(name, found) };

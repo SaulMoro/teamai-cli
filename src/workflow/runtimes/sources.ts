@@ -123,7 +123,7 @@ function credentialValues(driver: ResolvedDriver, use: string, credentials: EnvC
     if (value === undefined || value === '') {
       return {
         ok: false,
-        failure: { code: 'credential_missing', message: `Runtime "${use}" of driver definition ${driver.file} declares credential ${name}: env:${variable}, and ${variable} is not set in your environment. Set ${variable}, then start again.` },
+        failure: { code: 'credential_missing', message: `Runtime "${use}" of driver definition ${driver.location} declares credential ${name}: env:${variable}, and ${variable} is not set in your environment. Set ${variable}, then start again.` },
       };
     }
 
@@ -218,7 +218,7 @@ function entryOptions(driver: ResolvedDriver, use: string, given: RuntimeOptions
 
 /** Where runtime `use` of `driver` got its options: the definition's file, and the member's config when it sets them too. */
 function optionsSource(driver: ResolvedDriver, use: string): string {
-  return driver.config.workflows?.drivers?.[driver.name]?.runtimes?.[use] === undefined ? driver.file : `${driver.file} or your workflows.drivers.${driver.name}.runtimes.${use}`;
+  return driver.config.workflows?.drivers?.[driver.name]?.runtimes?.[use] === undefined ? driver.location : `${driver.location} or your workflows.drivers.${driver.name}.runtimes.${use}`;
 }
 
 /** Whether the options of `driver`'s `use` entry come only from a definition the member or the team keeps. */
@@ -245,7 +245,7 @@ function sandboxRecord(profile: SandboxProfile, can: DriverCan): NonNullable<Run
 }
 
 function badOption(driver: ResolvedDriver, use: string, key: string, message: string): WorkflowFailure {
-  return { code: 'bad_option', message: `Runtime "${use}" of driver definition ${driver.file} refused option "${key}": ${message}. Fix the option and start again.` };
+  return { code: 'bad_option', message: `Runtime "${use}" of driver definition ${driver.location} refused option "${key}": ${message}. Fix the option and start again.` };
 }
 
 /**
@@ -521,7 +521,7 @@ async function openComposed(driver: ResolvedDriver, { names, options, sandbox }:
 
     const builtin = outer.opened.kind === 'external' ? names.inner : names.outer;
 
-    return { ok: false, failure: { code: 'driver_invalid', message: `Driver definition ${driver.file} runs ${names.inner} through ${names.outer}, and ${builtin} runs in teamai's own process: it runs neither through another runtime nor another through it. Fix the file and start again.` } };
+    return { ok: false, failure: { code: 'driver_invalid', message: `Driver definition ${driver.location} runs ${names.inner} through ${names.outer}, and ${builtin} runs in teamai's own process: it runs neither through another runtime nor another through it. Fix the file and start again.` } };
   }
 
   const [outerOpened, innerOpened] = [outer.opened, inner.opened];
@@ -532,14 +532,14 @@ async function openComposed(driver: ResolvedDriver, { names, options, sandbox }:
   if (!innerOpened.launchesAgents && how.purpose !== 'stop') {
     await Promise.all([outerOpened.runtime.dispose(), innerOpened.runtime.dispose()]);
 
-    return { ok: false, failure: { code: 'driver_invalid', message: `Driver definition ${driver.file} runs ${names.inner} through ${names.outer}, and ${names.inner} launches no agents of its own: only a runtime that launches agents, such as an app's, runs its tools through another. Use ${names.outer} on its own, or fix the file, and start again.` } };
+    return { ok: false, failure: { code: 'driver_invalid', message: `Driver definition ${driver.location} runs ${names.inner} through ${names.outer}, and ${names.inner} launches no agents of its own: only a runtime that launches agents, such as an app's, runs its tools through another. Use ${names.outer} on its own, or fix the file, and start again.` } };
   }
 
   // One that runs each tool itself on the attempt's tool home, as a sandbox does, runs it in its own place, never the outer's.
   if (innerOpened.runsOnToolHome === true && how.purpose !== 'stop') {
     await Promise.all([outerOpened.runtime.dispose(), innerOpened.runtime.dispose()]);
 
-    return { ok: false, failure: { code: 'driver_invalid', message: `Driver definition ${driver.file} runs ${names.inner} through ${names.outer}, and ${names.inner} runs each tool itself, in its own place, on the attempt's tool home: only a runtime that launches agents its own way, such as an app's, runs its tools through another. Use ${names.inner} and ${names.outer} as runtimes of their own, or fix the file, and start again.` } };
+    return { ok: false, failure: { code: 'driver_invalid', message: `Driver definition ${driver.location} runs ${names.inner} through ${names.outer}, and ${names.inner} runs each tool itself, in its own place, on the attempt's tool home: only a runtime that launches agents its own way, such as an app's, runs its tools through another. Use ${names.inner} and ${names.outer} as runtimes of their own, or fix the file, and start again.` } };
   }
 
   const offer = composedOffer({ ok: true, can: outerOpened.can, launchesAgents: outerOpened.launchesAgents }, { ok: true, can: innerOpened.can, launchesAgents: innerOpened.launchesAgents, ...(innerOpened.unavailable && { unavailable: innerOpened.unavailable }) });
@@ -589,17 +589,17 @@ export async function openDriver(
   const opened: OpenedRuntime[] = [];
   const how = { mode, canAsk, purpose, checkout };
 
-  if (purpose === 'run') for (const warning of shadowedFleetEntries(driver.definition.runtimes)) log.warn(`Driver definition ${driver.file}: ${warning}`);
+  if (purpose === 'run') for (const warning of shadowedFleetEntries(driver.definition.runtimes)) log.warn(`Driver definition ${driver.location}: ${warning}`);
 
   if (purpose === 'run') {
-    for (const file of driver.unread ?? []) {
-      log.warn(`Driver definition ${file} is not read: host is teamai's built-in driver, which runs only commands, gates and workflows whose steps need no AI tool, and no file replaces it. Rename the file and the name in it.`);
+    for (const location of driver.unread ?? []) {
+      log.warn(`Driver definition ${location} is not read: host is teamai's built-in driver, which runs only commands, gates and workflows whose steps need no AI tool, and no file replaces it. Rename the file and the name in it.`);
     }
   }
 
   // A member's or the team's teamai-local replaces every run's default driver, which a run never does silently.
   if (purpose === 'run' && name === LOCAL_DRIVER && driver.source !== 'shipped') {
-    log.info(`Driver local runs ${driver.file}, ${driver.source === 'personal' ? 'your own' : 'the team\'s'} teamai-local, in place of teamai's.`);
+    log.info(`Driver local runs ${driver.location}, ${driver.source === 'personal' ? 'your own' : 'the team\'s'} teamai-local, in place of teamai's.`);
   }
 
   for (const entry of driver.definition.runtimes) {

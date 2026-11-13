@@ -491,7 +491,7 @@ describe('a member taking a prompt attempt', () => {
     const ready = await runtime.init({ options: { state, agent: { output: { ok: true }, conversations: false }, prompt_tool_home: true }, mode: 'unattended' });
     if (!ready.ok) throw new Error(ready.failure.message);
     const opened: OpenedDriver = {
-      driver: { name: 'bobs', definition: { schemaVersion: 'v1alpha1', name: 'bobs', runtimes: [] }, source: 'personal', file: 'bobs.yaml', config: (await team().member('bob')).config }, asked: 'bobs',
+      driver: { name: 'bobs', definition: { schemaVersion: 'v1alpha1', name: 'bobs', runtimes: [] }, source: 'personal', location: 'bobs.yaml', config: (await team().member('bob')).config }, asked: 'bobs',
       runtimes: [{ kind: 'external', use: 'toy', runtime, can: ready.can, launchesAgents: true, ...(ready.runsOnToolHome && { runsOnToolHome: true }), engine: { logins: [] }, credentials: {}, found: [], masks: {}, optionsFrom: 'test' }],
     };
     const place = memberPlace(opened);
@@ -1579,7 +1579,7 @@ describe('where a member runs an attempt', () => {
     const [first, ...rest] = runtimes;
     if (!first) throw new Error('no runtime');
 
-    return { driver: { name: 'bobs', definition: { schemaVersion: 'v1alpha1', name: 'bobs', runtimes: [] }, source: 'personal', file: 'bobs.yaml', config }, asked: 'bobs', runtimes: [first, ...rest] };
+    return { driver: { name: 'bobs', definition: { schemaVersion: 'v1alpha1', name: 'bobs', runtimes: [] }, source: 'personal', location: 'bobs.yaml', config }, asked: 'bobs', runtimes: [first, ...rest] };
   }
 
   it('runs on the first runtime of its driver that runs commands, one that does not say it runs none included', async () => {
