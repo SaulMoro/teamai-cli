@@ -1132,7 +1132,7 @@ steps:
     const runs = await publishedRuns(runner);
     expect(runs[0]?.offer?.lacks).toEqual([{
       reason: 'build needs a sandbox, which this machine does not declare',
-      fix: 'pass --sandbox on a disposable host, such as a CI runner or a container, set workflows.sandbox: true, or take it with a --driver whose runtime is a sandbox',
+      fix: 'pass --sandbox on a disposable host, such as a CI runner or a container, set workflows.sandbox: true, or take it with teamai workflow resume --next --driver <a driver whose runtime is a sandbox>',
     }]);
     expect(PublishedRuns.candidates(runs, { repository: 'github.com/acme/app', hasPerson: false, self })).toEqual([]);
     expect((await publishedRuns(runner, runnerTaker('unattended', { sandbox: true })))[0]?.offer?.lacks).toEqual([]);
