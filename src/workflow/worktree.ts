@@ -666,6 +666,15 @@ export async function removeWorktreeSetup(checkout: string, { dryRun = false, go
   const worktrees = listed.stdout.split('\n').flatMap((line) => (line.startsWith('worktree ') ? [line.slice('worktree '.length)] : [])).filter((dir) => !gone.includes(dir));
 
   if (worktrees.some((dir) => worktreeCheckout(dir) !== undefined)) return [];
+
+  // git's records of gone worktrees go with the setup: Docker makes a missing bind mount source, such as a sandbox's
+  // mount of a step worktree's git directory, as an empty directory when a container starts after the worktree went.
+  if (!dryRun) {
+    const forgot = await forgetGoneWorktrees(checkout);
+
+    if (!forgot.ok) throw new Error(forgot.reason);
+  }
+
   const removed: string[] = [];
 
   for (const dir of [path.join(checkout, '.teamai', 'workflow-worktrees'), hooksPath(checkout)]) {

@@ -2030,6 +2030,19 @@ describe('uninstall', () => {
       expect(git(projectRoot, 'config', '--local', '--list')).not.toMatch(/worktreeconfig/i);
     });
 
+    // Docker makes a missing bind mount source as an empty directory when a container starts, a step's mount of the
+    // worktree's git directory included, after the worktree went.
+    it('leaves no record git keeps of a run worktree that is gone, an empty one included', async () => {
+      const { projectRoot, worktrees: [done] } = await projectWithRunWorktrees(['teamai/r0123456789abcdef/pair/p1']);
+      git(projectRoot, 'worktree', 'remove', '--force', done);
+      const record = path.join(projectRoot, '.git', 'worktrees', path.basename(done));
+      await fse.ensureDir(record);
+
+      await uninstall({ force: true });
+
+      expect(await fse.pathExists(path.join(projectRoot, '.git', 'worktrees'))).toBe(false);
+    });
+
     it('names the command that removes a locked worktree it keeps', async () => {
       const { projectRoot, worktrees: [locked] } = await projectWithRunWorktrees(['teamai/r0123456789abcdef/fail/p1']);
       git(projectRoot, 'worktree', 'lock', '--reason', 'on a USB disk', locked);
