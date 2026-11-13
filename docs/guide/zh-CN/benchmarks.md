@@ -742,10 +742,19 @@ $ teamai benchmark run fix-auth --sandbox
 
 | `benchmark run` 退出码 | 何时 |
 | --- | --- |
-| 0 | 运行成功并写出了报告，无论 trial 的结果如何。 |
-| 1 | 套件或启动被拒绝、运行超时或被取消，或者某个 `finally` 步骤失败或被取消：报告，或者 `--fail-on-regression` 发现下降时的 `regression` 关卡。 |
+| 0 | 运行成功，写出了报告，且下面没有关卡失败。 |
+| 1 | 套件或启动被拒绝、运行超时或被取消，或者某个 `finally` 步骤失败或被取消：报告、check 无法运行时的 `checks` 关卡、没有 trial 得出结果时的 `results` 关卡，或者 `--fail-on-regression` 发现下降时的 `regression` 关卡。 |
 
 仍在等待发布的记录从不改变退出码。
+
+当每个 trial 都以错误结束或没有运行时，例如没有 trial 能打开它的沙箱，运行什么也没有衡量。结果会列出每个以错误结束的 trial 及其原因。随后 `results` 步骤失败，`benchmark run` 以 1 退出：
+
+```text
+No trial produced a result, so the run measured nothing. These trials ended with an error:
+  Trial 1/2 expired-token claude: sandbox_failed: <why the sandbox did not open>
+  Trial 2/2 expired-token codex: sandbox_failed: <why the sandbox did not open>
+Fix the cause named, then run teamai benchmark run fix-auth again.
+```
 
 | trial 得到 | |
 | --- | --- |
@@ -845,7 +854,7 @@ finally:
   - id: report
     command: teamai benchmark report
     env: { COMPARE: "{{ inputs.fail_on_regression }}" }
-    output: { text: string, table: json, regression: dropped | held | no_comparable | off, unchecked: string }
+    output: { text: string, table: json, regression: dropped | held | no_comparable | off, unchecked: string, unmeasured: string }
   # Fails when a baseline's or a trial's check could not run, naming each as report's text does: the run measured
   # nothing for them. Drop it to report them without failing.
   - id: checks
@@ -853,6 +862,13 @@ finally:
     if: steps.report.outputs.unchecked != ''
     command: node -e "process.stderr.write(process.env.UNCHECKED + '\n'); process.exit(1)"
     env: { UNCHECKED: "{{ steps.report.outputs.unchecked }}" }
+  # Fails when no trial produced a result, naming each trial that ended in an error as report's text does: the run
+  # measured nothing. Drop it to report such a run without failing.
+  - id: results
+    needs: [report]
+    if: steps.report.outputs.unmeasured != ''
+    command: node -e "process.stderr.write(process.env.UNMEASURED + '\n'); process.exit(1)"
+    env: { UNMEASURED: "{{ steps.report.outputs.unmeasured }}" }
   - id: regression
     needs: [report]
     if: steps.report.outputs.regression == 'dropped'
@@ -892,7 +908,7 @@ steps:
     requires: { isolation: sandbox, strict: true }
   # 没有 subjects、score、calibration-subjects 和 calibrate 步骤
 finally:
-  # report、checks 和 regression，同 teamai 的
+  # report、checks、results 和 regression，同 teamai 的
 ```
 
 ## 结果
@@ -1238,7 +1254,7 @@ No arm has a comparable pair against run rA, so --fail-on-regression has nothing
 ```yaml
 # workflows/teamai-benchmark.yaml：下降只在 CI 日志中警告，任务仍然通过
 finally:
-  # report 和 checks，与 teamai 的相同
+  # report、checks 和 results，与 teamai 的相同
   - id: regression
     needs: [report]
     if: steps.report.outputs.regression == 'dropped'

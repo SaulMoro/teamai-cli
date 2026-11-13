@@ -742,10 +742,19 @@ Each trial prompt runs with [`permissions: unattended`](workflow-advanced.md#una
 
 | `benchmark run` exits | When |
 | --- | --- |
-| 0 | The run succeeded and its report was written, whatever the trials' results. |
-| 1 | The suite or the start was refused, the run timed out or was cancelled, or a `finally` step failed or was cancelled: the report, or the `regression` gate when `--fail-on-regression` found a drop. |
+| 0 | The run succeeded, its report was written, and no gate below failed. |
+| 1 | The suite or the start was refused, the run timed out or was cancelled, or a `finally` step failed or was cancelled: the report, the `checks` gate when a check could not run, the `results` gate when no trial produced a result, or the `regression` gate when `--fail-on-regression` found a drop. |
 
 A record still waiting for publication never changes the exit code.
+
+When every trial ended in an error or did not run, such as when no trial could open its sandbox, the run measured nothing. The results name each trial that ended in an error, with why. Then the `results` step fails, and `benchmark run` exits 1:
+
+```text
+No trial produced a result, so the run measured nothing. These trials ended with an error:
+  Trial 1/2 expired-token claude: sandbox_failed: <why the sandbox did not open>
+  Trial 2/2 expired-token codex: sandbox_failed: <why the sandbox did not open>
+Fix the cause named, then run teamai benchmark run fix-auth again.
+```
 
 | A trial gets | |
 | --- | --- |
@@ -845,7 +854,7 @@ finally:
   - id: report
     command: teamai benchmark report
     env: { COMPARE: "{{ inputs.fail_on_regression }}" }
-    output: { text: string, table: json, regression: dropped | held | no_comparable | off, unchecked: string }
+    output: { text: string, table: json, regression: dropped | held | no_comparable | off, unchecked: string, unmeasured: string }
   # Fails when a baseline's or a trial's check could not run, naming each as report's text does: the run measured
   # nothing for them. Drop it to report them without failing.
   - id: checks
@@ -853,6 +862,13 @@ finally:
     if: steps.report.outputs.unchecked != ''
     command: node -e "process.stderr.write(process.env.UNCHECKED + '\n'); process.exit(1)"
     env: { UNCHECKED: "{{ steps.report.outputs.unchecked }}" }
+  # Fails when no trial produced a result, naming each trial that ended in an error as report's text does: the run
+  # measured nothing. Drop it to report such a run without failing.
+  - id: results
+    needs: [report]
+    if: steps.report.outputs.unmeasured != ''
+    command: node -e "process.stderr.write(process.env.UNMEASURED + '\n'); process.exit(1)"
+    env: { UNMEASURED: "{{ steps.report.outputs.unmeasured }}" }
   - id: regression
     needs: [report]
     if: steps.report.outputs.regression == 'dropped'
@@ -892,7 +908,7 @@ steps:
     requires: { isolation: sandbox, strict: true }
   # no subjects, score, calibration-subjects or calibrate step
 finally:
-  # report, checks and regression, as teamai's
+  # report, checks, results and regression, as teamai's
 ```
 
 ## Results
@@ -1238,7 +1254,7 @@ The gate is the team's to change. To warn of a drop instead of failing the job, 
 ```yaml
 # workflows/teamai-benchmark.yaml: a drop warns in the CI log, and the job still passes
 finally:
-  # report and checks, as teamai's
+  # report, checks and results, as teamai's
   - id: regression
     needs: [report]
     if: steps.report.outputs.regression == 'dropped'
