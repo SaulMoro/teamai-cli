@@ -3,13 +3,12 @@ import os from 'node:os';
 import path from 'node:path';
 import { afterAll, vi } from 'vitest';
 import { ATTEMPT_ENV, LAUNCHED_BY_ENV, RUN_MODE_ENV } from '../../launch-context.js';
-import { TOOLS } from '../../tools.js';
-import { homeVariables, isToolId } from '../../tool-registry.js';
 import { GIT_REPOSITORY_ENV } from '../../utils/git-env.js';
 import { AGENT_SESSION_ENV } from '../../utils/session-id.js';
 import { SESSION_APPS } from '../../workflow/session-apps.js';
 import { BUILT_IN_TOOLS } from '@teamai/tool-definitions';
 import type { LaunchAdapter } from '@teamai/tool-core/launch';
+import { toolRootVariables } from './tool-root-vars.js';
 
 // Tests run inside an agent's shell (Claude Code sets CLAUDE_CODE_SESSION_ID),
 // and recall, contribute and session save read that id through
@@ -29,11 +28,14 @@ for (const name of [...AGENT_SESSION_ENV, ...SESSION_APPS.map((app) => app.varia
   delete process.env[name];
 }
 
-// The same shell may relocate an agent's root (CLAUDE_CONFIG_DIR, and every
-// home `TOOLS[tool].home.moves` names), which teamai honors, so a test that
-// stubs only HOME would still read, write or remove the developer's real tool
-// files. A test that needs one sets it.
-for (const name of ['CLAUDE_CONFIG_DIR', ...Object.keys(TOOLS).filter(isToolId).flatMap(homeVariables)]) {
+// The same shell may relocate an agent's root, which teamai honors, so a test
+// that stubs only HOME would still read, write or remove the developer's real
+// tool files. The scrub reads the list teamai itself reads (`toolHomeVariableNames`):
+// every home `TOOLS[tool].home.moves` names, each `Home.rootVariable`, and the
+// roots `init` records in `toolRoots` (`RELOCATABLE_TOOLS`). No instance is loaded
+// yet, so an instance's own variable is the test's to set or clear. A test that
+// needs one sets it.
+for (const name of toolRootVariables()) {
   delete process.env[name];
 }
 
