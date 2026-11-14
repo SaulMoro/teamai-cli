@@ -324,6 +324,16 @@ describe("a tool instance's home in a ledger's section (e)", () => {
     expect((await toolInstancesIn(home)).filter((instance) => instance.name === 'acme-claude').map((instance) => instance.home?.dir)).toEqual(['.mine']);
   });
 
+  it("reads a workspace's team instance in place of the user scope's of the same name, as teamai does", async () => {
+    const home = homeWithInstances();
+    const userTeam = path.join(home, '.teamai', 'team-repo');
+    fs.mkdirSync(path.join(userTeam, 'tools'), { recursive: true });
+    fs.writeFileSync(path.join(userTeam, 'tools', 'acme-claude.yaml'), 'schemaVersion: v1alpha1\nname: acme-claude\nextends: claude\nhome: { dir: .user-acme }\n');
+    fs.writeFileSync(path.join(home, '.teamai', 'config.yaml'), `repo:\n  localPath: ${userTeam}\n  remote: https://teamai.test/team/user.git\nscope: user\n`);
+
+    expect((await toolInstancesIn(home)).filter((instance) => instance.name === 'acme-claude').map((instance) => instance.home?.dir)).toEqual(['.acme-claude']);
+  });
+
   it('excuses nothing in the home of an instance it could not read', () => {
     const rules = ledgerRules([]);
 

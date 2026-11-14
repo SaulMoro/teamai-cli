@@ -9,14 +9,14 @@ import path from 'node:path';
 import { z } from 'zod';
 import { parseYaml } from '@teamai/shared/yaml';
 import { instanceHomeDir, parseToolHomes, realHost } from '../../src/tool-home.js';
-import { teamToolInstances, type DeclaredTool } from '../../src/tool-instances.js';
+import { declaredTable, teamToolInstances, type DeclaredTool } from '../../src/tool-instances.js';
 import { TOOL_IDS } from '../../src/tools.js';
 import { LocalConfigSchema, ToolPathsSchema } from '../../src/types.js';
 import { projectsRootDir } from '../../src/utils/partition.js';
 import { rewriteLocked, type World } from './world.js';
 
-/** The part of an install's config.yaml that names its team repo. */
-const InstallRepo = z.object({ repo: LocalConfigSchema.shape.repo });
+/** The part of an install's config.yaml that names its team repo, and the scope that repo serves. */
+const InstallRepo = z.object({ repo: LocalConfigSchema.shape.repo, scope: LocalConfigSchema.shape.scope });
 
 /**
  * Each tool instance an install under `home` declares: those of the team repo each data home's config names, every
@@ -24,19 +24,19 @@ const InstallRepo = z.object({ repo: LocalConfigSchema.shape.repo });
  * `teamai uninstall`, which removes those records. An instance it cannot read is judged as no tool's: what it left is a LEAK.
  */
 export async function toolInstancesIn(home: string): Promise<DeclaredTool[]> {
-  const teamRepos = installConfigs(home).flatMap((text) => {
+  const teamRepos = new Map(installConfigs(home).flatMap((text) => {
     const config = InstallRepo.safeParse(text);
 
-    return config.success ? [config.data.repo.localPath] : [];
-  });
+    return config.success ? [[config.data.repo.localPath, config.data.scope] as const] : [];
+  }));
 
-  const [team, own] = await Promise.all([
-    Promise.all([...new Set(teamRepos)].map((root) => teamToolInstances({ root, namespaces: async () => 'legacy' }))),
-    // The member's own folder has the team root's layout, with no namespaces; their instance replaces the team's.
+  const [repos, own] = await Promise.all([
+    Promise.all([...teamRepos].map(async ([root, scope]) => ({ scope, instances: await teamToolInstances({ root, namespaces: async () => 'legacy' }) }))),
+    // The member's own folder has the team root's layout, with no namespaces.
     teamToolInstances({ root: path.join(home, '.teamai'), namespaces: async () => [] }),
   ]);
 
-  const instances = [...team.flat().filter((instance) => !own.some((mine) => mine.name === instance.name)), ...own];
+  const instances = [...declaredTable({ repos, own }).values()];
 
   // `.acme/`, `./.acme` and `.acme` name one folder.
   return instances.map((instance) => (instance.home === undefined ? instance : { ...instance, home: { ...instance.home, dir: path.posix.normalize(instance.home.dir).replace(/\/+$/, '') } }));
