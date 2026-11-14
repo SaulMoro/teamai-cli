@@ -3606,6 +3606,7 @@ export async function reportAttempt(config: LocalConfig, runId: string, report: 
 
     if (unmeasured && !uncounted) {
       outcome = 'failed';
+      // "which reports tokens" holds while `negotiate` (requirements.ts) leases a budgeted, non-interactive prompt only to a driver with can.tokens.
       message = report.unmeasured !== undefined
         ? `Step "${step.id}" runs under a token budget, and its driver, which reports tokens, read none for it, so the budget cannot count what it spent: ${report.unmeasured.cause} ${report.unmeasured.next}`
         : limits?.budget !== undefined
