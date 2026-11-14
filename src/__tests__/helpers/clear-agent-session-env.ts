@@ -8,7 +8,7 @@ import { homeVariables, isToolId } from '../../tool-registry.js';
 import { GIT_REPOSITORY_ENV } from '../../utils/git-env.js';
 import { AGENT_SESSION_ENV } from '../../utils/session-id.js';
 import { SESSION_APPS } from '../../workflow/session-apps.js';
-import { LAUNCH_ADAPTERS } from '../../launch-registry.js';
+import { BUILT_IN_TOOLS } from '@teamai/tool-definitions';
 import type { LaunchAdapter } from '@teamai/tool-core/launch';
 
 // Tests run inside an agent's shell (Claude Code sets CLAUDE_CODE_SESSION_ID),
@@ -47,8 +47,11 @@ for (const name of GIT_REPOSITORY_ENV) {
 
 // A step runtime that declares no credential gets the tools' sign-in variables
 // found in the member's environment, by name, so the developer's own would
-// reach every runtime a test starts. A test that needs one sets it.
-for (const name of Object.values(LAUNCH_ADAPTERS).flatMap((adapter: LaunchAdapter) => [...(adapter.signIn?.variables ?? []), ...(adapter.signIn?.alongside ?? [])])) {
+// reach every runtime a test starts. A test that needs one sets it. Read from
+// the tools' own adapters, not launch-registry.js: isolate-home.ts mocks that
+// module, and a mock a setup file loads keeps the product modules of the setup
+// after vi.resetModules below, so its lookups would miss what a test registers.
+for (const name of Object.values(BUILT_IN_TOOLS).flatMap((family) => Object.values<LaunchAdapter>(family.launch)).flatMap((adapter) => [...(adapter.signIn?.variables ?? []), ...(adapter.signIn?.alongside ?? [])])) {
   delete process.env[name];
 }
 
