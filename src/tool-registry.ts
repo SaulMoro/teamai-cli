@@ -81,13 +81,13 @@ export function baseToolOf(name: string): string {
 }
 
 /**
- * The name the member's `toolRoots` records `name`'s root under: for an instance that keeps the home of the tool it
- * extends (it sets neither `home` nor `paths`), that tool's, so the two resolve to one directory; else `name`.
+ * The name the member's `toolRoots` records `name`'s root under: for an instance with no home of its own, which lives in
+ * the home of the tool it extends whatever paths it sets, that tool's, so the two resolve to one directory; else `name`.
  */
 export function toolRootsKeyOf(name: string): string {
   const instance = toolOf(name)?.instance;
 
-  return instance?.kind === 'instance' && instance.home === undefined && instance.paths === undefined ? instance.extends : name;
+  return instance?.kind === 'instance' && instance.home === undefined ? instance.extends : name;
 }
 
 /**

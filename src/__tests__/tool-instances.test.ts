@@ -409,6 +409,41 @@ describe('the sessions of an instance', () => {
     expect(platforms).toContain('acme-claude');
     expect(platforms).not.toContain('review-claude');
   });
+
+  // The home of an instance with no home of its own is the one of the tool it extends, so the root recorded for that tool is its own.
+  it('starts, delivers, gates and finds the sessions of an instance with paths and no home at the root recorded for the tool it extends', async () => {
+    fs.mkdirSync(path.join(home, '.teamai'), { recursive: true });
+    fs.mkdirSync(path.join(home, '.codex-work'));
+    fs.writeFileSync(path.join(home, '.teamai', 'config.yaml'), 'repo: { localPath: /x, remote: x }\nusername: u\nscope: user\nadditionalRoles: []\ntoolRoots: { codex: ~/.codex-work }\n');
+    const { config } = await load(teamRepo({
+      'tools/review-codex.yaml': 'schemaVersion: v1alpha1\nname: review-codex\nextends: codex\npaths: { skills: .codex/review-skills }\n',
+      'tools/shared-codex.yaml': 'schemaVersion: v1alpha1\nname: shared-codex\nextends: codex\npaths: { skills: .agents/team-skills, settings: .codex/hooks.json }\n',
+    }));
+    const { scopedToolPaths } = await import('../types.js');
+    // The setup file mocks this module once, and a mock outlives vi.resetModules, binding it to the first test's registry.
+    const { toolCommandEnv } = await vi.importActual<typeof import('../tool-launch/tools.js')>('../tool-launch/tools.js');
+    const { installOf, locate, ownOf } = await import('../locate.js');
+    const { AgentSession } = await import('../session-flow/agent-session.js');
+    const { storeDirOf } = await import('../session-flow/adapters/index.js');
+    const toolRoots = { codex: '~/.codex-work' };
+    const skills = await locate('review-codex', 'skills', installOf(config ?? { toolPaths: {} }, { repo: {}, scope: 'user', toolRoots }));
+    const work = path.join(home, '.codex-work');
+
+    expect({
+      launch: toolCommandEnv('review-codex', { kind: 'delivered', inherited: {}, toolRoots }),
+      sessions: storeDirOf(AgentSession.platformForTool('review-codex') ?? 'none', toolRoots),
+      skills: ownOf(skills)?.path,
+      gate: skills.gates.find((gate) => gate.kind === 'installed'),
+      // Only what lies in the home of Codex moves with its root; Codex reads the shared skills directory from any home.
+      outside: scopedToolPaths(config ?? { toolPaths: {} }, { scope: 'user', toolRoots })['shared-codex'],
+    }).toEqual({
+      launch: { kind: 'ready', env: { CODEX_HOME: work } },
+      sessions: path.join(work, 'sessions'),
+      skills: path.join(work, 'review-skills'),
+      gate: expect.objectContaining({ probe: work, met: true }),
+      outside: { skills: '.agents/team-skills', settings: '.codex-work/hooks.json' },
+    });
+  });
 });
 
 describe('the home of an instance', () => {

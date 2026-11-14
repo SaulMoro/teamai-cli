@@ -3430,7 +3430,10 @@ export function applyToolRoots(
     // Not skipped when the root is unchanged: a bare file name (the MCP
     // companion) still moves inside it (see relocateToolPaths).
     out ??= { ...toolPaths };
-    out[tool] = rerootToolPaths(paths, newRoot);
+    // An instance on the recorded root of the tool it extends moves only what lies in that tool's home; the rest of its
+    // paths name places the tool reads wherever its home is.
+    const base = key === tool ? undefined : toolOf(tool)?.base;
+    out[tool] = base === undefined ? rerootToolPaths(paths, newRoot) : relocateToolPaths(paths, toolPathRoots(DEFAULT_TOOL_PATHS[base]), newRoot);
   }
 
   return out ?? toolPaths;
