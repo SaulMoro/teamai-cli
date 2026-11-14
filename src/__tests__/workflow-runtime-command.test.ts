@@ -14,6 +14,7 @@ import { AttemptIdSchema, attemptResultPath, attemptsDir, RunIdSchema, runsRemov
 import type { StepRuntime } from '@teamai/runtime-protocol/step-runtime';
 import type { OpId } from '@teamai/runtime-protocol';
 import { soleEntry } from './helpers/runtime-entry.js';
+import { log } from '@teamai/shared/log';
 
 /** An attempt on a step runtime whose `cancel`, like the real one, stops only an exec it has sent. */
 function commandRun(): { run: AttemptRun; execs: () => number } {
@@ -447,5 +448,53 @@ describe('an attempt\'s operations on a step runtime', () => {
 
     expect(await send(again)).toMatchObject(ends);
     expect(cancelled).toHaveLength(cancels);
+  });
+
+  it.skipIf(process.platform === 'win32' || process.getuid?.() === 0)('warns, naming the record and the cause, and ends the exec as it ran, when a display the runtime sends while it runs cannot be written', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-attempt-display-'));
+    const config: LocalConfig = { repo: { localPath: root, remote: 'local', kind: 'self' }, username: 'tester', scope: 'project', additionalRoles: [], projectRoot: root, dataHome: path.join(root, 'data') };
+    const run = RunIdSchema.parse('r0123abcd');
+    const attempt = AttemptIdSchema.parse('a00000001');
+    const record = attemptRuntimePath(config, run, attempt);
+    onTestFinished(() => {
+      if (fs.existsSync(path.dirname(record))) fs.chmodSync(path.dirname(record), 0o700);
+      fs.rmSync(root, { recursive: true, force: true });
+    });
+    const warn = vi.spyOn(log, 'warn').mockImplementation(() => undefined);
+    onTestFinished(() => { warn.mockRestore(); });
+    const runtime: StepRuntime<DriverCan> = {
+      name: 'shows',
+      init: async () => ({ ok: true, can: {}, launchesAgents: false }),
+      open: async (_request, onAccepted) => {
+        await onAccepted('h-1');
+
+        return { kind: 'ready', handle: 'h-1' };
+      },
+      // The record's folder cannot be written while the command runs, as a full disk leaves it, and the runtime shows
+      // its place then; the command runs on, and the folder can be written again before it ends.
+      exec: async (_request, events) => {
+        events.onAccepted?.({});
+        fs.chmodSync(path.dirname(record), 0o500);
+        events.onDisplay?.({ label: 'shows place' });
+        await new Promise((resolve) => setTimeout(resolve, 200));
+        fs.chmodSync(path.dirname(record), 0o700);
+
+        return { kind: 'exited', code: 0, stdout: 'built' };
+      },
+      prompt: async () => ({ kind: 'cancelled' }),
+      cancel: async () => {},
+      collect: async () => ({ ok: true }),
+      reattach: async () => ({ kind: 'gone' }),
+      close: async () => ({ ok: true }),
+      dispose: async () => {},
+    };
+    const attempted = attemptRun({ config, run, attempt, runtime, entry: soleEntry(runtime), driver: 'shows' });
+    expect(await attempted.open({ worktree: '/work', readonly: [], result: '/work/out', runDir: '/work/scratch', toolHome: {} })).toEqual({ ok: true, handle: 'h-1' });
+
+    const end = await attempted.exec({ argv: ['node', 'build.js'], env: {}, unset: [], credentials: {}, cwd: '/work' }, {}, 'command');
+
+    expect(end).toMatchObject({ kind: 'exited', code: 0, stdout: 'built' });
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(warn.mock.calls[0]?.[0]).toMatch(/^Could not write what step runtime "shows" shows of attempt a00000001 to .*runtime\.json \(EACCES: .*\), so the run's details may show less of it\. The step goes on\.$/u);
   });
 });

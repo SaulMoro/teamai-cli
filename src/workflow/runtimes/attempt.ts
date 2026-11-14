@@ -622,7 +622,7 @@ interface SendAfterStop {
    * is sent, and gets the stop once it is. An op that cannot be running there is not sent after a stop.
    */
   reconnects: boolean;
-  /** Settles once what the operation's events show is recorded; the send waits for it before it ends. */
+  /** Settles once what the operation's events show is recorded, or warned of when it could not be; never rejects. The send waits for it before it ends. */
   kept: () => Promise<void>;
 }
 
@@ -727,21 +727,39 @@ function attemptThrough({ config, run, attempt, sends, entry, driver, sources, d
   /**
    * Tells `events` of an operation's acceptance and of each display the runtime gives apart from it, and keeps each
    * display, with the acceptance or apart from it, for the run's details. `kept` settles once those are written, and the
-   * operation's end waits for it.
+   * operation's end waits for it. A display is only for the run's details, while the place and the operation are
+   * recorded by writes of their own, so one that cannot be written does not end the operation: each write's failure is
+   * caught as it happens, and `kept` warns of the first one once the operation ended.
    */
   const accepting = ({ onAccepted, onDisplay }: Pick<ExecEvents, 'onAccepted' | 'onDisplay'>) => {
     let kept: Promise<void> = Promise.resolve();
+    // Why the first display that could not be written was not.
+    let unwritten: string | undefined;
+
+    const keep = (display: RuntimeDisplay): void => {
+      kept = kept.then(async () => {
+        try {
+          await shown(display);
+        } catch (error) {
+          unwritten ??= error instanceof Error ? error.message : String(error);
+        }
+      });
+    };
 
     return {
       onAccepted: (accepted: Accepted): void => {
-        if (accepted.display) kept = kept.then(() => shown(accepted.display));
+        if (accepted.display) keep(accepted.display);
         onAccepted?.(accepted);
       },
       onDisplay: (display: RuntimeDisplay): void => {
-        kept = kept.then(() => shown(display));
+        keep(display);
         onDisplay?.(display);
       },
-      kept: () => kept,
+      kept: async (): Promise<void> => {
+        await kept;
+
+        if (unwritten !== undefined) log.warn(`Could not write what step runtime "${runtime.name}" shows of attempt ${attempt} to ${file} (${unwritten}), so the run's details may show less of it. The step goes on.`);
+      },
     };
   };
 
