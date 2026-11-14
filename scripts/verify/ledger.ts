@@ -21,7 +21,7 @@ import { PERSONAL_DIRS } from '../../src/workflow/runtimes/layers.js';
 import { installInstances, judgedInstances, recordedInstallInstances, type InstallInstance } from './instances.js';
 import { leftoversSection } from './leftovers.js';
 import { runOn, type Target } from './target.js';
-import { checkoutStatus, git, loadWriters, REPO_ROOT, teamRefs, UNREADABLE, worldFiles, worldWritersFile, type World } from './world.js';
+import { checkoutStatus, git, loadWriters, REPO_ROOT, teamRefs, UNREADABLE, worldFiles, worldWritersFile, type World, type Writers } from './world.js';
 
 interface Section {
   readonly title: string;
@@ -551,7 +551,7 @@ function ledgerPlaces(world: World): LedgerPlace[] {
 }
 
 /** The file a `worldFiles` entry names: `home/…` under the place's HOME, `project/…` under its project. */
-function entryPath(place: LedgerPlace, entry: string): string {
+function entryPath(place: Pick<LedgerPlace, 'home' | 'project'>, entry: string): string {
   const [base, ...rest] = entry.split('#')[0]?.split('/') ?? [];
 
   return path.join(base === 'home' ? place.home : place.project, ...rest);
@@ -606,11 +606,32 @@ async function reverseOf(world: World, place: LedgerPlace, rules: LedgerRules): 
   const leaks = status === 0 ? [] : [`teamai uninstall exited ${status}`];
 
   for (const dir of registered) if (fs.existsSync(dir)) leaks.push(`worktree ${dir} left behind after uninstall`);
+  const judged = uninstallChanges({ place, before, after, writers: loadWriters(place.writers), repository: repositoryView(place.project), rules });
+  const notes = judged.notes;
+  leaks.push(...judged.leaks);
+
+  if (leaks.length === 0 && notes.length === 0) notes.push('HOME and project match the world as it was made');
+
+  return { leaks, notes };
+}
+
+/**
+ * Section (e)'s judgement of each entry under `place` that uninstall left behind, removed or changed, from the snapshots
+ * `before` and `after`: the LEAKs, and the notes on what it excused and could not observe.
+ */
+export function uninstallChanges({ place, before, after, writers, repository, rules }: {
+  place: Pick<LedgerPlace, 'home' | 'project'>;
+  before: Readonly<Record<string, string>>;
+  after: Readonly<Record<string, string>>;
+  writers: Writers;
+  repository: { tracked: string[]; dirty: string[] };
+  rules: LedgerRules;
+}) {
+  const leaks: string[] = [];
   const unobserved = unobservedEntries(before, after);
   const notes = [...unobserved.notes];
 
   const leaked: string[] = [];
-  const writers = loadWriters(place.writers);
   const theirs = new Map<string, string[]>();
   const under = (entry: string, dirs: Iterable<string>): boolean => [...dirs].some((dir) => entry.startsWith(`${dir}/`));
 
@@ -618,7 +639,6 @@ async function reverseOf(world: World, place: LedgerPlace, rules: LedgerRules): 
     if (!under(entry, [...theirs.values()].flat())) theirs.set(why, [...theirs.get(why) ?? [], entry]);
   };
 
-  const repository = repositoryView(place.project);
   const namesTeamai = (entry: string): boolean => mentionsTeamai(fs.readFileSync(entryPath(place, entry), 'utf8'));
   const remoteTips = new Set(Object.entries(after).flatMap(([entry, value]) => (REMOTE_REF.test(entry) && value !== 'dir' ? [value] : [])));
 
@@ -710,8 +730,6 @@ async function reverseOf(world: World, place: LedgerPlace, rules: LedgerRules): 
   }
 
   for (const [why, entries] of theirs) notes.push(`${why}: ${entries.join(', ')}`);
-
-  if (leaks.length === 0 && notes.length === 0) notes.push('HOME and project match the world as it was made');
 
   return { leaks, notes };
 }
