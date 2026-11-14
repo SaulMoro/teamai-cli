@@ -1,11 +1,11 @@
-import { resolveConfigForDir } from '../../config.js';
+import { resolveConfigForDir, resolveMemberToolRoots } from '../../config.js';
 import { LAUNCHED_BY_ENV, resolveRunMode, RUN_MODE_ENV, type LaunchedBy } from '../../launch-context.js';
 import type { LocalConfig } from '../../types.js';
 import { resolveCliPath } from '@teamai/shared/cli-path';
 import { log } from '@teamai/shared/log';
 import { CallError, memberTools, type MemberTool } from '../member-tools.js';
 import { addTokens, type TokenUsage } from '@teamai/tool-core/stdout';
-import { executableOf, LAUNCH_ORDER, launchAdapterIdOf, launchAdapterOf, type LaunchOrderTool } from '../../launch-registry.js';
+import { executableOf, LAUNCH_ORDER, launchAdapterIdOf, launchAdapterOf, toolCommandEnv, type LaunchOrderTool } from '../../launch-registry.js';
 import { agyGatewayEnv } from '../../models/agy-gateway.js';
 import { extractReply } from '@teamai/tool-core/reply';
 import { answerLaunch } from '@teamai/runtime-tools/answer';
@@ -91,14 +91,23 @@ async function scopeHere(): Promise<LocalConfig | undefined> {
 
 type Picked = { tool: LaunchOrderTool; executable: string };
 
-/** The environment a call's tool runs in: the member's own, marked as teamai's launch, without an outer launch's checkout or session markers. */
-function callEnv(launchedBy: LaunchedBy, tool: string): NodeJS.ProcessEnv {
-  const { TEAMAI_LAUNCHED_TOOL: _tool, TEAMAI_LAUNCHED_CHECKOUT: _checkout, ...env } = withoutOuterSessionMarkers(process.env);
+/** The tool a call runs, and the environment it runs it in. */
+type Prepared = Picked & { env: NodeJS.ProcessEnv };
 
+/**
+ * The environment a call's tool runs in: the member's own at the home teamai delivered the tool to, marked as teamai's
+ * launch, without an outer launch's checkout or session markers. A recorded home that is gone fails the call, as it
+ * skips delivery.
+ */
+function callEnv({ launchedBy, tool, toolRoots }: { launchedBy: LaunchedBy; tool: string; toolRoots: LocalConfig['toolRoots'] }): NodeJS.ProcessEnv {
+  const { TEAMAI_LAUNCHED_TOOL: _tool, TEAMAI_LAUNCHED_CHECKOUT: _checkout, ...env } = withoutOuterSessionMarkers(process.env);
+  const home = toolCommandEnv(tool, { kind: 'delivered', inherited: env, toolRoots });
+
+  if (home.kind === 'home_gone') throw new CallError('call_failed', home.message);
   const gateway = tool === 'agy' ? agyGatewayEnv(env) : undefined;
 
   // Our own session, not the user's: its hooks would print the share-learnings hint into the answer we read.
-  return { ...env, ...gateway, TEAMAI_CONTRIBUTE_HINT_DISABLED: '1', [LAUNCHED_BY_ENV]: launchedBy, [RUN_MODE_ENV]: resolveRunMode(process.env) };
+  return { ...env, ...home.env, ...gateway, TEAMAI_CONTRIBUTE_HINT_DISABLED: '1', [LAUNCHED_BY_ENV]: launchedBy, [RUN_MODE_ENV]: resolveRunMode(process.env) };
 }
 
 /** A caller that resolves its tool once per scope and reuses it for every call there. */
@@ -145,7 +154,7 @@ export function createToolCaller({ resolveTool = resolveCliPath, resolveScope = 
   const picked = new Map<string, Promise<Picked>>();
 
   const pick = async (scope: LocalConfig | undefined): Promise<Picked> => {
-    const [first] = await memberTools(scope ?? await resolveScope());
+    const [first] = await memberTools(scope);
     const key = first?.tool ?? '';
     const cached = picked.get(key);
 
@@ -156,10 +165,17 @@ export function createToolCaller({ resolveTool = resolveCliPath, resolveScope = 
     return picking;
   };
 
+  /** The tool a call runs, picked in the scope it acts for, and its environment at the home teamai delivered that tool to. */
+  const prepare = async ({ launchedBy, scope, cwd = process.cwd() }: CallOptions): Promise<Prepared> => {
+    const here = scope ?? await resolveScope();
+    const chosen = await pick(here);
+
+    return { ...chosen, env: callEnv({ launchedBy, tool: chosen.tool, toolRoots: here?.toolRoots ?? await resolveMemberToolRoots(cwd) }) };
+  };
+
   /** One run of the picked tool: its answer, and the session it ran in when the tool reported one. */
-  const callOnce = async ({ tool, executable }: Picked, prompt: string, { launchedBy, timeout = DEFAULT_TIMEOUT_MS, cwd = process.cwd(), signal, idleTimeout }: CallOptions, session?: string): Promise<CallResult & { session?: string }> => {
+  const callOnce = async ({ tool, executable, env }: Prepared, prompt: string, { launchedBy, timeout = DEFAULT_TIMEOUT_MS, cwd = process.cwd(), signal, idleTimeout }: CallOptions, session?: string): Promise<CallResult & { session?: string }> => {
     log.debug(`[tool-launch] ${launchedBy} → ${tool}, timeout=${Math.round(timeout / 1000)}s${session ? `, resuming ${session}` : ''}`);
-    const env = callEnv(launchedBy, tool);
 
     const end = await answerLaunch({
       tool: { name: tool, family: launchAdapterIdOf(tool), call: launchAdapterOf(tool).call, executable },
@@ -180,13 +196,13 @@ export function createToolCaller({ resolveTool = resolveCliPath, resolveScope = 
   };
 
   const callTool: ToolCaller['callTool'] = async (prompt, options) => {
-    const { session: _session, ...result } = await callOnce(await pick(options.scope), prompt, options);
+    const { session: _session, ...result } = await callOnce(await prepare(options), prompt, options);
 
     return result;
   };
 
   const callForReply: ToolCaller['callForReply'] = async (prompt, schema, { retries = DEFAULT_REPLY_RETRIES, ...options }) => {
-    const chosen = await pick(options.scope);
+    const chosen = await prepare(options);
     // A tool whose call cannot continue its session is asked once: a fresh session would redo the work.
     const cap = 'resume' in launchAdapterOf(chosen.tool).call ? retries : 0;
     // Asking again spends the time the call was given, not a fresh timeout each time.
@@ -222,5 +238,5 @@ export function createToolCaller({ resolveTool = resolveCliPath, resolveScope = 
     return result;
   };
 
-  return { callTool, callForReply, toolFor: async (scope) => (await pick(scope)).tool };
+  return { callTool, callForReply, toolFor: async (scope) => (await pick(scope ?? await resolveScope())).tool };
 }
