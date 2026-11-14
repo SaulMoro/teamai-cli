@@ -127,6 +127,18 @@ describe('team tool instances', () => {
     expect(config?.toolPaths[stem]).toEqual(stem === 'cursor' ? expect.objectContaining({ skills: '.cursor/skills' }) : undefined);
   });
 
+  it.each([
+    ['claude', 'CLAUDE_CONFIG_DIR'],
+    ['codex', 'CODEX_HOME'],
+  ])('refuses an instance of %s whose home.env is %s, which teamai sets to the instance home itself', async (base, variable) => {
+    const stem = `acme-${base}`;
+    const text = ACME_CLAUDE.replaceAll('claude', base).replace(/env: \w+/, `env: ${variable}`);
+    const { registry, errors } = await load(teamRepo({ [`tools/${stem}.yaml`]: text }));
+
+    expect(errors).toEqual([expect.stringContaining(`${path.join('tools', `${stem}.yaml`)} is not valid: home.env: ${variable} is the variable ${base} reads its home from, and teamai sets it to this instance's home when it starts it; leave env out`)]);
+    expect(registry.toolOf(stem)).toBeUndefined();
+  });
+
   it.each(['./scripts/acme-claude', 'bin/acme-claude', '/opt/acme/bin/acme-claude', String.raw`tools\acme-claude.exe`])(
     'refuses an instance whose command is the path %s, since what runs at a path is not the file a person accepted',
     async (command) => {
@@ -344,18 +356,12 @@ describe('the sessions of an instance', () => {
 });
 
 describe('the home of an instance', () => {
-  it('stays the instance\'s own directory when its variable is the home variable of the tool it extends, which the member set for that tool', async () => {
-    vi.stubEnv('CLAUDE_CONFIG_DIR', path.join(home, '.claude2'));
-    vi.stubEnv('XDG_DATA_HOME', path.join(home, 'data'));
-    await load(teamRepo({
-      'tools/claude-work.yaml': 'schemaVersion: v1alpha1\nname: claude-work\nextends: claude\nhome: { dir: .claude-work, env: CLAUDE_CONFIG_DIR }\n',
-      'tools/opencode-work.yaml': 'schemaVersion: v1alpha1\nname: opencode-work\nextends: opencode\nhome: { dir: .opencode-work, env: XDG_DATA_HOME }\n',
-    }));
+  it('stays the instance\'s own directory when its variable is an XDG base directory, which the member set for every tool', async () => {
+    vi.stubEnv('XDG_CONFIG_HOME', path.join(home, 'config'));
+    await load(teamRepo({ 'tools/claude-work.yaml': 'schemaVersion: v1alpha1\nname: claude-work\nextends: claude\nhome: { dir: .claude-work, env: XDG_CONFIG_HOME }\n' }));
     const { storeDirOf } = await import('../session-flow/adapters/index.js');
-    const recorded = { kind: 'recorded', toolRoots: undefined } as const;
 
-    expect(storeDirOf('claude-work', recorded)).toBe(path.join(home, '.claude-work', 'projects'));
-    expect(storeDirOf('opencode-work', recorded)).toBe(path.join(home, '.opencode-work', 'opencode'));
+    expect(storeDirOf('claude-work', { kind: 'recorded', toolRoots: undefined })).toBe(path.join(home, '.claude-work', 'projects'));
   });
 
   it('follows the member\'s value of a variable of the instance\'s own', async () => {

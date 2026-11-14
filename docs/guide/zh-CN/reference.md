@@ -275,7 +275,7 @@ teamai score --session <id> --source acme-claude --scorer review-quality
 
 步骤运行 `acme-claude`，会话从 `$ACME_CLAUDE_CONFIG_DIR/projects/` 读取，未设置时从 `~/.acme-claude/projects/` 读取；用户级 pull 也写到这个目录。记录、续跑和打分都算在 `acme-claude` 名下，不会算成 Claude 的。
 
-如果 `env` 也是所扩展工具自己的 home 变量（例如 `claude` 实例的 `CLAUDE_CONFIG_DIR`），或者是 `XDG_CONFIG_HOME`、`XDG_DATA_HOME`，teamai 不使用你给它设置的值。这个值属于工具本身，所以实例的 home 始终是 `~/<dir>`。
+如果 `env` 是 `XDG_CONFIG_HOME` 或 `XDG_DATA_HOME`，teamai 不使用你给它设置的值。这个值属于所有读取它的工具，所以实例的 home 这时是 `~/<dir>`。
 
 **接受命令。** 设了 `command` 的实例会运行队友指定的程序。第一次运行时在终端里询问：
 
@@ -286,7 +286,7 @@ Run it? [y/N]
 
 你输入的一行只回答这个问题。同一终端上正在等待的审批或选择，会在你回答后重新询问。`teamai workflow cancel` 会让这个问题不经回答直接结束，命令不会运行。按 Ctrl-C 会停止运行而不作回答，`teamai workflow resume` 会再问一次。
 
-无人值守的运行（`TEAMAI_MODE=unattended`、CI、没有终端）会以 `tool_not_accepted` 拒绝，直到有人在终端里接受一次。接受结果按文件内容记在 `~/.teamai/trust/tools.json`：不改这个文件的提交不会再问，改了文件会再问。只设 `home` 或 `paths` 的实例运行内置命令，不需要接受。设了 `home` 但没有自己的 `env` 时，命令运行时会把工具的主目录变量（`CLAUDE_CONFIG_DIR`、`CODEX_HOME`）设为这个主目录，所以它读到的就是 teamai 写到那里的内容。实例被接受后，teamai 读取、导出和导入它的会话时也用它的命令；接受之前用内置命令。
+无人值守的运行（`TEAMAI_MODE=unattended`、CI、没有终端）会以 `tool_not_accepted` 拒绝，直到有人在终端里接受一次。接受结果按文件内容记在 `~/.teamai/trust/tools.json`：不改这个文件的提交不会再问，改了文件会再问。只设 `home` 或 `paths` 的实例运行内置命令，不需要接受。设了 `home` 但没有自己的 `env` 时，命令运行时会把工具的主目录变量（`CLAUDE_CONFIG_DIR`、`CODEX_HOME`）设为这个主目录，所以它读到的就是 teamai 写到那里的内容；`env` 写的是实例自己的变量，写成该工具的主目录变量时 teamai 会拒绝。实例被接受后，teamai 读取、导出和导入它的会话时也用它的命令；接受之前用内置命令。
 
 **调整内置工具。** 与内置工具同名的实例用来调整它。它的 `paths` 整体替换该工具的路径，和 `toolPaths` 条目一样，并且优先于 `toolPaths`。只有 Claude Code 和 Codex 能这样调整；其他工具的 `tools/<tool>.yaml` 会被拒绝，改用 `teamai.yaml` 里的 `toolPaths.<tool>` 条目移动它的路径：
 
