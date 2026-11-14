@@ -15,7 +15,7 @@ import { stdioStepRuntime } from './stdio.js';
 import { type InitHomeEnv, type InitInstance, type RuntimeFailure, type RuntimeOptions } from '@teamai/runtime-protocol';
 import { acceptToolCommand } from '../../tool-instances.js';
 import { instanceHomeDir } from '../../tool-home.js';
-import { baseToolOf, instanceNames, toolOf } from '../../tool-registry.js';
+import { baseToolOf, toolInstancesFor } from '../../tool-registry.js';
 import { type StepRuntime } from '@teamai/runtime-protocol/step-runtime';
 import { composedName, composedOffer, composedStepRuntime, nestedOptions } from './composed.js';
 import { credentialSecrets, isExecRuntimeTool, type ExecRuntimeTool, type RuntimeOrigin } from './attempt.js';
@@ -266,7 +266,7 @@ export type DriverPurpose = 'run' | 'stop' | 'check';
  * acceptance or was accepted on this machine. A runtime lists in `can.tools` the ones it can serve.
  */
 async function runnableInstances(): Promise<InitInstance[]> {
-  const instances = instanceNames().flatMap((name) => toolOf(name)?.instance ?? []);
+  const instances = toolInstancesFor('use');
   const accepted = await Promise.all(instances.map(async (instance) => (await acceptToolCommand(instance, { ask: undefined })).ok));
 
   return instances.filter((_, index) => accepted[index]).map((instance) => {

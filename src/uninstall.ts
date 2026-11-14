@@ -78,7 +78,7 @@ import { BUILTIN_SKILL_NAMES, LEGACY_BUILTIN_SKILL_NAMES, isCliOwnedSkillName } 
 import { ownedSkillFiles, prunedWhole, removeOwnedFiles, skillsGuardBase } from './skill-owned-files.js';
 import { cleanupOf, hookAdapterDirIn, hookSettingsFile, installOf, isInstalledFor, locate, openclawWorkspaceDir, ownOf, SHARED_AGENT_SKILLS_PATH, toolPathUnder, workspaceHooksOf, writesOf, type Location } from './locate.js';
 import { recordedHomes, realHost, reloadToolHomesHistory, toolHome, toolHomeOf, toolHomesAcrossProfiles } from './tool-home.js';
-import { baseDescriptorOf, channelsOf, declaredInstances, hookSyntaxOf, toolOf } from './tool-registry.js';
+import { baseDescriptorOf, channelsOf, toolInstancesFor, hookSyntaxOf, toolOf } from './tool-registry.js';
 import { leftInstanceHookFiles } from './tool-instances.js';
 import { isCodexTool } from './utils/tool-names.js';
 import { describeOutsideSkillLink, readsCodexSharedSkills, readTeamSkills, skillOrigin } from './resources/skills.js';
@@ -1788,7 +1788,7 @@ async function buildRemovalPlan(
   const recorded = recordedHomes(realHost());
   const history = reloadToolHomesHistory();
 
-  for (const { name } of declaredInstances()) {
+  for (const { name } of toolInstancesFor('guard')) {
     if (agentFilter !== undefined && agentFilter !== name) continue;
     const homes = [recorded[name], ...history[name] ?? []].filter((home): home is string => home !== undefined);
     const current = toolOf(name) === undefined ? null : toolHomeOf(name)?.dir ?? null;

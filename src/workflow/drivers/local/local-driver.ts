@@ -38,7 +38,7 @@ import { WholeEndSchema } from '../../whole-workflow.js';
 import { memberTools } from '../../member-tools.js';
 import { stopRecordedGroup } from '@teamai/shared/process-group';
 import { startGroupedCommand, type GroupedCommandExit } from '../../shell-command.js';
-import { baseToolOf, instanceNames, isToolId } from '../../../tool-registry.js';
+import { baseToolOf, isToolId, toolInstancesFor } from '../../../tool-registry.js';
 import { launchExecutableOf, LAUNCH_TOOLS, launchTargetOf } from '../../../launch-registry.js';
 import { confinedOffers, type ConfinedOffer } from '../../confined-launch.js';
 import { AttemptResult } from '../../attempt-result.js';
@@ -662,7 +662,7 @@ async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, given: 
   // rather than waits. A tool it picks for a step that names none, and that no step names, it offers without looking it
   // up, as it always launched it: launching it says if it is missing.
   const { named, picked } = isStarted ? runTools(started, toolForHere) : { named: undefined, picked: new Set<string>() };
-  const found = [...LAUNCH_TOOLS, ...instanceNames().filter((name) => !isToolId(name))].filter((tool) => (named === undefined || named.has(tool)) && onPath(tool));
+  const found = [...LAUNCH_TOOLS, ...toolInstancesFor('use').flatMap(({ name }) => isToolId(name) ? [] : [name])].filter((tool) => (named === undefined || named.has(tool)) && onPath(tool));
   const pickedUnlooked = [...picked].filter((tool) => !found.some((launched) => launched === tool) && !(named?.has(tool) ?? false));
   const tools = [...found, ...pickedUnlooked];
   const defined: DriverRuntimes = options.runtimes ?? { driver: 'local', asked: 'local', runtimes: [{ kind: 'tools', use: 'tools', engine: { logins: [] } }] };
