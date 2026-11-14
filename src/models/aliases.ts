@@ -42,7 +42,8 @@
 import path from 'node:path';
 import { parseYaml } from '@teamai/shared/yaml';
 import { z } from 'zod';
-import { getTeamaiHomeDir, type LocalConfig } from '../types.js';
+import { getTeamaiHomeDir, type LocalConfig, type Scope } from '../types.js';
+import { agentModelToolOf } from '../tool-instances.js';
 import { isJsonObject, JsonValueSchema, type JsonObject, type JsonValue } from '@teamai/shared/json';
 import { activeEntryNamespaces, describeEntryFailure, entryLayout, listEntryFiles, namespaceDir, readEntryFileText, type EntryLayout } from '../namespaced-entries.js';
 import { resolveNamespacedItems, type NamespaceCandidate } from '../namespace-resolver.js';
@@ -574,7 +575,8 @@ export function isModelAlias(aliases: ModelAliases, model: string): boolean {
  * written. Pull prints only these, so a member hears of an entry only when an
  * agent they receive uses it; doctor lists them all.
  */
-export function aliasWarningsFor(aliases: ModelAliases, spec: AgentSpec, tool: string): string[] {
+export function aliasWarningsFor(aliases: ModelAliases, spec: AgentSpec, receiver: string, scope: Scope): string[] {
+  const tool = agentModelToolOf(receiver, scope);
   const format = agentFormatOf(tool);
 
   if (!aliases.ok || format === undefined || spec.model === undefined) return [];
@@ -634,8 +636,9 @@ function switchReaching(aliases: ModelAliases & { ok: true }, tool: string, form
   return ownHome ? undefined : aliases.switches[format];
 }
 
-/** What `tool` receives for `spec`'s model. */
-export function resolveAgentModel(aliases: ModelAliases, spec: AgentSpec, tool: string): ModelResolution {
+/** What `receiver`'s agent file in `scope` holds for `spec`'s model. */
+export function resolveAgentModel(aliases: ModelAliases, spec: AgentSpec, receiver: string, scope: Scope): ModelResolution {
+  const tool = agentModelToolOf(receiver, scope);
   const format = agentFormatOf(tool);
   const extras = format === undefined ? undefined : toolExtrasFor(spec, format);
   const extrasModel = extras?.['model'];
