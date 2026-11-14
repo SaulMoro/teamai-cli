@@ -1,7 +1,8 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, onTestFinished } from 'vitest';
+import { getUserHome } from '@teamai/shared/home';
 import { installInstances, judgedInstances, recordedInstallInstances, recordInstallInstances } from './instances.js';
 import { ledgerRules } from './ledger.js';
 
@@ -45,6 +46,22 @@ describe("where a world's command finds an instance's home", () => {
 
     expect(await homesOf(home, { ACME_CODEX_HOME: path.join(home, 'work', 'acme-moved') })).toEqual([['acme-codex', 'work/acme-moved']]);
     expect(await homesOf(home, { ACME_CODEX_HOME: 'acme-moved' }, path.join(home, 'work'))).toEqual([['acme-codex', 'work/acme-moved']]);
+  });
+
+  it("is the home the install recorded for its variable, which a command without the variable reads too", async () => {
+    const { home } = installWithMovableHome();
+    fs.writeFileSync(path.join(home, '.teamai', 'tool-homes.json'), JSON.stringify({ 'acme-codex': path.join(home, 'work', 'acme-recorded') }));
+
+    expect(await homesOf(home, {})).toEqual([['acme-codex', 'work/acme-recorded']]);
+  });
+
+  it("never reads the homes recorded in the harness's own HOME", async () => {
+    const { home } = installWithMovableHome();
+    fs.mkdirSync(path.join(getUserHome(), '.teamai'), { recursive: true });
+    fs.writeFileSync(path.join(getUserHome(), '.teamai', 'tool-homes.json'), JSON.stringify({ 'acme-codex': path.join(home, 'harness-record') }));
+    onTestFinished(() => fs.rmSync(path.join(getUserHome(), '.teamai', 'tool-homes.json'), { force: true }));
+
+    expect(await homesOf(home, {})).toEqual([['acme-codex', '.acme-codex']]);
   });
 
   it('is none under HOME when that value lies outside it', async () => {

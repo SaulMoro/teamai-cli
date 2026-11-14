@@ -8,7 +8,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { z } from 'zod';
 import { parseYaml } from '@teamai/shared/yaml';
-import { instanceHomeDir, realHost } from '../../src/tool-home.js';
+import { instanceHomeDir, parseToolHomes, realHost } from '../../src/tool-home.js';
 import { teamToolInstances, type ResolvedToolInstance } from '../../src/tool-instances.js';
 import { TOOL_IDS } from '../../src/tools.js';
 import { LocalConfigSchema, ToolPathsSchema } from '../../src/types.js';
@@ -85,10 +85,11 @@ function recordFile(world: Pick<World, 'dir'>): string {
 
 /**
  * What the install under `home` declares, each home where a command run with `env` from `cwd` finds it: through
- * `instanceHomeDir`, as teamai and the tool it launches resolve it, so a home `home.env` moves is where that variable says.
+ * `instanceHomeDir`, as teamai and the tool it launches resolve it, so a home is the one the install recorded for its
+ * `home.env` (its ~/.teamai/tool-homes.json, never the harness's own), else where that variable says.
  */
 export async function installInstances(home: string, { env, cwd }: { env: Readonly<Record<string, string>>; cwd: string }): Promise<InstallInstance[]> {
-  const host = { ...realHost({ env, home }), cwd: () => cwd };
+  const host = { ...realHost({ env, home }), toolHomes: parseToolHomes(path.join(home, '.teamai', 'tool-homes.json')), cwd: () => cwd };
 
   return (await toolInstancesIn(home)).map((declared) => {
     if (declared.home === undefined) return { declared, home: undefined };
