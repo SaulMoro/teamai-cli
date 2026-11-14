@@ -682,11 +682,11 @@ export async function measureAgentWait(options: { keep: boolean }) {
 
     if (options.keep) console.error(`Kept world ${world.runId}: npm run -s verify -- ledger ${world.runId}, then cleanup.`);
     else {
-      const clean = await runLedger(world);
-      console.error(clean ? 'Ledger: CLEAN' : `Ledger found leaks: see ${world.dir}`);
+      const { verdict, leaks } = await runLedger(world);
+      console.error(leaks === 0 ? `Ledger: ${verdict}` : `Ledger found leaks: see ${world.dir}`);
 
       // The caller reads this list after the return above: a leak fails the measure as a broken invariant does.
-      if (!clean) failures.push(`the ledger found leaks after the measured rows: see ${world.dir}`);
+      if (leaks > 0) failures.push(`the ledger found leaks after the measured rows: see ${world.dir}`);
       cleanupWorld(world);
     }
   }

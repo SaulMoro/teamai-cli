@@ -135,6 +135,25 @@ function namingWorld(dir: string, world: World, since: number, found: string[], 
   }
 }
 
+/**
+ * Section (c)'s line for `file`, which the harness could not read. (c) looks only at what changed since the world was made,
+ * and a file a command wrote anew in a folder changes the folder's time, which stat reads without reading the folder: one
+ * that has not changed since is outside what (c) proves, and any other, or one whose time it cannot read, is NOT OBSERVED.
+ */
+export function hostUnreadableNote(file: string, since: number): string {
+  let changedAt: number | undefined;
+
+  try {
+    changedAt = fs.lstatSync(file).mtimeMs;
+  } catch {
+    changedAt = undefined;
+  }
+
+  return changedAt !== undefined && changedAt < since
+    ? `not readable, and unchanged since the world was made, so not checked: ${file}`
+    : `NOT OBSERVED: ${file}, which the harness cannot read and which changed since the world was made, so whether it names the world is unknown`;
+}
+
 function hostFiles(world: World, instances: readonly ResolvedToolInstance[]): Section {
   const leaks: string[] = [];
   const notes: string[] = [];
@@ -154,7 +173,7 @@ function hostFiles(world: World, instances: readonly ResolvedToolInstance[]): Se
 
   for (const home of homes) namingWorld(home, world, since, found, unreadable);
 
-  for (const dir of unreadable) notes.push(`not readable, so not checked: ${dir}`);
+  for (const dir of unreadable) notes.push(hostUnreadableNote(dir, since));
 
   // Tool homes often link to one shared directory: report each real file once.
   const real = new Map(found.toReversed().map((file) => [path.join(fs.realpathSync.native(path.dirname(file)), path.basename(file)), file]));
@@ -697,8 +716,24 @@ async function reverseOf(world: World, place: LedgerPlace, rules: LedgerRules): 
   return { leaks, notes };
 }
 
-/** Uninstalls teamai in the world, writes the next LEDGER-<n>.md and returns whether it is clean. */
-export async function runLedger(world: World): Promise<boolean> {
+/** A section line that says the ledger could not observe a part, a member's (`@<name> `) too: that part proves nothing. */
+const NOT_OBSERVED = /^(@\S+ )?NOT OBSERVED\b/;
+
+/** The ledger's last word: CLEAN only when it found no LEAK and observed every part. */
+export function ledgerVerdict(sections: readonly Section[]): string {
+  const leaks = sections.reduce((sum, section) => sum + section.leaks.length, 0);
+  const unseen = sections.reduce((sum, section) => sum + section.notes.filter((note) => NOT_OBSERVED.test(note)).length, 0);
+
+  if (leaks > 0) return `${leaks} LEAK${leaks === 1 ? '' : 'S'}`;
+
+  return unseen > 0 ? `no LEAK, ${unseen} NOT OBSERVED` : 'CLEAN';
+}
+
+/**
+ * Uninstalls teamai in the world, writes the next LEDGER-<n>.md and returns its verdict and how many LEAKs it found: a part
+ * NOT OBSERVED is no LEAK, so the verdict says it and a caller that fails on LEAKs does not.
+ */
+export async function runLedger(world: World): Promise<{ verdict: string; leaks: number }> {
   // Before uninstall, which removes the records that say which runtimes the world's runs used; observed after it.
   const leftovers = await leftoversSection(world);
   // The tool instances each install declares, read before uninstall too: their homes are judged as their tools' are.
@@ -707,7 +742,7 @@ export async function runLedger(world: World): Promise<boolean> {
   const left = { title: '(f) What a driver left running', ...await leftovers.observe() };
   const sections = [teamRepo(world), worktrees(world), hostFiles(world, [...instances.values()].flat()), environment(world), reverse, left];
   const leaks = sections.reduce((sum, section) => sum + section.leaks.length, 0);
-  const verdict = leaks === 0 ? 'CLEAN' : `${leaks} LEAK${leaks === 1 ? '' : 'S'}`;
+  const verdict = ledgerVerdict(sections);
 
   const body = sections
     .map((section) => [`## ${section.title}`, ...section.leaks.map((leak) => `- LEAK ${leak}`), ...section.notes.map((note) => `- ${note}`)].join('\n'))
@@ -719,5 +754,5 @@ export async function runLedger(world: World): Promise<boolean> {
   fs.writeFileSync(file, `${head}${body}\n\nLedger: ${verdict}\n`);
   console.log(`${body}\n\nLedger: ${verdict}\nWritten to ${file}`);
 
-  return leaks === 0;
+  return { verdict, leaks };
 }

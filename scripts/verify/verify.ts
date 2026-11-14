@@ -142,7 +142,7 @@ async function main(): Promise<number> {
 
     // The ledger and cleanup cover the world and every member of it, whichever one names it.
     case 'ledger':
-      return await runLedger(loadWorld(parseTarget(rest[0]).runId)) ? 0 : 1;
+      return (await runLedger(loadWorld(parseTarget(rest[0]).runId))).leaks === 0 ? 0 : 1;
     case 'cleanup': {
       const { worlds, skipped } = rest[0] === '--all' ? liveWorlds() : { worlds: [loadWorld(parseTarget(rest[0]).runId)], skipped: [] };
       let isClean = skipped.length === 0;

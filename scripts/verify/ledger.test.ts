@@ -2,12 +2,69 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { environmentNotes, ledgerRules, toolInstancesIn, unobservedEntries } from './ledger.js';
+import { environmentNotes, hostUnreadableNote, ledgerRules, ledgerVerdict, toolInstancesIn, unobservedEntries } from './ledger.js';
 
 const roots: string[] = [];
 
 afterEach(() => {
   for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true });
+});
+
+describe("a ledger's verdict", () => {
+  const section = (leaks: string[], notes: string[]) => ({ title: '(x)', leaks, notes });
+
+  it.each([
+    { when: 'it found no LEAK and observed every part', sections: [section([], ['none']), section([], ['HOME and project match the world as it was made'])], verdict: 'CLEAN' },
+    {
+      when: 'it found no LEAK and some part is NOT OBSERVED, a member\'s too',
+      sections: [section([], ['NOT OBSERVED: podman containers, podman info failed']), section([], ["@carol NOT OBSERVED: home/.codex/sessions/0000, which the harness has no permission to read, so whether uninstall left anything of teamai's in it is unknown"])],
+      verdict: 'no LEAK, 2 NOT OBSERVED',
+    },
+    { when: 'it found a LEAK', sections: [section(['home/.teamai left behind'], ['NOT OBSERVED: podman containers, podman info failed'])], verdict: '1 LEAK' },
+    { when: 'it found LEAKs', sections: [section(['a', 'b'], [])], verdict: '2 LEAKS' },
+    { when: 'a note only mentions the words', sections: [section([], ['the tool said NOT OBSERVED once'])], verdict: 'CLEAN' },
+  ])('is $verdict when $when', ({ sections, verdict }) => {
+    expect(ledgerVerdict(sections)).toBe(verdict);
+  });
+});
+
+describe.skipIf(process.platform === 'win32')("a folder of the real HOME section (c) cannot read", () => {
+  const unlistable = (mtime: Date): string => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ledger-host-'));
+    roots.push(root);
+    const folder = path.join(root, '.Trashes');
+    fs.mkdirSync(folder);
+    fs.utimesSync(folder, mtime, mtime);
+    // As macOS leaves one: this user can write and enter it, and cannot list it.
+    fs.chmodSync(folder, 0o300);
+
+    return folder;
+  };
+  const born = Date.parse('2026-11-13T12:00:00.000Z');
+
+  it('is NOT OBSERVED when it changed since the world was made, since a file the world wrote in it would change it', () => {
+    const folder = unlistable(new Date(born + 60_000));
+
+    try {
+      expect(hostUnreadableNote(folder, born)).toBe(`NOT OBSERVED: ${folder}, which the harness cannot read and which changed since the world was made, so whether it names the world is unknown`);
+    } finally {
+      fs.chmodSync(folder, 0o700);
+    }
+  });
+
+  it('is a note, not NOT OBSERVED, when it has not changed since the world was made', () => {
+    const folder = unlistable(new Date(born - 86_400_000));
+
+    try {
+      expect(hostUnreadableNote(folder, born)).toBe(`not readable, and unchanged since the world was made, so not checked: ${folder}`);
+    } finally {
+      fs.chmodSync(folder, 0o700);
+    }
+  });
+
+  it('is NOT OBSERVED when the harness cannot even tell when it changed', () => {
+    expect(hostUnreadableNote('/nonexistent-ledger-host/x', born)).toMatch(/^NOT OBSERVED: \/nonexistent-ledger-host\/x, /);
+  });
 });
 
 describe("a ledger's section (d)", () => {
