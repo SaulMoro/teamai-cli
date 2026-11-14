@@ -31,7 +31,7 @@ afterEach(async () => {
 async function init(options: Message): Promise<Message> {
   const connection = connect(executable, { ...engine.env(), HOME: dir });
   open.push(connection);
-  connection.send({ type: 'init', protocol: 1, mode: 'unattended', options });
+  connection.send({ type: 'init', protocol: 1, homeEnv: {}, mode: 'unattended', options });
 
   return connection.next((message) => message.type === 'init', 30_000);
 }

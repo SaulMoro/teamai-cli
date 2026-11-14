@@ -10,7 +10,7 @@ import { publishRun } from '../workflow/handoff.js';
 import { definitionHash } from '../workflow/snapshot.js';
 import { attemptDir, AttemptIdSchema, installOwner, readRun, RunIdSchema, runFilePath, runScratchDir, takeRunLock, type AttemptId, type RunId } from '../workflow/store.js';
 import { memberPlace, takeFleetAttempt, type MemberPlace } from '../workflow/fleet/member.js';
-import type { OpenedDriver, OpenedRuntime } from '../workflow/runtimes/sources.js';
+import { homeEnvOf, type OpenedDriver, type OpenedRuntime } from '../workflow/runtimes/sources.js';
 import { CANCEL_WRITE_MS, cancelFleetAttempt, fleetStepRuntime, shadowedFleetEntries } from '../workflow/fleet/owner.js';
 import { RuntimeOptionsSchema, WAKE_COMMAND, type PlaceView } from '@teamai/runtime-protocol';
 import { hostStepRuntime } from '../workflow/runtimes/host.js';
@@ -488,7 +488,7 @@ describe('a member taking a prompt attempt', () => {
   it('runs a prompt on a runtime of its driver that runs each tool on the attempt\'s tool home, in that home', async () => {
     const state = fs.mkdtempSync(path.join(os.tmpdir(), 'toy-tool-home-'));
     const runtime = stdioStepRuntime({ name: 'toy', command: process.execPath, args: [TOY_RUNTIME] });
-    const ready = await runtime.init({ options: { state, agent: { output: { ok: true }, conversations: false }, prompt_tool_home: true }, mode: 'unattended' });
+    const ready = await runtime.init({ homeEnv: homeEnvOf([]), options: { state, agent: { output: { ok: true }, conversations: false }, prompt_tool_home: true }, mode: 'unattended' });
     if (!ready.ok) throw new Error(ready.failure.message);
     const opened: OpenedDriver = {
       driver: { name: 'bobs', definition: { schemaVersion: 'v1alpha1', name: 'bobs', runtimes: [] }, source: 'personal', location: 'bobs.yaml', config: (await team().member('bob')).config }, asked: 'bobs',
@@ -1529,7 +1529,7 @@ describe('fleet entries of one driver definition', () => {
     const alice = await acme.member('alice');
     const runtime = fleetStepRuntime({ config: alice.config, masks: {} });
 
-    expect(await runtime.init({ options: { pool: 'e2e', labels: ['computer-use'] }, mode: 'unattended', checkout: alice.checkout })).toMatchObject({ ok: true, can: { labels: ['computer-use'] } });
+    expect(await runtime.init({ homeEnv: homeEnvOf([]), options: { pool: 'e2e', labels: ['computer-use'] }, mode: 'unattended', checkout: alice.checkout })).toMatchObject({ ok: true, can: { labels: ['computer-use'] } });
     await runtime.dispose();
   });
 
@@ -1537,7 +1537,7 @@ describe('fleet entries of one driver definition', () => {
     const acme = team();
     const alice = await acme.member('alice');
     const runtime = fleetStepRuntime({ config: alice.config, masks: {} });
-    const ready = await runtime.init({ options: { pool: 'e2e', can: { hitl: true, network: true } }, mode: 'unattended', checkout: alice.checkout });
+    const ready = await runtime.init({ homeEnv: homeEnvOf([]), options: { pool: 'e2e', can: { hitl: true, network: true } }, mode: 'unattended', checkout: alice.checkout });
 
     expect(ready).toMatchObject({ ok: true, can: { network: true } });
     expect(ready.ok && ready.can).not.toHaveProperty('hitl');
@@ -1549,7 +1549,7 @@ describe('fleet entries of one driver definition', () => {
     const alice = await acme.member('alice');
     const runtime = fleetStepRuntime({ config: alice.config, masks: {} });
     // The confined directory lives under this machine's $TEAMAI_RUN_DIR, which no commit a member fetches carries.
-    const ready = await runtime.init({ options: { pool: 'e2e', can: { network: true, confined: [{ level: 'best-effort', tools: ['codex'] }] } }, mode: 'unattended', checkout: alice.checkout });
+    const ready = await runtime.init({ homeEnv: homeEnvOf([]), options: { pool: 'e2e', can: { network: true, confined: [{ level: 'best-effort', tools: ['codex'] }] } }, mode: 'unattended', checkout: alice.checkout });
 
     expect(ready).toMatchObject({ ok: true, can: { network: true } });
     expect(ready.ok && ready.can).not.toHaveProperty('confined');
@@ -1629,7 +1629,7 @@ async function ownerOffering(opened: StepRuntime<DriverCan>[], wake?: () => Prom
   const open = async () => {
     const runtime = fleetStepRuntime({ config: alice.config, masks: {}, ...(wake && { openWake: async () => ({ ok: true as const, ...(await wake()) }) }) });
     opened.push(runtime);
-    const ready = await runtime.init({ options: { stale_after: staleAfter, pool: 'gpu', ...(wake && { wake: { use: 'toy' } }) }, mode: 'unattended', checkout: alice.checkout });
+    const ready = await runtime.init({ homeEnv: homeEnvOf([]), options: { stale_after: staleAfter, pool: 'gpu', ...(wake && { wake: { use: 'toy' } }) }, mode: 'unattended', checkout: alice.checkout });
     const place = ready.ok ? await runtime.open({ op: newOpId(), run, attempt, credentials: {} }, async () => undefined) : undefined;
     const exec = (op: OpId) => {
       if (place?.kind !== 'ready') throw new Error('the fleet runtime opened no place');
@@ -2001,7 +2001,7 @@ describe('waking a fleet member for an offer no member claimed', () => {
   async function toyWaker(wakeLog?: string): Promise<{ runtime: StepRuntime<DriverCan>; wakes: boolean }> {
     const runtime = stdioStepRuntime({ name: 'toy', command: process.execPath, args: [TOY_RUNTIME] });
     opened.push(runtime);
-    const ready = await runtime.init({ options: { state: fs.mkdtempSync(path.join(os.tmpdir(), 'toy-wake-')), ...(wakeLog !== undefined && { wake_log: wakeLog }) }, mode: 'unattended' });
+    const ready = await runtime.init({ homeEnv: homeEnvOf([]), options: { state: fs.mkdtempSync(path.join(os.tmpdir(), 'toy-wake-')), ...(wakeLog !== undefined && { wake_log: wakeLog }) }, mode: 'unattended' });
     if (!ready.ok) throw new Error(ready.failure.message);
 
     return { runtime, wakes: ready.wakes === true };
@@ -2149,7 +2149,7 @@ describe('waking a fleet member for an offer no member claimed', () => {
     const runtime = fleetStepRuntime({ config: alice.config, masks: {} });
     opened.push(runtime);
 
-    expect(await runtime.init({ options: { pool: 'gpu', wake: { use: 't3' } }, mode: 'unattended', checkout: alice.checkout })).toMatchObject({ ok: false, failure: { code: 'bad_option', key: 'wake' } });
+    expect(await runtime.init({ homeEnv: homeEnvOf([]), options: { pool: 'gpu', wake: { use: 't3' } }, mode: 'unattended', checkout: alice.checkout })).toMatchObject({ ok: false, failure: { code: 'bad_option', key: 'wake' } });
   });
 
   it('opens no wake runtime to stop or close what it ran', async () => {
@@ -2159,7 +2159,7 @@ describe('waking a fleet member for an offer no member claimed', () => {
     const runtime = fleetStepRuntime({ config: alice.config, masks: {}, openWake: async () => { asked += 1; return toyWaker().then((waker) => ({ ok: true as const, ...waker })); } });
     opened.push(runtime);
 
-    expect(await runtime.init({ options: { pool: 'gpu', wake: { use: 'toy' } }, mode: 'recover', checkout: alice.checkout })).toMatchObject({ ok: true });
+    expect(await runtime.init({ homeEnv: homeEnvOf([]), options: { pool: 'gpu', wake: { use: 'toy' } }, mode: 'recover', checkout: alice.checkout })).toMatchObject({ ok: true });
     expect(asked).toBe(0);
   });
 });

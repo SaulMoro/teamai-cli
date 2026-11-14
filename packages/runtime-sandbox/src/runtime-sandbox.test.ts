@@ -61,7 +61,7 @@ function start(extra: NodeJS.ProcessEnv = {}): Connection {
 }
 
 async function init(connection: Connection, options: Message, mode = 'unattended', credentials?: InitCredentials, instances?: Message[]): Promise<Message> {
-  connection.send({ type: 'init', protocol: 1, mode, options, ...(credentials && { credentials }), ...(instances && { instances }) });
+  connection.send({ type: 'init', protocol: 1, homeEnv: {}, mode, options, ...(credentials && { credentials }), ...(instances && { instances }) });
 
   return connection.next((message) => message.type === 'init', 30_000);
 }
@@ -187,7 +187,7 @@ describe('init', () => {
 
 describe('how teamai starts it', () => {
   it('serves nothing when teamai did not start it: with no TEAMAI_RUNTIME_PROTOCOL it reads no request and exits 2, naming the variable', () => {
-    const request = { type: 'init', protocol: 1, mode: 'unattended', options: { provider: 'docker', image: IMAGE } };
+    const request = { type: 'init', protocol: 1, homeEnv: {}, mode: 'unattended', options: { provider: 'docker', image: IMAGE } };
     const ran = spawnSync(process.execPath, [executable], { env: { ...engine.env(), HOME: path.join(dir, 'home') }, input: `${JSON.stringify(request)}\n`, encoding: 'utf8', timeout: 20_000 });
 
     expect(ran.status).toBe(2);

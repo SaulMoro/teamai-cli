@@ -8,6 +8,7 @@ import { stdioStepRuntime } from '../workflow/runtimes/stdio.js';
 import { newOpId, type Initialized, type OpenRequest, type PromptRequest, type StepRuntime } from '@teamai/runtime-protocol/step-runtime';
 import type { DriverCan } from '../workflow/requirements.js';
 import { TOY_RUNTIME } from './helpers/toy-runtime.js';
+import { homeEnvOf } from '../workflow/runtimes/sources.js';
 
 type Offer = Extract<Initialized<DriverCan>, { ok: true }>;
 
@@ -74,7 +75,7 @@ describe('a toy through a toy, over stdio', () => {
   const start = async (inner: Record<string, JsonValue> = {}, innerCredentials: Record<string, string> = { INNER_TOKEN: 'inner-value' }): Promise<StepRuntime<DriverCan>> => {
     const runtime = composedStepRuntime({ outer: toy('sandboxtoy'), inner: toy('apptoy'), innerCredentials });
     started.push(runtime);
-    const ready = await runtime.init({
+    const ready = await runtime.init({ homeEnv: homeEnvOf([]),
       options: { sandboxtoy: { state: path.join(dir, 'outer'), calls }, apptoy: { state: path.join(dir, 'inner'), calls, agent: { output: { ok: true } }, ...inner } },
       mode: 'unattended',
     });
@@ -237,7 +238,7 @@ describe('a toy through a toy, over stdio', () => {
   it('records only the outer\'s place when the outer fails its open, so the close removes it without the inner, which was never asked', async () => {
     const runtime = composedStepRuntime({ outer: toy('sandboxtoy'), inner: toy('apptoy'), innerCredentials: {} });
     started.push(runtime);
-    await runtime.init({ options: { sandboxtoy: { state: path.join(dir, 'outer'), calls, open_fails: { code: 'sandbox_failed', message: 'The image cannot be pulled.' } }, apptoy: { state: path.join(dir, 'inner'), calls, agent: { output: { ok: true } } } }, mode: 'unattended' });
+    await runtime.init({ homeEnv: homeEnvOf([]), options: { sandboxtoy: { state: path.join(dir, 'outer'), calls, open_fails: { code: 'sandbox_failed', message: 'The image cannot be pulled.' } }, apptoy: { state: path.join(dir, 'inner'), calls, agent: { output: { ok: true } } } }, mode: 'unattended' });
     let recorded = '';
 
     expect(await runtime.open(openRequest(), async (handle) => { recorded = handle; })).toMatchObject({ kind: 'failed', failure: { code: 'sandbox_failed' } });

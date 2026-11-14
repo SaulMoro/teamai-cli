@@ -120,7 +120,7 @@ export function placeIn(root: string): Place {
 }
 
 export async function init(connection: Connection, options: Message, credentials?: { env: string[]; logins: string[] }, instances?: Message[]): Promise<Message> {
-  connection.send({ type: 'init', protocol: 1, mode: 'unattended', options, ...(credentials && { credentials }), ...(instances && { instances }) });
+  connection.send({ type: 'init', protocol: 1, homeEnv: {}, mode: 'unattended', options, ...(credentials && { credentials }), ...(instances && { instances }) });
 
   return connection.next((message) => message.type === 'init', 30_000);
 }

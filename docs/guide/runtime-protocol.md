@@ -44,7 +44,7 @@ A runtime reads one JSON request per line on stdin and answers with JSON lines o
 teamai reads every reply strictly, the `init` reply included: a key it does not know is a reply it cannot read, and the runtime does not start. Protocol `1` has not been released yet, and teamai ships its runtimes with the engine, so a key a runtime adds lands together with the teamai that reads it, and the protocol stays `1`.
 
 ```text
-→ {"type":"init","protocol":1,"mode":"unattended","options":{"state":"/var/tmp/toy-state"}}
+→ {"type":"init","protocol":1,"mode":"unattended","options":{"state":"/var/tmp/toy-state"},"homeEnv":{…}}
 ← {"type":"init","ok":true,"can":{"workspace":["read-only","new","continue"],"tools":["claude"],"env":true,"unattended":true}}
 → {"type":"open","op":"op-5e0d11cb4777","run":"r…","attempt":"a…","view":{…},"credentials":{}}
 ← {"op":"op-5e0d11cb4777","event":"accepted","handle":"toy-r…-a…"}
@@ -80,14 +80,14 @@ $ teamai workflow start review --driver app --tools default=codex         # --to
 teamai keeps `max_parallel` and `credentials` for itself: it strips them from the options before `init`, so your runtime never sees them and must not check them. `init` names the credentials instead, never their values, so your runtime can offer only the tools it can sign in, such as a `can.confined` judge:
 
 ```text
-→ {"type":"init","protocol":1,"mode":"unattended","options":{"state":"/var/tmp/toy-state"},"credentials":{"env":["CLAUDE_CODE_OAUTH_TOKEN"],"logins":["codex"]}}
+→ {"type":"init","protocol":1,"mode":"unattended","options":{"state":"/var/tmp/toy-state"},"credentials":{"env":["CLAUDE_CODE_OAUTH_TOKEN"],"logins":["codex"]},"homeEnv":{…}}
 ```
 
 When your runtime's provider keeps its own login for a tool, such as a sandbox signed in to Codex, reply `"ownLogins":["codex"]` beside `can`. teamai then copies none of that login into the attempt's tool home, and sends none of that tool's sign-in variables it found in the member's environment, such as `OPENAI_API_KEY`, nor one the member's own config declares under `workflows.drivers.<name>.runtimes.<runtime>.credentials`. A variable your definition declares still goes.
 
 `init` names the run's checkout too, `"checkout":"/abs/path"`, and teamai starts your runtime in that directory.
 
-`init` also lists the [tool instances](reference.md#team-tools-tools) you may run: your own, and the team's whose command needs no acceptance or was accepted on this machine. Each one's `home.dir` is the absolute path of its home, as teamai resolves it: your value of the instance's own variable when your environment sets it, else the directory under your home. It is absolute in every teamai that speaks protocol 1, so use it as it is: never join it to a home of your own. `init.homeEnv` lists, for each tool a step may name, the shipped tools teamai launches and each instance, every variable its command reads its home from: an instance's are the variable of the tool it extends and its own when it names one. When your runtime starts a tool in a home, set each of that tool's variables to that home, and choose none yourself: a tool it lists with none takes no variable. List in `can.tools` the instances your runtime can serve. On a runtime that execs its tool, teamai then launches the instance's `command`, with every variable `homeEnv` names for it set to the attempt's tool home. A step on an instance names it as the `tool` of its `open`, `"tool":"acme-claude"`, and of its prompt's `lease` for a runtime that launches agents: your runtime maps it, through `init.instances`, to the tool it extends. A step on an instance that no runtime of the definition lists fails `tool_unsupported`:
+`init` also lists the [tool instances](reference.md#team-tools-tools) you may run: your own, and the team's whose command needs no acceptance or was accepted on this machine. Each one's `home.dir` is the absolute path of its home, as teamai resolves it: your value of the instance's own variable when your environment sets it, else the directory under your home. It is absolute in every teamai that speaks protocol 1, so use it as it is: never join it to a home of your own. `init.homeEnv`, which is required, lists, for each tool a step may name, the shipped tools teamai launches and each instance, every variable its command reads its home from: an instance's are the variable of the tool it extends and its own when it names one. When your runtime starts a tool in a home, set each of that tool's variables to that home, and choose none yourself: a tool it lists with none takes no variable. An `init` without `homeEnv` is refused with `runtime_protocol`: otherwise a tool would start at its default home while teamai delivered to another. List in `can.tools` the instances your runtime can serve. On a runtime that execs its tool, teamai then launches the instance's `command`, with every variable `homeEnv` names for it set to the attempt's tool home. A step on an instance names it as the `tool` of its `open`, `"tool":"acme-claude"`, and of its prompt's `lease` for a runtime that launches agents: your runtime maps it, through `init.instances`, to the tool it extends. A step on an instance that no runtime of the definition lists fails `tool_unsupported`:
 
 ```text
 → {"type":"init","protocol":1,"mode":"unattended","options":{…},"instances":[{"name":"acme-claude","tool":"claude","command":"acme-claude","home":{"dir":"/home/me/.acme-claude"}}],"homeEnv":{"claude":["CLAUDE_CONFIG_DIR"],"codex":["CODEX_HOME"],"opencode":[],"acme-claude":["CLAUDE_CONFIG_DIR","ACME_CLAUDE_CONFIG_DIR"]}}
@@ -145,7 +145,7 @@ A runtime that exits while an exec or prompt runs fails it `runtime_lost`, for t
 teamai opens your runtime in `recover` mode whenever it must stop an attempt, as `workflow cancel` does after the driver was killed. In that mode run no sign-in or tool check, offer nothing, and answer `cancel`, `reattach`, `collect` and `close` from your own journal, so a provider that is down or never answers cannot hold the stop. That process may run beside others of your runtime: one that drives another run, or one that outlived its killed driver while an exec ran. teamai asks about an attempt's place from one of its processes at a time, so keep one journal file per record, written to a temporary path and renamed into place, and let only one process write each record. A runtime that answers `recover` with an error is opened again for new work, and when that fails too, the cancel names both failures:
 
 ```text
-→ {"type":"init","protocol":1,"mode":"recover","options":{"state":"/var/tmp/toy-state"}}
+→ {"type":"init","protocol":1,"mode":"recover","options":{"state":"/var/tmp/toy-state"},"homeEnv":{…}}
 ← {"type":"init","ok":true,"can":{}}
 → {"type":"reattach","handle":"toy-r…-a…"}
 ← {"event":"alive","handle":"toy-r…-a…","ops":[{"op":"op-83bfffde9ce3","state":"running"}]}
@@ -161,7 +161,7 @@ When you cannot stop an operation, end it `failed` with `cancel_failed` and a me
 teamai opens your runtime in `check` mode when it only asks whether a run could start now, as describe does in an app's session. It sends nothing after that `init`. In that mode sign in to nothing, write nothing, here or in your provider, and start nothing. Answer `ok` with what you can tell you offer, or fail with why a run could not start. When you cannot tell without writing or starting something, fail the `init`. A runtime older than this mode refuses it too, and teamai then offers no start on your runtime:
 
 ```text
-→ {"type":"init","protocol":1,"mode":"check","options":{"state":"/var/tmp/toy-state"}}
+→ {"type":"init","protocol":1,"mode":"check","options":{"state":"/var/tmp/toy-state"},"homeEnv":{…}}
 ← {"type":"init","ok":true,"prompt":true,"can":{"exec":false,"env":false}}
 ```
 
@@ -216,7 +216,7 @@ runtimes:
 teamai then sends each prompt step as one `prompt`. `lease.prompt` is the whole prompt, with the agent definition's instructions when the step names one, and the line that says where to write the result. The agent writes `lease.result`; the runtime reads it back and sends it in `finished`, with the tool's session and the tokens it billed:
 
 ```text
-→ {"type":"init","protocol":1,"mode":"attended","options":{}}
+→ {"type":"init","protocol":1,"mode":"attended","options":{},"homeEnv":{…}}
 ← {"type":"init","ok":true,"prompt":true,"can":{"exec":false,"hitl":true,"workspace":["read-only","new","continue"],"tools":["claude","codex"]}}
 → {"type":"open","op":"op-1c9e0f4a2b77","run":"r7a1…","attempt":"a3f0…","tool":"claude","view":{"worktree":"/repo/.teamai/workflow-worktrees/r7a1-review-p1",…},"credentials":{}}
 ← {"op":"op-1c9e0f4a2b77","event":"accepted","handle":"threads-r7a1-a3f0"}

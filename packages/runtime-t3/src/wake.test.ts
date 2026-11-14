@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { WAKE_COMMAND } from '@teamai/runtime-protocol';
 import { CLAUDE, CODEX, signIn, type Connection, type FakeT3Config, type Line } from './testing/harness.js';
-import { start, t3, useT3Runtime } from './testing/suite.js';
+import { start, t3, useT3Runtime, SHIPPED_HOME_ENV } from './testing/suite.js';
 import { END_OF_WAKE } from './wake.js';
 
 // A wake launches a fleet member's thread on a machine linked to this T3 Code that has the run's repository as a
@@ -30,7 +30,7 @@ const wake = (op: string, request: Line = {}) => ({ type: 'wake', op, pool: 'gpu
 /** A runtime past an attended init, and its init reply. */
 async function initialized(env: Record<string, string> = {}, options: Line = {}): Promise<{ runtime: Connection; reply: Line }> {
   const runtime = start(env);
-  runtime.send({ type: 'init', protocol: 1, mode: 'attended', options: { environment: 'local', ...options } });
+  runtime.send({ type: 'init', protocol: 1, homeEnv: SHIPPED_HOME_ENV, mode: 'attended', options: { environment: 'local', ...options } });
   const reply = await runtime.next((line) => line['type'] === 'init');
   expect(reply).toMatchObject({ ok: true });
 
@@ -60,7 +60,7 @@ describe('teamai-runtime-t3', () => {
     it('offers no wake in recover mode', async () => {
       t3.config(LINKED);
       const runtime = start();
-      runtime.send({ type: 'init', protocol: 1, mode: 'recover', options: { environment: 'local' } });
+      runtime.send({ type: 'init', protocol: 1, homeEnv: SHIPPED_HOME_ENV, mode: 'recover', options: { environment: 'local' } });
 
       expect(await runtime.next((line) => line['type'] === 'init')).toEqual({ type: 'init', ok: true, can: {} });
     });

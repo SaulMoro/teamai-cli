@@ -60,7 +60,7 @@ describe('teamai-runtime-t3', () => {
         t3.config({ providers: [CLAUDE, { ...CLAUDE, providerInstanceId: 'claude-work', displayName: 'Claude (work)' }, CODEX] });
         t3.settings({ defaultModelSelection: { instanceId: 'claudeAgent', model: 'claude-opus-5-5' }, projectSettingsOverrides: { 'project-1': { defaultModelSelection: { instanceId: 'claude-work', model: 'claude-opus-5-5' } } } });
         const runtime = start({}, checkout);
-        runtime.send({ type: 'init', protocol: 1, mode: 'attended', options: { environment: 'local' } });
+        runtime.send({ type: 'init', protocol: 1, homeEnv: SHIPPED_HOME_ENV, mode: 'attended', options: { environment: 'local' } });
         expect(await runtime.next((line) => line['type'] === 'init')).toMatchObject({ ok: true });
         expect(await openOn(runtime, worktree)).toMatchObject({ event: 'ready' });
         runtime.send(prompt(`t3-${RUN}-a1b2c3d4`, 'op-0000000b', { model: { name: 'claude-sonnet-5-5' } }));
@@ -73,7 +73,7 @@ describe('teamai-runtime-t3', () => {
         t3.settings({ projectSettingsOverrides: { 'project-1': { providerInstances: { codex: { enabled: false } } } } });
         const runtime = start({}, checkout);
 
-        runtime.send({ type: 'init', protocol: 1, mode: 'attended', options: { environment: 'local' } });
+        runtime.send({ type: 'init', protocol: 1, homeEnv: SHIPPED_HOME_ENV, mode: 'attended', options: { environment: 'local' } });
 
         expect(await runtime.next((line) => line['type'] === 'init')).toMatchObject({ ok: true, can: { tools: ['claude'] } });
       });
@@ -189,7 +189,7 @@ describe('teamai-runtime-t3', () => {
     it('runs an Auto thread on the sign-in a run at a tighter runtime_mode left', async () => {
       fs.rmSync(credentialsFile(t3.home));
       const tighter = start();
-      tighter.send({ type: 'init', protocol: 1, mode: 'unattended', options: { environment: 'local', runtime_mode: 'approval-required' } });
+      tighter.send({ type: 'init', protocol: 1, homeEnv: SHIPPED_HOME_ENV, mode: 'unattended', options: { environment: 'local', runtime_mode: 'approval-required' } });
       expect(await tighter.next((line) => line['type'] === 'init')).toMatchObject({ ok: true });
       await tighter.close();
 
@@ -438,7 +438,7 @@ describe('teamai-runtime-t3', () => {
     it('runs a claude step on the instance named after Claude when its Binary path is a Claude version file', async () => {
       t3.settings({ defaultModelSelection: { instanceId: 'claudeAgent', model: 'claude-opus-5-5' }, providerInstances: { claudeAgent: { config: { binaryPath: '/Users/member/.local/share/claude/versions/2.1.3' } } } });
       const runtime = start();
-      runtime.send({ type: 'init', protocol: 1, mode: 'attended', options: { environment: 'local' }, checkout });
+      runtime.send({ type: 'init', protocol: 1, homeEnv: SHIPPED_HOME_ENV, mode: 'attended', options: { environment: 'local' }, checkout });
 
       expect(await runtime.next((line) => line['type'] === 'init')).toMatchObject({ ok: true, can: { tools: ['claude', 'codex'], default_tool: 'claude' } });
     });
@@ -450,7 +450,7 @@ describe('teamai-runtime-t3', () => {
 
       const initFrom = async (env: Record<string, string>): Promise<Connection> => {
         const runtime = start(env);
-        runtime.send({ type: 'init', protocol: 1, mode: 'attended', options: { environment: 'local' }, checkout });
+        runtime.send({ type: 'init', protocol: 1, homeEnv: SHIPPED_HOME_ENV, mode: 'attended', options: { environment: 'local' }, checkout });
         expect(await runtime.next((line) => line['type'] === 'init')).toMatchObject({ ok: true });
         expect(await openOn(runtime, worktree)).toMatchObject({ event: 'ready' });
 
@@ -461,7 +461,7 @@ describe('teamai-runtime-t3', () => {
         t3.settings(MEMBER_DEFAULT);
         t3.addThread({ threadId: 'thread-parent-1', title: 'Fix the README', status: 'running', instanceId: 'codex', model: 'gpt-6.1-sol', runtimeMode: 'full-access' });
         const runtime = start(FROM);
-        runtime.send({ type: 'init', protocol: 1, mode: 'attended', options: { environment: 'local' }, checkout });
+        runtime.send({ type: 'init', protocol: 1, homeEnv: SHIPPED_HOME_ENV, mode: 'attended', options: { environment: 'local' }, checkout });
 
         expect(await runtime.next((line) => line['type'] === 'init')).toMatchObject({ ok: true, can: { tools: ['claude', 'codex'], default_tool: 'codex' } });
         expect(await openOn(runtime, worktree)).toMatchObject({ event: 'ready' });
@@ -510,7 +510,7 @@ describe('teamai-runtime-t3', () => {
         t3.settings({ defaultModelSelection: { instanceId: 'claudeAgent', model: 'claude-sonnet-5-5' }, providerInstances: Object.fromEntries(Object.entries(binaryPaths).map(([id, binaryPath]) => [id, { config: { binaryPath } }])) });
         t3.addThread({ threadId: 'thread-parent-1', title: 'Fix the README', status: 'running', instanceId, model });
         const runtime = start(FROM);
-        runtime.send({ type: 'init', protocol: 1, mode: 'attended', options: { environment: 'local', ...options }, checkout });
+        runtime.send({ type: 'init', protocol: 1, homeEnv: SHIPPED_HOME_ENV, mode: 'attended', options: { environment: 'local', ...options }, checkout });
 
         expect(await runtime.next((line) => line['type'] === 'init')).toMatchObject({ ok: true, can: { default_tool: 'claude' } });
         expect(await openOn(runtime, worktree)).toMatchObject({ event: 'ready' });
@@ -753,7 +753,7 @@ describe('teamai-runtime-t3', () => {
         t3.config({ delegatesPending: true, waitCapMs: 300, stopLagMs: 100 });
 
         const second = start();
-        second.send({ type: 'init', protocol: 1, mode: 'attended', options: { environment: 'local' } });
+        second.send({ type: 'init', protocol: 1, homeEnv: SHIPPED_HOME_ENV, mode: 'attended', options: { environment: 'local' } });
         await second.next((line) => line['type'] === 'init');
         second.send({ type: 'cancel', op: 'op-00000043' });
 
@@ -960,7 +960,7 @@ describe('teamai-runtime-t3', () => {
       await first.runtime.close();
 
       const second = start();
-      second.send({ type: 'init', protocol: 1, mode: 'attended', options: { environment: 'local' } });
+      second.send({ type: 'init', protocol: 1, homeEnv: SHIPPED_HOME_ENV, mode: 'attended', options: { environment: 'local' } });
       await second.next((line) => line['type'] === 'init');
       second.send({ type: 'reattach', handle: first.handle });
       const [thread] = t3.threads();
@@ -987,7 +987,7 @@ describe('teamai-runtime-t3', () => {
       signIn(t3, 'fake-t3-token-second-0987654321');
 
       const second = start();
-      second.send({ type: 'init', protocol: 1, mode: 'attended', options: { environment: 'local' } });
+      second.send({ type: 'init', protocol: 1, homeEnv: SHIPPED_HOME_ENV, mode: 'attended', options: { environment: 'local' } });
       expect(await second.next((line) => line['type'] === 'init')).toMatchObject({ ok: true });
       second.send(prompt(first.handle, 'op-0000004f'));
       await second.next((line) => line['op'] === 'op-0000004f' && line['event'] === 'accepted');
@@ -1008,7 +1008,7 @@ describe('teamai-runtime-t3', () => {
 
       // As `teamai workflow cancel` does for a run whose driver died: cancel, then reattach until the op no longer runs.
       const second = start();
-      second.send({ type: 'init', protocol: 1, mode: 'attended', options: { environment: 'local' } });
+      second.send({ type: 'init', protocol: 1, homeEnv: SHIPPED_HOME_ENV, mode: 'attended', options: { environment: 'local' } });
       await second.next((line) => line['type'] === 'init');
       second.send({ type: 'cancel', op: 'op-0000001c' });
 
@@ -1036,7 +1036,7 @@ describe('teamai-runtime-t3', () => {
         await first.runtime.close();
 
         const runtime = start();
-        runtime.send({ type: 'init', protocol: 1, mode: 'recover', options: { environment: 'local' } });
+        runtime.send({ type: 'init', protocol: 1, homeEnv: SHIPPED_HOME_ENV, mode: 'recover', options: { environment: 'local' } });
         expect(await runtime.next((line) => line['type'] === 'init')).toEqual({ type: 'init', ok: true, can: {} });
 
         return { runtime, handle: first.handle };
@@ -1100,7 +1100,7 @@ describe('teamai-runtime-t3', () => {
         t3.config({ launchMs: 16_000 });
 
         const runtime = start();
-        runtime.send({ type: 'init', protocol: 1, mode: 'recover', options: { environment: 'local' } });
+        runtime.send({ type: 'init', protocol: 1, homeEnv: SHIPPED_HOME_ENV, mode: 'recover', options: { environment: 'local' } });
         await runtime.next((line) => line['type'] === 'init');
         const closedAt = Date.now();
         runtime.send({ type: 'close', handle: first.handle });
@@ -1135,7 +1135,7 @@ describe('teamai-runtime-t3', () => {
         t3.config({ interruptFails: false });
 
         const runtime = start();
-        runtime.send({ type: 'init', protocol: 1, mode: 'recover', options: { environment: 'local' } });
+        runtime.send({ type: 'init', protocol: 1, homeEnv: SHIPPED_HOME_ENV, mode: 'recover', options: { environment: 'local' } });
         await runtime.next((line) => line['type'] === 'init');
         // Each operation is kept in a record of its own, apart from its place.
         const ops = path.join(t3.home, '.teamai', 'runtime-state', 't3', 'ops');
@@ -1182,7 +1182,7 @@ describe('teamai-runtime-t3', () => {
       fs.rmSync(path.join(t3.t3Home, 'userdata', 'server-runtime.json'));
 
       const second = start();
-      second.send({ type: 'init', protocol: 1, mode: 'attended', options: { environment: 'local' } });
+      second.send({ type: 'init', protocol: 1, homeEnv: SHIPPED_HOME_ENV, mode: 'attended', options: { environment: 'local' } });
       expect(await second.next((line) => line['type'] === 'init')).toMatchObject({ ok: false, error: { code: 't3_unavailable' } });
       second.send({ type: 'reattach', handle: first.handle });
 
@@ -1195,7 +1195,7 @@ describe('teamai-runtime-t3', () => {
       // T3 Code is back: the place closes as usual.
       await t3.start();
       const third = start();
-      third.send({ type: 'init', protocol: 1, mode: 'attended', options: { environment: 'local' } });
+      third.send({ type: 'init', protocol: 1, homeEnv: SHIPPED_HOME_ENV, mode: 'attended', options: { environment: 'local' } });
       await third.next((line) => line['type'] === 'init');
       third.send({ type: 'close', handle: first.handle });
 
@@ -1217,7 +1217,7 @@ describe('teamai-runtime-t3', () => {
         before();
 
         const runtime = start();
-        runtime.send({ type: 'init', protocol: 1, mode: 'attended', options: { environment: 'local' } });
+        runtime.send({ type: 'init', protocol: 1, homeEnv: SHIPPED_HOME_ENV, mode: 'attended', options: { environment: 'local' } });
         expect(await runtime.next((line) => line['type'] === 'init')).toMatchObject({ ok: true });
         runtime.send(prompt(first.handle, op));
 
@@ -1340,7 +1340,7 @@ describe('teamai-runtime-t3', () => {
         t3.config({ launchMs: 0, launchUnavailable: true });
 
         const second = start();
-        second.send({ type: 'init', protocol: 1, mode: 'attended', options: { environment: 'local' } });
+        second.send({ type: 'init', protocol: 1, homeEnv: SHIPPED_HOME_ENV, mode: 'attended', options: { environment: 'local' } });
         await second.next((line) => line['type'] === 'init');
         second.send({ type: 'cancel', op: 'op-0000004b' });
 
@@ -1370,7 +1370,7 @@ describe('teamai-runtime-t3', () => {
 
         // This runtime launches new threads in auto, which the sign-in does not allow.
         const second = start();
-        second.send({ type: 'init', protocol: 1, mode: 'attended', options: { environment: 'local' } });
+        second.send({ type: 'init', protocol: 1, homeEnv: SHIPPED_HOME_ENV, mode: 'attended', options: { environment: 'local' } });
         expect(await second.next((line) => line['type'] === 'init')).toMatchObject({ ok: true });
         second.send(prompt(first.handle, 'op-00000066'));
         expect(await second.next((line) => line['op'] === 'op-00000066' && line['event'] === 'display')).toMatchObject({ display: { url: linkTo(t3.threads()[0]?.threadId) } });
@@ -1396,7 +1396,7 @@ describe('teamai-runtime-t3', () => {
           signIn(t3, SECOND);
 
           const runtime = start();
-          runtime.send({ type: 'init', protocol: 1, mode: 'attended', options: { environment: 'local' } });
+          runtime.send({ type: 'init', protocol: 1, homeEnv: SHIPPED_HOME_ENV, mode: 'attended', options: { environment: 'local' } });
           expect(await runtime.next((line) => line['type'] === 'init')).toMatchObject({ ok: true });
 
           return { runtime, handle: first.handle, record: path.join(t3.home, '.teamai', 'runtime-state', 't3', 'places', `${encodeURIComponent(first.handle)}.json`) };
@@ -1451,7 +1451,7 @@ describe('teamai-runtime-t3', () => {
         t3.config({ launchMs: 16_000 });
 
         const second = start();
-        second.send({ type: 'init', protocol: 1, mode: 'attended', options: { environment: 'local' } });
+        second.send({ type: 'init', protocol: 1, homeEnv: SHIPPED_HOME_ENV, mode: 'attended', options: { environment: 'local' } });
         await second.next((line) => line['type'] === 'init');
         const cancelledAt = Date.now();
         second.send({ type: 'cancel', op: 'op-0000006b' });
@@ -1471,7 +1471,7 @@ describe('teamai-runtime-t3', () => {
         t3.config({ launchMs: 13_000 });
 
         const second = start();
-        second.send({ type: 'init', protocol: 1, mode: 'attended', options: { environment: 'local' } });
+        second.send({ type: 'init', protocol: 1, homeEnv: SHIPPED_HOME_ENV, mode: 'attended', options: { environment: 'local' } });
         await second.next((line) => line['type'] === 'init');
         const cancelledAt = Date.now();
         second.send({ type: 'cancel', op: 'op-0000007b' });
@@ -1497,7 +1497,7 @@ describe('teamai-runtime-t3', () => {
         t3.config({ launchMs: 0 });
 
         const second = start();
-        second.send({ type: 'init', protocol: 1, mode: 'attended', options: { environment: 'local' } });
+        second.send({ type: 'init', protocol: 1, homeEnv: SHIPPED_HOME_ENV, mode: 'attended', options: { environment: 'local' } });
         await second.next((line) => line['type'] === 'init');
         second.send({ type: 'cancel', op: 'op-00000048' });
 
@@ -1527,7 +1527,7 @@ describe('teamai-runtime-t3', () => {
       fs.writeFileSync(record, '{broken');
 
       const second = start();
-      second.send({ type: 'init', protocol: 1, mode: 'attended', options: { environment: 'local' } });
+      second.send({ type: 'init', protocol: 1, homeEnv: SHIPPED_HOME_ENV, mode: 'attended', options: { environment: 'local' } });
       await second.next((line) => line['type'] === 'init');
       second.send({ type: 'cancel', op: 'op-00000070' });
 
@@ -1569,7 +1569,7 @@ describe('teamai-runtime-t3', () => {
       fs.writeFileSync(record, '{broken');
 
       const second = start();
-      second.send({ type: 'init', protocol: 1, mode: 'recover', options: { environment: 'local' } });
+      second.send({ type: 'init', protocol: 1, homeEnv: SHIPPED_HOME_ENV, mode: 'recover', options: { environment: 'local' } });
       await second.next((line) => line['type'] === 'init');
       second.send({ type: 'cancel', op: 'op-0000007e' });
 
@@ -1589,7 +1589,7 @@ describe('teamai-runtime-t3', () => {
       fs.renameSync(record, `${record}.aside`);
 
       const second = start();
-      second.send({ type: 'init', protocol: 1, mode: 'attended', options: { environment: 'local' } });
+      second.send({ type: 'init', protocol: 1, homeEnv: SHIPPED_HOME_ENV, mode: 'attended', options: { environment: 'local' } });
       await second.next((line) => line['type'] === 'init');
       second.send({ type: 'cancel', op: 'op-00000071' });
       second.send({ type: 'reattach', handle: first.handle });
@@ -1785,7 +1785,7 @@ describe('teamai-runtime-t3', () => {
       await runtime.close();
 
       const second = start();
-      second.send({ type: 'init', protocol: 1, mode: 'attended', options: { environment: 'local' } });
+      second.send({ type: 'init', protocol: 1, homeEnv: SHIPPED_HOME_ENV, mode: 'attended', options: { environment: 'local' } });
       await second.next((line) => line['type'] === 'init');
       second.send({ type: 'reattach', handle });
       expect(await second.next((line) => line['event'] === 'alive')).toMatchObject({ ops: [{ op: 'op-00000018', state: 'finished', session: end['session'], result: end['result'] }] });
@@ -2049,7 +2049,7 @@ describe('teamai-runtime-t3', () => {
       await runtime.close();
 
       const again = start();
-      again.send({ type: 'init', protocol: 1, mode: 'attended', options: { environment: 'local' } });
+      again.send({ type: 'init', protocol: 1, homeEnv: SHIPPED_HOME_ENV, mode: 'attended', options: { environment: 'local' } });
       expect(await again.next((line) => line['type'] === 'init')).toMatchObject({ ok: true });
       again.send({ type: 'reattach', handle: later.handle });
       expect(await again.next((line) => line['event'] === 'alive' && line['handle'] === later.handle)).toMatchObject({ ops: [{ op: 'op-000000b2', state: 'running' }] });
@@ -2121,7 +2121,7 @@ describe('teamai-runtime-t3', () => {
       t3.config({ sendMs: 0 });
 
       const again = start();
-      again.send({ type: 'init', protocol: 1, mode: 'attended', options: { environment: 'local' } });
+      again.send({ type: 'init', protocol: 1, homeEnv: SHIPPED_HOME_ENV, mode: 'attended', options: { environment: 'local' } });
       expect(await again.next((line) => line['type'] === 'init')).toMatchObject({ ok: true });
       again.send(turn(later, 'op-000000b2', { handle, op: 'op-000000b1' }));
 

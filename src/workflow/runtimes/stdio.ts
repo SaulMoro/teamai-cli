@@ -401,7 +401,7 @@ export function stdioStepRuntime({ name, command, args = [], cwd, secrets = {} }
 
         timer.unref();
         onInit = settle;
-        send({ type: 'init', protocol: RUNTIME_PROTOCOL, mode, options, ...(credentials && { credentials }), ...(instances && { instances }), ...(homeEnv && { homeEnv }), ...(checkout !== undefined && { checkout }) });
+        send({ type: 'init', protocol: RUNTIME_PROTOCOL, mode, options, ...(credentials && { credentials }), ...(instances && { instances }), homeEnv, ...(checkout !== undefined && { checkout }) });
       });
     },
 

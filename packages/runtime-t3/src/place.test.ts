@@ -263,7 +263,7 @@ describe('teamai-runtime-t3', () => {
       t3.config({ stopLagMs: 1_000 });
 
       const second = start();
-      second.send({ type: 'init', protocol: 1, mode: 'attended', options: { environment: 'local' } });
+      second.send({ type: 'init', protocol: 1, homeEnv: SHIPPED_HOME_ENV, mode: 'attended', options: { environment: 'local' } });
       await second.next((line) => line['type'] === 'init');
       second.send({ type: 'cancel', op: 'op-00000036' });
       expect(await second.next((line) => line['op'] === 'op-00000036')).toEqual({ op: 'op-00000036', event: 'cancelled' });
@@ -561,7 +561,7 @@ describe('teamai-runtime-t3', () => {
     it('closes a place only once its open finished, leaving no record of it', async () => {
       t3.config({ projectsMs: 2_000 });
       const runtime = start();
-      runtime.send({ type: 'init', protocol: 1, mode: 'attended', options: { environment: 'local' } });
+      runtime.send({ type: 'init', protocol: 1, homeEnv: SHIPPED_HOME_ENV, mode: 'attended', options: { environment: 'local' } });
       await runtime.next((line) => line['type'] === 'init');
       runtime.send({ type: 'open', op: 'op-00000072', run: RUN, attempt: 'a1b2c3d4', credentials: {}, view: { worktree, readonly: [], result: path.dirname(result), runDir: path.join(dir, 'run'), toolHome: {} } });
       const handle = z.string().parse((await runtime.next((line) => line['op'] === 'op-00000072'))['handle']);

@@ -44,7 +44,7 @@ teamai 自带的运行时则建立在 `@teamai/runtime-kit` 之上：它的请�
 teamai 严格读取每个回复，包括 `init` 的回复：它不认识的键会让回复无法读取，运行时也就不会启动。协议 `1` 还没有发布，而 teamai 和引擎一起发布它的运行时，所以运行时新增的键会和读取它的 teamai 一起落地，协议仍然是 `1`。
 
 ```text
-→ {"type":"init","protocol":1,"mode":"unattended","options":{"state":"/var/tmp/toy-state"}}
+→ {"type":"init","protocol":1,"mode":"unattended","options":{"state":"/var/tmp/toy-state"},"homeEnv":{…}}
 ← {"type":"init","ok":true,"can":{"workspace":["read-only","new","continue"],"tools":["claude"],"env":true,"unattended":true}}
 → {"type":"open","op":"op-5e0d11cb4777","run":"r…","attempt":"a…","view":{…},"credentials":{}}
 ← {"op":"op-5e0d11cb4777","event":"accepted","handle":"toy-r…-a…"}
@@ -80,14 +80,14 @@ $ teamai workflow start review --driver app --tools default=codex         # --to
 `max_parallel` 和 `credentials` 由 teamai 自己使用：它在 `init` 之前把它们从选项里去掉，所以你的运行时永远看不到它们，也不应检查它们。`init` 改为列出凭据的名字，从不带值，这样你的运行时可以只提供它能登录的工具，例如 `can.confined` 评审：
 
 ```text
-→ {"type":"init","protocol":1,"mode":"unattended","options":{"state":"/var/tmp/toy-state"},"credentials":{"env":["CLAUDE_CODE_OAUTH_TOKEN"],"logins":["codex"]}}
+→ {"type":"init","protocol":1,"mode":"unattended","options":{"state":"/var/tmp/toy-state"},"credentials":{"env":["CLAUDE_CODE_OAUTH_TOKEN"],"logins":["codex"]},"homeEnv":{…}}
 ```
 
 如果你的运行时的提供方自己保存某个工具的登录，比如已登录 Codex 的沙箱，就在 `can` 旁边回复 `"ownLogins":["codex"]`。teamai 就不会把这份登录复制进本次尝试的工具主目录，也不会发送它在成员环境里按名字找到的该工具登录变量，比如 `OPENAI_API_KEY`，或成员自己的配置在 `workflows.drivers.<name>.runtimes.<runtime>.credentials` 下声明的该工具登录变量。驱动定义声明的变量照常发送。
 
 `init` 还会给出运行所在的检出目录 `"checkout":"/abs/path"`，teamai 也在该目录启动你的运行时。
 
-`init` 还会列出你可以运行的[工具实例](reference.md#团队工具tools)：你自己的，以及团队中命令无需确认或已在本机确认过的实例。每个实例的 `home.dir` 是 teamai 解析出的其主目录绝对路径：你的环境设置了实例自己的变量时取其值，否则取你主目录下的该目录。所有使用协议 1 的 teamai 都给出绝对路径，所以直接使用它，不要再把它拼接到你自己的主目录下。`init.homeEnv` 为步骤可能指定的每个工具（teamai 启动的内置工具和每个实例）列出其命令读取主目录的每个变量：实例的变量是它扩展的工具的变量，以及实例自己命名的变量。你的运行时在某个主目录中启动某个工具时，把该工具的这些变量都设为那个主目录，不要自己另选变量：列出但没有变量的工具不设任何变量。在 `can.tools` 中列出你的运行时能提供的实例。在自行 exec 工具的运行时上，teamai 会启动实例的 `command`，并把 `homeEnv` 为它列出的每个变量都设为该次尝试的工具主目录。在实例上运行的步骤会把实例名作为 `open` 的 `tool`，即 `"tool":"acme-claude"`，对自行启动 agent 的运行时也作为提示 `lease` 的 `tool`：你的运行时通过 `init.instances` 把它对应到它扩展的工具。没有任何运行时列出该实例时，在其上运行的步骤以 `tool_unsupported` 失败：
+`init` 还会列出你可以运行的[工具实例](reference.md#团队工具tools)：你自己的，以及团队中命令无需确认或已在本机确认过的实例。每个实例的 `home.dir` 是 teamai 解析出的其主目录绝对路径：你的环境设置了实例自己的变量时取其值，否则取你主目录下的该目录。所有使用协议 1 的 teamai 都给出绝对路径，所以直接使用它，不要再把它拼接到你自己的主目录下。`init.homeEnv` 是必需字段，为步骤可能指定的每个工具（teamai 启动的内置工具和每个实例）列出其命令读取主目录的每个变量：实例的变量是它扩展的工具的变量，以及实例自己命名的变量。你的运行时在某个主目录中启动某个工具时，把该工具的这些变量都设为那个主目录，不要自己另选变量：列出但没有变量的工具不设任何变量。缺少 `homeEnv` 的 `init` 会以 `runtime_protocol` 被拒绝：否则工具会在默认主目录启动，而 teamai 已投放到另一个主目录。在 `can.tools` 中列出你的运行时能提供的实例。在自行 exec 工具的运行时上，teamai 会启动实例的 `command`，并把 `homeEnv` 为它列出的每个变量都设为该次尝试的工具主目录。在实例上运行的步骤会把实例名作为 `open` 的 `tool`，即 `"tool":"acme-claude"`，对自行启动 agent 的运行时也作为提示 `lease` 的 `tool`：你的运行时通过 `init.instances` 把它对应到它扩展的工具。没有任何运行时列出该实例时，在其上运行的步骤以 `tool_unsupported` 失败：
 
 ```text
 → {"type":"init","protocol":1,"mode":"unattended","options":{…},"instances":[{"name":"acme-claude","tool":"claude","command":"acme-claude","home":{"dir":"/home/me/.acme-claude"}}],"homeEnv":{"claude":["CLAUDE_CONFIG_DIR"],"codex":["CODEX_HOME"],"opencode":[],"acme-claude":["CLAUDE_CONFIG_DIR","ACME_CLAUDE_CONFIG_DIR"]}}
@@ -145,7 +145,7 @@ exec 或提示运行期间退出的运行时，出于同样的原因会让它失
 每当 teamai 必须停止一次尝试时（例如驱动被杀掉后的 `workflow cancel`），它都会以 `recover` 模式打开你的运行时。在这种模式下，不做登录或工具检查，什么都不提供，只根据你自己的日志回答 `cancel`、`reattach`、`collect` 和 `close`，这样宕机或一直不回答的提供方就不会卡住停止。这个进程可能与你的运行时的其他进程同时运行：驱动另一次运行的进程，或在 exec 运行时比被杀掉的驱动活得更久的进程。teamai 同一时间只从它的一个进程询问一次尝试的位置，所以请每条记录保存一个日志文件，先写到临时路径再重命名到位，并且每条记录只让一个进程写。用错误回答 `recover` 的运行时会再为新工作打开一次；如果这也失败，cancel 会同时给出两个失败：
 
 ```text
-→ {"type":"init","protocol":1,"mode":"recover","options":{"state":"/var/tmp/toy-state"}}
+→ {"type":"init","protocol":1,"mode":"recover","options":{"state":"/var/tmp/toy-state"},"homeEnv":{…}}
 ← {"type":"init","ok":true,"can":{}}
 → {"type":"reattach","handle":"toy-r…-a…"}
 ← {"event":"alive","handle":"toy-r…-a…","ops":[{"op":"op-83bfffde9ce3","state":"running"}]}
@@ -161,7 +161,7 @@ exec 或提示运行期间退出的运行时，出于同样的原因会让它失
 当 teamai 只想知道现在能否启动运行时（例如 describe 在应用会话中所做的），它会以 `check` 模式打开你的运行时，在这个 `init` 之后不再发送任何请求。在这种模式下，不登录任何东西，不写任何东西（无论在本机还是在你的提供方），也不启动任何东西。用 `ok` 回答你能确定自己提供的内容，或者失败并说明为什么不能启动运行。如果不写入或启动某些东西就无法确定，就让 `init` 失败。早于这个模式的运行时同样会拒绝它，teamai 随后不会在你的运行时上提供启动：
 
 ```text
-→ {"type":"init","protocol":1,"mode":"check","options":{"state":"/var/tmp/toy-state"}}
+→ {"type":"init","protocol":1,"mode":"check","options":{"state":"/var/tmp/toy-state"},"homeEnv":{…}}
 ← {"type":"init","ok":true,"prompt":true,"can":{"exec":false,"env":false}}
 ```
 
@@ -216,7 +216,7 @@ runtimes:
 teamai 随后把每个提示步骤作为一次 `prompt` 发送。`lease.prompt` 是完整的提示：步骤指定了智能体定义时包含它的说明，还有告诉智能体把结果写到哪里的那一行。智能体写入 `lease.result`，运行时把它读回来，在 `finished` 中连同工具的会话和计费的 token 一起发送：
 
 ```text
-→ {"type":"init","protocol":1,"mode":"attended","options":{}}
+→ {"type":"init","protocol":1,"mode":"attended","options":{},"homeEnv":{…}}
 ← {"type":"init","ok":true,"prompt":true,"can":{"exec":false,"hitl":true,"workspace":["read-only","new","continue"],"tools":["claude","codex"]}}
 → {"type":"open","op":"op-1c9e0f4a2b77","run":"r7a1…","attempt":"a3f0…","tool":"claude","view":{"worktree":"/repo/.teamai/workflow-worktrees/r7a1-review-p1",…},"credentials":{}}
 ← {"op":"op-1c9e0f4a2b77","event":"accepted","handle":"threads-r7a1-a3f0"}

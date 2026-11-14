@@ -23,7 +23,7 @@ describe('teamai-runtime-t3', () => {
       signIn(t3);
       const runtime = start();
 
-      runtime.send({ type: 'init', protocol: 1, mode: 'attended', options: { environment: 'local' } });
+      runtime.send({ type: 'init', protocol: 1, homeEnv: SHIPPED_HOME_ENV, mode: 'attended', options: { environment: 'local' } });
       const reply = await runtime.next((line) => line['type'] === 'init');
 
       expect(RuntimeMessageSchema.safeParse(reply).success).toBe(true);
@@ -47,7 +47,7 @@ describe('teamai-runtime-t3', () => {
       fs.chmodSync(store, 0o300);
       const runtime = start();
 
-      runtime.send({ type: 'init', protocol: 1, mode: 'attended', options: { environment: 'local' } });
+      runtime.send({ type: 'init', protocol: 1, homeEnv: SHIPPED_HOME_ENV, mode: 'attended', options: { environment: 'local' } });
 
       try {
         expect(await runtime.next((line) => line['type'] === 'init')).toMatchObject({ ok: true, can: { tools: ['claude', 'codex'], tokens: false } });
@@ -64,7 +64,7 @@ describe('teamai-runtime-t3', () => {
       t3.config({ environment: { environmentId: 'env-fake-1', label: 'fake-laptop', ...(serverVersion !== undefined && { serverVersion }) } });
       const runtime = start();
 
-      runtime.send({ type: 'init', protocol: 1, mode: 'attended', options: { environment: 'local' } });
+      runtime.send({ type: 'init', protocol: 1, homeEnv: SHIPPED_HOME_ENV, mode: 'attended', options: { environment: 'local' } });
 
       expect(await runtime.next((line) => line['type'] === 'init')).toEqual({
         type: 'init', ok: false,
@@ -77,7 +77,7 @@ describe('teamai-runtime-t3', () => {
       t3.config({ environment: { environmentId: 'env-fake-1', label: 'fake-laptop', serverVersion: '0.1.8-nightly.20261104.4200' } });
       const runtime = start();
 
-      runtime.send({ type: 'init', protocol: 1, mode: 'attended', options: { environment: 'local' } });
+      runtime.send({ type: 'init', protocol: 1, homeEnv: SHIPPED_HOME_ENV, mode: 'attended', options: { environment: 'local' } });
 
       expect(await runtime.next((line) => line['type'] === 'init')).toMatchObject({ type: 'init', ok: true });
     });
@@ -87,7 +87,7 @@ describe('teamai-runtime-t3', () => {
       const browser = fakeBrowser(dir);
       const runtime = start({ PATH: [t3.bin, browser.bin, PATH_WITHOUT_T3].join(path.delimiter) });
 
-      runtime.send({ type: 'init', protocol: 1, mode, options: { environment: 'local' } });
+      runtime.send({ type: 'init', protocol: 1, homeEnv: SHIPPED_HOME_ENV, mode, options: { environment: 'local' } });
 
       const reply = await runtime.next((line) => line['type'] === 'init');
       expect(reply, JSON.stringify(reply)).toMatchObject({ ok: true, can: { tools: ['claude', 'codex'] } });
@@ -102,7 +102,7 @@ describe('teamai-runtime-t3', () => {
       await runtime.close();
 
       const later = start();
-      later.send({ type: 'init', protocol: 1, mode: 'unattended', options: { environment: 'local' } });
+      later.send({ type: 'init', protocol: 1, homeEnv: SHIPPED_HOME_ENV, mode: 'unattended', options: { environment: 'local' } });
 
       expect(await later.next((line) => line['type'] === 'init')).toMatchObject({ ok: true });
       expect(t3.commandRuns()).toHaveLength(1);
@@ -112,7 +112,7 @@ describe('teamai-runtime-t3', () => {
     it('refuses an environment other than local before it signs in, since a step\'s first message names this machine\'s paths', async () => {
       const runtime = start();
 
-      runtime.send({ type: 'init', protocol: 1, mode: 'unattended', options: { environment: 'gpu-box' } });
+      runtime.send({ type: 'init', protocol: 1, homeEnv: SHIPPED_HOME_ENV, mode: 'unattended', options: { environment: 'gpu-box' } });
 
       expect(await runtime.next((line) => line['type'] === 'init')).toMatchObject({ ok: false, error: { code: 'bad_option', key: 'environment',
         message: 'environment "gpu-box" is not one runtime t3 runs steps in. It launches a step\'s thread only in environment: local, the T3 Code on this machine, because the thread\'s first message names this machine\'s paths, such as the run\'s scratch directory and the workflow\'s folder, which a linked environment does not have. Set environment: local, or offer the step to another machine with a fleet entry whose wake uses t3' } });
@@ -122,7 +122,7 @@ describe('teamai-runtime-t3', () => {
     it.each(['auto-accept-edits', 'approval-required'])('approves its silent sign-in with Auto access in a run whose runtime_mode is %s', async (runtimeMode) => {
       const runtime = start();
 
-      runtime.send({ type: 'init', protocol: 1, mode: 'unattended', options: { environment: 'local', runtime_mode: runtimeMode } });
+      runtime.send({ type: 'init', protocol: 1, homeEnv: SHIPPED_HOME_ENV, mode: 'unattended', options: { environment: 'local', runtime_mode: runtimeMode } });
 
       expect(await runtime.next((line) => line['type'] === 'init')).toMatchObject({ ok: true });
       expect(t3.calls().find((call) => call.tool === 'oauth_decision')?.args).toEqual({ access: 'auto' });
@@ -132,7 +132,7 @@ describe('teamai-runtime-t3', () => {
       const browser = fakeBrowser(dir);
       const attended = start({ PATH: `${browser.bin}${path.delimiter}${PATH_WITHOUT_T3}` });
 
-      attended.send({ type: 'init', protocol: 1, mode: 'attended', options: { environment: 'local' } });
+      attended.send({ type: 'init', protocol: 1, homeEnv: SHIPPED_HOME_ENV, mode: 'attended', options: { environment: 'local' } });
 
       const signedIn = await attended.next((line) => line['type'] === 'init');
       expect(signedIn, JSON.stringify(signedIn)).toMatchObject({ ok: true });
@@ -145,7 +145,7 @@ describe('teamai-runtime-t3', () => {
       await attended.close();
 
       const unattended = start();
-      unattended.send({ type: 'init', protocol: 1, mode: 'unattended', options: { environment: 'local' } });
+      unattended.send({ type: 'init', protocol: 1, homeEnv: SHIPPED_HOME_ENV, mode: 'unattended', options: { environment: 'local' } });
 
       expect(await unattended.next((line) => line['type'] === 'init')).toMatchObject({ ok: true, can: { hitl: false } });
       expect(t3.calls().filter((call) => call.tool === 'oauth_token')).toHaveLength(1);
@@ -170,7 +170,7 @@ describe('teamai-runtime-t3', () => {
         if (config) t3.config(config);
         const runtime = start(pathOf ? { PATH: pathOf() } : {});
 
-        runtime.send({ type: 'init', protocol: 1, mode: 'unattended', options: { environment: 'local' } });
+        runtime.send({ type: 'init', protocol: 1, homeEnv: SHIPPED_HOME_ENV, mode: 'unattended', options: { environment: 'local' } });
 
         const reply = await runtime.next((line) => line['type'] === 'init', 20_000);
         expect(reply).toEqual({
@@ -190,7 +190,7 @@ describe('teamai-runtime-t3', () => {
         const browser = fakeBrowser(dir);
         const runtime = start({ PATH: [browser.bin, pathOf?.() ?? [t3.bin, PATH_WITHOUT_T3].join(path.delimiter)].join(path.delimiter) });
 
-        runtime.send({ type: 'init', protocol: 1, mode: 'attended', options: { environment: 'local' } });
+        runtime.send({ type: 'init', protocol: 1, homeEnv: SHIPPED_HOME_ENV, mode: 'attended', options: { environment: 'local' } });
 
         expect(await runtime.next((line) => line['type'] === 'init', 20_000)).toMatchObject({ ok: true });
         expect(browser.visits()).toEqual(['/oauth/mcp/authorize']);
@@ -209,7 +209,7 @@ describe('teamai-runtime-t3', () => {
     it('fails an unattended run with no sign-in and no t3 command, saying how to sign in, and asks T3 for none', async () => {
       const runtime = start({ PATH: PATH_WITHOUT_T3 });
 
-      runtime.send({ type: 'init', protocol: 1, mode: 'unattended', options: { environment: 'local' } });
+      runtime.send({ type: 'init', protocol: 1, homeEnv: SHIPPED_HOME_ENV, mode: 'unattended', options: { environment: 'local' } });
 
       expect(await runtime.next((line) => line['type'] === 'init')).toEqual({
         type: 'init', ok: false,
@@ -223,7 +223,7 @@ describe('teamai-runtime-t3', () => {
       const browser = fakeBrowser(dir);
       const runtime = start({ PATH: [t3.bin, browser.bin, PATH_WITHOUT_T3].join(path.delimiter) });
 
-      runtime.send({ type: 'init', protocol: 1, mode: 'recover', options: { environment: 'local' } });
+      runtime.send({ type: 'init', protocol: 1, homeEnv: SHIPPED_HOME_ENV, mode: 'recover', options: { environment: 'local' } });
 
       expect(await runtime.next((line) => line['type'] === 'init')).toEqual({ type: 'init', ok: true, can: {} });
       expect(browser.visits()).toEqual([]);
@@ -295,7 +295,7 @@ describe('teamai-runtime-t3', () => {
       signIn(t3, 'fake-t3-token-expired-0000000000', 60);
       const runtime = start();
 
-      runtime.send({ type: 'init', protocol: 1, mode: 'unattended', options: { environment: 'local' } });
+      runtime.send({ type: 'init', protocol: 1, homeEnv: SHIPPED_HOME_ENV, mode: 'unattended', options: { environment: 'local' } });
 
       expect(await runtime.next((line) => line['type'] === 'init')).toMatchObject({ ok: true });
       expect(t3.commandRuns()).toHaveLength(1);
@@ -310,7 +310,7 @@ describe('teamai-runtime-t3', () => {
       signIn(t3, undefined, 60);
       const runtime = start({ PATH: PATH_WITHOUT_T3 });
 
-      runtime.send({ type: 'init', protocol: 1, mode: 'unattended', options: { environment: 'local' } });
+      runtime.send({ type: 'init', protocol: 1, homeEnv: SHIPPED_HOME_ENV, mode: 'unattended', options: { environment: 'local' } });
 
       expect(await runtime.next((line) => line['type'] === 'init')).toMatchObject({
         ok: false, error: { code: 'login_required', message: expect.stringContaining('could not sign in through the t3 command (found no t3 command at $T3CODE_CLI_PATH (unset), on PATH, or at ') },
@@ -324,7 +324,7 @@ describe('teamai-runtime-t3', () => {
       const runtime = start();
       const sentAt = Date.now();
 
-      runtime.send({ type: 'init', protocol: 1, mode: 'unattended', options: { environment: 'local' } });
+      runtime.send({ type: 'init', protocol: 1, homeEnv: SHIPPED_HOME_ENV, mode: 'unattended', options: { environment: 'local' } });
 
       expect(await runtime.next((line) => line['type'] === 'init', 20_000)).toEqual({ type: 'init', ok: false, error: { code: 't3_unavailable', message: 'T3 Code did not answer what it runs within 10 s. Check that T3 Code is open and responding, then start the workflow again.' } });
       expect(Date.now() - sentAt).toBeLessThan(12_000);
@@ -336,7 +336,7 @@ describe('teamai-runtime-t3', () => {
       fs.rmSync(path.join(t3.t3Home, 'userdata', 'server-runtime.json'));
       const runtime = start();
 
-      runtime.send({ type: 'init', protocol: 1, mode: 'attended', options: { environment: 'local' } });
+      runtime.send({ type: 'init', protocol: 1, homeEnv: SHIPPED_HOME_ENV, mode: 'attended', options: { environment: 'local' } });
 
       expect(await runtime.next((line) => line['type'] === 'init')).toMatchObject({ ok: false, error: { code: 't3_unavailable', message: 'T3 Code is not running on this machine. Open T3 Code, or run `t3 serve`, then start the workflow again.' } });
     });
@@ -349,7 +349,7 @@ describe('teamai-runtime-t3', () => {
       fs.writeFileSync(path.join(t3.t3Home, 'userdata', 'server-runtime.json'), JSON.stringify({ version: 1, pid: 999_999, origin }));
       const runtime = start();
 
-      runtime.send({ type: 'init', protocol: 1, mode: 'unattended', options: { environment: 'local' } });
+      runtime.send({ type: 'init', protocol: 1, homeEnv: SHIPPED_HOME_ENV, mode: 'unattended', options: { environment: 'local' } });
 
       expect(await runtime.next((line) => line['type'] === 'init')).toEqual({
         type: 'init', ok: false, error: { code: 't3_unavailable', message: `T3 Code at ${origin} does not answer. Open T3 Code, or run \`t3 serve\`, then start the workflow again.` },
@@ -371,7 +371,7 @@ describe('teamai-runtime-t3', () => {
       it('signs in through the t3 command T3CODE_CLI_PATH names, in the T3 home that holds it', async () => {
         const runtime = start({ PATH: PATH_WITHOUT_T3, T3CODE_HOME: '', T3CODE_CLI_PATH: installed() });
 
-        runtime.send({ type: 'init', protocol: 1, mode: 'unattended', options: { environment: 'local' } });
+        runtime.send({ type: 'init', protocol: 1, homeEnv: SHIPPED_HOME_ENV, mode: 'unattended', options: { environment: 'local' } });
 
         expect(await runtime.next((line) => line['type'] === 'init')).toMatchObject({ ok: true });
         expect(t3.commandRuns()).toEqual([expect.arrayContaining(['auth', 'pairing', 'create', '--base-dir', t3.t3Home])]);
@@ -381,7 +381,7 @@ describe('teamai-runtime-t3', () => {
         installed();
         const runtime = start({ PATH: PATH_WITHOUT_T3 });
 
-        runtime.send({ type: 'init', protocol: 1, mode: 'unattended', options: { environment: 'local' } });
+        runtime.send({ type: 'init', protocol: 1, homeEnv: SHIPPED_HOME_ENV, mode: 'unattended', options: { environment: 'local' } });
 
         expect(await runtime.next((line) => line['type'] === 'init')).toMatchObject({ ok: true });
         expect(t3.commandRuns()).toHaveLength(1);
@@ -393,18 +393,18 @@ describe('teamai-runtime-t3', () => {
       t3.config({ providers: [CLAUDE, { ...CLAUDE, providerInstanceId: 'claude-work', displayName: 'Claude (work)' }, { ...CLAUDE, providerInstanceId: 'claude-off', constraints: ['Provider instance is disabled.'] }] });
       const runtime = start();
 
-      runtime.send({ type: 'init', protocol: 1, mode: 'attended', options: { environment: 'local', instance: 'claude-work' } });
+      runtime.send({ type: 'init', protocol: 1, homeEnv: SHIPPED_HOME_ENV, mode: 'attended', options: { environment: 'local', instance: 'claude-work' } });
       expect(await runtime.next((line) => line['type'] === 'init')).toMatchObject({ ok: true, can: { tools: ['claude'] } });
 
       const missing = start();
-      missing.send({ type: 'init', protocol: 1, mode: 'attended', options: { environment: 'local', instance: 'claude-sandbox' } });
+      missing.send({ type: 'init', protocol: 1, homeEnv: SHIPPED_HOME_ENV, mode: 'attended', options: { environment: 'local', instance: 'claude-sandbox' } });
       expect(await missing.next((line) => line['type'] === 'init')).toEqual({
         type: 'init', ok: false,
         error: { code: 'bad_option', key: 'instance', message: expect.stringMatching(/^T3 Code has no provider instance "claude-sandbox"\. Add it in T3 Code under Settings → Providers, .*Instances here: [^.]+$/) },
       });
 
       const disabled = start();
-      disabled.send({ type: 'init', protocol: 1, mode: 'attended', options: { environment: 'local', instance: 'claude-off' } });
+      disabled.send({ type: 'init', protocol: 1, homeEnv: SHIPPED_HOME_ENV, mode: 'attended', options: { environment: 'local', instance: 'claude-off' } });
       expect(await disabled.next((line) => line['type'] === 'init')).toMatchObject({ ok: false, error: { key: 'instance', message: expect.stringMatching(/cannot run now: Provider instance is disabled\. Enable it in T3 Code under Settings → Providers$/) } });
     });
 
@@ -414,7 +414,7 @@ describe('teamai-runtime-t3', () => {
       t3.config({ providers: [{ ...CLAUDE, constraints: ['Claude Code is not authenticated. Run `claude auth login` and try again.', 'Provider is not authenticated.'] }, CODEX] });
       const runtime = start();
 
-      runtime.send({ type: 'init', protocol: 1, mode: 'attended', options: { environment: 'local' } });
+      runtime.send({ type: 'init', protocol: 1, homeEnv: SHIPPED_HOME_ENV, mode: 'attended', options: { environment: 'local' } });
 
       expect(await runtime.next((line) => line['type'] === 'init')).toMatchObject({ ok: true, can: { tools: ['codex'], confined: [{ tools: ['codex'] }] } });
     });
@@ -442,7 +442,7 @@ describe('teamai-runtime-t3', () => {
         // teamai starts the runtime in the run's checkout, and names it in init.
         const runtime = start({}, dir);
 
-        runtime.send({ type: 'init', protocol: 1, mode: 'attended', options: { environment: 'local', ...options }, checkout });
+        runtime.send({ type: 'init', protocol: 1, homeEnv: SHIPPED_HOME_ENV, mode: 'attended', options: { environment: 'local', ...options }, checkout });
         const reply = await runtime.next((line) => line['type'] === 'init');
 
         expect(RuntimeMessageSchema.safeParse(reply).success).toBe(true);
@@ -595,7 +595,7 @@ describe('teamai-runtime-t3', () => {
       it('signs in with Full access through a pairing code carrying the scopes T3 needs for it, and reports every tool it offers as running in full access', async () => {
         const runtime = start();
 
-        runtime.send({ type: 'init', protocol: 1, mode: 'unattended', options: { environment: 'local', runtime_mode: 'full-access' } });
+        runtime.send({ type: 'init', protocol: 1, homeEnv: SHIPPED_HOME_ENV, mode: 'unattended', options: { environment: 'local', runtime_mode: 'full-access' } });
         const reply = await runtime.next((line) => line['type'] === 'init');
 
         expect(RuntimeMessageSchema.safeParse(reply).success).toBe(true);
@@ -608,14 +608,14 @@ describe('teamai-runtime-t3', () => {
         signIn(t3, undefined, undefined, 'orchestration:read orchestration:operate');
         const runtime = start();
 
-        runtime.send({ type: 'init', protocol: 1, mode: 'unattended', options: { environment: 'local', runtime_mode: 'full-access' } });
+        runtime.send({ type: 'init', protocol: 1, homeEnv: SHIPPED_HOME_ENV, mode: 'unattended', options: { environment: 'local', runtime_mode: 'full-access' } });
 
         expect(await runtime.next((line) => line['type'] === 'init')).toMatchObject({ ok: true, permissions: { claude: 'full-access' } });
         expect(t3.calls().find((call) => call.tool === 'oauth_decision')?.args).toEqual({ access: 'full-access' });
         await runtime.close();
 
         const later = start();
-        later.send({ type: 'init', protocol: 1, mode: 'unattended', options: { environment: 'local' } });
+        later.send({ type: 'init', protocol: 1, homeEnv: SHIPPED_HOME_ENV, mode: 'unattended', options: { environment: 'local' } });
 
         expect(await later.next((line) => line['type'] === 'init')).not.toHaveProperty('permissions');
         expect(t3.calls().filter((call) => call.tool === 'oauth_token')).toHaveLength(1);
@@ -626,7 +626,7 @@ describe('teamai-runtime-t3', () => {
         const browser = fakeBrowser(dir);
         const runtime = start({ PATH: `${browser.bin}${path.delimiter}${PATH_WITHOUT_T3}` });
 
-        runtime.send({ type: 'init', protocol: 1, mode: 'attended', options: { environment: 'local', runtime_mode: 'full-access' } });
+        runtime.send({ type: 'init', protocol: 1, homeEnv: SHIPPED_HOME_ENV, mode: 'attended', options: { environment: 'local', runtime_mode: 'full-access' } });
 
         const reply = await runtime.next((line) => line['type'] === 'init');
         expect(reply, JSON.stringify(reply)).toMatchObject({ ok: true, permissions: { claude: 'full-access' } });
@@ -637,7 +637,7 @@ describe('teamai-runtime-t3', () => {
         const browser = fakeBrowser(dir);
         const runtime = start({ PATH: `${browser.bin}${path.delimiter}${PATH_WITHOUT_T3}` });
 
-        runtime.send({ type: 'init', protocol: 1, mode: 'attended', options: { environment: 'local', runtime_mode: 'full-access' } });
+        runtime.send({ type: 'init', protocol: 1, homeEnv: SHIPPED_HOME_ENV, mode: 'attended', options: { environment: 'local', runtime_mode: 'full-access' } });
 
         expect(await runtime.next((line) => line['type'] === 'init')).toEqual({
           type: 'init', ok: false,
@@ -658,7 +658,7 @@ describe('teamai-runtime-t3', () => {
       signIn(t3);
       const runtime = start();
 
-      runtime.send({ type: 'init', protocol: 1, mode: 'attended', options: { environment: 'local', runtime_mode: runtimeMode } });
+      runtime.send({ type: 'init', protocol: 1, homeEnv: SHIPPED_HOME_ENV, mode: 'attended', options: { environment: 'local', runtime_mode: runtimeMode } });
 
       expect(await runtime.next((line) => line['type'] === 'init')).toEqual({
         type: 'init', ok: false,
@@ -674,7 +674,7 @@ describe('teamai-runtime-t3', () => {
       signIn(t3);
       const runtime = start();
 
-      runtime.send({ type: 'init', protocol: 1, mode: 'attended', options: { environment: 'local', instnace: 'x' } });
+      runtime.send({ type: 'init', protocol: 1, homeEnv: SHIPPED_HOME_ENV, mode: 'attended', options: { environment: 'local', instnace: 'x' } });
 
       expect(await runtime.next((line) => line['type'] === 'init')).toMatchObject({ ok: false, error: { code: 'bad_option', key: 'instnace' } });
     });

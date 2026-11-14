@@ -11,7 +11,7 @@ import { z } from 'zod';
 //  teamai persists before it sends the request, and a runtime answers a repeated id with the same acceptance and the
 //  same terminal outcome until `close`. Both sides parse with the schemas below.
 //
-//    > {"type":"init","protocol":1,"mode":"unattended","options":{...},"credentials":{"env":["ANTHROPIC_API_KEY"],"logins":[]},"instances":[{"name":"acme-claude","tool":"claude","command":"acme-claude"}],"checkout":"/repo"}
+//    > {"type":"init","protocol":1,"mode":"unattended","options":{...},"credentials":{"env":["ANTHROPIC_API_KEY"],"logins":[]},"instances":[{"name":"acme-claude","tool":"claude","command":"acme-claude"}],"homeEnv":{...},"checkout":"/repo"}
 //    < {"type":"init","ok":true,"can":{...},"prompt":true}           prompt: it launches agents its own way
 //                                                                    permissions: {"claude":"full-access"}, the tools it runs without prompts
 //                                                                    confinedPrompt: it answers confined prompts, so it may offer can.confined
@@ -59,7 +59,7 @@ import { z } from 'zod';
 //  which `reattach` shows.
 //
 //  To stop what it ran, teamai opens a runtime in `recover` mode, and opens it for new work only when it refuses that mode:
-//    > {"type":"init","protocol":1,"mode":"recover","options":{...}}
+//    > {"type":"init","protocol":1,"mode":"recover","options":{...},"homeEnv":{...}}
 //    < {"type":"init","ok":true,"can":{}}
 //
 //  An `exited` (and a reattach's `exited` state) carries the command's whole stdout up to `EXITED_STDOUT_CHARS`, and past
@@ -411,7 +411,8 @@ export type InitInstance = z.infer<typeof InitInstanceSchema>;
  * For each tool a step may name, a shipped tool teamai launches or an instance in `init.instances`, every variable its
  * command reads its home from, as teamai sets them on it: a shipped tool's own, and for an instance the extended tool's
  * and its own. A runtime that starts a tool's command in a home, or reads the home a provider of it sets, uses these and
- * decides none of its own; a tool with none listed, or none sent, takes no variable.
+ * decides none of its own; a tool it lists with none takes no variable. Required: without it a tool would start at its
+ * default home while teamai delivered to another.
  */
 export const InitHomeEnvSchema = z.record(z.string().min(1), z.array(z.string().min(1)));
 
@@ -445,7 +446,7 @@ const InitRequestSchema = z.object({
   type: z.literal('init'), protocol: z.literal(RUNTIME_PROTOCOL), mode: z.enum(RUNTIME_MODES), options: RuntimeOptionsSchema,
   credentials: InitCredentialsSchema.optional(),
   instances: z.array(InitInstanceSchema).optional(),
-  homeEnv: InitHomeEnvSchema.optional(),
+  homeEnv: InitHomeEnvSchema,
   /** The run's checkout, an absolute path: teamai starts the runtime there too. */
   checkout: z.string().min(1).optional(),
 });

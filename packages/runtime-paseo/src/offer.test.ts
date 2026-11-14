@@ -4,7 +4,7 @@ import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
 import { parseYaml } from '@teamai/shared/yaml';
-import { dir, worktree, daemon, behave, received, start, isEnd, isInit, ready, opened, cannotRun, notInstalled, promptRequest, useRuntimeSuite } from './testing/suite.js';
+import { dir, worktree, daemon, behave, received, start, isEnd, isInit, ready, opened, cannotRun, notInstalled, promptRequest, SHIPPED_HOME_ENV, useRuntimeSuite } from './testing/suite.js';
 
 /** The `exec` teamai's own runtime `name` declares in its marker (`runtimes/teamai-<name>.yaml`), which teamai reads without starting it. */
 function declaredExec(name: string): unknown {
@@ -275,7 +275,7 @@ describe('teamai-runtime-paseo', () => {
     const runtime = start();
 
     // teamai refuses a credential or a login for a runtime that launches agents its own way, so this is what it sends.
-    runtime.send({ type: 'init', protocol: 1, mode: 'unattended', options: { url: daemon.url }, credentials: { env: [], logins: [] } });
+    runtime.send({ type: 'init', protocol: 1, mode: 'unattended', options: { url: daemon.url }, credentials: { env: [], logins: [] }, homeEnv: SHIPPED_HOME_ENV });
 
     expect(await runtime.next(isInit)).toMatchObject({ ok: true, confinedPrompt: true, can: { tools: ['claude'], confined: [{ level: 'best-effort', access: 'read', tools: ['claude'] }] } });
   });

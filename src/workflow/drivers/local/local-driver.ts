@@ -27,7 +27,7 @@ import { answerCallTool, hostStepRuntime } from '../../runtimes/host.js';
 import { writeHeldSteps, type HeldSteps } from '../../runtimes/held.js';
 import { closeAfterSweep, endLeftLogins, releaseHeldPlaces, stopLeftInProcess, stopOnRecordedDriver } from '../../runtimes/cancelled.js';
 import { loginHolder } from '../../runtimes/login.js';
-import { toolsLaunchDeps, type EngineOptions, type OpenedDriver } from '../../runtimes/sources.js';
+import { homeEnvOf, toolsLaunchDeps, type EngineOptions, type OpenedDriver } from '../../runtimes/sources.js';
 import { newOpId, type ExecAnswer, type ExecQuestion, type StepRuntime } from '@teamai/runtime-protocol/step-runtime';
 import { resumeOrPublish, retryCommand } from '../../runtimes/retry-command.js';
 import type { RuntimeOffer, SoleDriver } from '../../engine.js';
@@ -669,7 +669,7 @@ async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, given: 
   const lookup = options.resolveTool ? { resolveTool: options.resolveTool } : {};
   const confined = isStarted && mayConfine(started) ? await confinedOffers(lookup) : [];
   const hostRuntime = hostStepRuntime({ config, can: localCan({ strict: localStrictCan(config, options), hitl: canHitl, tools, confined }) });
-  const hostReady = await hostRuntime.init({ options: {}, mode });
+  const hostReady = await hostRuntime.init({ options: {}, mode, homeEnv: homeEnvOf([]) });
 
   if (!hostReady.ok) return { error: { code: 'runtime_failed', message: hostReady.failure.message } };
 
@@ -685,7 +685,7 @@ async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, given: 
 
   // `tools` launches the member's tools for prompt steps and runs no command; the host runtime runs those in this process.
   const toolsRuntime = toolsStepRuntime<DriverCan>({ can: hostCan, launch: toolsLaunchDeps(), ...(options.adapter && { launcher: options.adapter }) });
-  const toolsReady = await toolsRuntime.init({ options: {}, mode });
+  const toolsReady = await toolsRuntime.init({ options: {}, mode, homeEnv: homeEnvOf([]) });
 
   if (!toolsReady.ok) return { error: { code: 'runtime_failed', message: toolsReady.failure.message } };
 

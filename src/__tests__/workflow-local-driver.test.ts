@@ -1346,7 +1346,7 @@ steps:
     const state = path.join(path.dirname(workspace), 'toy-state');
     const runtime = stdioStepRuntime({ name: 'toy', command: process.execPath, args: [TOY_RUNTIME] });
     onTestFinished(() => runtime.dispose());
-    const ready = await runtime.init({ options: { state, can: { tools: ['claude', 'opencode'] }, agent: { output: { ok: true } }, prompt_tool_home: true }, mode: 'unattended' });
+    const ready = await runtime.init({ homeEnv: homeEnvOf([]), options: { state, can: { tools: ['claude', 'opencode'] }, agent: { output: { ok: true } }, prompt_tool_home: true }, mode: 'unattended' });
     if (!ready.ok) throw new Error(ready.failure.message);
     const runtimes: DriverRuntimes = {
       driver: 'toy', asked: 'toy',
@@ -1426,7 +1426,7 @@ steps:
     const state = path.join(path.dirname(workspace), 'toy-state');
     const runtime = stdioStepRuntime({ name: 'toy', command: process.execPath, args: [TOY_RUNTIME] });
     onTestFinished(() => runtime.dispose());
-    const ready = await runtime.init({ options: { state, can: { tools: ['acme-claude'] }, agent: { output: { ok: true } }, prompt_tool_home: true }, mode: 'unattended' });
+    const ready = await runtime.init({ homeEnv: homeEnvOf([]), options: { state, can: { tools: ['acme-claude'] }, agent: { output: { ok: true } }, prompt_tool_home: true }, mode: 'unattended' });
     if (!ready.ok) throw new Error(ready.failure.message);
     const runtimes: DriverRuntimes = {
       driver: 'toy', asked: 'toy',
@@ -1457,7 +1457,7 @@ steps:
     const state = path.join(path.dirname(workspace), 'toy-state');
     const runtime = stdioStepRuntime({ name: 'toy', command: process.execPath, args: [TOY_RUNTIME] });
     onTestFinished(() => runtime.dispose());
-    const ready = await runtime.init({ options: { state, agent: { output: { ok: true }, usage: { input: 300, output: 100 }, conversations: false }, prompt_tool_home: true, can: { end_turn: true } }, mode: 'unattended' });
+    const ready = await runtime.init({ homeEnv: homeEnvOf([]), options: { state, agent: { output: { ok: true }, usage: { input: 300, output: 100 }, conversations: false }, prompt_tool_home: true, can: { end_turn: true } }, mode: 'unattended' });
     if (!ready.ok) throw new Error(ready.failure.message);
     const runtimes: DriverRuntimes = {
       driver: 'toy', asked: 'toy',
@@ -1492,7 +1492,7 @@ steps:
     const why = { cause: 'teamai cannot read /home/al/.claude/projects/-repo because it has no permission to read it.', next: 'Let the user teamai runs as read it, then retry the step.' };
     const runtime = stdioStepRuntime({ name: 'toy', command: process.execPath, args: [TOY_RUNTIME] });
     onTestFinished(() => runtime.dispose());
-    const ready = await runtime.init({ options: { state, agent: { output: { ok: true }, unmeasured: why, conversations: false }, prompt_tool_home: true, can: { tokens: true } }, mode: 'unattended' });
+    const ready = await runtime.init({ homeEnv: homeEnvOf([]), options: { state, agent: { output: { ok: true }, unmeasured: why, conversations: false }, prompt_tool_home: true, can: { tokens: true } }, mode: 'unattended' });
     if (!ready.ok) throw new Error(ready.failure.message);
     const runtimes: DriverRuntimes = {
       driver: 'toy', asked: 'toy',
@@ -1519,7 +1519,7 @@ steps:
     const cause = 'teamai cannot read /home/al/.claude/projects/-repo because it has no permission to read it.';
     const runtime = stdioStepRuntime({ name: 'toy', command: process.execPath, args: [TOY_RUNTIME] });
     onTestFinished(() => runtime.dispose());
-    const ready = await runtime.init({ options: { state, agent: { output: { ok: true }, unmeasured: { cause, next: 'Let the user teamai runs as read it, then retry the step.' }, conversations: false }, prompt_tool_home: true, can: { tokens: true } }, mode: 'unattended' });
+    const ready = await runtime.init({ homeEnv: homeEnvOf([]), options: { state, agent: { output: { ok: true }, unmeasured: { cause, next: 'Let the user teamai runs as read it, then retry the step.' }, conversations: false }, prompt_tool_home: true, can: { tokens: true } }, mode: 'unattended' });
     if (!ready.ok) throw new Error(ready.failure.message);
     const runtimes: DriverRuntimes = {
       driver: 'toy', asked: 'toy',
@@ -1550,7 +1550,7 @@ steps:
     const state = path.join(path.dirname(workspace), 'toy-state');
     const runtime = stdioStepRuntime({ name: 'toy', command: process.execPath, args: [TOY_RUNTIME] });
     onTestFinished(() => runtime.dispose());
-    const ready = await runtime.init({ options: { state, agent: { output: { ok: true }, conversations: false }, prompt_tool_home: true }, mode: 'unattended' });
+    const ready = await runtime.init({ homeEnv: homeEnvOf([]), options: { state, agent: { output: { ok: true }, conversations: false }, prompt_tool_home: true }, mode: 'unattended' });
     if (!ready.ok) throw new Error(ready.failure.message);
     const runtimes: DriverRuntimes = {
       driver: 'toy', asked: 'toy',
@@ -1580,7 +1580,7 @@ steps:
     const state = path.join(path.dirname(workspace), 'toy-state');
     const runtime = stdioStepRuntime({ name: 'toy', command: process.execPath, args: [TOY_RUNTIME] });
     onTestFinished(() => runtime.dispose());
-    const ready = await runtime.init({ options: { state, agent: { output: { ok: true }, conversations: false }, prompt_tool_home: true, can: { tools: ['claude', 'opencode'] } }, mode: 'unattended' });
+    const ready = await runtime.init({ homeEnv: homeEnvOf([]), options: { state, agent: { output: { ok: true }, conversations: false }, prompt_tool_home: true, can: { tools: ['claude', 'opencode'] } }, mode: 'unattended' });
     if (!ready.ok) throw new Error(ready.failure.message);
     const runtimes: DriverRuntimes = {
       driver: 'toy', asked: 'toy',
@@ -1621,7 +1621,7 @@ steps:
     const calls = path.join(path.dirname(workspace), 'toy-calls.jsonl');
     const runtime = stdioStepRuntime({ name: 'toy', command: process.execPath, args: [TOY_RUNTIME] });
     onTestFinished(() => runtime.dispose());
-    const ready = await runtime.init({ options: { state, calls, agent: { output: { ok: true }, transcript: true } }, mode: 'unattended' });
+    const ready = await runtime.init({ homeEnv: homeEnvOf([]), options: { state, calls, agent: { output: { ok: true }, transcript: true } }, mode: 'unattended' });
     if (!ready.ok) throw new Error(ready.failure.message);
     const runtimes: DriverRuntimes = {
       driver: 'toy', asked: 'toy',
@@ -1694,7 +1694,7 @@ steps:
     const state = path.join(path.dirname(workspace), 'toy-state');
     const runtime = stdioStepRuntime({ name: 'toy', command: process.execPath, args: [TOY_RUNTIME] });
     onTestFinished(() => runtime.dispose());
-    const ready = await runtime.init({ options: { state, agent: { output: { ok: true }, stopped: 'idle' } }, mode: 'unattended' });
+    const ready = await runtime.init({ homeEnv: homeEnvOf([]), options: { state, agent: { output: { ok: true }, stopped: 'idle' } }, mode: 'unattended' });
     if (!ready.ok) throw new Error(ready.failure.message);
     const runtimes: DriverRuntimes = {
       driver: 'mine', asked: 'mine',
@@ -1818,7 +1818,7 @@ steps:
     const state = path.join(path.dirname(workspace), 'toy-state');
     const runtime = stdioStepRuntime({ name: 'toy', command: process.execPath, args: [TOY_RUNTIME] });
     onTestFinished(() => runtime.dispose());
-    const ready = await runtime.init({ options: { state, agent: { output: { ok: true } } }, mode: 'unattended' });
+    const ready = await runtime.init({ homeEnv: homeEnvOf([]), options: { state, agent: { output: { ok: true } } }, mode: 'unattended' });
     if (!ready.ok) throw new Error(ready.failure.message);
     fs.mkdirSync(personalDir('drivers'), { recursive: true });
     onTestFinished(() => fs.rmSync(personalDir('drivers'), { recursive: true, force: true }));
@@ -1868,7 +1868,7 @@ describe('a place held open for a conversation a later step continues', () => {
     const calls = path.join(dir, 'toy-calls.jsonl');
     const runtime = stdioStepRuntime({ name: 'toy', command: process.execPath, args: [TOY_RUNTIME] });
     const agent = { output: { ok: true }, transcript: true, home: path.join(dir, 'toy-claude'), ...(release !== undefined && { release }), ...(conversations === false && { conversations }) };
-    const ready = await runtime.init({ options: { state, calls, agent, can }, mode: 'unattended' });
+    const ready = await runtime.init({ homeEnv: homeEnvOf([]), options: { state, calls, agent, can }, mode: 'unattended' });
     onTestFinished(() => runtime.dispose());
 
     if (!ready.ok) throw new Error(`toy did not start: ${ready.failure.message}`);

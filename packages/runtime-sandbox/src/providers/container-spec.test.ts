@@ -169,7 +169,7 @@ for (const target of TARGETS) {
 
     async function opened(extra: NodeJS.ProcessEnv = {}, credentials: Record<string, string> = {}): Promise<Opened> {
       const connection = start(extra);
-      connection.send({ type: 'init', protocol: 1, mode: 'unattended', options: target.options, credentials: { env: [], logins: [] } });
+      connection.send({ type: 'init', protocol: 1, homeEnv: {}, mode: 'unattended', options: target.options, credentials: { env: [], logins: [] } });
       expect(await connection.next((message) => message.type === 'init', 300_000)).toMatchObject({ ok: true });
       const root = fs.mkdtempSync(path.join(dir, 'place-'));
       const worktree = path.join(root, 'worktree');
@@ -327,7 +327,7 @@ for (const target of TARGETS) {
 
     it.runIf(target.engine !== 'sbx')('fails init naming an image that cannot be pulled', async () => {
       const connection = start();
-      connection.send({ type: 'init', protocol: 1, mode: 'unattended', options: { ...target.options, image: 'localhost:1/teamai-spec/missing:1' } });
+      connection.send({ type: 'init', protocol: 1, homeEnv: {}, mode: 'unattended', options: { ...target.options, image: 'localhost:1/teamai-spec/missing:1' } });
       const reply = await connection.next((message) => message.type === 'init', 300_000);
 
       expect(reply).toMatchObject({ ok: false, error: { code: 'sandbox_unavailable' } });

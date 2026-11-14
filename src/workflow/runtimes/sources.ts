@@ -312,7 +312,7 @@ async function fleetRuntime(driver: ResolvedDriver, split: Extract<ReturnType<ty
 
   const runtime = fleetStepRuntime({ config: driver.config, masks, openWake });
   const mode = how.purpose === 'stop' ? 'recover' : how.purpose === 'check' ? 'check' : how.mode;
-  const ready = await runtime.init({ options: split.runtime, mode, checkout: how.checkout });
+  const ready = await runtime.init({ options: split.runtime, mode, homeEnv: homeEnvOf([]), checkout: how.checkout });
 
   if (!ready.ok) return { ok: false, failure: badOption(driver, 'fleet', ready.failure.key ?? 'pool', ready.failure.message) };
 
@@ -424,7 +424,7 @@ async function openRuntime(driver: ResolvedDriver, { use, options, sandbox }: { 
 
   if (purpose === 'stop') {
     const recovering = spawned();
-    const recovered = await recovering.init({ options: initOptions, mode: 'recover', checkout });
+    const recovered = await recovering.init({ options: initOptions, mode: 'recover', homeEnv: homeEnvOf([]), checkout });
 
     // It offers nothing in this mode: it is asked only to stop, collect and close what it ran.
     if (recovered.ok) return { ok: true, opened: { kind: 'external', use, runtime: removingCopy(recovering), can: recovered.can, launchesAgents: recovered.launchesAgents, ...(recovered.keepsConversations && { keepsConversations: true }), ...(recovered.runsOnToolHome && { runsOnToolHome: true }), engine: split.engine, credentials: {}, found: [], masks, optionsFrom: optionsSource(driver, use), sources: [origin] } };

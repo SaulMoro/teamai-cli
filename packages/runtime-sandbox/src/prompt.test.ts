@@ -100,7 +100,7 @@ function newOp(): string {
 }
 
 async function init(connection: Connection): Promise<Message> {
-  connection.send({ type: 'init', protocol: 1, mode: 'unattended', options: { provider: 'docker', image: IMAGE }, credentials: { env: ['ANTHROPIC_API_KEY'], logins: [] } });
+  connection.send({ type: 'init', protocol: 1, homeEnv: {}, mode: 'unattended', options: { provider: 'docker', image: IMAGE }, credentials: { env: ['ANTHROPIC_API_KEY'], logins: [] } });
 
   return connection.next((message) => message.type === 'init', 30_000);
 }
@@ -162,7 +162,7 @@ describe('a prompt step in the attempt\'s container', () => {
     first.child.kill('SIGKILL');
     await first.end();
     const second = start();
-    second.send({ type: 'init', protocol: 1, mode: 'unattended', options: { provider: 'podman', image: IMAGE }, credentials: { env: ['ANTHROPIC_API_KEY'], logins: [] } });
+    second.send({ type: 'init', protocol: 1, homeEnv: {}, mode: 'unattended', options: { provider: 'podman', image: IMAGE }, credentials: { env: ['ANTHROPIC_API_KEY'], logins: [] } });
     expect(await second.next((message) => message.type === 'init', 30_000)).toMatchObject({ ok: true });
     const before = engine.calls().length;
 

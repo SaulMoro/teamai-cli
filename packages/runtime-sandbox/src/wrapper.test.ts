@@ -80,7 +80,7 @@ function start(): Connection {
 }
 
 async function init(connection: Connection, instances: Message[] = [], image = IMAGE): Promise<Message> {
-  connection.send({ type: 'init', protocol: 1, mode: 'unattended', options: { provider: 'docker', image }, credentials: { env: ['CLAUDE_CODE_OAUTH_TOKEN', 'OPENAI_API_KEY'], logins: [] }, instances });
+  connection.send({ type: 'init', protocol: 1, homeEnv: {}, mode: 'unattended', options: { provider: 'docker', image }, credentials: { env: ['CLAUDE_CODE_OAUTH_TOKEN', 'OPENAI_API_KEY'], logins: [] }, instances });
 
   return connection.next((message) => message.type === 'init', 30_000);
 }
@@ -597,7 +597,7 @@ describe('after the runtime restarts', () => {
     const handle = await openFor(first, at);
     await register(handle, null);
     const stopping = start();
-    stopping.send({ type: 'init', protocol: 1, mode: 'recover', options: { provider: 'docker', image: IMAGE } });
+    stopping.send({ type: 'init', protocol: 1, homeEnv: {}, mode: 'recover', options: { provider: 'docker', image: IMAGE } });
     await stopping.next((message) => message.type === 'init', 30_000);
     stopping.send({ type: 'reattach', handle });
     expect(await stopping.next((message) => message.handle === handle)).toMatchObject({ event: 'alive', handle });

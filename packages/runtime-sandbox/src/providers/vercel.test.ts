@@ -67,7 +67,7 @@ function start(extra: NodeJS.ProcessEnv = AUTH): Connection {
 }
 
 async function init(connection: Connection, options: Message = { provider: 'vercel' }, credentials = { env: ['CLAUDE_CODE_OAUTH_TOKEN'], logins: [] }): Promise<Message> {
-  connection.send({ type: 'init', protocol: 1, mode: 'unattended', options, credentials });
+  connection.send({ type: 'init', protocol: 1, homeEnv: {}, mode: 'unattended', options, credentials });
 
   return connection.next((message) => message.type === 'init', 30_000);
 }

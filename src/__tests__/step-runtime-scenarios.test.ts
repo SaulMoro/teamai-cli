@@ -169,7 +169,7 @@ describe.each(SUBJECTS)('StepRuntime scenarios: $name', (subject) => {
     const runtime = subject.start(state);
     started.push(runtime);
 
-    expect(await runtime.init({ options: { ...subject.options(state), imgae: 'x' }, mode: 'unattended' }))
+    expect(await runtime.init({ homeEnv: homeEnvOf([]), options: { ...subject.options(state), imgae: 'x' }, mode: 'unattended' }))
       .toMatchObject({ ok: false, failure: { code: 'bad_option', key: 'imgae' } });
   });
 
@@ -1146,7 +1146,7 @@ describe('the conformance profile of each step runtime', () => {
   it.each(tied)('declares what the $profile runtime offers the local driver', async ({ profile, offer }) => {
     const { runtime, options } = offer(path.join(dir, 'state'));
     started.push(runtime);
-    const ready = await runtime.init({ options, mode: 'unattended' });
+    const ready = await runtime.init({ homeEnv: homeEnvOf([]), options, mode: 'unattended' });
 
     if (!ready.ok) throw new Error(`The ${profile} runtime offered nothing: ${ready.failure.message}`);
     // A local driver has a person by its operation, not by the runtime's offer, and runs every runtime's steps remotely.
@@ -1184,7 +1184,7 @@ describe('a runtime that answers confined prompts, over stdio', () => {
   });
 
   it('tells the runtime at init the names of the credentials and logins it brings, never a value, so it offers only the judges it can sign in', async () => {
-    const ready = await start().init({ options: { state, judge: {} }, mode: 'unattended', credentials: { env: ['ANTHROPIC_API_KEY'], logins: ['codex'] } });
+    const ready = await start().init({ homeEnv: homeEnvOf([]), options: { state, judge: {} }, mode: 'unattended', credentials: { env: ['ANTHROPIC_API_KEY'], logins: ['codex'] } });
 
     expect(ready).toMatchObject({ ok: true });
     const noted = fs.readFileSync(path.join(state, 'credentials.jsonl'), 'utf8').trim().split('\n').map((line) => JSON.parse(line) as unknown);
@@ -1192,7 +1192,7 @@ describe('a runtime that answers confined prompts, over stdio', () => {
   });
 
   it('drops can.confined from an offer whose init does not say it answers confined prompts', async () => {
-    const ready = await start().init({ options: { state, can: { confined: offer } }, mode: 'unattended' });
+    const ready = await start().init({ homeEnv: homeEnvOf([]), options: { state, can: { confined: offer } }, mode: 'unattended' });
 
     expect(ready).toMatchObject({ ok: true });
     expect(ready.ok && ready.can.confined).toBeUndefined();
@@ -1200,7 +1200,7 @@ describe('a runtime that answers confined prompts, over stdio', () => {
 
   it('answers a confined prompt in a place opened with no view, reading only its directory, and reports the level it kept', async () => {
     const runtime = start();
-    const ready = await runtime.init({ options: { state, judge: { reply: { answer: { label: 'good' } } } }, mode: 'unattended' });
+    const ready = await runtime.init({ homeEnv: homeEnvOf([]), options: { state, judge: { reply: { answer: { label: 'good' } } } }, mode: 'unattended' });
     expect(ready).toMatchObject({ ok: true, can: { confined: offer } });
     const place = await runtime.open({ op: newOpId(), run: 'r0123abcd', attempt: 'a0123abcd', credentials: {} }, async () => {});
 
@@ -1236,7 +1236,7 @@ describe('a runtime\'s display over stdio', () => {
   const openWith = async (display: JsonValue) => {
     const runtime = stdioStepRuntime({ name: 'toy', command: process.execPath, args: [TOY_RUNTIME] });
     started.push(runtime);
-    expect(await runtime.init({ options: { state: path.join(dir, 'state'), display }, mode: 'unattended' })).toMatchObject({ ok: true });
+    expect(await runtime.init({ homeEnv: homeEnvOf([]), options: { state: path.join(dir, 'state'), display }, mode: 'unattended' })).toMatchObject({ ok: true });
     const opened = await runtime.open({
       op: newOpId(), run: 'r0123abcd', attempt: 'a0123abcd', credentials: {},
       view: { worktree: path.join(dir, 'worktree'), readonly: [], result: path.join(dir, 'out'), runDir: path.join(dir, 'scratch'), toolHome: {} },
@@ -1271,7 +1271,7 @@ describe('a runtime\'s display over stdio', () => {
   ])('%s a prompt runtime gives once it accepted the prompt', async (_, display, kept) => {
     const runtime = stdioStepRuntime({ name: 'toy', command: process.execPath, args: [TOY_RUNTIME] });
     started.push(runtime);
-    expect(await runtime.init({ options: { state: path.join(dir, 'state'), agent: { output: { ok: true }, display } }, mode: 'unattended' })).toMatchObject({ ok: true });
+    expect(await runtime.init({ homeEnv: homeEnvOf([]), options: { state: path.join(dir, 'state'), agent: { output: { ok: true }, display } }, mode: 'unattended' })).toMatchObject({ ok: true });
     const opened = await runtime.open({
       op: newOpId(), run: 'r0123abcd', attempt: 'a0123abcd', credentials: {},
       view: { worktree: path.join(dir, 'worktree'), readonly: [], result: path.join(dir, 'out'), runDir: path.join(dir, 'scratch'), toolHome: {} },
@@ -1291,7 +1291,7 @@ describe('a runtime\'s display over stdio', () => {
     const release = path.join(dir, 'release');
     const runtime = stdioStepRuntime({ name: 'toy', command: process.execPath, args: [TOY_RUNTIME] });
     started.push(runtime);
-    expect(await runtime.init({ options: { state: path.join(dir, 'state'), agent: { output: { ok: true }, display, display_after_ms: 0, release } }, mode: 'unattended' })).toMatchObject({ ok: true });
+    expect(await runtime.init({ homeEnv: homeEnvOf([]), options: { state: path.join(dir, 'state'), agent: { output: { ok: true }, display, display_after_ms: 0, release } }, mode: 'unattended' })).toMatchObject({ ok: true });
     const opened = await runtime.open({
       op: newOpId(), run: 'r0123abcd', attempt: 'a0123abcd', credentials: {},
       view: { worktree: path.join(dir, 'worktree'), readonly: [], result: path.join(dir, 'out'), runDir: path.join(dir, 'scratch'), toolHome: {} },
@@ -1342,7 +1342,7 @@ describe('a runtime that cannot close a place, over stdio', () => {
   const opened = async (options: RuntimeOptions): Promise<{ runtime: StepRuntime<DriverCan>; handle: string }> => {
     const runtime = stdioStepRuntime({ name: 'toy', command: process.execPath, args: [TOY_RUNTIME] });
     started.push(runtime);
-    expect(await runtime.init({ options: { state: path.join(dir, 'state'), ...options }, mode: 'unattended' })).toMatchObject({ ok: true });
+    expect(await runtime.init({ homeEnv: homeEnvOf([]), options: { state: path.join(dir, 'state'), ...options }, mode: 'unattended' })).toMatchObject({ ok: true });
     const place = await runtime.open({
       op: newOpId(), run: 'r0123abcd', attempt: 'a0123abcd', credentials: {},
       view: { worktree: path.join(dir, 'worktree'), readonly: [], result: path.join(dir, 'out'), runDir: path.join(dir, 'scratch'), toolHome: {} },
@@ -1418,7 +1418,7 @@ describe('a runtime that cannot close a place, over stdio', () => {
   it('ends a prompt, and fails an open, the runtime does not accept within 15 s, as runtime_unanswered', async () => {
     const runtime = stdioStepRuntime({ name: 'toy', command: process.execPath, args: [TOY_RUNTIME] });
     started.push(runtime);
-    expect(await runtime.init({ options: { state: path.join(dir, 'state'), agent: {}, answer: { open: 'silent', prompt: 'silent' } }, mode: 'unattended' })).toMatchObject({ ok: true });
+    expect(await runtime.init({ homeEnv: homeEnvOf([]), options: { state: path.join(dir, 'state'), agent: {}, answer: { open: 'silent', prompt: 'silent' } }, mode: 'unattended' })).toMatchObject({ ok: true });
     const handle = 'toy-r0123abcd-a0123abcd';
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
 
@@ -1444,7 +1444,7 @@ describe('a runtime that cannot close a place, over stdio', () => {
     const release = path.join(dir, 'release');
     const agentToy = stdioStepRuntime({ name: 'toy', command: process.execPath, args: [TOY_RUNTIME] });
     started.push(agentToy);
-    expect(await agentToy.init({ options: { state: path.join(dir, 'agent-state'), agent: { release }, answer: { cancel: 'silent' } }, mode: 'unattended' })).toMatchObject({ ok: true });
+    expect(await agentToy.init({ homeEnv: homeEnvOf([]), options: { state: path.join(dir, 'agent-state'), agent: { release }, answer: { cancel: 'silent' } }, mode: 'unattended' })).toMatchObject({ ok: true });
     let execAccepted: () => void = () => {};
     let promptAccepted: () => void = () => {};
     let wroteAfterCancel: () => void = () => {};
@@ -1485,7 +1485,7 @@ describe('a runtime that cannot close a place, over stdio', () => {
     const display = { label: 'Review the change', url: 't3://thread/5e1c' };
     const runtime = stdioStepRuntime({ name: 'toy', command: process.execPath, args: [TOY_RUNTIME] });
     started.push(runtime);
-    expect(await runtime.init({ options: { state: path.join(dir, 'state'), agent: { display }, answer: { prompt: 'display' } }, mode: 'unattended' })).toMatchObject({ ok: true });
+    expect(await runtime.init({ homeEnv: homeEnvOf([]), options: { state: path.join(dir, 'state'), agent: { display }, answer: { prompt: 'display' } }, mode: 'unattended' })).toMatchObject({ ok: true });
     const accepted: unknown[] = [];
     let showed: (sent: RuntimeDisplay) => void = () => {};
     const shown = new Promise<RuntimeDisplay>((resolve) => { showed = resolve; });
@@ -1513,7 +1513,7 @@ describe('a runtime that cannot close a place, over stdio', () => {
     const release = path.join(dir, 'release');
     const runtime = stdioStepRuntime({ name: 'toy', command: process.execPath, args: [TOY_RUNTIME] });
     started.push(runtime);
-    expect(await runtime.init({ options: { state: path.join(dir, 'state'), agent: { release, display }, answer: { cancel: 'display' } }, mode: 'unattended' })).toMatchObject({ ok: true });
+    expect(await runtime.init({ homeEnv: homeEnvOf([]), options: { state: path.join(dir, 'state'), agent: { release, display }, answer: { cancel: 'display' } }, mode: 'unattended' })).toMatchObject({ ok: true });
     let promptAccepted: () => void = () => {};
     let showed: (sent: RuntimeDisplay) => void = () => {};
     const acceptance = new Promise<void>((resolve) => { promptAccepted = resolve; });
@@ -1553,7 +1553,7 @@ describe('a runtime that cannot close a place, over stdio', () => {
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
 
     try {
-      const ready = runtime.init({ options: { state: path.join(dir, 'state'), answer: { init: 'silent' } }, mode: 'unattended' });
+      const ready = runtime.init({ homeEnv: homeEnvOf([]), options: { state: path.join(dir, 'state'), answer: { init: 'silent' } }, mode: 'unattended' });
       await vi.advanceTimersByTimeAsync(15_000);
 
       expect(await Promise.race([ready, 'still waiting'])).toEqual({ ok: false, failure: { code: 'runtime_unanswered', message: 'Step runtime "toy" did not answer init within 15 s.' } });
@@ -1571,7 +1571,7 @@ describe('a runtime that cannot close a place, over stdio', () => {
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
 
     try {
-      const ready = runtime.init({ options: { state: path.join(dir, 'state'), answer: { init: 'silent' }, notice: { init: 'Open https://toy.example.test/device to sign in.' } }, mode: 'attended' });
+      const ready = runtime.init({ homeEnv: homeEnvOf([]), options: { state: path.join(dir, 'state'), answer: { init: 'silent' }, notice: { init: 'Open https://toy.example.test/device to sign in.' } }, mode: 'attended' });
 
       expect(await notice).toBe('Step runtime "toy": Open https://toy.example.test/device to sign in.');
       await vi.advanceTimersByTimeAsync(15_000);
@@ -1618,7 +1618,7 @@ describe('a cancel a runtime tries again, over stdio', () => {
   const toy = async (options: RuntimeOptions): Promise<StepRuntime<DriverCan>> => {
     const runtime = stdioStepRuntime({ name: 'toy', command: process.execPath, args: [TOY_RUNTIME] });
     started.push(runtime);
-    expect(await runtime.init({ options: { state: path.join(dir, 'state'), ...options }, mode: 'unattended' })).toMatchObject({ ok: true });
+    expect(await runtime.init({ homeEnv: homeEnvOf([]), options: { state: path.join(dir, 'state'), ...options }, mode: 'unattended' })).toMatchObject({ ok: true });
 
     return runtime;
   };
@@ -1670,7 +1670,7 @@ describe('the toy runtime once teamai stops reading it', () => {
     lines.on('line', (line) => replies.push(line));
     lines.on('error', (error) => replies.push(`error: ${error.message}`));
     const exec = newOpId();
-    toy.stdin.write(`${JSON.stringify({ type: 'init', protocol: 1, mode: 'unattended', options: { state } })}\n`);
+    toy.stdin.write(`${JSON.stringify({ type: 'init', protocol: 1, homeEnv: homeEnvOf([]), mode: 'unattended', options: { state } })}\n`);
     toy.stdin.write(`${JSON.stringify({ type: 'open', op: newOpId(), run: 'r0123abcd', attempt: 'a0123abcd', credentials: {}, view: { worktree, readonly: [], result: path.join(dir, 'out'), runDir: path.join(dir, 'scratch'), toolHome: {} } })}\n`);
     toy.stdin.write(`${JSON.stringify({ type: 'exec', op: exec, handle: 'toy-r0123abcd-a0123abcd', argv: [process.execPath, '-e', 'setTimeout(() => { for (let i = 0; i < 50; i += 1) console.log(`line ${i}`); }, 300)'], env: {}, unset: [], cwd: worktree })}\n`);
     expect(await until(() => replies.some((line) => line.includes(exec) && line.includes('accepted')))).toBe(true);
@@ -1680,7 +1680,7 @@ describe('the toy runtime once teamai stops reading it', () => {
     await new Promise((resolve) => toy.once('close', resolve));
     const again = stdioStepRuntime({ name: 'toy', command: process.execPath, args: [TOY_RUNTIME] });
     started.push(again);
-    expect(await again.init({ options: { state }, mode: 'unattended' })).toMatchObject({ ok: true });
+    expect(await again.init({ homeEnv: homeEnvOf([]), options: { state }, mode: 'unattended' })).toMatchObject({ ok: true });
 
     expect(await again.reattach('toy-r0123abcd-a0123abcd')).toMatchObject({ kind: 'alive', ops: [{ op: exec, state: 'exited', code: 0 }] });
   });
@@ -1693,7 +1693,7 @@ describe('the toy runtime once teamai stops reading it', () => {
     readline.createInterface({ input: toy.stdout }).on('line', (line) => { lines.push(line); }).on('error', (error) => { lines.push(`error: ${error.message}`); });
     const write = (request: object): void => { toy.stdin.write(`${JSON.stringify(request)}\n`); };
     const op = newOpId();
-    write({ type: 'init', protocol: 1, mode: 'unattended', options: { state } });
+    write({ type: 'init', protocol: 1, homeEnv: homeEnvOf([]), mode: 'unattended', options: { state } });
     write({ type: 'open', op: newOpId(), run: 'r0123abcd', attempt: 'a0123abcd', credentials: {}, view: { worktree, readonly: [], result: path.join(dir, 'out'), runDir: path.join(dir, 'scratch'), toolHome: {} } });
     expect(await until(() => lines.some((line) => line.includes('"ready"')))).toBe(true);
     const argv = [process.execPath, '-e', 'setTimeout(() => process.stdout.write("finished"), 500)'];
@@ -1705,7 +1705,7 @@ describe('the toy runtime once teamai stops reading it', () => {
 
     const second = stdioStepRuntime({ name: 'toy', command: process.execPath, args: [TOY_RUNTIME] });
     started.push(second);
-    expect(await second.init({ options: { state }, mode: 'unattended' })).toMatchObject({ ok: true });
+    expect(await second.init({ homeEnv: homeEnvOf([]), options: { state }, mode: 'unattended' })).toMatchObject({ ok: true });
 
     // Another command under the same id: an outcome of `finished` is the recorded one, not a second run.
     const rerun = [process.execPath, '-e', 'process.stdout.write("ran again")'];
@@ -1721,7 +1721,7 @@ describe('the toy runtime once teamai stops reading it', () => {
     readline.createInterface({ input: toy.stdout }).on('line', (line) => { lines.push(line); }).on('error', (error) => { lines.push(`error: ${error.message}`); });
     const write = (request: object): void => { toy.stdin.write(`${JSON.stringify(request)}\n`); };
     const op = newOpId();
-    write({ type: 'init', protocol: 1, mode: 'unattended', options: { state } });
+    write({ type: 'init', protocol: 1, homeEnv: homeEnvOf([]), mode: 'unattended', options: { state } });
     write({ type: 'open', op: newOpId(), run: 'r0123abcd', attempt: 'a0123abcd', credentials: {}, view: { worktree, readonly: [], result: path.join(dir, 'out'), runDir: path.join(dir, 'scratch'), toolHome: {} } });
     expect(await until(() => lines.some((line) => line.includes('"ready"')))).toBe(true);
     write({ type: 'exec', op, handle: 'toy-r0123abcd-a0123abcd', argv: [process.execPath, '-e', 'setTimeout(() => { process.stdout.write("retained"); require("fs").writeFileSync("ended", ""); }, 300)'], env: {}, unset: [], credentials: {}, cwd: worktree });
@@ -1734,7 +1734,7 @@ describe('the toy runtime once teamai stops reading it', () => {
       await new Promise((resolve) => setTimeout(resolve, 200));
       const second = stdioStepRuntime({ name: 'toy', command: process.execPath, args: [TOY_RUNTIME] });
       started.push(second);
-      expect(await second.init({ options: { state }, mode: 'unattended' })).toMatchObject({ ok: true });
+      expect(await second.init({ homeEnv: homeEnvOf([]), options: { state }, mode: 'unattended' })).toMatchObject({ ok: true });
 
       expect(await second.reattach('toy-r0123abcd-a0123abcd')).toEqual({ kind: 'alive', ops: [{ op, state: 'running' }] });
       toy.kill('SIGCONT');
@@ -1800,7 +1800,7 @@ describe('a driver whose runtime stopped on a line it could not read', () => {
           import { stdioStepRuntime } from './stdio.js';
           const [toy, dir] = process.argv.slice(2);
           const runtime = stdioStepRuntime({ name: 'toy', command: process.execPath, args: [toy] });
-          await runtime.init({ options: { state: dir + '/state', stray: true }, mode: 'unattended' });
+          await runtime.init({ options: { state: dir + '/state', stray: true }, mode: 'unattended', homeEnv: ${JSON.stringify(homeEnvOf([]))} });
           const place = await runtime.open({ op: 'op-00000001', run: 'r0123abcd', attempt: 'a0123abcd', credentials: {}, view: { worktree: dir + '/worktree', readonly: [], result: dir + '/out', runDir: dir + '/scratch', toolHome: {} } }, async () => {});
           const end = await runtime.exec({ op: 'op-00000002', handle: place.handle, argv: [process.execPath, '-e', ''], env: {}, unset: [], credentials: {}, cwd: dir + '/worktree' }, {});
           console.log(JSON.stringify(end));
@@ -1842,7 +1842,7 @@ describe('an attempt\'s deadline, over stdio', () => {
   const opened = async (options: RuntimeOptions, deadline: string): Promise<{ runtime: StepRuntime<DriverCan>; handle: string }> => {
     const runtime = stdioStepRuntime({ name: 'toy', command: process.execPath, args: [TOY_RUNTIME] });
     started.push(runtime);
-    expect(await runtime.init({ options: { state: path.join(dir, 'state'), ...options }, mode: 'unattended' })).toMatchObject({ ok: true });
+    expect(await runtime.init({ homeEnv: homeEnvOf([]), options: { state: path.join(dir, 'state'), ...options }, mode: 'unattended' })).toMatchObject({ ok: true });
     const place = await runtime.open({
       op: newOpId(), run: 'r0123abcd', attempt: 'a0123abcd', credentials: {}, deadline,
       view: { worktree: path.join(dir, 'worktree'), readonly: [], result: path.join(dir, 'out'), runDir: path.join(dir, 'scratch'), toolHome: {} },
@@ -1917,7 +1917,7 @@ describe('an attempt\'s deadline, over stdio', () => {
     });`;
     const runtime = stdioStepRuntime({ name: 'slow', command: process.execPath, args: ['-e', acceptsOnly] });
     started.push(runtime);
-    expect(await runtime.init({ options: {}, mode: 'unattended' })).toMatchObject({ ok: true });
+    expect(await runtime.init({ homeEnv: homeEnvOf([]), options: {}, mode: 'unattended' })).toMatchObject({ ok: true });
     const persisted: string[] = [];
     const op = newOpId();
 
@@ -1936,7 +1936,7 @@ describe('an attempt\'s deadline, over stdio', () => {
     });`;
     const runtime = stdioStepRuntime({ name: 'late', command: process.execPath, args: ['-e', late] });
     started.push(runtime);
-    expect(await runtime.init({ options: {}, mode: 'unattended' })).toMatchObject({ ok: true });
+    expect(await runtime.init({ homeEnv: homeEnvOf([]), options: {}, mode: 'unattended' })).toMatchObject({ ok: true });
     const persisted: string[] = [];
     const op = newOpId();
 
@@ -1956,7 +1956,7 @@ describe('the stdio step runtime client', () => {
       if (request.type === 'open') process.stdout.write(JSON.stringify({ op: request.op, event: 'accepted', handle: 'h1' }) + '\\n', () => process.exit(1));
     });`;
     const runtime = stdioStepRuntime({ name: 'accepts-then-exits', command: process.execPath, args: ['-e', acceptsThenExits] });
-    expect(await runtime.init({ options: {}, mode: 'unattended' })).toMatchObject({ ok: true });
+    expect(await runtime.init({ homeEnv: homeEnvOf([]), options: {}, mode: 'unattended' })).toMatchObject({ ok: true });
     const request: OpenRequest = { op: newOpId(), run: 'r0123abcd', attempt: 'a0123abcd', credentials: {}, view: { worktree: os.tmpdir(), readonly: [], result: os.tmpdir(), runDir: os.tmpdir(), toolHome: {} } };
 
     await expect(runtime.open(request, async () => {
@@ -1978,7 +1978,7 @@ describe('the stdio step runtime client', () => {
     const runtime = stdioStepRuntime({ name: 'long', command: process.execPath, args: ['-e', long] });
 
     try {
-      expect(await runtime.init({ options: {}, mode: 'unattended' })).toMatchObject({ ok: true });
+      expect(await runtime.init({ homeEnv: homeEnvOf([]), options: {}, mode: 'unattended' })).toMatchObject({ ok: true });
       expect(warned.mock.calls.map(([line]) => line)).toEqual([`Step runtime "long": ${'x'.repeat(2000)}…`]);
     } finally {
       warned.mockRestore();
@@ -2003,7 +2003,7 @@ describe('the stdio step runtime client', () => {
     const runtime = stdioStepRuntime({ name: 'notes', command: process.execPath, args: ['-e', notes], secrets: { 'ACME_TOKEN (credential of notes)': 'acme-secret-7f3a91' } });
 
     try {
-      expect(await runtime.init({ options: {}, mode: 'unattended' })).toMatchObject({ ok: true });
+      expect(await runtime.init({ homeEnv: homeEnvOf([]), options: {}, mode: 'unattended' })).toMatchObject({ ok: true });
       const opened = await runtime.open({ op: newOpId(), run: 'r0123abcd', attempt: 'a0123abcd', credentials: { ACME_TOKEN: 'acme-secret-7f3a91' }, view: { worktree: os.tmpdir(), readonly: [], result: os.tmpdir(), runDir: os.tmpdir(), toolHome: {} } }, async () => {});
 
       expect(opened).toMatchObject({ kind: 'ready', handle: 'h1' });
@@ -2037,7 +2037,7 @@ describe('the stdio step runtime client', () => {
     const runtime = stdioStepRuntime({ name: 'twice', command: process.execPath, args: ['-e', twice] });
 
     try {
-      expect(await runtime.init({ options: {}, mode: 'unattended' })).toMatchObject({ ok: true });
+      expect(await runtime.init({ homeEnv: homeEnvOf([]), options: {}, mode: 'unattended' })).toMatchObject({ ok: true });
       const [first, second] = [newOpId(), newOpId()];
       const exec = (op: typeof first): ExecRequest => ({ op, handle: 'h1', argv: ['true'], env: {}, unset: [], credentials: {}, cwd: os.tmpdir() });
 
@@ -2069,7 +2069,7 @@ describe('the stdio step runtime client', () => {
     const runtime = stdioStepRuntime({ name: 'answers', command: process.execPath, args: ['-e', answers] });
 
     try {
-      expect(await runtime.init({ options: {}, mode: 'unattended' })).toMatchObject({ ok: true });
+      expect(await runtime.init({ homeEnv: homeEnvOf([]), options: {}, mode: 'unattended' })).toMatchObject({ ok: true });
       const [cancelled, ended] = [newOpId(), newOpId()];
 
       await runtime.cancel(cancelled);
@@ -2090,7 +2090,7 @@ describe('the stdio step runtime client', () => {
     });`;
     const runtime = stdioStepRuntime({ name: 'surplus', command: process.execPath, args: ['-e', surplus] });
 
-    expect(await runtime.init({ options: {}, mode: 'unattended' })).toMatchObject({ ok: false, failure: { message: expect.stringContaining('"surplus"') } });
+    expect(await runtime.init({ homeEnv: homeEnvOf([]), options: {}, mode: 'unattended' })).toMatchObject({ ok: false, failure: { message: expect.stringContaining('"surplus"') } });
     await runtime.dispose();
   });
 
@@ -2112,7 +2112,7 @@ describe('the stdio step runtime client', () => {
     const shown: RuntimeDisplay[] = [];
 
     try {
-      expect(await runtime.init({ options: {}, mode: 'unattended' })).toMatchObject({ ok: true, wakes: true });
+      expect(await runtime.init({ homeEnv: homeEnvOf([]), options: {}, mode: 'unattended' })).toMatchObject({ ok: true, wakes: true });
       expect(await runtime.wake?.({ op: newOpId(), ...WAKE }, { onDisplay: (display) => shown.push(display) })).toEqual({ kind: 'woken', where: 'studio-mac:gpu' });
       expect(shown).toEqual([{ label: 'Fleet member for gpu', url: 't3://thread/th-1' }]);
     } finally {
@@ -2127,8 +2127,8 @@ describe('the stdio step runtime client', () => {
     const op = newOpId();
 
     try {
-      expect(await plain.init({ options: { state: path.join(state, 'plain') }, mode: 'unattended' })).not.toHaveProperty('wakes');
-      expect(await waking.init({ options: { state: path.join(state, 'waking'), wake_log: wakeLog }, mode: 'unattended' })).toMatchObject({ ok: true, wakes: true });
+      expect(await plain.init({ homeEnv: homeEnvOf([]), options: { state: path.join(state, 'plain') }, mode: 'unattended' })).not.toHaveProperty('wakes');
+      expect(await waking.init({ homeEnv: homeEnvOf([]), options: { state: path.join(state, 'waking'), wake_log: wakeLog }, mode: 'unattended' })).toMatchObject({ ok: true, wakes: true });
       expect(await waking.wake?.({ op, ...WAKE }, {})).toEqual({ kind: 'woken', where: 'toy' });
       expect(fs.readFileSync(wakeLog, 'utf8').split('\n').filter(Boolean).map((line) => JSON.parse(line))).toEqual([{ type: 'wake', op, ...WAKE }]);
     } finally {
@@ -2143,7 +2143,7 @@ describe('the stdio step runtime client', () => {
     const runtime = stdioStepRuntime({ name: 'toy', command: process.execPath, args: [TOY_RUNTIME] });
 
     try {
-      expect(await runtime.init({ options: { state, calls }, mode: 'unattended' })).toMatchObject({ ok: true });
+      expect(await runtime.init({ homeEnv: homeEnvOf([]), options: { state, calls }, mode: 'unattended' })).toMatchObject({ ok: true });
       expect(await runtime.wake?.({ op: newOpId(), ...WAKE }, {})).toEqual({ kind: 'failed', failure: { code: 'wake_unavailable', message: 'Step runtime "toy" wakes no fleet member: its init did not offer wake.' } });
       expect(fs.existsSync(calls)).toBe(false);
     } finally {
@@ -2163,7 +2163,7 @@ describe('the stdio step runtime client', () => {
     const runtime = stdioStepRuntime({ name: 'always', command: process.execPath, args: ['-e', always] });
 
     try {
-      expect(await runtime.init({ options: {}, mode: 'recover' })).toMatchObject({ ok: true });
+      expect(await runtime.init({ homeEnv: homeEnvOf([]), options: {}, mode: 'recover' })).toMatchObject({ ok: true });
       expect(await runtime.wake?.({ op: newOpId(), ...WAKE }, {})).toMatchObject({ kind: 'failed', failure: { code: 'wake_unavailable' } });
     } finally {
       await runtime.dispose();
@@ -2179,7 +2179,7 @@ describe('the stdio step runtime client', () => {
     const runtime = stdioStepRuntime({ name: 'accepts-then-exits', command: process.execPath, args: ['-e', acceptsThenExits] });
 
     try {
-      expect(await runtime.init({ options: {}, mode: 'unattended' })).toMatchObject({ ok: true, wakes: true });
+      expect(await runtime.init({ homeEnv: homeEnvOf([]), options: {}, mode: 'unattended' })).toMatchObject({ ok: true, wakes: true });
       expect(await runtime.wake?.({ op: newOpId(), ...WAKE }, {})).toEqual({ kind: 'lost', failure: { code: 'runtime_exited', message: expect.stringContaining('Step runtime "accepts-then-exits" stopped: it exited with status 1.') } });
     } finally {
       await runtime.dispose();
@@ -2214,7 +2214,7 @@ describe('the stdio step runtime client', () => {
     const runtime = stdioStepRuntime({ name: 'recording', command: process.execPath, args: ['-e', recording, received] });
 
     try {
-      expect(await runtime.init({ options: {}, mode: 'unattended' })).toMatchObject({ ok: true, launchesAgents: true });
+      expect(await runtime.init({ homeEnv: homeEnvOf([]), options: {}, mode: 'unattended' })).toMatchObject({ ok: true, launchesAgents: true });
       const place = promptPlace(dir);
       expect(await runtime.open(place.open, async () => {})).toMatchObject({ kind: 'ready', handle: 'h1' });
 
@@ -2236,7 +2236,7 @@ describe('the stdio step runtime client', () => {
     const limits = { budget: { tokens: 20_000 }, timeoutMs: 600_000, idleMs: 120_000 };
 
     try {
-      expect(await runtime.init({ options: { state, agent: { output: { ok: true } } }, mode: 'unattended' })).toMatchObject({ ok: true, launchesAgents: true });
+      expect(await runtime.init({ homeEnv: homeEnvOf([]), options: { state, agent: { output: { ok: true } } }, mode: 'unattended' })).toMatchObject({ ok: true, launchesAgents: true });
       const place = promptPlace(dir);
       const opened = await runtime.open(place.open, async () => {});
       if (opened.kind !== 'ready') throw new Error(`not opened: ${JSON.stringify(opened)}`);
@@ -2265,7 +2265,7 @@ describe('the stdio step runtime client', () => {
     const runtime = stdioStepRuntime({ name: 'stopping', command: process.execPath, args: ['-e', stopping] });
 
     try {
-      expect(await runtime.init({ options: {}, mode: 'unattended' })).toMatchObject({ ok: true, launchesAgents: true, runsOnToolHome: true, keepsConversations: true });
+      expect(await runtime.init({ homeEnv: homeEnvOf([]), options: {}, mode: 'unattended' })).toMatchObject({ ok: true, launchesAgents: true, runsOnToolHome: true, keepsConversations: true });
       const place = promptPlace(dir);
       await runtime.open(place.open, async () => {});
 
@@ -2582,7 +2582,7 @@ async function ownerOf({ workflow = SLOW, command = SLOW_COMMAND, tools, labels,
   const open = async (cwd = alice.checkout, options: RuntimeOptions = { stale_after: '60s' }) => {
     const runtime = fleetStepRuntime({ config: alice.config, masks: {} });
     fleetRuntimes.push(runtime);
-    const initialized = await runtime.init({ options, mode: 'unattended', checkout: alice.checkout });
+    const initialized = await runtime.init({ homeEnv: homeEnvOf([]), options, mode: 'unattended', checkout: alice.checkout });
     expect(initialized).toMatchObject({ ok: true, can: { remote: true }, launchesAgents: true });
     expect(initialized.ok && initialized.can).not.toHaveProperty('prompt');
     const opened = await runtime.open({ op: newOpId(), run, attempt, credentials: {} }, async () => undefined);
@@ -3189,7 +3189,7 @@ done`);
       // A teamai that restarted reads the end from the record as the live one gave it.
       const restarted = fleetStepRuntime({ config: owner.alice.config, masks: {} });
       fleetRuntimes.push(restarted);
-      expect(await restarted.init({ options: { stale_after: '12s' }, mode: 'unattended', checkout: owner.alice.checkout })).toMatchObject({ ok: true });
+      expect(await restarted.init({ homeEnv: homeEnvOf([]), options: { stale_after: '12s' }, mode: 'unattended', checkout: owner.alice.checkout })).toMatchObject({ ok: true });
       expect(await restarted.reattach(handle)).toMatchObject({ kind: 'alive', ops: [{ op, state: 'cancelled', stdout: end.kind === 'cancelled' ? end.stdout : '' }] });
     } finally {
       vi.unstubAllEnvs();
@@ -3442,7 +3442,7 @@ done`);
     const driven = async () => {
       const runtime = fleetStepRuntime({ config: owner.alice.config, masks: {} });
       fleetRuntimes.push(runtime);
-      expect(await runtime.init({ options: { stale_after: '60s' }, mode: 'unattended', checkout: owner.alice.checkout })).toMatchObject({ ok: true });
+      expect(await runtime.init({ homeEnv: homeEnvOf([]), options: { stale_after: '60s' }, mode: 'unattended', checkout: owner.alice.checkout })).toMatchObject({ ok: true });
       const attempt = attemptRun({ config: owner.alice.config, run: owner.run, attempt: owner.attempt, runtime, driver: 'fleet' });
       expect(await attempt.open(undefined)).toMatchObject({ ok: true });
       const prompt = async () => attempt.prompt({

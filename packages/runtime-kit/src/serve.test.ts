@@ -81,6 +81,8 @@ describe('serving runtime protocol 1', () => {
     ['a line that is no JSON, which names nothing, with an error line', 'not json', { event: 'error', message: expect.stringContaining('Not a protocol 1 request') }],
     ['an unreadable request naming an op, with that op\'s failure', JSON.stringify({ type: 'exec', op: OP }), { op: OP, event: 'failed', failure: { code: 'runtime_protocol', message: expect.stringContaining('Not a protocol 1 request') } }],
     ['an unreadable request naming a handle, with that handle\'s failure', JSON.stringify({ type: 'reattach', handle: 'h-1', credentials: 'none' }), { event: 'failed', handle: 'h-1', failure: { code: 'runtime_protocol', message: expect.stringContaining('Not a protocol 1 request') } }],
+    // Without it each tool would start at its default home while teamai delivered to another.
+    ['an init without homeEnv, with init\'s refusal naming the field', JSON.stringify({ type: 'init', protocol: 1, mode: 'unattended', options: {} }), { type: 'init', ok: false, error: { code: 'runtime_protocol', message: expect.stringMatching(/^Not a protocol 1 request: .*homeEnv/s) } }],
     ['an unreadable init, with init\'s refusal', JSON.stringify({ type: 'init', protocol: 2 }), { type: 'init', ok: false, error: { code: 'runtime_protocol', message: expect.stringContaining('Not a protocol 1 request') } }],
   ])('answers %s', async (_, line, answer) => {
     const runtime = served();
@@ -100,7 +102,7 @@ describe('serving runtime protocol 1', () => {
   });
 
   it.each<[string, RuntimeRequest, RuntimeMessage]>([
-    ['an init, with init\'s refusal', { type: 'init', protocol: 1, mode: 'unattended', options: {} }, { type: 'init', ok: false, error: { code: 'runtime_failed', message: 'Runtime fake could not start: boom' } }],
+    ['an init, with init\'s refusal', { type: 'init', protocol: 1, mode: 'unattended', options: {}, homeEnv: {} }, { type: 'init', ok: false, error: { code: 'runtime_failed', message: 'Runtime fake could not start: boom' } }],
     ['an exec, with its failure', exec(OP), { op: OP, event: 'failed', failure: { code: 'runtime_failed', message: `Runtime fake could not carry out exec of ${OP}: boom` } }],
     ['a cancel, with a stop it could not confirm', { type: 'cancel', op: OP }, { op: OP, event: 'failed', failure: { code: 'cancel_failed', message: `Runtime fake could not carry out the cancel of ${OP}, so its fake agent may still run: boom. Run teamai workflow cancel again.` } }],
     ['a reattach, with its handle\'s failure', { type: 'reattach', handle: 'h-1' }, { event: 'failed', handle: 'h-1', failure: { code: 'runtime_failed', message: 'Runtime fake could not carry out reattach of h-1: boom' } }],

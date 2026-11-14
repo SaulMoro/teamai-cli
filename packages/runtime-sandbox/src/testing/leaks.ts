@@ -115,7 +115,7 @@ export async function closeLeftovers(connections: Connection[]): Promise<{ inval
     const options = connections.filter((connection) => connection.env.HOME === home).flatMap((connection) => connection.sent).findLast((request) => request.type === 'init')?.options ?? {};
     const recover = connect(last.executable, last.env);
     recovered.push(recover);
-    recover.send({ type: 'init', protocol: 1, mode: 'recover', options });
+    recover.send({ type: 'init', protocol: 1, homeEnv: {}, mode: 'recover', options });
     await recover.next((message) => message.type === 'init', 30_000);
 
     for (const handle of handles) {

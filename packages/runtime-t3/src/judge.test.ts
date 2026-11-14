@@ -4,7 +4,7 @@ import { RuntimeMessageSchema } from '@teamai/runtime-protocol';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { z } from 'zod';
 import { signIn, type Connection, type Line } from './testing/harness.js';
-import { dir, isNotice, linkTo, start, t3, useT3Runtime } from './testing/suite.js';
+import { dir, isNotice, linkTo, start, t3, useT3Runtime, SHIPPED_HOME_ENV } from './testing/suite.js';
 
 describe('teamai-runtime-t3', () => {
   useT3Runtime();
@@ -18,7 +18,7 @@ describe('teamai-runtime-t3', () => {
     /** A runtime past init and an open with no view, as teamai opens a confined prompt's place, and its handle. */
     const opened = async (options: Line = {}, mode: 'attended' | 'unattended' = 'attended'): Promise<{ runtime: Connection; handle: string }> => {
       const runtime = start();
-      runtime.send({ type: 'init', protocol: 1, mode, options: { environment: 'local', ...options } });
+      runtime.send({ type: 'init', protocol: 1, homeEnv: SHIPPED_HOME_ENV, mode, options: { environment: 'local', ...options } });
       expect(await runtime.next((line) => line['type'] === 'init')).toMatchObject({ ok: true, confinedPrompt: true });
       runtime.send({ type: 'open', op: OPEN, run: RUN, attempt: 'a9e8d7c6', credentials: {} });
       const accepted = await runtime.next((line) => line['op'] === OPEN && line['event'] === 'accepted');
@@ -231,7 +231,7 @@ describe('teamai-runtime-t3', () => {
       t3.config({ sendHangs: false });
 
       const second = start();
-      second.send({ type: 'init', protocol: 1, mode: 'attended', options: { environment: 'local' } });
+      second.send({ type: 'init', protocol: 1, homeEnv: SHIPPED_HOME_ENV, mode: 'attended', options: { environment: 'local' } });
       await second.next((line) => line['type'] === 'init');
       second.send(judge(first.handle, 'op-000000b4'));
 
@@ -272,7 +272,7 @@ describe('teamai-runtime-t3', () => {
       await first.runtime.close();
 
       const second = start();
-      second.send({ type: 'init', protocol: 1, mode: 'attended', options: { environment: 'local' } });
+      second.send({ type: 'init', protocol: 1, homeEnv: SHIPPED_HOME_ENV, mode: 'attended', options: { environment: 'local' } });
       await second.next((line) => line['type'] === 'init');
       second.send(judge(first.handle, 'op-000000a5'));
       fs.writeFileSync(release, '');
