@@ -357,7 +357,7 @@ describe('teamai-runtime-t3', () => {
       const elsewhere = path.join(dir, 'scratch-home');
       fs.mkdirSync(elsewhere);
       const runtime = start({ HOME: elsewhere });
-      runtime.send({ type: 'init', protocol: 1, mode: 'attended', options: { environment: 'local' }, instances: [{ name: 'acme-claude', tool: 'claude', command: 'acme-claude' }] });
+      runtime.send({ type: 'init', protocol: 1, mode: 'attended', options: { environment: 'local' }, instances: [{ name: 'acme-claude', tool: 'claude', command: 'acme-claude', homeEnv: ['CLAUDE_CONFIG_DIR'] }] });
       await runtime.next((line) => line['type'] === 'init');
 
       const theirs = path.join(t3.home, '.claude');
@@ -377,7 +377,7 @@ describe('teamai-runtime-t3', () => {
       t3.settings({ providerInstances: { 'acme-claude-t3': { config: { binaryPath: '/opt/acme/bin/acme-claude', ...(homePath && { homePath: path.join(dir, homePath) }) } } } });
       t3.addThread({ threadId: 'thread-parent-1', title: 'Fix the README', status: 'running', instanceId: 'claudeAgent', model: 'claude-opus-5-5' });
       const runtime = start({ CLAUDE_CONFIG_DIR: moved, ...env });
-      runtime.send({ type: 'init', protocol: 1, mode: 'attended', options: { environment: 'local' }, instances: [{ name: 'acme-claude', tool: 'claude', command: 'acme-claude' }] });
+      runtime.send({ type: 'init', protocol: 1, mode: 'attended', options: { environment: 'local' }, instances: [{ name: 'acme-claude', tool: 'claude', command: 'acme-claude', homeEnv: ['CLAUDE_CONFIG_DIR'] }] });
 
       expect(await runtime.next((line) => line['type'] === 'init')).toMatchObject({ ok: true, can: { tools: ['claude', 'codex', 'acme-claude'] } });
       const expected = noticed ? [{ event: 'notice', message: `T3 Code provider instance "acme-claude-t3" runs acme-claude in ~/.claude, while teamai gives acme-claude the home ${moved}: on T3 it signs in and keeps its sessions there. To use the same home, set the instance's Home path in T3 Code under Settings → Providers to ${moved}.` }] : [];
@@ -388,7 +388,7 @@ describe('teamai-runtime-t3', () => {
       t3.config({ providers: [CLAUDE, CODEX, { ...CLAUDE, providerInstanceId: 'acme-claude-t3', displayName: 'Claude (acme)' }] });
       t3.settings({ providerInstances: { 'acme-claude-t3': { config: { binaryPath: '/opt/acme/bin/acme-claude' } } } });
       const runtime = start({ CLAUDE_CONFIG_DIR: '~/.claude-moved' });
-      runtime.send({ type: 'init', protocol: 1, mode: 'attended', options: { environment: 'local' }, instances: [{ name: 'acme-claude', tool: 'claude', command: 'acme-claude' }] });
+      runtime.send({ type: 'init', protocol: 1, mode: 'attended', options: { environment: 'local' }, instances: [{ name: 'acme-claude', tool: 'claude', command: 'acme-claude', homeEnv: ['CLAUDE_CONFIG_DIR'] }] });
 
       expect(await runtime.next((line) => line['type'] === 'init')).toMatchObject({ ok: true });
       expect(noticesOf(runtime)).toEqual([{ event: 'notice', message: 'T3 Code provider instance "acme-claude-t3" runs acme-claude in ~/.claude, while teamai gives acme-claude the home ~/.claude-moved: on T3 it signs in and keeps its sessions there. To use the same home, set the instance\'s Home path in T3 Code under Settings → Providers to ~/.claude-moved.' }]);
@@ -398,7 +398,7 @@ describe('teamai-runtime-t3', () => {
       t3.config({ providers: [CLAUDE, CODEX, { ...CLAUDE, providerInstanceId: 'acme-claude-t3', displayName: 'Claude (acme)' }] });
       t3.settings({ providerInstances: { 'acme-claude-t3': { config: { binaryPath: '/opt/acme/bin/acme-claude', homePath: '~/.acme-claude' } } } });
       const runtime = start();
-      runtime.send({ type: 'init', protocol: 1, mode: 'attended', options: { environment: 'local' }, instances: [{ name: 'acme-claude', tool: 'claude', command: 'acme-claude', home: { dir: '.acme-claude', env: 'CLAUDE_CONFIG_DIR' } }] });
+      runtime.send({ type: 'init', protocol: 1, mode: 'attended', options: { environment: 'local' }, instances: [{ name: 'acme-claude', tool: 'claude', command: 'acme-claude', home: { dir: '.acme-claude' }, homeEnv: ['CLAUDE_CONFIG_DIR'] }] });
       expect(await runtime.next((line) => line['type'] === 'init')).toMatchObject({ ok: true, can: { tools: ['claude', 'codex', 'acme-claude'] } });
       expect(await openOn(runtime, worktree)).toMatchObject({ event: 'ready' });
 
@@ -424,7 +424,7 @@ describe('teamai-runtime-t3', () => {
       t3.config({ providers: [CLAUDE, CODEX, { ...CLAUDE, providerInstanceId: 'acme-claude-t3', displayName: 'Claude (acme)' }] });
       t3.settings({ defaultModelSelection: { instanceId: 'acme-claude-t3', model: 'claude-opus-5-5' }, providerInstances: { 'acme-claude-t3': { config: { binaryPath: '/opt/acme/bin/acme-claude' } } } });
       const runtime = start();
-      runtime.send({ type: 'init', protocol: 1, mode: 'attended', options: { environment: 'local' }, instances: [{ name: 'acme-claude', tool: 'claude', command: 'acme-claude' }], checkout });
+      runtime.send({ type: 'init', protocol: 1, mode: 'attended', options: { environment: 'local' }, instances: [{ name: 'acme-claude', tool: 'claude', command: 'acme-claude', homeEnv: ['CLAUDE_CONFIG_DIR'] }], checkout });
       expect(await runtime.next((line) => line['type'] === 'init')).toMatchObject({ ok: true, can: { tools: ['claude', 'codex', 'acme-claude'], default_tool: 'acme-claude' } });
       expect(await openOn(runtime, worktree)).toMatchObject({ event: 'ready' });
 

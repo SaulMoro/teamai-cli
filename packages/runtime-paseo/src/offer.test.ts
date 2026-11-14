@@ -74,7 +74,7 @@ describe('teamai-runtime-paseo', () => {
 
     try {
       expect(await ready(start(), {
-        instances: [{ name: 'acme-codex', tool: 'codex', command: 'acme-codex', home: { dir: '.codex-acme', env: 'CODEX_HOME' } }],
+        instances: [{ name: 'acme-codex', tool: 'codex', command: 'acme-codex', home: { dir: '.codex-acme' }, homeEnv: ['CODEX_HOME'] }],
       })).toMatchObject({ ok: true, can: { tools: ['acme-codex'], tokens: true } });
     } finally {
       fs.chmodSync(elsewhere, 0o700);

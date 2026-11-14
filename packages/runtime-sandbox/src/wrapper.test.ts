@@ -31,7 +31,7 @@ process.stdin.on('data', (data) => { input += data; });
 process.stdin.on('end', () => { console.log(JSON.stringify({ ...report, input })); process.exit(Number(/exit ([0-9]+)/.exec(input)?.[1] ?? 7)); });
 `;
 
-const ACME_CLAUDE = { name: 'acme-claude', tool: 'claude', command: 'acme-claude', home: { dir: '/home/m/.acme-claude', env: 'ACME_CLAUDE_CONFIG_DIR' } } satisfies InitInstance;
+const ACME_CLAUDE = { name: 'acme-claude', tool: 'claude', command: 'acme-claude', home: { dir: '/home/m/.acme-claude' }, homeEnv: ['CLAUDE_CONFIG_DIR', 'ACME_CLAUDE_CONFIG_DIR'] } satisfies InitInstance;
 
 let executable: string;
 let dir: string;

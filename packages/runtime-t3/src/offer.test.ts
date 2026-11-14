@@ -235,7 +235,7 @@ describe('teamai-runtime-t3', () => {
     describe('in check mode', () => {
       const couldStart = { type: 'init', ok: true, prompt: true, conversations: true, can: { exec: false, env: false } };
       const check = (runtime: Connection): void => runtime.send({
-        type: 'init', protocol: 1, mode: 'check', options: { environment: 'local' }, instances: [{ name: 'acme-claude', tool: 'claude', command: path.join(dir, 'acme-claude') }],
+        type: 'init', protocol: 1, mode: 'check', options: { environment: 'local' }, instances: [{ name: 'acme-claude', tool: 'claude', command: path.join(dir, 'acme-claude'), homeEnv: ['CLAUDE_CONFIG_DIR'] }],
       });
 
       it('answers that a run could start on the sign-in it keeps, asking T3 nothing and writing none of its settings', async () => {
@@ -453,7 +453,7 @@ describe('teamai-runtime-t3', () => {
 
     describe('a team or personal tool instance', () => {
       const ACME = { ...CLAUDE, providerInstanceId: 'acme-claude-t3', displayName: 'Claude (acme)' };
-      const INSTANCE = { name: 'acme-claude', tool: 'claude', command: 'acme-claude' };
+      const INSTANCE = { name: 'acme-claude', tool: 'claude', command: 'acme-claude', homeEnv: ['CLAUDE_CONFIG_DIR'] };
 
       /** The init reply for `instances` given in init, `options` added to the definition's, and each provider instance's Binary path. */
       const initWith = async ({ binaryPaths, options = {}, providers = [CLAUDE, CODEX, ACME], instances = [INSTANCE] }: { binaryPaths: Record<string, string>; options?: Line; providers?: FakeT3Config['providers']; instances?: Line[] }): Promise<Line> => {
@@ -550,7 +550,7 @@ describe('teamai-runtime-t3', () => {
         t3.config({ providers: [CLAUDE, CODEX, ACME] });
         t3.settings({ providerInstances: { 'acme-claude-t3': { config: { binaryPath: '/opt/acme/bin/acme-claude', ...(homePath && { homePath }) } } } });
         const runtime = start();
-        runtime.send({ type: 'init', protocol: 1, mode: 'unattended', options: { environment: 'local' }, instances: [{ ...INSTANCE, home: { dir: '.acme-claude', env: 'CLAUDE_CONFIG_DIR' } }] });
+        runtime.send({ type: 'init', protocol: 1, mode: 'unattended', options: { environment: 'local' }, instances: [{ ...INSTANCE, home: { dir: '.acme-claude' } }] });
 
         expect(await runtime.next((line) => line['type'] === 'init')).toMatchObject({ ok: true, can: { tools: ['claude', 'codex', 'acme-claude'] } });
         expect(noticesOf(runtime)).toEqual(notice === undefined ? [] : [{ event: 'notice', message: notice }]);
@@ -573,7 +573,7 @@ describe('teamai-runtime-t3', () => {
       });
 
       it('keeps offering claude on its default instance when the team adjusts claude with no command of its own', async () => {
-        const reply = await initWith({ binaryPaths: {}, instances: [{ name: 'claude', tool: 'claude', home: { dir: '/home/member/.claude-team', env: 'CLAUDE_CONFIG_DIR' } }] });
+        const reply = await initWith({ binaryPaths: {}, instances: [{ name: 'claude', tool: 'claude', home: { dir: '/home/member/.claude-team' }, homeEnv: ['CLAUDE_CONFIG_DIR'] }] });
 
         expect(reply).toMatchObject({ ok: true, can: { tools: ['claude', 'codex'] } });
         expect(reply).not.toHaveProperty('unavailable');

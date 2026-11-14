@@ -40,14 +40,15 @@ const SIGN_IN_CHECK_TIMEOUT_MS = 5_000;
  * provider's env sets, else a team instance's own. `shown` is how a sign-in step names it.
  */
 export interface RunsIn {
-  variable: string;
+  /** The variables that point the command at `dir`: a team instance's `homeEnv`, else the one its provider's env sets. */
+  variables: readonly string[];
   dir: string;
   shown: string;
 }
 
 /** How a person signs a tool in on the daemon's host, such as `codex login`: for a team instance, its own command in its own home. */
 export function signInStep({ runsIn, command, login }: { runsIn: RunsIn | undefined; command: string; login: string }): string {
-  return `${runsIn ? `${runsIn.variable}=${runsIn.shown} ` : ''}${command} ${login}`;
+  return `${runsIn ? runsIn.variables.map((variable) => `${variable}=${runsIn.shown} `).join('') : ''}${command} ${login}`;
 }
 
 /**

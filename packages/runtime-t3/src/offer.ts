@@ -1,5 +1,5 @@
 import path from 'node:path';
-import type { InitInstance, RuntimeFailure, RuntimeRequest } from '@teamai/runtime-protocol';
+import type { RuntimeFailure, RuntimeRequest } from '@teamai/runtime-protocol';
 import { type InstanceAdder } from './instances.js';
 import { JUDGE_KEPT } from './judge.js';
 import { parseOptions } from './options.js';
@@ -7,7 +7,7 @@ import { projectAt } from './place.js';
 import type { Serving, Session } from './runtime.js';
 import { canListStore, DRIVER_NAMES, DRIVERS, driverOf, toolOf, type Driver, type ToolId } from './sessions.js';
 import { instanceToolHome, projectSettings, readSettings, type ModelSelection, type ProjectSettings } from './settings.js';
-import { driverOfProvider, runsOwnBinary, servedInstances, teamaiToolHome, tilde } from './tool-instances.js';
+import { driverOfProvider, runsOwnBinary, servedInstances, teamaiToolHome, tilde, type ServedTool } from './tool-instances.js';
 import { canWake } from './wake.js';
 import { T3Error, tooOld, type Provider, type T3 } from './t3.js';
 import { within } from './within.js';
@@ -90,7 +90,7 @@ export function offer({ serving, adder, start, recover }: { serving: Serving; ad
   // thread, not a home teamai gives a tool.
   const toolHomeEnv = options.startedFrom === undefined ? options.env : {};
 
-  const toolHomeOf = (instance: InitInstance, driver: Driver): string => teamaiToolHome({ instance, driver, home: options.home, env: toolHomeEnv, cwd: options.cwd });
+  const toolHomeOf = (instance: ServedTool, driver: Driver): string => teamaiToolHome({ instance, driver, home: options.home, env: toolHomeEnv, cwd: options.cwd });
 
   // teamai quotes a keyed option failure (`key` set) inside a sentence of its own and ends it, so it brings no full stop.
   const init = async (request: Extract<RuntimeRequest, { type: 'init' }>): Promise<void> => {

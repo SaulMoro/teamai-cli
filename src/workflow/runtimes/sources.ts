@@ -21,7 +21,7 @@ import { composedName, composedOffer, composedStepRuntime, nestedOptions } from 
 import { credentialSecrets, isExecRuntimeTool, type ExecRuntimeTool, type RuntimeOrigin } from './attempt.js';
 import { LOGIN_TOOLS, type LoginTool } from './login.js';
 import type { SignInVariables } from '@teamai/tool-core/launch';
-import { executableOf, isLaunchTool, launchAdapterIdOf, launchAdapterOf } from '../../launch-registry.js';
+import { executableOf, isLaunchTool, launchAdapterIdOf, launchAdapterOf, toolCommandEnv } from '../../launch-registry.js';
 import type { StepLaunchDeps } from '@teamai/runtime-tools';
 import { opencodeMajorVersion } from '../../opencode-version.js';
 import { agyGatewayEnv } from '../../models/agy-gateway.js';
@@ -269,13 +269,19 @@ async function runnableInstances(): Promise<InitInstance[]> {
   const instances = instanceNames().flatMap((name) => toolOf(name)?.instance ?? []);
   const accepted = await Promise.all(instances.map(async (instance) => (await acceptToolCommand(instance, { ask: undefined })).ok));
 
-  return instances.filter((_, index) => accepted[index]).map((instance) => ({
-    name: instance.name, tool: instance.extends,
-    ...(instance.command !== undefined && { command: instance.command }),
+  return instances.filter((_, index) => accepted[index]).map((instance) => {
     // Resolved once, here, and absolute, a relative value from where teamai runs: a runtime uses this home and never resolves one of its own.
-    ...(instance.home && { home: { dir: path.resolve(instanceHomeDir({ name: instance.name, home: instance.home })), ...(instance.home.env !== undefined && { env: instance.home.env }) } }),
-    ...(instance.paths && { paths: instance.paths }),
-  }));
+    const home = instance.home && path.resolve(instanceHomeDir({ name: instance.name, home: instance.home }));
+
+    return {
+      name: instance.name, tool: instance.extends,
+      ...(instance.command !== undefined && { command: instance.command }),
+      ...(home !== undefined && { home: { dir: home } }),
+      // The variables teamai sets on the instance's command started in a home, the one decision a runtime applies as given.
+      homeEnv: Object.keys(toolCommandEnv(instance.name, { kind: 'at', dir: home ?? '' })),
+      ...(instance.paths && { paths: instance.paths }),
+    };
+  });
 }
 
 /**

@@ -362,7 +362,7 @@ Judge whether the change does what the step asked. Read the diff and the session
 
 ## 团队工具实例
 
-团队工具实例上的步骤，在 Paseo 中运行于它自己的 Paseo 自定义提供方上。守护进程在本机时，teamai 在第一个运行该实例的步骤开始时添加这个提供方，无论是否有人值守。该提供方以实例命名，扩展实例所属的工具，从你的 `PATH` 运行实例的命令；实例有自己的主目录时，还会设置该工具的主目录变量。它会保留供以后的运行使用，运行会提示一次如何删除它：
+团队工具实例上的步骤，在 Paseo 中运行于它自己的 Paseo 自定义提供方上。守护进程在本机时，teamai 在第一个运行该实例的步骤开始时添加这个提供方，无论是否有人值守。该提供方以实例命名，扩展实例所属的工具，从你的 `PATH` 运行实例的命令；实例有自己的主目录时，还会把该工具的主目录变量设为它；实例命名了自己的变量时，也会设置那个变量。它会保留供以后的运行使用，运行会提示一次如何删除它：
 
 ```text
 ⚠ Step runtime "paseo", operation op-2b7e91c4d0a3: teamai added the Paseo provider acme-claude to the daemon at ws://127.0.0.1:6767/ws for its acme-claude steps: it extends claude and runs /Users/ana/.local/bin/acme-claude, with CLAUDE_CONFIG_DIR=/Users/ana/.claude-acme. It stays for later runs; to remove it, choose Remove provider on acme-claude in the Paseo app's provider settings, or delete agents.providers.acme-claude from /Users/ana/.paseo/config.json, then run `paseo daemon reload`. Paseo cannot show its agents' logs once it is gone, so read them first.
@@ -380,7 +380,7 @@ Judge whether the change does what the step asked. Read the diff and the session
 { "claude-work": { "extends": "claude", "label": "claude-work", "env": { "CLAUDE_CONFIG_DIR": "/Users/ana/.claude-work" } } }
 ```
 
-守护进程已有合适的提供方时，就用那个：扩展实例所属工具、并运行其命令（按名称或指向它的绝对路径；守护进程所在主机运行 Windows 时，例如 `C:\Tools\acme-claude.exe`，teamai 从路径本身判断）的那个；对只有主目录的实例，则是运行该工具自身命令、且 `env` 中设有该主目录的那个。它的步骤和评判沿用该工具的模式、授权和登录检查，它们的会话以实例命名。实例的登录和会话在其提供方 `env` 所设的主目录中查找，没有时在实例自己的主目录中查找；该提供方的主目录不是 teamai 为该实例使用的主目录时，运行会提示一次。未登录的实例会给出它自己的命令，例如 `CODEX_HOME=~/.codex-acme acme-codex login`；该 Codex 主目录尚不存在时，前面还会加上 `mkdir -p ~/.codex-acme && `，因为 Codex 拒绝不存在的主目录。
+守护进程已有合适的提供方时，就用那个：扩展实例所属工具、并运行其命令（按名称或指向它的绝对路径；守护进程所在主机运行 Windows 时，例如 `C:\Tools\acme-claude.exe`，teamai 从路径本身判断）的那个；对只有主目录的实例，则是运行该工具自身命令、且 `env` 中把该工具的变量（实例命名了自己的变量时也包括那个变量）设为该主目录的那个。它的步骤和评判沿用该工具的模式、授权和登录检查，它们的会话以实例命名。实例的登录和会话在其提供方 `env` 所设的主目录中查找，没有时在实例自己的主目录中查找；该提供方的主目录不是 teamai 为该实例使用的主目录时，运行会提示一次。未登录的实例会给出它自己的命令，例如 `CODEX_HOME=~/.codex-acme acme-codex login`；该 Codex 主目录尚不存在时，前面还会加上 `mkdir -p ~/.codex-acme && `，因为 Codex 拒绝不存在的主目录。
 
 实例无法在 teamai 刚添加的提供方上运行时（例如未登录），teamai 会再次删除该提供方，所以失败的步骤不会在 Paseo 的配置中留下任何东西，之后的步骤会重新添加它。如果删除失败，步骤的失败信息会说明这一点，提供方可能保留，并给出上面的提示。
 

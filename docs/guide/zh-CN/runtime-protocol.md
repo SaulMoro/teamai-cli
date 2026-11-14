@@ -87,10 +87,10 @@ $ teamai workflow start review --driver app --tools default=codex         # --to
 
 `init` 还会给出运行所在的检出目录 `"checkout":"/abs/path"`，teamai 也在该目录启动你的运行时。
 
-`init` 还会列出你可以运行的[工具实例](reference.md#团队工具tools)：你自己的，以及团队中命令无需确认或已在本机确认过的实例。每个实例的 `home.dir` 是 teamai 解析出的其主目录绝对路径：你的环境设置了 `home.env` 时取其值，否则取你主目录下的该目录。所有使用协议 1 的 teamai 都给出绝对路径，所以直接使用它，不要再把它拼接到你自己的主目录下。在 `can.tools` 中列出你的运行时能提供的实例。在自行 exec 工具的运行时上，teamai 会启动实例的 `command`，并把它的 `home.env` 设为该次尝试的工具主目录。在实例上运行的步骤会把实例名作为 `open` 的 `tool`，即 `"tool":"acme-claude"`，对自行启动 agent 的运行时也作为提示 `lease` 的 `tool`：你的运行时通过 `init.instances` 把它对应到它扩展的工具。没有任何运行时列出该实例时，在其上运行的步骤以 `tool_unsupported` 失败：
+`init` 还会列出你可以运行的[工具实例](reference.md#团队工具tools)：你自己的，以及团队中命令无需确认或已在本机确认过的实例。每个实例的 `home.dir` 是 teamai 解析出的其主目录绝对路径：你的环境设置了实例自己的变量时取其值，否则取你主目录下的该目录。所有使用协议 1 的 teamai 都给出绝对路径，所以直接使用它，不要再把它拼接到你自己的主目录下。`homeEnv` 列出实例命令读取主目录的每个变量：它扩展的工具的变量，以及实例自己命名的变量。你的运行时在某个主目录中启动该命令时，把这些变量都设为那个主目录，不要自己另选变量。在 `can.tools` 中列出你的运行时能提供的实例。在自行 exec 工具的运行时上，teamai 会启动实例的 `command`，并把 `homeEnv` 中的每个变量都设为该次尝试的工具主目录。在实例上运行的步骤会把实例名作为 `open` 的 `tool`，即 `"tool":"acme-claude"`，对自行启动 agent 的运行时也作为提示 `lease` 的 `tool`：你的运行时通过 `init.instances` 把它对应到它扩展的工具。没有任何运行时列出该实例时，在其上运行的步骤以 `tool_unsupported` 失败：
 
 ```text
-→ {"type":"init","protocol":1,"mode":"unattended","options":{…},"instances":[{"name":"acme-claude","tool":"claude","command":"acme-claude","home":{"dir":"/home/me/.acme-claude","env":"ACME_CLAUDE_CONFIG_DIR"}}]}
+→ {"type":"init","protocol":1,"mode":"unattended","options":{…},"instances":[{"name":"acme-claude","tool":"claude","command":"acme-claude","home":{"dir":"/home/me/.acme-claude"},"homeEnv":["CLAUDE_CONFIG_DIR","ACME_CLAUDE_CONFIG_DIR"]}]}
 ← {"type":"init","ok":true,"can":{"tools":["claude","acme-claude"]}}
 ✖ Step "review" failed with tool_unsupported: Step "review" runs on acme-claude, an instance of claude, which runtime sandbox of driver sandboxed cannot launch. Run it with --driver local.
 ```

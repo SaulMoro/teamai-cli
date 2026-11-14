@@ -208,7 +208,7 @@ describe('how teamai starts it', () => {
 });
 
 /** A team's Claude instance: its own command, and its own home under its own variable. */
-const ACME_CLAUDE = { name: 'acme-claude', tool: 'claude', command: 'acme-claude', home: { dir: '.acme-claude', env: 'ACME_CLAUDE_CONFIG_DIR' } } satisfies InitInstance;
+const ACME_CLAUDE = { name: 'acme-claude', tool: 'claude', command: 'acme-claude', home: { dir: '.acme-claude' }, homeEnv: ['CLAUDE_CONFIG_DIR', 'ACME_CLAUDE_CONFIG_DIR'] } satisfies InitInstance;
 
 /** An instance's command that writes into its own home, so a test sees where it ran and with which home. */
 const ACME_CLAUDE_COMMAND = "const fs = require('node:fs'); fs.writeFileSync(`${process.env.ACME_CLAUDE_CONFIG_DIR}/ran`, 'acme-claude'); console.log('reviewed');";
@@ -216,7 +216,7 @@ const ACME_CLAUDE_COMMAND = "const fs = require('node:fs'); fs.writeFileSync(`${
 describe('the tool instances teamai passes at init', () => {
   it('offers an instance whose command the image holds and whose tool signs in, and says why it leaves out one whose command the image lacks', async () => {
     engine.image(IMAGE, { claude: CLAUDE, 'acme-claude': ACME_CLAUDE_COMMAND });
-    const instances = [ACME_CLAUDE, { name: 'acme-review', tool: 'claude', command: 'acme-review' }, { name: 'acme-codex', tool: 'codex', command: 'acme-codex' }] satisfies InitInstance[];
+    const instances = [ACME_CLAUDE, { name: 'acme-review', tool: 'claude', command: 'acme-review', homeEnv: ['CLAUDE_CONFIG_DIR'] }, { name: 'acme-codex', tool: 'codex', command: 'acme-codex', homeEnv: ['CODEX_HOME'] }] satisfies InitInstance[];
     const reply = await init(start(), { provider: 'docker', image: IMAGE }, 'unattended', { env: ['CLAUDE_CODE_OAUTH_TOKEN'], logins: [] }, instances);
 
     expect(reply).toMatchObject({ ok: true, can: { tools: ['claude', 'acme-claude'] }, unavailable: { 'acme-codex': expect.stringContaining('acme-codex, an instance of codex, cannot sign in') } });
@@ -246,7 +246,7 @@ describe('the tool instances teamai passes at init', () => {
 
   it('cuts a reason longer than protocol 1 takes to fit, marking the cut, so init still answers', async () => {
     const name = `acme-${'x'.repeat(300)}`;
-    const reply = await init(start(), { provider: 'docker', image: IMAGE }, 'unattended', { env: ['CLAUDE_CODE_OAUTH_TOKEN'], logins: [] }, [{ name, tool: 'claude', command: name }]);
+    const reply = await init(start(), { provider: 'docker', image: IMAGE }, 'unattended', { env: ['CLAUDE_CODE_OAUTH_TOKEN'], logins: [] }, [{ name, tool: 'claude', command: name, homeEnv: ['CLAUDE_CONFIG_DIR'] }]);
     const reason = String((reply.unavailable as Message)[name]);
 
     expect(reply).toMatchObject({ ok: true, can: { tools: ['claude'] } });
@@ -257,13 +257,13 @@ describe('the tool instances teamai passes at init', () => {
   it("offers an instance whose command the image holds without its tool's own executable, and says why one that runs that executable cannot run", async () => {
     const wrapperOnly = 'ghcr.io/acme/wrapper:1';
     engine.image(wrapperOnly, { 'acme-claude': ACME_CLAUDE_COMMAND });
-    const reply = await init(start(), { provider: 'docker', image: wrapperOnly }, 'unattended', { env: ['ANTHROPIC_API_KEY'], logins: [] }, [ACME_CLAUDE, { name: 'claude-work', tool: 'claude', home: { dir: '.claude-work', env: 'CLAUDE_CONFIG_DIR' } }]);
+    const reply = await init(start(), { provider: 'docker', image: wrapperOnly }, 'unattended', { env: ['ANTHROPIC_API_KEY'], logins: [] }, [ACME_CLAUDE, { name: 'claude-work', tool: 'claude', home: { dir: '.claude-work' }, homeEnv: ['CLAUDE_CONFIG_DIR'] }]);
 
     expect(reply).toMatchObject({ ok: true, can: { tools: ['acme-claude'] }, unavailable: { 'claude-work': expect.stringContaining(`claude-work runs claude, which is not in image ${wrapperOnly}`) } });
   });
 
   it('offers an instance with no command of its own wherever its tool is offered', async () => {
-    const reply = await init(start(), { provider: 'docker', image: IMAGE }, 'unattended', { env: ['ANTHROPIC_API_KEY'], logins: [] }, [{ name: 'claude-work', tool: 'claude', home: { dir: '.claude-work', env: 'CLAUDE_CONFIG_DIR' } }]);
+    const reply = await init(start(), { provider: 'docker', image: IMAGE }, 'unattended', { env: ['ANTHROPIC_API_KEY'], logins: [] }, [{ name: 'claude-work', tool: 'claude', home: { dir: '.claude-work' }, homeEnv: ['CLAUDE_CONFIG_DIR'] }]);
 
     expect(reply).toMatchObject({ ok: true, can: { tools: ['claude', 'claude-work'] } });
     expect(reply).not.toHaveProperty('unavailable');
@@ -1105,7 +1105,7 @@ describe('a prompt attempt in a container', () => {
   // Whether a run could start here is known only once the image is pulled and a container started, which a check may not
   // do; whether the engine runs at all is known by asking it.
   it('in check mode asks the engine only whether it runs, says why not when it does not, and keeps nothing of the instances it names', async () => {
-    const instances = [{ name: 'acme-claude', tool: 'claude', command: 'acme-claude' }];
+    const instances = [{ name: 'acme-claude', tool: 'claude', command: 'acme-claude', homeEnv: ['CLAUDE_CONFIG_DIR'] }];
 
     expect(await init(start(), { provider: 'docker', image: IMAGE }, 'check', undefined, instances)).toEqual({
       type: 'init', ok: false, error: { code: 'check_unsupported', message: expect.stringContaining('cannot tell whether a run could start without starting a sandbox') },
@@ -2774,7 +2774,7 @@ describe('an attempt in an sbx sandbox', () => {
 
     expect(await init(start(), { provider: 'sbx', agent: './kits/acme' }, 'unattended', { env: [], logins: [] }, [ACME_CLAUDE])).toMatchObject({ ok: true, can: { tools: ['claude', 'acme-claude'] } });
     // An instance whose command is its tool's own runs in that tool's template.
-    const reply = await init(start(), { provider: 'sbx' }, 'unattended', { env: [], logins: [] }, [ACME_CLAUDE, { name: 'claude-fast', tool: 'claude', command: 'claude' }]);
+    const reply = await init(start(), { provider: 'sbx' }, 'unattended', { env: [], logins: [] }, [ACME_CLAUDE, { name: 'claude-fast', tool: 'claude', command: 'claude', homeEnv: ['CLAUDE_CONFIG_DIR'] }]);
 
     expect(reply).toMatchObject({ ok: true, can: { tools: ['claude', 'opencode', 'claude-fast'] }, unavailable: { 'acme-claude': expect.stringMatching(/acme-claude.*sbx's claude template.*agent.*kit.*--driver local/) } });
   });
@@ -2783,7 +2783,7 @@ describe('an attempt in an sbx sandbox', () => {
     engine.image('claude', { claude: "const fs = require('node:fs'); const signedIn = fs.existsSync(`${process.env.ACME_CLAUDE_CONFIG_DIR}/.credentials.json`); console.log(signedIn ? 'signed in' : 'Not logged in · Please run /login'); process.exit(signedIn ? 0 : 1);" });
     engine.secret('anthropic', true);
     const connection = start();
-    const instance = { name: 'claude-work', tool: 'claude', home: { dir: '.claude-work', env: 'ACME_CLAUDE_CONFIG_DIR' } } satisfies InitInstance;
+    const instance = { name: 'claude-work', tool: 'claude', home: { dir: '.claude-work' }, homeEnv: ['CLAUDE_CONFIG_DIR', 'ACME_CLAUDE_CONFIG_DIR'] } satisfies InitInstance;
 
     expect(await init(connection, { provider: 'sbx' }, 'unattended', { env: [], logins: [] }, [instance])).toMatchObject({ ok: true, can: { tools: ['claude', 'opencode', 'claude-work'] } });
     const at = place();

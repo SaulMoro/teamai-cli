@@ -11,7 +11,7 @@ describe('teamai-runtime-t3', () => {
     usePromptStep();
 
     describe('a tool instance no T3 provider instance runs yet', () => {
-      const ACME ={ name: 'acme-claude', tool: 'claude', command: 'acme-claude' };
+      const ACME ={ name: 'acme-claude', tool: 'claude', command: 'acme-claude', homeEnv: ['CLAUDE_CONFIG_DIR'] };
       const AUTO = 'orchestration:read orchestration:operate';
       const FULL = 'orchestration:read orchestration:operate settings:write source-control:write';
       const MEMBER_SETTINGS = { defaultModelSelection: { instanceId: 'claudeAgent', model: 'claude-opus-5-5' }, providerInstances: { cursor: { driver: 'cursor', enabled: true } } };
@@ -248,7 +248,7 @@ describe('teamai-runtime-t3', () => {
       it('fails the open saying what T3 Code needs, when the instance it added cannot run, such as a tool not signed in in its home', async () => {
         signIn(t3, undefined, undefined, FULL);
         t3.config({ addedInstanceConstraints: ['Claude Code is not authenticated. Run `claude auth login` and try again.'] });
-        const { runtime } = await initOn({ mode: 'unattended', instances: [{ name: 'claude-work', tool: 'claude', home: { dir: '.claude-work', env: 'CLAUDE_CONFIG_DIR' } }] });
+        const { runtime } = await initOn({ mode: 'unattended', instances: [{ name: 'claude-work', tool: 'claude', home: { dir: '.claude-work' }, homeEnv: ['CLAUDE_CONFIG_DIR'] }] });
 
         expect(await openFor(runtime, 'claude-work')).toMatchObject({
           event: 'failed',
@@ -265,7 +265,7 @@ describe('teamai-runtime-t3', () => {
         { case: 'Claude\'s own home, with no Home path', dir: '.claude', homePath: () => ({}) },
       ])('adds a team tool that names $case', async ({ dir: homeDir, homePath }) => {
         signIn(t3, undefined, undefined, FULL);
-        const { runtime } = await initOn({ mode: 'unattended', instances: [{ ...ACME, home: { dir: homeDir, env: 'CLAUDE_CONFIG_DIR' } }] });
+        const { runtime } = await initOn({ mode: 'unattended', instances: [{ ...ACME, home: { dir: homeDir } }] });
 
         expect(await openFor(runtime, 'acme-claude')).toMatchObject({ event: 'ready' });
         expect(settingsNow()).toEqual({
@@ -276,7 +276,7 @@ describe('teamai-runtime-t3', () => {
 
       it('adds an instance with a home of its own and no command on its tool\'s own binary in that home, rather than running it on the member\'s Claude', async () => {
         signIn(t3, undefined, undefined, FULL);
-        const { runtime, reply } = await initOn({ mode: 'unattended', instances: [{ name: 'claude-work', tool: 'claude', home: { dir: '.claude-work', env: 'CLAUDE_CONFIG_DIR' } }] });
+        const { runtime, reply } = await initOn({ mode: 'unattended', instances: [{ name: 'claude-work', tool: 'claude', home: { dir: '.claude-work' }, homeEnv: ['CLAUDE_CONFIG_DIR'] }] });
 
         expect(reply).toMatchObject({ ok: true, can: { tools: ['claude', 'codex', 'claude-work'] } });
         expect(await openFor(runtime, 'claude-work')).toMatchObject({ event: 'ready' });

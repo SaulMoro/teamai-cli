@@ -390,18 +390,21 @@ export type InitCredentials = z.infer<typeof InitCredentialsSchema>;
 
 /**
  * A tool instance the member may run: `name`, the name a step and `can.tools` give it; `tool`, the shipped tool it
- * extends; `command`, the executable on PATH that starts it; `home`, the absolute path of its home on this machine and
- * the variable that moves it, as teamai resolves it once for every runtime (the member's value of `home.env` when their
- * environment sets it and it moves neither the extended tool's own home nor an XDG base directory, else
- * `~/<its directory>`); `paths`, the tool paths it sets. A runtime lists in `can.tools` the instances it can serve: on one that execs its
- * tool, teamai then launches `command` with `home.env` set to the attempt's tool home. `home.dir` is absolute in every
- * release that speaks protocol 1, the first included, so no runtime reads a relative one.
+ * extends; `command`, the executable on PATH that starts it; `home`, the absolute path of its home on this machine, as
+ * teamai resolves it once for every runtime (the member's value of the instance's own variable when their environment
+ * sets it and it moves neither the extended tool's own home nor an XDG base directory, else `~/<its directory>`);
+ * `homeEnv`, every variable its command reads its home from, the extended tool's and the instance's own, as teamai sets
+ * them on it: a runtime that starts the command in a home sets each one to that home, and decides none of its own;
+ * `paths`, the tool paths it sets. A runtime lists in `can.tools` the instances it can serve: on one that execs its tool,
+ * teamai then launches `command` with every `homeEnv` variable set to the attempt's tool home. `home.dir` is absolute in
+ * every release that speaks protocol 1, the first included, so no runtime reads a relative one.
  */
 export const InitInstanceSchema = z.object({
   name: z.string().min(1),
   tool: z.string().min(1),
   command: z.string().min(1).optional(),
-  home: z.object({ dir: z.string().min(1), env: z.string().min(1).optional() }).optional(),
+  home: z.object({ dir: z.string().min(1) }).optional(),
+  homeEnv: z.array(z.string().min(1)),
   paths: z.record(z.string(), z.unknown()).optional(),
 });
 

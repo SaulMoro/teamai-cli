@@ -23,6 +23,12 @@ export function runsOwnBinary(binaryPath: string | undefined, driver: Driver): b
   return binaryPath === undefined || runsCommand({ executable: binaryPath, command: DRIVERS[driver].tool, expandsHome: true });
 }
 
+/**
+ * What T3 serves a tool by: a tool instance `init` gives, or a shipped tool the definition's `instances` maps. T3 Code
+ * starts it with a Binary path and a Home path only, so no home variable of `InitInstance.homeEnv` reaches it.
+ */
+export type ServedTool = Pick<InitInstance, 'name' | 'tool' | 'command' | 'home'>;
+
 /** What finds the provider instance of each tool instance: T3's instances, which of them can run now, and each one's Binary path. */
 export interface InstanceLookup {
   providers: Provider[];
@@ -33,7 +39,7 @@ export interface InstanceLookup {
   /** The tool home T3 runs the provider instance in. */
   homeOf(provider: Provider, driver: Driver): string;
   /** The tool home teamai gives the instance. */
-  homeFor(instance: InitInstance, driver: Driver): string;
+  homeFor(instance: ServedTool, driver: Driver): string;
   /** A home as the person writes it. */
   shown(home: string): string;
 }
@@ -44,7 +50,7 @@ export interface ServedInstances {
   /** What the person hears at the start: a misspelt `instances` key, which no step may ever name to show its reason. */
   notices: string[];
   /** The instances no provider instance runs, and `instances` does not map, which teamai may add, with the command each runs. */
-  missing: Array<{ instance: InitInstance; driver: Driver; command: string }>;
+  missing: Array<{ instance: ServedTool; driver: Driver; command: string }>;
 }
 
 /**
@@ -54,7 +60,7 @@ export interface ServedInstances {
  * cannot hold is not served, and `unavailable` says what to set. teamai passes every instance the member may run at init, so a problem
  * with one never fails the others.
  */
-export function servedInstances({ instances, mapped, lookup }: { instances: InitInstance[]; mapped: Record<string, string> | undefined; lookup: InstanceLookup }): ServedInstances {
+export function servedInstances({ instances, mapped, lookup }: { instances: ServedTool[]; mapped: Record<string, string> | undefined; lookup: InstanceLookup }): ServedInstances {
   const served = new Map<string, Provider>();
   const unavailable: Record<string, string> = {};
   const notices: string[] = [];
@@ -159,7 +165,7 @@ export function driverOfProvider(provider: Provider): Driver | undefined {
  * tool's home variable in `env` moves (`~` as `home`, relative to `cwd`, where teamai runs), else under `home`, the
  * member's home.
  */
-export function teamaiToolHome({ instance, driver, home, env, cwd }: { instance: InitInstance; driver: Driver; home: string; env: Readonly<Record<string, string | undefined>>; cwd: string }): string {
+export function teamaiToolHome({ instance, driver, home, env, cwd }: { instance: ServedTool; driver: Driver; home: string; env: Readonly<Record<string, string | undefined>>; cwd: string }): string {
   if (instance.home) return path.resolve(home, instance.home.dir);
 
   const moved = env[DRIVERS[driver].homeEnv]?.trim();

@@ -59,6 +59,11 @@ export function instanceHomeOf(home: NonNullable<InitInstance['home']>): string 
   return path.resolve(getUserHome(), home.dir);
 }
 
+/** Each of an instance's `homeEnv` variables set to `dir`, as teamai sets them on its command. */
+export function homeEnvAt(homeEnv: readonly string[], dir: string): Record<string, string> {
+  return Object.fromEntries(homeEnv.map((variable) => [variable, dir]));
+}
+
 /** `dir` as the member reads it: `~/…` under their home, else as it is. */
 export function shownPath(dir: string): string {
   const under = path.relative(getUserHome(), dir);
@@ -142,12 +147,12 @@ export type ProviderFound = { provider: string } | { cannot: string } | { add: P
  * run the instance's command, else the one custom provider that does, and, for an instance with only a home of its own,
  * the one that runs the tool's own command with that home. With none, the one teamai adds, when it can: on a daemon on
  * this machine, under the instance's name, with its command found on teamai's PATH. Or why it cannot, with how to set one
- * up. `home` is the absolute home the instance sets with `variable`, when it has one of its own.
+ * up. `home` is the absolute home of the instance's own, when it has one, which every variable of its `homeEnv` is set to.
  */
-export function providerOf(instance: InitInstance, tool: PaseoTool, { custom, named, home, variable, onThisMachine }: {
-  custom: CustomProviders; named: string | undefined; home: string | undefined; variable: string; onThisMachine: boolean;
+export function providerOf(instance: InitInstance, tool: PaseoTool, { custom, named, home, onThisMachine }: {
+  custom: CustomProviders; named: string | undefined; home: string | undefined; onThisMachine: boolean;
 }): ProviderFound {
-  const { command, name } = instance;
+  const { command, name, homeEnv } = instance;
   const hostPlatform = onThisMachine ? process.platform : undefined;
 
   if (named !== undefined) {
@@ -163,7 +168,7 @@ export function providerOf(instance: InitInstance, tool: PaseoTool, { custom, na
 
   // A provider with no command of its own runs the tool's.
   const runsOwn = (entry: CustomProviders[string]): boolean => (command === undefined
-    ? (entry.command?.[0] === undefined || daemonRuns({ executable: entry.command[0], command: tool, hostPlatform })) && home !== undefined && entry.env?.[variable] === home
+    ? (entry.command?.[0] === undefined || daemonRuns({ executable: entry.command[0], command: tool, hostPlatform })) && home !== undefined && homeEnv.length > 0 && homeEnv.every((variable) => entry.env?.[variable] === home)
     : daemonRuns({ executable: entry.command?.[0], command, hostPlatform }));
 
   if (command === undefined && home === undefined) {
@@ -172,7 +177,7 @@ export function providerOf(instance: InitInstance, tool: PaseoTool, { custom, na
 
   const shownHome = instance.home ? shownPath(instanceHomeOf(instance.home)) : '';
   const subject = command === undefined ? `no Paseo provider runs ${tool} in its home ${shownHome}` : `no Paseo provider runs its command ${command}`;
-  const setUp = command === undefined ? `with env ${JSON.stringify({ [variable]: shownHome })}` : `with command ${JSON.stringify([command])}`;
+  const setUp = command === undefined ? `with env ${JSON.stringify(homeEnvAt(homeEnv, shownHome))}` : `with command ${JSON.stringify([command])}`;
   const matches = Object.entries(custom).flatMap(([id, entry]) => (entry.extends === tool && runsOwn(entry) ? [id] : []));
   const [only, second] = matches;
 
@@ -193,8 +198,8 @@ export function providerOf(instance: InitInstance, tool: PaseoTool, { custom, na
   const taken = custom[name];
 
   if (taken !== undefined) {
-    const runs = command === undefined ? `${tool} in ${taken.env?.[variable] ?? `${tool}'s own home`}` : taken.command?.[0] ?? `${tool}'s own command`;
-    const point = command === undefined ? `set ${variable} to ${shownHome} in its env` : `point that provider at ${command}`;
+    const runs = command === undefined ? `${tool} in ${homeEnv.map((variable) => taken.env?.[variable]).find((dir) => dir !== undefined) ?? `${tool}'s own home`}` : taken.command?.[0] ?? `${tool}'s own command`;
+    const point = command === undefined ? `set ${homeEnv.join(' and ')} to ${shownHome} in its env` : `point that provider at ${command}`;
 
     return { cannot: `${subject}, and the Paseo provider ${name} runs ${runs} instead, so teamai adds none under that name; ${point}, or name the provider to use in the runtime's providers option` };
   }
@@ -208,7 +213,7 @@ export function providerOf(instance: InitInstance, tool: PaseoTool, { custom, na
   return {
     add: {
       id: name,
-      entry: { extends: tool, label: name, ...(found && { command: [found] }), ...(home !== undefined && { env: { [variable]: home } }) },
+      entry: { extends: tool, label: name, ...(found && { command: [found] }), ...(home !== undefined && { env: homeEnvAt(homeEnv, home) }) },
     },
   };
 }
