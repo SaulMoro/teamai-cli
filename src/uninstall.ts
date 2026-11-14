@@ -76,7 +76,7 @@ import { BUILTIN_AGENT_NAMES } from './builtin-agents.js';
 import { teamaiBin } from './default-drivers.js';
 import { BUILTIN_SKILL_NAMES, LEGACY_BUILTIN_SKILL_NAMES, isCliOwnedSkillName } from './cli-skill-names.js';
 import { ownedSkillFiles, prunedWhole, removeOwnedFiles, skillsGuardBase } from './skill-owned-files.js';
-import { cleanupOf, hookAdapterDirIn, hookSettingsFile, installOf, isInstalledFor, locate, openclawWorkspaceDir, ownOf, SHARED_AGENT_SKILLS_PATH, workspaceHooksOf, writesOf, type Location } from './locate.js';
+import { cleanupOf, hookAdapterDirIn, hookSettingsFile, installOf, isInstalledFor, locate, openclawWorkspaceDir, ownOf, SHARED_AGENT_SKILLS_PATH, toolPathUnder, workspaceHooksOf, writesOf, type Location } from './locate.js';
 import { toolHome, toolHomeOf, toolHomesAcrossProfiles } from './tool-home.js';
 import { baseDescriptorOf, channelsOf, hookSyntaxOf, toolOf } from './tool-registry.js';
 import { CODEX_TOOL_IDS } from './utils/tool-names.js';
@@ -3567,7 +3567,7 @@ function instanceFoldersOf(tools: readonly string[], toolPaths: ReturnType<typeo
       if (segments.length <= home.length || home.some((segment, at) => segments[at] !== segment) || segments.some((segment) => ['', '.', '..'].includes(segment))) return [];
       const deepest = FOLDER_FIELDS.has(field) ? segments.length : segments.length - 1;
 
-      return Array.from({ length: deepest - home.length + 1 }, (_, at) => path.join(baseDir, ...segments.slice(0, home.length + at)));
+      return Array.from({ length: deepest - home.length + 1 }, (_, at) => toolPathUnder(tool, baseDir, segments.slice(0, home.length + at).join('/')));
     });
   }))];
 }
