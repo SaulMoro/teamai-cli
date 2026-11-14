@@ -10,7 +10,7 @@ import { acquireLock, releaseLock } from '../../update.js';
 import { AttemptIdSchema, RunIdSchema, type AttemptId, type RunId } from '../store.js';
 import type { WorkflowFailure } from '../types.js';
 import { retryCommand } from './retry-command.js';
-import type { LaunchTool } from '../../launch-registry.js';
+import { toolCommandEnv, type LaunchTool } from '../../launch-registry.js';
 import { readRegularFile, writeRegularFile } from '@teamai/shared/regular-file';
 
 // ─── A tool login teamai keeps for step runtimes ─────────
@@ -311,7 +311,7 @@ async function signInHeld(tool: LoginTool, { step, canAsk }: Parameters<typeof e
   await fs.mkdir(loginHome(tool), { recursive: true });
 
   const ended = await new Promise<{ code: number } | { error: string }>((resolve) => {
-    const child = spawnCommand(tool, ['login'], { env: { ...process.env, [HOME_VARIABLES[tool]]: loginHome(tool) }, stdio: 'inherit' });
+    const child = spawnCommand(tool, ['login'], { env: { ...process.env, ...toolCommandEnv(tool, { kind: 'at', dir: loginHome(tool) }) }, stdio: 'inherit' });
     child.on('error', (error) => resolve({ error: error.message }));
     child.on('close', (exit, signal) => resolve({ code: exit ?? (signal ? 128 : 1) }));
   });

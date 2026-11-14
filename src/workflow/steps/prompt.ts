@@ -222,16 +222,16 @@ async function usedInSession(tool: string, sessionId: string, cwd: string, teamS
 }
 
 /**
- * The home at `dir` the tool of a prompt through another runtime keeps its session in, in the outer's place, under
- * `variable`: made, and started on the member's model choices from `memberHome`, as an exec runtime's is. None for a
- * tool no step runtime execs.
+ * The home at `dir` the tool of a prompt through another runtime keeps its session in, in the outer's place: made, and
+ * started on the member's model choices from `memberHome`, as an exec runtime's is. None for a tool no step runtime
+ * execs, or with no `variable` to read a home from.
  */
-async function outerToolHome({ dir, tool, variable, memberHome }: { dir: string; tool: string; variable: string | undefined; memberHome: () => string }): Promise<{ variable: string; dir: string } | undefined> {
+async function outerToolHome({ dir, tool, variable, memberHome }: { dir: string; tool: string; variable: string | undefined; memberHome: () => string }): Promise<string | undefined> {
   if (variable === undefined || !isExecRuntimeTool(tool)) return undefined;
   await fs.mkdir(dir, { recursive: true });
   await seedMemberModel({ tool, dir, memberHome: memberHome() });
 
-  return { variable, dir };
+  return dir;
 }
 
 
@@ -405,7 +405,7 @@ export async function runPromptStep({ config, lock, driver, lease, adapter = ste
 
   // An instance reaches a runtime that execs its tool only when the runtime lists it, so its command is there. Its
   // home, and the sessions there, are its own.
-  const toolHome = homed && variable !== undefined ? { tool: selected, variable, dir: attemptToolHome(config, lock.run, lease.attempt, launched) } : undefined;
+  const toolHome = homed && variable !== undefined ? { tool: selected, dir: attemptToolHome(config, lock.run, lease.attempt, launched) } : undefined;
   let resume: { id: string; resumed: SessionRef } | undefined;
 
   // A runtime that launches agents continues, as a new turn, the conversation an earlier attempt launched on it, in the
@@ -526,15 +526,17 @@ export async function runPromptStep({ config, lock, driver, lease, adapter = ste
     // Through another runtime, the app's tool runs in the outer's place, on a home of the attempt's, as an exec runtime's does.
     const throughHome = onRuntime.isThrough !== true ? undefined : await outerToolHome({ dir: attemptToolHome(config, lock.run, lease.attempt, launched), tool: selected, variable: homeVariable, memberHome });
     const isThroughOuter = onRuntime.isThrough === true;
+    const viewHome = throughHome ?? toolHome?.dir;
     launcher = runtimePrompter(onRuntime.run, {
-      view: await placeView(config, lock.run, lease, cwd, throughHome ?? toolHome), runId: lock.run, step: lease.step, provided: scoped.provided, unset: scoped.unset,
+      view: await placeView(config, lock.run, lease, cwd, viewHome === undefined ? undefined : toolCommandEnv(launched, { kind: 'at', dir: viewHome })), runId: lock.run, step: lease.step, provided: scoped.provided, unset: scoped.unset,
       credentials: credentialsForTool(onRuntime.credentials, onRuntime.found, launched), setUp, tool: launched, isThroughOuter, ...(conversation && { continues: { handle: conversation.handle, op: conversation.op } }),
       ...(toolHome && { toolHome: { tool: toolHome.tool, dir: toolHome.dir } }),
     });
   } else if (onRuntime && toolHome) {
     const scoped = runtimeStepEnv(lease, lease.processEnv ?? {}, { config, run: lock.run, mode });
-    input.env = { ...scoped.env, [toolHome.variable]: toolHome.dir };
-    const view = await placeView(config, lock.run, lease, cwd, toolHome);
+    const homeEnv = toolCommandEnv(launched, { kind: 'at', dir: toolHome.dir });
+    input.env = { ...scoped.env, ...homeEnv };
+    const view = await placeView(config, lock.run, lease, cwd, homeEnv);
     const start = runtimeLauncher(onRuntime.run, { view, tool: launched, toolHome: { tool: toolHome.tool, dir: toolHome.dir }, unset: scoped.unset, credentials: credentialsForTool(onRuntime.credentials, onRuntime.found, toolHome.tool), setUp });
     // The runtime finds the command where it runs it, and a resumed step attaches there to the tool it left running.
     launcher = stepLauncher(toolsLaunchDeps(), { start, canReattach: true, resolveTool: (command) => command, resolveInstanceCommand: (command) => command });

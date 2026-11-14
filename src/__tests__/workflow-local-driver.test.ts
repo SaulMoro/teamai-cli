@@ -1346,6 +1346,40 @@ steps:
     expect(two).toMatchObject({ status: 'succeeded', resumed: { tool: 'claude', id: session } });
   }, 30_000);
 
+  it('gives an instance that names its own home variable the attempt\'s tool home under that variable and under its tool\'s', async () => {
+    useToolInstances(new Map([['acme-claude', {
+      name: 'acme-claude', extends: 'claude', home: { dir: '.acme-claude', env: 'ACME_CLAUDE_HOME' },
+      source: 'personal', file: '/home/.teamai/tools/acme-claude.yaml', location: '~/.teamai/tools/acme-claude.yaml', revision: 'r1',
+    }]]));
+    onTestFinished(() => { useToolInstances(new Map()); });
+    const { config, workspace, runId } = await workflowFixture(`schemaVersion: v1alpha1
+name: build
+description: Review the project.
+steps:
+  - id: review
+    tool: acme-claude
+    prompt: Review this project.
+    output:
+      ok: boolean
+`);
+    const state = path.join(path.dirname(workspace), 'toy-state');
+    const runtime = stdioStepRuntime({ name: 'toy', command: process.execPath, args: [TOY_RUNTIME] });
+    onTestFinished(() => runtime.dispose());
+    const ready = await runtime.init({ options: { state, can: { tools: ['acme-claude'] }, agent: { output: { ok: true } }, prompt_tool_home: true }, mode: 'unattended' });
+    if (!ready.ok) throw new Error(ready.failure.message);
+    const runtimes: DriverRuntimes = {
+      driver: 'toy', asked: 'toy',
+      runtimes: [{ kind: 'external', use: 'toy', runtime, can: ready.can, launchesAgents: true, ...(ready.runsOnToolHome && { runsOnToolHome: true }), engine: { logins: [] }, credentials: {}, found: [], masks: {}, optionsFrom: 'test' }],
+    };
+
+    expect(await runLocalDriver(config, runId, workspace, { runtimes })).toMatchObject({ data: { done: { outcome: 'succeeded' } } });
+
+    const [view] = fs.readdirSync(path.join(state, 'views'));
+    const attempt = AttemptIdSchema.parse(view?.slice(`toy-${runId}-`.length, -'.json'.length));
+    const home = attemptToolHome(config, RunIdSchema.parse(runId), attempt, 'acme-claude');
+    expect(JSON.parse(fs.readFileSync(path.join(state, 'views', view ?? ''), 'utf8'))).toMatchObject({ toolHome: { CLAUDE_CONFIG_DIR: home, ACME_CLAUDE_HOME: home } });
+  }, 30_000);
+
   it('holds a Claude prompt to its budget on a runtime that runs it in the attempt\'s tool home, and lists the budget as enforced', async () => {
     const { config, workspace, runId } = await workflowFixture(`schemaVersion: v1alpha1
 name: build

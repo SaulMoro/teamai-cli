@@ -17,6 +17,7 @@ import { git } from '../worktree.js';
 import { isWithin, samePath } from '../../utils/agent-path.js';
 import { UsageLimits } from '../usage-limits.js';
 import type { LocalConfig } from '../../types.js';
+import type { ToolCommandEnv } from '../../launch-registry.js';
 import { stepPrompt, toolLauncher, withoutPrompt, type ToolClosed, type ToolLauncher } from '@teamai/tool-launch/run-step-launch';
 import type { StepLauncher, StepRun, StepRunResult } from '@teamai/runtime-tools';
 
@@ -35,9 +36,9 @@ const STDERR_KEPT = 64 * 1024;
  * What the attempt of `lease` gives its runtime: the worktree `cwd` read-write at its host path, its git paths read-only
  * (the common git directory, with the worktree's admin directory inside it, which holds `config.worktree`, and the
  * `.git` pointer), the workflow folder its env names read-only, the result directory read-write, and the tool home
- * under the variable its tool reads.
+ * under the variables its tool's command reads it from (`toolCommandEnv`).
  */
-export async function placeView(config: LocalConfig, run: RunId, lease: Pick<LeaseWire, 'attempt' | 'env'>, cwd: string, toolHome?: { variable: string; dir: string }): Promise<PlaceView> {
+export async function placeView(config: LocalConfig, run: RunId, lease: Pick<LeaseWire, 'attempt' | 'env'>, cwd: string, toolHome: ToolCommandEnv = {}): Promise<PlaceView> {
   const { attempt } = lease;
   const folder = WorkflowFolder.named(config, lease.env?.[WORKFLOW_DIR_ENV]);
   const listed = await git(cwd, ['rev-parse', '--path-format=absolute', '--git-common-dir', '--git-dir']);
@@ -51,11 +52,8 @@ export async function placeView(config: LocalConfig, run: RunId, lease: Pick<Lea
   const result = path.dirname(attemptResultPath(config, run, attempt));
   const runDir = runScratchDir(config, run);
   await Promise.all([fs.mkdir(result, { recursive: true }), fs.mkdir(runDir, { recursive: true })]);
-  const view: PlaceView = { worktree: cwd, readonly, result, runDir, toolHome: {} };
 
-  if (toolHome) view.toolHome[toolHome.variable] = toolHome.dir;
-
-  return view;
+  return { worktree: cwd, readonly, result, runDir, toolHome: { ...toolHome } };
 }
 
 /** The names a step's process gets over its runtime's environment, and those it goes without. */
