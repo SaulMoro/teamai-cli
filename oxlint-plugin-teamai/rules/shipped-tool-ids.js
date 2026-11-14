@@ -1,7 +1,7 @@
 /** @import { ESTree } from '@oxlint/plugins' */
 import { defineRule } from '@oxlint/plugins';
 
-import { isProductionSource, repositoryPath, scopedFiles, stringLiteralValue } from '../utils.js';
+import { isProductionSource, isScriptSource, repositoryPath, scopedFiles, stringLiteralValue } from '../utils.js';
 
 /** The two predicates that hold only for a tool teamai ships, never for a tool instance a team or member defines. */
 const SHIPPED_ONLY_PREDICATES = new Set(['isToolId', 'isAgentToolId']);
@@ -37,6 +37,10 @@ export const SHIPPED_ONLY = new Map(Object.entries({
   'src/models/aliases.ts': { count: 1 },
   // A session variable names the shipped tool that sets it; an instance runs that tool and sets the same variable.
   'src/workflow/drivers/skill/skill-driver.ts': { count: 1 },
+  // The README's tool matrix and the generated tool support page list the tools teamai ships, from their descriptors;
+  // an instance is a team's or a member's, with no descriptor of its own, and the support page lists the tools it extends.
+  'scripts/doc-checks/readme-matrix.ts': { count: 1 },
+  'scripts/tool-support.ts': { count: 1 },
 }));
 
 scopedFiles([...SHIPPED_ONLY.keys()]);
@@ -67,6 +71,7 @@ export const BASE_ID_COMPARISONS = new Map(Object.entries({
   'packages/tool-core/src/stdout.ts': 3,
   'packages/tool-launch/src/confined-launch.ts': 3,
   'packages/tool-launch/src/run-step-launch.ts': 1,
+  'scripts/verify/ledger.ts': 1,
   'src/autocompact-reconcile.ts': 6,
   'src/builtin-hooks.ts': 1,
   'src/claude-hook-host.ts': 1,
@@ -128,7 +133,7 @@ export default defineRule({
   create(context) {
     const { relative } = repositoryPath(context);
 
-    if (!isProductionSource(relative) || DEFINITIONS.has(relative)) return {};
+    if (!(isProductionSource(relative) || isScriptSource(relative)) || DEFINITIONS.has(relative)) return {};
     const allowed = SHIPPED_ONLY.get(relative)?.count ?? 0;
     const comparable = BASE_ID_COMPARISONS.get(relative) ?? 0;
     /** @type {Array<{ node: ESTree.Node, name: string }>} */
