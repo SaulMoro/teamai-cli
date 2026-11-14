@@ -899,6 +899,19 @@ steps:
     expect(initsOf().at(-1)?.instances).toContainEqual(expect.objectContaining({ name: 'acme-claude', home: { dir: path.join(fs.realpathSync(repo), 'acme-claude-here') } }));
   });
 
+  it('gives a runtime at init no instance for a file that only adjusts a shipped tool\'s paths', async () => {
+    const file = path.join(os.homedir(), '.teamai', 'tools', 'claude.yaml');
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, 'schemaVersion: v1alpha1\nname: claude\nextends: claude\npaths: { skills: .claude/team-skills }\n');
+    onTestFinished(() => fs.rmSync(file, { force: true }));
+    writeDefinition('toyadjusted', [{ use: 'toy', options: { state, agent: { output: { ok: true } } } }]);
+
+    await runCLI(['workflow', 'start', 'oneprompt', '--driver', 'toyadjusted'], repo, env());
+
+    const [init] = fs.readFileSync(path.join(state, 'inits.jsonl'), 'utf8').trim().split('\n').map((line) => JSON.parse(line) as { instances?: Array<{ name: string }> }).slice(-1);
+    expect(init?.instances ?? []).not.toContainEqual(expect.objectContaining({ name: 'claude' }));
+  });
+
   it('runs a step whose default tool is an instance on the next runtime when the first offers only the tool it extends', async () => {
     ownInstance('claude-work');
     writeDefinition('toyinstance', [{ use: 'toy', options: { state, can: { tools: ['claude'] } } }, { use: 'local' }]);

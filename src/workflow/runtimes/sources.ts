@@ -263,10 +263,11 @@ export type DriverPurpose = 'run' | 'stop' | 'check';
 
 /**
  * The tool instances the member may run, as `init` gives them: their own, and the team's whose command needs no
- * acceptance or was accepted on this machine. A runtime lists in `can.tools` the ones it can serve.
+ * acceptance or was accepted on this machine. A file that only adjusts a shipped tool's paths is no instance: a step
+ * names that tool, which the runtime already serves. A runtime lists in `can.tools` the ones it can serve.
  */
 async function runnableInstances(): Promise<InitInstance[]> {
-  const instances = toolInstancesFor('use');
+  const instances = toolInstancesFor('use').filter((declared) => declared.kind === 'instance');
   const accepted = await Promise.all(instances.map(async (instance) => (await acceptToolCommand(instance, { ask: undefined })).ok));
 
   return instances.filter((_, index) => accepted[index]).map((instance) => {
