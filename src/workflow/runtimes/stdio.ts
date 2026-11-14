@@ -14,6 +14,12 @@ import { signalChild } from '@teamai/shared/process-group';
 const DISPOSE_WAIT_MS = 2000;
 
 /**
+ * How long teamai still reads what a runtime that exited wrote before it did, while a process it started holds its
+ * stdout open, so its output never closes: then the runtime is gone, and what waits on it ends.
+ */
+const EXITED_DRAIN_MS = 1000;
+
+/**
  * How long teamai waits for a runtime's reply to an `init`, a `reattach` or a `close`, and for the first answer to an
  * `open`, an `exec` or a `prompt`, and for the outcome of an `exec` or `prompt` it cancelled, before it fails that
  * request `runtime_unanswered`.
@@ -127,7 +133,8 @@ function offered(can: Can, answersConfined: boolean): Can {
 
 /**
  * The client of an external step runtime: `command` spawned with `args`, speaking runtime protocol 1 over its stdio.
- * The process starts at `init`. Once it exits, or writes a line the protocol does not have, no request reaches it
+ * The process starts at `init`. Once it exits (its output read to the end, or for at most 1 s while a process it
+ * started holds that output open), or writes a line the protocol does not have, no request reaches it
  * again: an exec or prompt in flight ends `lost`, since what it started may outlive the runtime, and every other
  * request fails with `runtime_exited`. A `reattach`, `collect` or `close` ends with its own reply, or with the failure
  * reply for its handle. Every request still waiting fails `runtime_unanswered` when the runtime writes an error that
@@ -378,7 +385,10 @@ export function stdioStepRuntime({ name, command, args = [], cwd, secrets = {} }
       if (!stdin || !stdout || !stderr) return { ok: false, failure: { code: 'runtime_exited', message: `Step runtime "${name}" started without its stdio.` } };
       exited = new Promise((resolve) => started.on('close', () => resolve()));
       started.on('error', (error) => die(`it could not start (${error.message})`));
-      started.on('close', (code, signal) => die(signal ? `it was killed by ${signal}` : `it exited with status ${code ?? 1}`));
+      const ended = (code: number | null, signal: NodeJS.Signals | null): string => (signal ? `it was killed by ${signal}` : `it exited with status ${code ?? 1}`);
+      started.on('close', (code, signal) => die(ended(code, signal)));
+      // `close` waits for every holder of the runtime's stdio, which a process it started may keep open for good.
+      started.on('exit', (code, signal) => { setTimeout(() => die(ended(code, signal)), EXITED_DRAIN_MS).unref(); });
       stdin.on('error', () => {});
       stderr.setEncoding('utf8').on('data', (data: string) => { stderrTail = `${stderrTail}${data}`.slice(-4000); });
       readline.createInterface({ input: stdout }).on('line', receive).on('error', (error) => die(`its output could not be read (${error.message})`));

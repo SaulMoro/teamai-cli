@@ -49,7 +49,7 @@
 // running stops nothing and ends it failed with that failure, which reattach keeps reporting until a later cancel stops
 // it. With `stop_ms`, a stop completes that long after the cancel, and the operation is reported running until then.
 // With `stray`, an exec it accepts also starts a process that shares the toy's stdout and stderr and outlives it, which
-// writes its pid to `stray.pid` in the state; the toy then writes a line that is not JSON. With `binds`, a place keeps
+// writes its pid to `stray.pid` in the state; the toy then writes a line that is not JSON, unless `stray: "quiet"`. With `binds`, a place keeps
 // the worktree folder it was first opened on until it is closed, as a container binds a folder: an exec in a place
 // whose worktree was made again since exits 128, as Docker's does.
 //
@@ -387,7 +387,8 @@ function exec(request) {
     const stray = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { detached: true, stdio: ['ignore', 'inherit', 'inherit'] });
     fs.writeFileSync(file('stray.pid'), String(stray.pid));
     stray.unref();
-    process.stdout.write('not json\n');
+
+    if (options.stray !== 'quiet') process.stdout.write('not json\n');
   }
 
   // The toy itself stops while the exec runs on, as a runtime that crashes leaves its processes behind.

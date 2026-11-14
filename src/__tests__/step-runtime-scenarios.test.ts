@@ -7,7 +7,7 @@ import readline from 'node:readline';
 import { fileURLToPath } from 'node:url';
 import { buildSync } from 'esbuild';
 import { z } from 'zod';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest';
 import { log } from '@teamai/shared/log';
 import { homeEnvOf, toolsLaunchDeps } from '../workflow/runtimes/sources.js';
 import { stepLauncher, toolsStepRuntime } from '@teamai/runtime-tools';
@@ -1366,6 +1366,19 @@ describe('a runtime that cannot close a place, over stdio', () => {
       .toMatchObject({ kind: 'lost', failure: { code: 'runtime_exited' } });
 
     expect(await runtime.close(handle)).toMatchObject({ ok: false, failure: { code: 'runtime_exited' } });
+  });
+
+  it('ends an accepted exec runtime_exited soon after the runtime exits, though what it started still holds its output open', async () => {
+    const { runtime, handle } = await opened({ exit_at: 'exec-accepted', stray: 'quiet' });
+    const strayPid = path.join(dir, 'state', 'stray.pid');
+    onTestFinished(() => {
+      if (fs.existsSync(strayPid)) signalPid(Number(fs.readFileSync(strayPid, 'utf8')), 'SIGKILL');
+    });
+
+    const end = runtime.exec({ op: newOpId(), handle, argv: [process.execPath, '-e', 'setTimeout(() => {}, 200)'], env: {}, unset: [], credentials: {}, cwd: path.join(dir, 'worktree') }, {}, 'command');
+
+    expect(await Promise.race([end, new Promise((resolve) => setTimeout(() => resolve('still pending'), 5000))])).toMatchObject({ kind: 'lost', failure: { code: 'runtime_exited' } });
+    expect(signalPid(Number(fs.readFileSync(strayPid, 'utf8')), 0)).toBe('sent');
   });
 
   it('fails an open sent once the runtime has stopped as runtime_not_sent, since the runtime never got it', async () => {
