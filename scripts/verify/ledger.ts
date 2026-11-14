@@ -335,7 +335,8 @@ function instanceView(instance: DeclaredTool): ToolView[] {
     return base === 'home' || base === 'project' ? `${base}/${instanceReadPath(instance, { from: base, relative: rest.join('/') })}` : entry;
   };
 
-  const paths = instance.paths ?? defaultPathsOf(instance);
+  // A world's ledger reads no team config: an instance's paths move from the shipped ones of the tool it extends.
+  const paths = instance.paths ?? defaultPathsOf(instance, {});
   const relatives = [...USER_FIELDS.map((field) => paths.userScope?.[field] ?? paths[field]), paths.mcp].flatMap((relative) => relative ?? []);
   // Under HOME, or under the tool's home where its user paths are relative to it (Copilot's): either is teamai's.
   const home = instance.home.dir;

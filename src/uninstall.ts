@@ -52,7 +52,7 @@ import {
   hookToolPathsForConfig,
   SYNC_LOCK_FILENAME,
   TOOL_ROOT_FIELDS,
-  toolInstallRoot,
+  toolGateRoot,
   type GlobalOptions,
   type TeamaiConfig,
   type LocalConfig,
@@ -1444,7 +1444,7 @@ async function buildRemovalPlan(
     for (const file of res.agentFiles) {
       const stem = agentStemFromFilename(path.basename(file)) ?? path.basename(file);
 
-      if (await ownsAgentCopy(localConfig, file, stem, tool, previous)) ownedAgents.push(file);
+      if (await ownsAgentCopy(teamConfig, localConfig, file, stem, tool, previous)) ownedAgents.push(file);
       else res.keptFiles.push(describeMembersDirLeft(file, teamAgentNames.get(stem) ?? `agents/${stem}.yaml`, 'uninstall'));
     }
 
@@ -1820,7 +1820,7 @@ async function buildRemovalPlan(
     const homes = [recorded[name], ...history[name] ?? []].filter((home): home is string => home !== undefined);
     const current = toolOf(name) === undefined ? null : toolHomeOf(name)?.dir ?? null;
 
-    for (const { file } of leftInstanceHookFiles({ name, homes, current, toolRoots: localConfig.toolRoots })) {
+    for (const { file } of leftInstanceHookFiles({ name, homes, current, toolRoots: localConfig.toolRoots, toolPaths: teamConfig.toolPaths })) {
       if (plan.hookFiles.some((entry) => entry.path === file) || !await pathExists(file) || !await hasTeamaiHooks(file, name, plan.hookManifestPath)) continue;
       plan.hookFiles.unshift({ path: file, tool: name, manifestPath: plan.hookManifestPath, keepRecords: plan.hookFiles.some((entry) => entry.tool === name) });
     }
@@ -2804,7 +2804,7 @@ async function forgetUninstalledToolPaths(
 
   const codexShared = (id: string): string[] => readsCodexSharedSkills(id) ? [SHARED_AGENT_SKILLS_PATH] : [];
   // The tool's roots (`.claude`, `.github`), less what another tool in use reads there (WorkBuddy's `.codebuddy/rules`).
-  const roots = [...new Set([...pathsOf(tool).map(toolInstallRoot), ...codexShared(tool)])];
+  const roots = [...new Set([...pathsOf(tool).map((one) => toolGateRoot(tool, one, localConfig.toolRoots)), ...codexShared(tool)])];
 
   const others = Object.keys(toolPaths).flatMap((id) =>
     id === tool || isAgentExcluded(localConfig, id) ? [] : [...pathsOf(id), ...codexShared(id)]);

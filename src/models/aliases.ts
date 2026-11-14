@@ -42,8 +42,9 @@
 import path from 'node:path';
 import { parseYaml } from '@teamai/shared/yaml';
 import { z } from 'zod';
-import { getTeamaiHomeDir, type LocalConfig, type Scope } from '../types.js';
-import { agentModelToolOf } from '../tool-instances.js';
+import { getTeamaiHomeDir, type LocalConfig } from '../types.js';
+import { effectivePathsOf } from '../tool-instances.js';
+import { agentsDirAt, type DeliveryPlace } from '../locate.js';
 import { isJsonObject, JsonValueSchema, type JsonObject, type JsonValue } from '@teamai/shared/json';
 import { activeEntryNamespaces, describeEntryFailure, entryLayout, listEntryFiles, namespaceDir, readEntryFileText, type EntryLayout } from '../namespaced-entries.js';
 import { resolveNamespacedItems, type NamespaceCandidate } from '../namespace-resolver.js';
@@ -575,8 +576,8 @@ export function isModelAlias(aliases: ModelAliases, model: string): boolean {
  * written. Pull prints only these, so a member hears of an entry only when an
  * agent they receive uses it; doctor lists them all.
  */
-export function aliasWarningsFor(aliases: ModelAliases, spec: AgentSpec, receiver: string, scope: Scope): string[] {
-  const tool = agentModelToolOf(receiver, scope);
+export function aliasWarningsFor(aliases: ModelAliases, spec: AgentSpec, receiver: string, place: DeliveryPlace): string[] {
+  const tool = agentModelToolOf(receiver, place);
   const format = agentFormatOf(tool);
 
   if (!aliases.ok || format === undefined || spec.model === undefined) return [];
@@ -636,9 +637,24 @@ function switchReaching(aliases: ModelAliases & { ok: true }, tool: string, form
   return ownHome ? undefined : aliases.switches[format];
 }
 
-/** What `receiver`'s agent file in `scope` holds for `spec`'s model. */
-export function resolveAgentModel(aliases: ModelAliases, spec: AgentSpec, receiver: string, scope: Scope): ModelResolution {
-  const tool = agentModelToolOf(receiver, scope);
+/**
+ * The tool whose model aliases render `receiver`'s agent files at `place`. An instance whose agent files land in the
+ * directory of the tool it extends writes that tool's files, so each renders as that tool's from either pass.
+ */
+export function agentModelToolOf(receiver: string, place: DeliveryPlace): string {
+  const instance = toolOf(receiver)?.instance;
+  const own = instance?.kind === 'instance' ? effectivePathsOf(instance, place.toolPaths) : undefined;
+
+  if (instance === undefined || own === undefined) return receiver;
+  const effective = { ...place, toolPaths: { ...place.toolPaths, [receiver]: own } };
+  const shared = agentsDirAt(instance.extends, effective);
+
+  return shared !== null && agentsDirAt(receiver, effective) === shared ? instance.extends : receiver;
+}
+
+/** What `receiver`'s agent file at `place` holds for `spec`'s model. */
+export function resolveAgentModel(aliases: ModelAliases, spec: AgentSpec, receiver: string, place: DeliveryPlace): ModelResolution {
+  const tool = agentModelToolOf(receiver, place);
   const format = agentFormatOf(tool);
   const extras = format === undefined ? undefined : toolExtrasFor(spec, format);
   const extrasModel = extras?.['model'];
