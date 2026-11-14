@@ -8,7 +8,7 @@ import { warnOnce } from './utils/warn-once.js';
 import type { TeamaiConfig, LocalConfig } from './types.js';
 import { resolveBaseDir, isAgentExcluded, scopedToolPaths } from './types.js';
 import { installOf, locate, SHARED_AGENT_SKILLS_PATH, writable } from './locate.js';
-import { CODEX_TOOL, skillTargetsFor } from './resources/skills.js';
+import { readsCodexSharedSkills, skillTargetsFor } from './resources/skills.js';
 import { allowsSkillDirectory, describeSkippedSkillDirectory, findSkillDirectoryBlock } from './skill-directory.js';
 import { getUserHome } from '@teamai/shared/home';
 import { packagedSkillRoots } from './skill-content.js';
@@ -126,12 +126,13 @@ export async function pruneLegacyBuiltinSkills(
   { skillsDir, guardBase }: BuiltinSkillsTarget,
   names: ReadonlySet<string> = LEGACY_BUILTIN_SKILL_NAMES,
 ): Promise<void> {
-  // The shared .agents/skills directory belongs to Codex alone. Reaching it from
-  // another tool's pass would delete Codex's copies while Codex is excluded or
-  // not installed, which the enabledAgents whitelist rules out.
+  // The shared .agents/skills directory belongs to the Codex builds alone, Codex's
+  // and an instance's. Reaching it from another tool's pass would delete Codex's
+  // copies while Codex is excluded or not installed, which the enabledAgents
+  // whitelist rules out.
   const skillRoots = [skillsDir];
 
-  if (tool === CODEX_TOOL) skillRoots.push(path.join(guardBase, SHARED_AGENT_SKILLS_PATH));
+  if (readsCodexSharedSkills(tool)) skillRoots.push(path.join(guardBase, SHARED_AGENT_SKILLS_PATH));
 
   for (const legacyName of names) {
     for (const root of skillRoots) {
@@ -368,7 +369,7 @@ export async function deployBuiltinSkills(
           log.warn(`Archived but could not delete ${result.notRemoved.length} file(s) under ${destDir}. First: ${result.notRemoved[0].file} — ${result.notRemoved[0].error}`);
         }
 
-        if (tool === CODEX_TOOL) await retireOtherCodexCopy(tool, skillName, destDir, target);
+        if (readsCodexSharedSkills(tool)) await retireOtherCodexCopy(tool, skillName, destDir, target);
         // The one file it writes there, never the directory (#915).
         options?.recorder?.report('builtin', path.join(destDir, 'SKILL.md'));
 

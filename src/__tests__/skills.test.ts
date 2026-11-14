@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach, onTestFinished } from 'vitest';
 import path from 'node:path';
 import os from 'node:os';
 import fse from 'fs-extra';
@@ -23,6 +23,7 @@ import { allowsSkillDirectory } from '../skill-directory.js';
 import { contentHash } from '../resources/delivered-copies.js';
 import { log } from '@teamai/shared/log';
 import { commitTeamRepo } from './helpers/team-repo-history.js';
+import { useToolInstances } from '../tool-registry.js';
 import type { TeamaiConfig, LocalConfig } from '../types.js';
 
 describe('skill push item construction', () => {
@@ -1701,11 +1702,20 @@ describe('SkillsHandler.pullItem Codex shared skills', () => {
     await fse.remove(tmpDir);
   });
 
-  it('updates an existing .agents skill and removes an identical TeamAI .codex copy', async () => {
+  // An instance runs a Codex build, which reads the shared directory as Codex does, so it would see the skill twice.
+  it.each([
+    { tool: 'codex', home: '.codex' },
+    { tool: 'acme-codex', home: '.acme-codex' },
+  ])('updates an existing .agents skill and removes an identical TeamAI $home copy of $tool', async ({ tool, home }) => {
+    useToolInstances(new Map([['acme-codex', {
+      name: 'acme-codex', extends: 'codex', home: { dir: '.acme-codex' },
+      source: 'personal', file: '/home/.teamai/tools/acme-codex.yaml', location: '~/.teamai/tools/acme-codex.yaml', revision: 'r1',
+    }]]));
+    onTestFinished(() => { useToolInstances(new Map()); });
     const homeDir = path.join(tmpDir, 'home');
     const sourcePath = path.join(tmpDir, 'team-repo', 'skills', 'team-skill');
     const sharedSkillPath = path.join(homeDir, '.agents', 'skills', 'team-skill');
-    const codexSkillPath = path.join(homeDir, '.codex', 'skills', 'team-skill');
+    const codexSkillPath = path.join(homeDir, home, 'skills', 'team-skill');
     await fse.ensureDir(codexSkillPath);
     await fse.ensureDir(sharedSkillPath);
     await fse.ensureDir(sourcePath);
@@ -1723,7 +1733,7 @@ describe('SkillsHandler.pullItem Codex shared skills', () => {
       provider: 'git' as const,
       reviewers: [],
       sharing: { skills: {}, rules: { enforced: [] }, docs: { localDir: '' }, env: { injectShellProfile: true } },
-      toolPaths: { codex: { skills: '.codex/skills' } },
+      toolPaths: { [tool]: { skills: `${home}/skills` } },
     };
     const localConfig = {
       repo: { localPath: path.join(tmpDir, 'team-repo'), remote: 'https://example.test/team.git' },
