@@ -60,6 +60,27 @@ describe('teamai-runtime-paseo', () => {
     }
   });
 
+  it.skipIf(process.platform === 'win32')('reports tokens for a Codex whose Paseo provider sets its home, though teamai cannot list another home that Codex does not use', async () => {
+    const providerHome = path.join(dir, 'paseo-homes', 'acme-codex');
+    // teamai's own home for the instance, where its Codex would keep its sessions had the provider not moved it.
+    const elsewhere = path.join(dir, 'home', '.codex-acme', 'sessions');
+    fs.mkdirSync(path.join(providerHome, 'sessions'), { recursive: true });
+    fs.mkdirSync(elsewhere, { recursive: true });
+    fs.chmodSync(elsewhere, 0o300);
+    behave({
+      models: { codex: ['gpt-6.1-sol'] }, codex_login: 'signed_in', codex_login_home: providerHome,
+      custom_providers: { 'codex-acme': { extends: 'codex', command: ['/opt/acme/bin/acme-codex'], env: { CODEX_HOME: providerHome } } },
+    });
+
+    try {
+      expect(await ready(start(), {
+        instances: [{ name: 'acme-codex', tool: 'codex', command: 'acme-codex', home: { dir: '.codex-acme', env: 'CODEX_HOME' } }],
+      })).toMatchObject({ ok: true, can: { tools: ['acme-codex'], tokens: true } });
+    } finally {
+      fs.chmodSync(elsewhere, 0o700);
+    }
+  });
+
   it('offers neither a step nor a judge on a tool installed but signed out, which Paseo still calls available, and names it unavailable with how to sign it in', async () => {
     behave({ models: { claude: ['claude-opus-5-5'], opencode: ['opencode/beam-free'] }, sign_in: { claude: 'signed_out' } });
 

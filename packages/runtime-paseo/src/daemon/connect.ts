@@ -125,14 +125,14 @@ function holdsRollout(home: string, threadId: string): boolean {
 }
 
 /**
- * The homes on this machine the daemon's Codex likely writes, in the order to look in. Paseo reports no Codex home, so
- * they are: the one its Paseo provider's env sets, then the runtime's `CODEX_HOME`, then a team instance's home as
- * teamai resolved it (an absolute `homeDir`), or `.codex` in the account's home, where a daemon the Paseo app started
- * runs, then in `$HOME`.
+ * The homes on this machine the daemon's Codex likely writes, in the order to look in. Paseo starts Codex with its
+ * provider's env over the daemon's own and reports no Codex home, so they are: the one its Paseo provider's env sets,
+ * alone, as Codex writes only there; else the runtime's `CODEX_HOME`, then a team instance's home as teamai resolved it
+ * (an absolute `homeDir`), or `.codex` in the account's home, where a daemon the Paseo app started runs, then in `$HOME`.
  */
 export function codexHomes({ providerHome, homeDir }: { providerHome: string | undefined; homeDir: string }): string[] {
-  // The home a Paseo provider's env sets is the one its Codex writes.
-  const homes: string[] = providerHome === undefined ? [] : [providerHome];
+  if (providerHome !== undefined) return [providerHome];
+  const homes: string[] = [];
   // CODEX_HOME moves the Codex home, not a team instance's own.
   const moved = homeDir === '.codex' ? process.env.CODEX_HOME : undefined;
 
