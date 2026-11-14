@@ -25,10 +25,12 @@ import { canList, FsFailureSchema, isPermissionDenied } from '@teamai/shared/fs-
  */
 export const DRIVERS = {
   claudeAgent: {
+    // oxlint-disable-next-line teamai/tool-home-env -- a runtime package names the variable of the shipped tool a provider runs: InitInstance.homeEnv carries only an instance's, and toolCommandEnv is in src/
     tool: 'claude', label: 'Claude', home: '.claude', homeEnv: 'CLAUDE_CONFIG_DIR', store: 'projects', sessions: (toolHome: string) => new ClaudeCodeAdapter('claude-code', path.join(toolHome, 'projects')),
     tokens: 'claude-jsonl',
   },
   codex: {
+    // oxlint-disable-next-line teamai/tool-home-env -- a runtime package names the variable of the shipped tool a provider runs: InitInstance.homeEnv carries only an instance's, and toolCommandEnv is in src/
     tool: 'codex', label: 'Codex', home: '.codex', homeEnv: 'CODEX_HOME', store: 'sessions', sessions: (toolHome: string, host: SessionHost) => new CodexAdapter('codex', path.join(toolHome, 'sessions'), host),
     tokens: 'codex-rollout',
   },

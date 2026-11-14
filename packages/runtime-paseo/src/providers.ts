@@ -38,8 +38,10 @@ export const PASEO_TOOLS: readonly PaseoTool[] = Object.keys(CONFINED_MODES).fil
 export function homeVariableOf(tool: PaseoTool): string {
   switch (tool) {
     case 'claude':
+      // oxlint-disable-next-line teamai/tool-home-env -- a runtime package names the variable of the shipped tool a provider runs: InitInstance.homeEnv carries only an instance's, and toolCommandEnv is in src/
       return 'CLAUDE_CONFIG_DIR';
     case 'codex':
+      // oxlint-disable-next-line teamai/tool-home-env -- a runtime package names the variable of the shipped tool a provider runs: InitInstance.homeEnv carries only an instance's, and toolCommandEnv is in src/
       return 'CODEX_HOME';
     case 'opencode':
       return 'XDG_DATA_HOME';

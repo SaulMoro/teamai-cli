@@ -34,10 +34,8 @@ export const LOGIN_TOOLS = ['codex'] as const satisfies readonly LaunchTool[];
 
 export type LoginTool = (typeof LOGIN_TOOLS)[number];
 
-/** The login file each tool keeps in its home, and the variable that names that home. */
+/** The login file each tool keeps in its home. */
 const LOGIN_FILES = { codex: 'auth.json' } as const satisfies Record<LoginTool, string>;
-
-const HOME_VARIABLES = { codex: 'CODEX_HOME' } as const satisfies Record<LoginTool, string>;
 
 const TOOL_NAMES = { codex: 'Codex' } as const satisfies Record<LoginTool, string>;
 
@@ -61,7 +59,14 @@ export function loginHome(tool: LoginTool): string {
 
 /** The command that fills `tool`'s dedicated home, as every message about the login names it. */
 export function loginCommand(tool: LoginTool): string {
-  return `${HOME_VARIABLES[tool]}=${loginHome(tool)} ${tool} login`;
+  return signInCommand(tool, loginHome(tool), tool);
+}
+
+/** `executable`'s login command with `tool`'s home at `dir`, as a member types it. */
+function signInCommand(tool: LoginTool, dir: string, executable: string): string {
+  const variables = Object.entries(toolCommandEnv(tool, { kind: 'at', dir })).map(([name, value]) => `${name}=${value}`);
+
+  return [...variables, executable, 'login'].join(' ');
 }
 
 /** A home a login is copied from, and the command that signs the tool in there again. */
@@ -474,7 +479,7 @@ export async function holdLoginFrom({ tool, executable, from, toolHome, run, att
 }): Promise<{ ok: true; release(): Promise<WorkflowFailure | undefined> } | { ok: false; failure: WorkflowFailure }> {
   if (!await holdsLogin(path.join(from, LOGIN_FILES[tool]))) return { ok: true, release: async () => undefined };
 
-  const source: LoginSource = { home: from, signIn: `${HOME_VARIABLES[tool]}=${from} ${executable} login` };
+  const source: LoginSource = { home: from, signIn: signInCommand(tool, from, executable) };
 
   // A lock this attempt holds is a killed run's: its home keeps what the tool refreshed, unless the home went with it,
   // and then that hold ends, so this run copies the login again; what nothing refreshed has nothing to say.
