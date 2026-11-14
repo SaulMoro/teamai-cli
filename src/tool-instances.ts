@@ -4,13 +4,14 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { z } from 'zod';
 import { isBareCommandName } from '@teamai/shared/cli-path';
+import type { FirstExistingRead, HomeRead } from '@teamai/tool-core/definition';
 import { INSTANCE_KEYS, type ToolInstance, type ToolInstanceHome } from '@teamai/tool-core/instance';
 import { isSafeNamespaceSegment } from './manifest-schema.js';
 import { resolveNamespacedItems, type NamespaceCandidate } from './namespace-resolver.js';
 import { isSessionPlatform } from './session-flow/adapters/platform-facts.js';
 import { instanceHomeAfterInit, instanceHomeDir, isSameDirOn, realHost, toolHome, type Host } from './tool-home.js';
-import { INSTANCE_BASES, isInstanceBase, isToolId, TOOL_ORDER, toolInstancesFor, toolOf, useToolInstances } from './tool-registry.js';
-import type { ToolId } from './tools.js';
+import { descriptorOf, INSTANCE_BASES, isInstanceBase, isToolId, TOOL_ORDER, toolInstancesFor, toolOf, useToolInstances } from './tool-registry.js';
+import type { ShippedDescriptor, ToolId } from './tools.js';
 import { DEFAULT_TOOL_PATHS, TOOL_ROOT_FIELDS, getTeamaiHomeDir, relativeInside, getTrustDir, recordedToolRootDir, RELOCATABLE_TOOLS, rerootToolPaths, toolInstallRoot, toolPathRoots, ToolPathsSchema, type TeamaiConfig } from './types.js';
 import { writeJsonAtomic } from './utils/fs.js';
 import { log } from './utils/logger.js';
@@ -93,18 +94,63 @@ function refused(file: string, reason: string): RefusedInstance {
 /**
  * The first user-scope path of `paths` outside the instance home `dir`, a `$HOME`-relative directory, by the key that
  * sets it: what a tool started at that home would not read there. Decided by containment, since a home may be nested.
+ * A path the tool `base` reads for that field wherever its home is (`homeReadAt` leaves it where it is) is read there.
  */
-function userPathOutsideHome(paths: z.infer<typeof ToolPathsSchema>, dir: string): { key: string; value: string } | undefined {
+function userPathOutsideHome(paths: z.infer<typeof ToolPathsSchema>, dir: string, base: ToolId): { key: string; value: string } | undefined {
   for (const field of TOOL_ROOT_FIELDS) {
     const own = field === 'mcp' ? undefined : paths.userScope?.[field];
     const value = own === undefined ? paths[field] : own;
 
-    if (value !== undefined && value !== null && relativeInside(value, dir) === undefined) {
+    if (value === undefined || value === null || relativeInside(value, dir) !== undefined) continue;
+
+    if (!homeReadsOf(base, field).includes(value) || homeReadAt(base, dir, value) !== value) {
       return { key: own === undefined ? `paths.${field}` : `paths.userScope.${field}`, value };
     }
   }
 
   return undefined;
+}
+
+/** The paths the channel of the tool `base` that a `paths` field feeds declares it reads from home. */
+function homeReadsOf(base: ToolId, field: (typeof TOOL_ROOT_FIELDS)[number]): readonly string[] {
+  const reads = userReadsOf(descriptorOf(base), field);
+
+  return reads === 'unknown' ? [] : reads.flatMap((read) => read.base === 'home' && 'path' in read ? [read.path] : []);
+}
+
+function userReadsOf({ skills, rules, blocks, agents, mcp, hooks }: ShippedDescriptor, field: (typeof TOOL_ROOT_FIELDS)[number]): readonly (HomeRead | FirstExistingRead)[] | 'unknown' {
+  switch (field) {
+    case 'skills':
+      return skills.user;
+    case 'rules':
+      return rules.user instanceof Object && 'reads' in rules.user ? rules.user.reads : 'unknown';
+    case 'claudemd':
+      return blocks.user instanceof Object ? blocks.user.reads : 'unknown';
+    case 'agents':
+      return agents.user instanceof Object ? agents.user.reads : 'unknown';
+    case 'mcp':
+      return mcp.user instanceof Object ? mcp.user.reads : 'unknown';
+    case 'settings':
+    case 'hooks':
+      return hooks.user instanceof Object && 'reads' in hooks.user ? hooks.user.reads : 'unknown';
+    default: {
+      const unhandled: never = field;
+
+      return unhandled;
+    }
+  }
+}
+
+/**
+ * Where a build of the tool `base` started at the home `dir` reads what `base` reads at `relative` under the home: inside
+ * `dir` for a path in `base`'s own home and for a bare file beside it (Claude Code's .claude.json), which a moved home
+ * takes along; elsewhere, where `base` reads it from any home (Codex's ~/.agents/skills), as it is.
+ */
+function homeReadAt(base: ToolId, dir: string, relative: string): string {
+  if (!relative.includes('/')) return `${dir}/${relative}`;
+  const root = toolInstallRoot(relative);
+
+  return toolPathRoots(DEFAULT_TOOL_PATHS[base]).has(root) ? dir + relative.slice(root.length) : relative;
 }
 
 function sha256(text: string): string {
@@ -167,7 +213,7 @@ function parseToolInstance({ file, text, source, location }: { file: string; tex
   }
 
   if (!isToolId(fields.name) && isSessionPlatform(fields.name)) return refused(file, `"${fields.name}" is the name of a session platform teamai ships`);
-  const outside = fields.home && fields.paths && userPathOutsideHome(fields.paths, fields.home.dir);
+  const outside = fields.home && fields.paths && userPathOutsideHome(fields.paths, fields.home.dir, base);
 
   // An instance with a home starts with the variables of its home at it, whatever runs it, so its home is where it lives.
   if (fields.home && outside) {
@@ -496,11 +542,8 @@ export function defaultPathsOf(instance: DeclaredTool, toolPaths: TeamaiConfig['
 export function instanceReadPath(instance: DeclaredTool, { from, relative }: { from: 'home' | 'project'; relative: string }): string {
   if (!instance.home || (from === 'project' && (instance.paths !== undefined || !movesProjectPaths(instance)))) return relative;
 
-  // A bare file beside the tool's home (Claude Code's .claude.json) is inside a home that moved, as the instance's is.
-  if (!relative.includes('/')) return from === 'home' ? `${instance.home.dir}/${relative}` : relative;
-  const root = toolInstallRoot(relative);
-
-  return toolPathRoots(DEFAULT_TOOL_PATHS[instance.extends]).has(root) ? instance.home.dir + relative.slice(root.length) : relative;
+  // A file at the project's root is not beside a home.
+  return from === 'project' && !relative.includes('/') ? relative : homeReadAt(instance.extends, instance.home.dir, relative);
 }
 
 /**
