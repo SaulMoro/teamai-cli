@@ -7,7 +7,7 @@
 import fs from 'node:fs/promises';
 import { toolExtrasFor, type AgentSpec } from '../../resources/agent-format.js';
 import { observeLaunch, type ToolLaunch, type Used } from '../../agent-observation.js';
-import { detectProjectConfig } from '../../config.js';
+import { detectProjectConfig, resolveMemberToolRoots } from '../../config.js';
 import { type WorkflowEnv } from '../../env-resolution.js';
 import { launchEnv, workflowLaunch, type RunMode } from '../../launch-context.js';
 import type { LocalConfig, TeamaiConfig } from '../../types.js';
@@ -504,6 +504,9 @@ export async function runPromptStep({ config, lock, driver, lease, adapter = ste
 
   if (lease.interactive && !onRuntime) log.info(`Step "${lease.step}" opens ${launched} here for interactive work.`);
 
+  const inherited = lease.processEnv ?? process.env;
+  const toolRoots = stepConfig.toolRoots ?? await resolveMemberToolRoots(cwd);
+
   const input: StepRun = {
     prompt: lease.prompt!,
     cwd,
@@ -511,7 +514,7 @@ export async function runPromptStep({ config, lock, driver, lease, adapter = ste
     secrets,
     expected: expectedOutput(lease.output),
     // The lease `env` is set over the step's environment, as a command's is.
-    env: { ...withoutOuterSessionMarkers(lease.processEnv ?? process.env), ...toolCommandEnv(target.name, { kind: 'delivered', inherited: lease.processEnv ?? process.env }), ...lease.env, ...attemptEnv(config, lock.run, lease.attempt, mode) },
+    env: { ...withoutOuterSessionMarkers(inherited), ...toolCommandEnv(target.name, { kind: 'delivered', inherited, toolRoots }), ...lease.env, ...attemptEnv(config, lock.run, lease.attempt, mode) },
   };
 
   let launcher = adapter;

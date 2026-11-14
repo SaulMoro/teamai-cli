@@ -24,6 +24,8 @@ import { confinedVariables } from '@teamai/tool-launch/confined-launch';
 import { confinedIsolation, runConfined as launchConfined, type ConfinedDeps, type ConfinedFailure, type ConfinedFamily, type ConfinedRequest } from '@teamai/runtime-tools/confined';
 import { CONFINED_TOOLS, executableOf, launchAdapterIdOf, launchAdapterOf, toolCommandEnv, type ConfinedTool } from '../launch-registry.js';
 import { holdLoginFrom } from './runtimes/login.js';
+import { resolveMemberToolRoots } from '../config.js';
+import type { LocalConfig } from '../types.js';
 import { AttemptIdSchema, RunIdSchema } from './store.js';
 
 type ToolLookup = { resolveTool?: (tool: string) => string | null };
@@ -74,7 +76,8 @@ export async function confinedToolLevel(tool: ConfinedTool, { resolveTool = reso
 
   if (executable === null) return undefined;
   const tmp = await fs.realpath(os.tmpdir());
-  const version = await probeBinary(executable, ['--version'], (command, args, options) => execCommand(command, args, { ...options, env: confinedEnv(tool), cwd: tmp }));
+  const env = confinedEnv(tool, await resolveMemberToolRoots());
+  const version = await probeBinary(executable, ['--version'], (command, args, options) => execCommand(command, args, { ...options, env, cwd: tmp }));
 
   return { tool, version, isolation: await confinedIsolation({ profile: profileOf(tool), family: familyOf(tool), version, dir: tmp }) };
 }
@@ -140,12 +143,12 @@ function memberEnv(): NodeJS.ProcessEnv {
   return restored;
 }
 
-function confinedEnv(tool: ConfinedTool): NodeJS.ProcessEnv {
+function confinedEnv(tool: ConfinedTool, toolRoots: LocalConfig['toolRoots']): NodeJS.ProcessEnv {
   const restored = memberEnv();
 
   const env: NodeJS.ProcessEnv = {
     ...Object.fromEntries(confinedEnvNames(tool).flatMap((key) => restored[key] === undefined ? [] : [[key, restored[key]]])),
-    ...toolCommandEnv(tool, { kind: 'delivered', inherited: restored }),
+    ...toolCommandEnv(tool, { kind: 'delivered', inherited: restored, toolRoots }),
   };
 
   if (tool === 'agy') Object.assign(env, agyGatewayEnv(restored));
@@ -191,7 +194,7 @@ export async function runConfined(input: ConfinedInput, { resolveTool = resolveC
 
   // The runtime reports its own failures; what the member's machine gives the run is read here, before it starts.
   try {
-    machine = { env: confinedEnv(input.tool), memberEnv: memberEnv(), home: toolHome(input.tool) };
+    machine = { env: confinedEnv(input.tool, await resolveMemberToolRoots()), memberEnv: memberEnv(), home: toolHome(input.tool) };
   } catch (error) {
     return { ok: false, code: 'confined_failed', message: `${input.tool} could not run confined: ${error instanceof Error ? error.message : String(error)}. Fix that, then retry.` };
   }
