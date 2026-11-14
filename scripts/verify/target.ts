@@ -10,6 +10,7 @@ import { lineRedactor, worldRedactor } from './secrets.js';
 import { MEMBER_NAME } from './members.js';
 import { sandboxJournalRoot } from '../../packages/runtime-sandbox/src/journal-root.js';
 import { markDriverSeen, recordWriters, refuseCleaned, runProbe, runtimeStateDirs, updateWorld, worldFiles, worldHomes, worldWritersFile, writeCommandLog, type Member, type World } from './world.js';
+import { installInstances, recordInstallInstances } from './instances.js';
 
 export type Target = { kind: 'world' } | { kind: 'member'; name: string };
 
@@ -162,6 +163,9 @@ export async function runOn(world: World, target: Target, argv: readonly string[
 
   const log = writeCommandLog(world, argv.map(mask), output, status);
   recordWriters(place.writers, argv, before, worldFiles(place));
+
+  // Where this command found each tool instance's home, with its own variables: uninstall removes what declares them.
+  if (place.machine.kind === 'host' && place.env !== undefined) recordInstallInstances(world, place.home, await installInstances(place.home, { env, cwd }));
 
   if (hasRuntimeState(world)) markDriverSeen(world);
 

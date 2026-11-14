@@ -11,15 +11,14 @@ import { descriptorOf, TOOL_ORDER } from '../../src/tool-registry.js';
 import type { ToolId } from '../../src/tools.js';
 import { z } from 'zod';
 import { defaultToolHome, envToolHome, instanceHomeDir, toolHome } from '../../src/tool-home.js';
-import { detectToolRoot, LocalConfigSchema, RELOCATABLE_TOOLS, TeamaiConfigBaseSchema, type ToolPathsSchema } from '../../src/types.js';
-import { defaultPathsOf, instanceReadPath, teamToolInstances, type ResolvedToolInstance } from '../../src/tool-instances.js';
-import { projectsRootDir } from '../../src/utils/partition.js';
+import { detectToolRoot, RELOCATABLE_TOOLS, TeamaiConfigBaseSchema, type ToolPathsSchema } from '../../src/types.js';
+import { defaultPathsOf, instanceReadPath, type ResolvedToolInstance } from '../../src/tool-instances.js';
 import { FsFailureSchema, isPermissionDenied, type FsFailure } from '@teamai/shared/fs-failure';
-import { parseYaml } from '@teamai/shared/yaml';
 import { MCP_SERVER_KEY } from '../../src/resources/mcp-format.js';
 import type { ToolDescriptor } from '@teamai/tool-core/definition';
 import { isJsonObject, parseJson, type JsonValue } from '@teamai/shared/json';
 import { PERSONAL_DIRS } from '../../src/workflow/runtimes/layers.js';
+import { installInstances, judgedInstances, recordedInstallInstances, type InstallInstance } from './instances.js';
 import { leftoversSection } from './leftovers.js';
 import { runOn, type Target } from './target.js';
 import { checkoutStatus, git, loadWriters, REPO_ROOT, teamRefs, UNREADABLE, worldFiles, worldWritersFile, type World } from './world.js';
@@ -257,45 +256,6 @@ const TOOL_LEFTOVERS: Partial<Record<ToolId, { readonly files: readonly (readonl
     dirs: ['home/.codex/skills/.system'],
   },
 };
-
-/** The part of an install's config.yaml that names its team repo. */
-const InstallRepo = z.object({ repo: LocalConfigSchema.shape.repo });
-
-/**
- * Each tool instance an install under `home` declares: those of the team repo each data home's config names, every
- * namespace's, and the member's own in ~/.teamai/tools, with its home as teamai joins it to HOME. Read before
- * `teamai uninstall`, which removes those records. An instance it cannot read is judged as no tool's: what it left is a LEAK.
- */
-export async function toolInstancesIn(home: string): Promise<ResolvedToolInstance[]> {
-  const projects = projectsRootDir(home);
-  const dataHomes = [path.join(home, '.teamai'), ...(fs.existsSync(projects) ? fs.readdirSync(projects).map((slug) => path.join(projects, slug)) : [])];
-
-  const teamRepos = dataHomes.flatMap((dataHome) => {
-    const file = path.join(dataHome, 'config.yaml');
-    let text: unknown;
-
-    try {
-      text = parseYaml(fs.readFileSync(file, 'utf8'));
-    } catch {
-      return [];
-    }
-
-    const config = InstallRepo.safeParse(text);
-
-    return config.success ? [config.data.repo.localPath] : [];
-  });
-
-  const [team, own] = await Promise.all([
-    Promise.all([...new Set(teamRepos)].map((root) => teamToolInstances({ root, namespaces: async () => 'legacy' }))),
-    // The member's own folder has the team root's layout, with no namespaces; their instance replaces the team's.
-    teamToolInstances({ root: path.join(home, '.teamai'), namespaces: async () => [] }),
-  ]);
-
-  const instances = [...team.flat().filter((instance) => !own.some((mine) => mine.name === instance.name)), ...own];
-
-  // `.acme/`, `./.acme` and `.acme` name one folder.
-  return instances.map((instance) => (instance.home === undefined ? instance : { ...instance, home: { ...instance.home, dir: path.posix.normalize(instance.home.dir).replace(/\/+$/, '') } }));
-}
 
 const Base = z.enum(['home', 'project']);
 
@@ -568,12 +528,14 @@ interface LedgerPlace {
   readonly project: string;
   readonly writers: string;
   readonly baseline: Record<string, string> | undefined;
+  /** The variables its commands get; undefined in a world made before they were frozen. */
+  readonly env: Readonly<Record<string, string>> | undefined;
 }
 
 function ledgerPlaces(world: World): LedgerPlace[] {
   return [
-    { label: '', target: { kind: 'world' }, home: world.home, project: world.project, writers: worldWritersFile(world), baseline: world.baseline.files },
-    ...(world.members ?? []).map((member): LedgerPlace => ({ label: `@${member.name} `, target: { kind: 'member', name: member.name }, home: member.home, project: member.project, writers: member.writers, baseline: member.baseline.files })),
+    { label: '', target: { kind: 'world' }, home: world.home, project: world.project, writers: worldWritersFile(world), baseline: world.baseline.files, env: world.env },
+    ...(world.members ?? []).map((member): LedgerPlace => ({ label: `@${member.name} `, target: { kind: 'member', name: member.name }, home: member.home, project: member.project, writers: member.writers, baseline: member.baseline.files, env: member.env })),
   ];
 }
 
@@ -599,13 +561,13 @@ export function unobservedEntries(before: Readonly<Record<string, string>>, afte
 }
 
 /** A way in has a way out: after `teamai uninstall` each install's HOME and project match the snapshot taken when it was made. */
-async function reverseState(world: World, instances: ReadonlyMap<string, readonly ResolvedToolInstance[]>): Promise<Section> {
+async function reverseState(world: World, instances: ReadonlyMap<string, readonly InstallInstance[]>): Promise<Section> {
   const title = '(e) After teamai uninstall';
   const leaks: string[] = [];
   const notes: string[] = [];
 
   for (const place of ledgerPlaces(world)) {
-    const reversed = await reverseOf(world, place, ledgerRules(instances.get(place.label) ?? []));
+    const reversed = await reverseOf(world, place, ledgerRules(judgedInstances(instances.get(place.label) ?? [])));
     leaks.push(...reversed.leaks.map((line) => `${place.label}${line}`));
     notes.push(...reversed.notes.map((line) => `${place.label}${line}`));
   }
@@ -763,11 +725,18 @@ export function ledgerVerdict(sections: readonly Section[]): string {
 export async function runLedger(world: World): Promise<{ verdict: string; leaks: number }> {
   // Before uninstall, which removes the records that say which runtimes the world's runs used; observed after it.
   const leftovers = await leftoversSection(world);
-  // The tool instances each install declares, read before uninstall too: their homes are judged as their tools' are.
-  const instances = new Map(await Promise.all(ledgerPlaces(world).map(async (place) => [place.label, await toolInstancesIn(place.home)] as const)));
+
+  // The tool instances each install declares, read before uninstall too, with every home the world's commands found
+  // them at: their homes are judged as their tools' are.
+  const instances = new Map(await Promise.all(ledgerPlaces(world).map(async (place) => {
+    const now = await installInstances(place.home, { env: place.env ?? {}, cwd: place.project });
+
+    return [place.label, [...recordedInstallInstances(world, place.home), ...now]] as const;
+  })));
+
   const reverse = await reverseState(world, instances);
   const left = { title: '(f) What a driver left running', ...await leftovers.observe() };
-  const sections = [teamRepo(world), worktrees(world), hostFiles(world, [...instances.values()].flat()), environment(world), reverse, left];
+  const sections = [teamRepo(world), worktrees(world), hostFiles(world, [...instances.values()].flat().map(({ declared }) => declared)), environment(world), reverse, left];
   const leaks = sections.reduce((sum, section) => sum + section.leaks.length, 0);
   const verdict = ledgerVerdict(sections);
 

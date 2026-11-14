@@ -2,7 +2,8 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { environmentNotes, hostUnreadableNote, ledgerRules, ledgerVerdict, namingWorld, toolInstancesIn, unobservedEntries } from './ledger.js';
+import { toolInstancesIn } from './instances.js';
+import { environmentNotes, hostUnreadableNote, ledgerRules, ledgerVerdict, namingWorld, unobservedEntries } from './ledger.js';
 
 const roots: string[] = [];
 
