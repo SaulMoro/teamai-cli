@@ -55,7 +55,8 @@ async function driverHere(config: LocalConfig, name: DriverName): Promise<Driver
   const { acceptRuntime, locateRuntime } = await import('./workflow/runtimes/locate.js');
   let here: DriverHere = 'drives';
 
-  for (const { use } of resolved.driver.definition.runtimes) {
+  // An entry through another runtime starts both, each found and accepted as a runtime of its own.
+  for (const use of resolved.driver.definition.runtimes.flatMap((entry) => (entry.through === undefined ? [entry.use] : [entry.use, entry.through]))) {
     const located = await locateRuntime(resolved.driver, use);
 
     if (!located.ok) return absent;

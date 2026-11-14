@@ -4,8 +4,9 @@ import path from 'node:path';
 import YAML from 'yaml';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { refreshRoleAssignment } from '../config.js';
-import { driveByDefault } from '../default-driver.js';
+import { awaitsLine, driveByDefault } from '../default-driver.js';
 import { getUserConfigPath, LocalConfigSchema, type LocalConfig } from '../types.js';
+import { DriverNameSchema } from '../workflow/driver-name.js';
 import { log } from '@teamai/shared/log';
 
 const dirs: string[] = [];
@@ -74,6 +75,19 @@ describe('driveByDefault', () => {
 
     expect(await driveByDefault(machine)).toEqual({ kind: 'drive', driver: 'local' });
     expect(await driveByDefault(own)).toEqual({ kind: 'awaits', driver: 'beta' });
+  });
+
+  it('awaits a driver whose entry runs through a team runtime no one accepted here, as the team\'s sandbox in place of teamai\'s', async () => {
+    const config = await workspace('', 'workflows: { driver: boxed }\n');
+    const team = config.repo.localPath;
+    fs.mkdirSync(path.join(team, 'drivers'));
+    fs.writeFileSync(path.join(team, 'drivers', 'boxed.yaml'), 'schemaVersion: v1alpha1\nname: boxed\nruntimes:\n  - use: t3\n    through: sandbox\n');
+    fs.mkdirSync(path.join(team, 'runtimes', 'sandbox'), { recursive: true });
+    fs.writeFileSync(path.join(team, 'runtimes', 'sandbox', 'runtime'), '#!/bin/sh\nexit 1\n', { mode: 0o755 });
+    fs.writeFileSync(path.join(team, 'runtimes', 'sandbox', 'RUNTIME.yaml'), 'protocol: 1\nentry: ./runtime\n');
+
+    expect(await driveByDefault(config)).toEqual({ kind: 'awaits', driver: 'boxed' });
+    expect(await awaitsLine(config, 'r0123abcd', DriverNameSchema.parse('boxed'))).toBe('r0123abcd waits for driver boxed, whose team runtime this machine has not accepted. To review it and drive the run here: teamai workflow resume r0123abcd --driver boxed');
   });
 
   it('leaves the run to any driver with none', async () => {
