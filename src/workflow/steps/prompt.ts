@@ -390,7 +390,7 @@ export async function runPromptStep({ config, lock, driver, lease, adapter = ste
   const homed = onRuntime && (!onRuntime.launchesAgents || onRuntime.runsOnToolHome === true) ? onRuntime : undefined;
   const homeVariable = target.instance?.home?.env ?? toolHomeVariable(selected);
   const variable = homed ? homeVariable : undefined;
-  const memberHome = () => (target.instance?.home ? instanceHomeDir(target.instance.home) : memberToolHome(selected));
+  const memberHome = () => (target.instance?.home ? instanceHomeDir({ name: target.instance.name, home: target.instance.home }) : memberToolHome(selected));
 
   if (homed && (variable === undefined || !isExecRuntimeTool(selected))) {
     return giveUp({

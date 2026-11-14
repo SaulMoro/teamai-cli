@@ -92,7 +92,7 @@ export async function installInstances(home: string, { env, cwd }: { env: Readon
 
   return (await toolInstancesIn(home)).map((declared) => {
     if (declared.home === undefined) return { declared, home: undefined };
-    const relative = path.relative(home, instanceHomeDir(declared.home, host));
+    const relative = path.relative(home, instanceHomeDir({ name: declared.name, home: declared.home }, host));
     const inside = relative !== '' && !relative.startsWith('..') && !path.isAbsolute(relative);
 
     return { declared, home: inside ? relative.split(path.sep).join('/') : undefined };

@@ -273,7 +273,7 @@ async function runnableInstances(): Promise<InitInstance[]> {
     name: instance.name, tool: instance.extends,
     ...(instance.command !== undefined && { command: instance.command }),
     // Resolved once, here, and absolute, a relative value from where teamai runs: a runtime uses this home and never resolves one of its own.
-    ...(instance.home && { home: { dir: path.resolve(instanceHomeDir(instance.home)), ...(instance.home.env !== undefined && { env: instance.home.env }) } }),
+    ...(instance.home && { home: { dir: path.resolve(instanceHomeDir({ name: instance.name, home: instance.home })), ...(instance.home.env !== undefined && { env: instance.home.env }) } }),
     ...(instance.paths && { paths: instance.paths }),
   }));
 }
