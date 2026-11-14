@@ -325,9 +325,9 @@ const SHIPPED_VIEWS: readonly ToolView[] = TOOL_ORDER.map((tool) => ({ tool, hom
 /** The fields of tool paths teamai delivers to in user scope. */
 const USER_FIELDS = ['skills', 'rules', 'settings', 'agents', 'hooks', 'claudemd'] as const;
 
-/** The view of `instance`; none for one with no home of its own, which reads where its tool does. */
+/** The view of `instance`; none for an adjustment, or an instance with no home of its own, which reads where its tool does. */
 function instanceView(instance: DeclaredTool): ToolView[] {
-  if (instance.home === undefined || instance.name === instance.extends) return [];
+  if (instance.kind === 'adjustment' || instance.home === undefined) return [];
 
   const placed = (entry: string): string => {
     const [base, ...rest] = entry.split('/');
