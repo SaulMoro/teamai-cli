@@ -129,6 +129,39 @@ describe.skipIf(process.platform === 'win32')("a world's snapshot of its HOME an
       vi.restoreAllMocks();
     }
   });
+
+  it('leaves out an entry removed after its folder was listed, as a tool removes its lock file while the world is read', () => {
+    const { home, project } = layout();
+    fs.mkdirSync(path.join(home, '.tmp', 'plugins-clone', '.git'), { recursive: true });
+    fs.writeFileSync(path.join(home, '.tmp', 'plugins-clone', '.git', 'shallow.lock'), '');
+    fs.symlinkSync('notes.txt', path.join(home, 'notes-link'));
+    // Listed whole, then each of a file, a folder and a symlink in it removed before the walk reads it.
+    vi.spyOn(fs, 'readdirSync').mockImplementation(((dir: fs.PathLike, _options: { withFileTypes: true }) => {
+      const listing = fs.opendirSync(dir.toString());
+      const entries: fs.Dirent[] = [];
+
+      for (let entry = listing.readSync(); entry !== null; entry = listing.readSync()) entries.push(entry);
+      listing.closeSync();
+
+      if (dir.toString() === path.join(home, '.tmp', 'plugins-clone', '.git')) fs.rmSync(path.join(dir.toString(), 'shallow.lock'));
+
+      if (dir.toString() === home) {
+        fs.rmSync(path.join(home, '.codex'), { recursive: true });
+        fs.rmSync(path.join(home, 'notes-link'));
+      }
+
+      return entries;
+    }) as typeof fs.readdirSync);
+
+    try {
+      const files = worldFiles({ home, project });
+
+      expect(Object.keys(files).filter((entry) => /^home\/(\.codex|notes-link|\.tmp\/plugins-clone\/\.git\/)/.test(entry))).toEqual([]);
+      expect(files).toMatchObject({ 'home/.tmp/plugins-clone/.git': 'dir', 'home/notes.txt': expect.stringMatching(/^[0-9a-f]{64}$/) });
+    } finally {
+      vi.restoreAllMocks();
+    }
+  });
 });
 
 describe("a world's TMPDIR", () => {

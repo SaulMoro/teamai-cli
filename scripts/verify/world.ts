@@ -111,9 +111,23 @@ function permitted<T>(read: () => T): T | undefined {
   }
 }
 
+/** What `present` returns for an entry removed after its folder was listed. */
+const GONE = Symbol('gone');
+
+/** What `read` returns, or `GONE` when what it names no longer exists; any other failure is thrown. */
+function present<T>(read: () => T): T | typeof GONE {
+  try {
+    return read();
+  } catch (error) {
+    if (errnoCode(error) === 'ENOENT') return GONE;
+    throw error;
+  }
+}
+
 /**
  * Every entry under the world's HOME and project: a file's sha256, `dir`, or a symlink's target; a git config file is `git
- * config` and one entry per setting. A folder or file the harness has no permission to read is `UNREADABLE`.
+ * config` and one entry per setting. A folder or file the harness has no permission to read is `UNREADABLE`. An entry
+ * removed after its folder was listed, as a lock file a running tool removes, is not there.
  */
 export function worldFiles(world: Pick<World, 'home' | 'project'>) {
   const files: Record<string, string> = {};
@@ -127,9 +141,14 @@ export function worldFiles(world: Pick<World, 'home' | 'project'>) {
 
       const settings = entry.isFile() && GIT_CONFIG.test(child) ? gitConfigSettings(`${label}/${child}`, full) : undefined;
 
-      if (entry.isSymbolicLink()) files[`${label}/${child}`] = `-> ${fs.readlinkSync(full)}`;
-      else if (entry.isDirectory()) {
-        const inside = permitted(() => fs.readdirSync(full, { withFileTypes: true }));
+      if (entry.isSymbolicLink()) {
+        const target = present(() => fs.readlinkSync(full));
+
+        if (target !== GONE) files[`${label}/${child}`] = `-> ${target}`;
+      } else if (entry.isDirectory()) {
+        const inside = present(() => permitted(() => fs.readdirSync(full, { withFileTypes: true })));
+
+        if (inside === GONE) continue;
         files[`${label}/${child}`] = inside === undefined ? UNREADABLE : 'dir';
 
         if (inside !== undefined) walk(root, label, child, inside);
@@ -137,7 +156,9 @@ export function worldFiles(world: Pick<World, 'home' | 'project'>) {
         files[`${label}/${child}`] = 'git config';
         Object.assign(files, settings);
       } else {
-        const content = permitted(() => fs.readFileSync(full));
+        const content = present(() => permitted(() => fs.readFileSync(full)));
+
+        if (content === GONE) continue;
         files[`${label}/${child}`] = content === undefined ? UNREADABLE : crypto.createHash('sha256').update(content).digest('hex');
       }
     }
