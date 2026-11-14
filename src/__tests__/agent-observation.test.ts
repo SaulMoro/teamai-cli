@@ -205,11 +205,13 @@ describe('observeLaunch (#1176)', () => {
     });
   });
 
-  it.skipIf(process.platform === 'win32')('observes the version of a Codex launch as codex --version reports it', async () => {
+  it.skipIf(process.platform === 'win32')('observes a Codex launch with no version, and starts no codex to read one', async () => {
     const { config, root, project } = checkout();
     const bin = path.join(root, 'codex-bin');
+    const started = path.join(root, 'codex-started');
     fs.mkdirSync(bin, { recursive: true });
-    fs.writeFileSync(path.join(bin, 'codex'), '#!/bin/sh\necho "codex-cli 0.167.0"\n', { mode: 0o755 });
+    // A stand-in Codex that would answer a version, and notes each time it is started.
+    fs.writeFileSync(path.join(bin, 'codex'), `#!/bin/sh\necho "$*" >> ${JSON.stringify(started)}\necho "codex-cli 0.167.0"\n`, { mode: 0o755 });
     const previous = process.env.PATH;
     process.env.PATH = `${bin}${path.delimiter}${previous ?? ''}`;
     clearVersionCache();
@@ -218,7 +220,8 @@ describe('observeLaunch (#1176)', () => {
       clearVersionCache();
     });
 
-    expect((await observeLaunch({ config, tool: 'codex', cwd: project })).tool).toEqual({ version: '0.167.0' });
+    expect((await observeLaunch({ config, tool: 'codex', cwd: project })).tool).toBeUndefined();
+    expect(fs.existsSync(started)).toBe(false);
   });
 
   it('names the selection the last pull delivered for, with the workspace children it kept, never the current config', async () => {
