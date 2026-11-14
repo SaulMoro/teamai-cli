@@ -825,6 +825,27 @@ console.error('Could not remove podman image teamai-warm:fedcba9876543210: podma
 
       return driven;
     });
+    // The driver's next try at the removal lock lands as uninstall releases it, and holds it until uninstall ends, as
+    // a driver slowed by a busy machine would.
+    const update = await import('../update.js');
+    const { releaseLock, withFileLock } = update;
+    const removal = runsRemovalLockIn(dataHome);
+    let tookRemoval = (): void => undefined;
+    const triedRemoval = new Promise<void>((resolve) => { tookRemoval = resolve; });
+    vi.spyOn(update, 'withFileLock').mockImplementation((lock, wait, body, options) => (lock === removal
+      ? withFileLock(lock, wait, async () => {
+        const value = await body();
+        tookRemoval();
+        await ended;
+
+        return value;
+      }, options)
+      : withFileLock(lock, wait, body, options)));
+    vi.spyOn(update, 'releaseLock').mockImplementation(async (lock) => {
+      await releaseLock(lock);
+
+      if (lock === removal) await Promise.race([triedRemoval, driving?.catch(() => undefined)]);
+    });
 
     await uninstall({ force: true });
     uninstalled();

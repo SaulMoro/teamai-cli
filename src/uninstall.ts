@@ -1,4 +1,5 @@
-import { lstat, readdir, realpath, rmdir } from 'node:fs/promises';
+import { randomUUID } from 'node:crypto';
+import { lstat, readdir, realpath, rename, rmdir } from 'node:fs/promises';
 import path from 'node:path';
 import { z } from 'zod';
 import { autoDetectInit, loadLocalConfig, loadStateForScope, readConfigFrom, resolveMemberToolRoots, saveLocalConfig, saveLocalConfigForScope, saveStateForScope, UnreadableProjectConfigError, detectProjectConfig } from './config.js';
@@ -3989,22 +3990,55 @@ async function whileRunsLocked(dataHomes: readonly string[], body: () => Promise
 
     await body();
   } finally {
-    for (const lock of held) await releaseLock(lock);
-    await removeLeftEmpty(held, dataHomes);
+    const [outermost] = [...dataHomes].sort((a, b) => a.length - b.length);
+
+    for (const lock of [...held].sort((a, b) => b.length - a.length)) {
+      const away = await movedAwayIfOnly(lock);
+      await releaseLock(lock);
+
+      if (away !== undefined) await removeMovedAway(away);
+      await removeLeftEmpty(path.dirname(away === undefined ? lock : path.dirname(lock)), outermost);
+    }
   }
 }
 
 /**
- * Removes the directory of each of `locks`, and those up to the outermost of `dataHomes`, while each is left empty, as
- * after a removal that kept only the locks (`runsRemovalLocksOf`). Removes nothing that holds anything else.
+ * Moves the directory of removal lock `lock` aside, still holding the lock, when the lock is all that is left in it, as
+ * after a removal that kept only the locks (`runsRemovalLocksOf`), and answers where. A driver that waits for the lock
+ * then finds its data home gone, rather than taking the lock in it once released and keeping it from being removed.
+ * Answers `undefined`, and moves nothing, when the directory holds anything else or cannot be moved.
  */
-async function removeLeftEmpty(locks: readonly string[], dataHomes: readonly string[]): Promise<void> {
-  const [outermost] = [...dataHomes].sort((a, b) => a.length - b.length);
+async function movedAwayIfOnly(lock: string): Promise<string | undefined> {
+  const dir = path.dirname(lock);
+  const left = await readdir(dir).catch(() => []);
 
-  for (const lock of [...locks].sort((a, b) => b.length - a.length)) {
-    for (let dir = path.dirname(lock); isWithin(dir, outermost); dir = path.dirname(dir)) {
-      if (!await rmdir(dir).then(() => true, () => false)) break;
-    }
+  if (left.length !== 1 || left[0] !== path.basename(lock)) return undefined;
+  const away = path.join(path.dirname(dir), `${path.basename(dir)}.removing-${randomUUID()}`);
+
+  try {
+    await rename(dir, away);
+
+    return away;
+  } catch (e) {
+    log.debug(`Kept ${dir} in place: ${e instanceof Error ? e.message : String(e)}`);
+
+    return undefined;
+  }
+}
+
+/** Removes `away`, a data home `movedAwayIfOnly` moved aside, which holds only its released lock. */
+async function removeMovedAway(away: string): Promise<void> {
+  try {
+    await remove(away);
+  } catch (e) {
+    log.warn(`Could not remove ${away}, the emptied data home this uninstall moved aside: ${e instanceof Error ? e.message : String(e)}. Remove it by hand.`);
+  }
+}
+
+/** Removes `dir`, and each directory above it up to `outermost`, while each is left empty. Removes nothing that holds anything else. */
+async function removeLeftEmpty(dir: string, outermost: string): Promise<void> {
+  for (let up = dir; isWithin(up, outermost); up = path.dirname(up)) {
+    if (!await rmdir(up).then(() => true, () => false)) break;
   }
 }
 
