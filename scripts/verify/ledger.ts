@@ -21,7 +21,7 @@ import { PERSONAL_DIRS } from '../../src/workflow/runtimes/layers.js';
 import { installInstances, judgedInstances, recordedInstallInstances, type InstallInstance } from './instances.js';
 import { leftoversSection } from './leftovers.js';
 import { runOn, type Target } from './target.js';
-import { checkoutStatus, git, loadWriters, REPO_ROOT, teamRefs, UNREADABLE, worldFiles, worldWritersFile, type World, type Writers } from './world.js';
+import { checkoutStatus, git, GONE, loadWriters, present, REPO_ROOT, teamRefs, UNREADABLE, worldFiles, worldWritersFile, type World, type Writers } from './world.js';
 
 interface Section {
   readonly title: string;
@@ -639,38 +639,43 @@ export function uninstallChanges({ place, before, after, writers, repository, ru
     if (!under(entry, [...theirs.values()].flat())) theirs.set(why, [...theirs.get(why) ?? [], entry]);
   };
 
-  const namesTeamai = (entry: string): boolean => mentionsTeamai(fs.readFileSync(entryPath(place, entry), 'utf8'));
   const remoteTips = new Set(Object.entries(after).flatMap(([entry, value]) => (REMOTE_REF.test(entry) && value !== 'dir' ? [value] : [])));
 
   for (const entry of [...new Set([...Object.keys(before), ...Object.keys(after)])].sort()) {
     if (before[entry] === after[entry] || unobserved.covers(entry) || under(entry, [...leaked, ...rules.knownLeftoverDirs])) continue;
-    const change = before[entry] === undefined ? 'left behind' : after[entry] === undefined ? 'removed' : 'changed';
+    // A file the walk listed may be gone when it is read, as a lock file a running tool removes: then it is not there.
+    const read = /^[0-9a-f]{64}$/.test(after[entry] ?? '') ? present(() => fs.readFileSync(entryPath(place, entry), 'utf8')) : undefined;
+    const now = read === GONE ? undefined : after[entry];
+    const text = read === GONE ? undefined : read;
+
+    if (before[entry] === now) continue;
+    const change = before[entry] === undefined ? 'left behind' : now === undefined ? 'removed' : 'changed';
     const writer = writers[entry];
 
-    if (change === 'left behind' && MEMBERS_OWN.some((dir) => entry === dir || entry.startsWith(`${dir}/`)) && writer !== undefined && writer.value === after[entry]) {
+    if (change === 'left behind' && MEMBERS_OWN.some((dir) => entry === dir || entry.startsWith(`${dir}/`)) && writer !== undefined && writer.value === now) {
       excuse(`the member's own, put there by ${writer.program}, which uninstall keeps`, entry);
       continue;
     }
 
     // A tool's sessions, or a member's own commit: left as a member's program left it, whatever teamai did in between.
-    if (writer !== undefined && writer.value === (after[entry] ?? null) && !rules.isTeamaiPlace(entry, after[entry])) {
+    if (writer !== undefined && writer.value === (now ?? null) && !rules.isTeamaiPlace(entry, now)) {
       excuse(`left as ${writer.program} wrote it, so not teamai's`, entry);
       continue;
     }
 
     // A file teamai shares with a tool, such as Claude's ~/.claude.json, which keeps the tool's state once teamai's part is out.
-    if (writer !== undefined && writer.value === after[entry] && /^[0-9a-f]{64}$/.test(after[entry]) && rules.isSharedFile(entry) && !namesTeamai(entry)) {
+    if (writer !== undefined && writer.value === now && text !== undefined && rules.isSharedFile(entry) && !mentionsTeamai(text)) {
       excuse(`left as ${writer.program} wrote it, with nothing of teamai's in it`, entry);
       continue;
     }
 
     // A tool writes its own state there whether teamai launched it or the member did: what teamai adds is its servers.
-    if (change === 'left behind' && /^[0-9a-f]{64}$/.test(after[entry] ?? '') && rules.isToolOwnState(entry, fs.readFileSync(entryPath(place, entry), 'utf8'))) {
+    if (change === 'left behind' && text !== undefined && rules.isToolOwnState(entry, text)) {
       excuse("the tool's own state file, with no MCP server and nothing else of teamai's in it", entry);
       continue;
     }
 
-    const own = change === 'left behind' ? rules.ownStateOf(entry, after[entry]) : undefined;
+    const own = change === 'left behind' ? rules.ownStateOf(entry, now) : undefined;
 
     if (own?.kind === 'state') {
       excuse(`${own.owner}'s own state in ${own.dir}, where teamai writes none of it`, entry);
@@ -694,7 +699,7 @@ export function uninstallChanges({ place, before, after, writers, repository, ru
       continue;
     }
 
-    if (change === 'changed' && entry.startsWith('project/.git/refs/heads/') && remoteTips.has(after[entry] ?? '')) {
+    if (change === 'changed' && entry.startsWith('project/.git/refs/heads/') && remoteTips.has(now ?? '')) {
       excuse("the member's branch moved to a commit the remote has, history uninstall does not rewrite", entry);
       continue;
     }
@@ -709,22 +714,21 @@ export function uninstallChanges({ place, before, after, writers, repository, ru
       continue;
     }
 
-    if (tracked !== undefined && within(repository.tracked) && /^[0-9a-f]{64}$/.test(after[entry] ?? '')
-      && !/teamai/i.test(fs.readFileSync(path.join(place.project, tracked), 'utf8'))) {
+    if (tracked !== undefined && within(repository.tracked) && text !== undefined && !/teamai/i.test(text)) {
       excuse("teamai's part taken out of a file the repository tracks, for the member to commit", entry);
       continue;
     }
 
     if (change === 'left behind' && RUN_BRANCH.test(entry)) {
-      if (after[entry] !== 'dir') notes.push(`${entry.slice('project/.git/refs/heads/'.length)} left behind: a run's result branch, the member's to keep`);
+      if (now !== 'dir') notes.push(`${entry.slice('project/.git/refs/heads/'.length)} left behind: a run's result branch, the member's to keep`);
       continue;
     }
 
     const known = rules.knownLeftover(entry);
 
-    if (change === 'left behind' && (known === 'any' || known === after[entry])) notes.push(`${entry} left behind, known: ${KNOWN_LEFTOVERS_ISSUE}`);
+    if (change === 'left behind' && (known === 'any' || known === now)) notes.push(`${entry} left behind, known: ${KNOWN_LEFTOVERS_ISSUE}`);
     else {
-      leaks.push(`${entry} ${change}${after[entry] === 'dir' || before[entry] === 'dir' ? ', with everything in it' : ''}`);
+      leaks.push(`${entry} ${change}${now === 'dir' || before[entry] === 'dir' ? ', with everything in it' : ''}`);
       leaked.push(entry);
     }
   }

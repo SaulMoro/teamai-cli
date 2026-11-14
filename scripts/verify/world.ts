@@ -112,10 +112,10 @@ function permitted<T>(read: () => T): T | undefined {
 }
 
 /** What `present` returns for an entry removed after its folder was listed. */
-const GONE = Symbol('gone');
+export const GONE = Symbol('gone');
 
 /** What `read` returns, or `GONE` when what it names no longer exists; any other failure is thrown. */
-function present<T>(read: () => T): T | typeof GONE {
+export function present<T>(read: () => T): T | typeof GONE {
   try {
     return read();
   } catch (error) {

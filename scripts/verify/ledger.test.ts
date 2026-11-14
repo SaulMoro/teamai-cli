@@ -3,7 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { toolInstancesIn } from './instances.js';
-import { environmentNotes, hostHomes, hostUnreadableNote, ledgerRules, ledgerVerdict, namingWorld, unobservedEntries } from './ledger.js';
+import { environmentNotes, hostHomes, hostUnreadableNote, ledgerRules, ledgerVerdict, namingWorld, uninstallChanges, unobservedEntries } from './ledger.js';
 
 const roots: string[] = [];
 
@@ -353,5 +353,37 @@ describe('the homes on this machine the ledger reads for files that name a world
     } finally {
       vi.unstubAllEnvs();
     }
+  });
+});
+
+describe("a file section (e) reads after the walk listed it", () => {
+  const sha = (c: string) => c.repeat(64);
+
+  const placeIn = () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ledger-gone-'));
+    roots.push(root);
+    const place = { home: path.join(root, 'home'), project: path.join(root, 'project') };
+    fs.mkdirSync(path.join(place.project, '.git', 'info'), { recursive: true });
+    fs.mkdirSync(place.home);
+
+    return place;
+  };
+
+  // A tool still running, such as Codex removing a lock file, can remove a file between the walk and the read.
+  it.each<{ file: string; entry: string; before: Record<string, string>; writers: Record<string, { program: string; value: string }>; tracked: string[]; leaks: string[] }>([
+    { file: 'a file teamai shares with a tool, left as the tool wrote it', entry: 'project/.git/info/exclude', before: {}, writers: { 'project/.git/info/exclude': { program: 'git', value: sha('a') } }, tracked: [], leaks: [] },
+    { file: "a file left behind, read for a tool's own state", entry: 'home/.claude.json', before: {}, writers: {}, tracked: [], leaks: [] },
+    { file: 'a file the repository tracks, changed and not committed', entry: 'project/notes.md', before: { 'project/notes.md': sha('d') }, writers: {}, tracked: ['notes.md'], leaks: ['project/notes.md removed'] },
+  ])('judges $file, removed since the walk listed it, as not there', ({ entry, before, writers, tracked, leaks }) => {
+    const place = placeIn();
+
+    expect(uninstallChanges({ place, before, after: { [entry]: sha('a') }, writers, repository: { tracked, dirty: tracked }, rules: ledgerRules([]) })).toEqual({ leaks, notes: [] });
+  });
+
+  it('still fails on a read error other than a file that is gone', () => {
+    const place = placeIn();
+    fs.mkdirSync(path.join(place.home, '.claude.json'));
+
+    expect(() => uninstallChanges({ place, before: {}, after: { 'home/.claude.json': sha('b') }, writers: {}, repository: { tracked: [], dirty: [] }, rules: ledgerRules([]) })).toThrow(/EISDIR/);
   });
 });
