@@ -66,8 +66,10 @@ A ledger section or an observer line that says NOT OBSERVED proves nothing for t
   fleet     see \`help fleet\`
   T3        teamai <run> workflow start <wf> --driver teamai-t3 (t3 on PATH)
             ends: a thread per prompt step; (f) no open attempt place left
-  Paseo     teamai <run> workflow start <wf> --driver teamai-paseo (paseo on PATH)
-            ends: an agent per prompt step; (f) no open attempt place left
+  Paseo     teamai <run> --pass PASEO_HOME workflow start <wf> --driver teamai-paseo (paseo on PATH)
+            ends: an agent per prompt step; (f) no open attempt place left. Without --pass PASEO_HOME the runtime
+            reads the daemon's address from, and adds its providers to, <world>/home/.paseo/config.json, which no
+            daemon reads; with it, they land in your Paseo home's config.json, which you restore after the run
   sandbox   teamai <run> workflow start <wf> --driver <a driver whose entry is use: sandbox>, with a profile per provider
     docker, podman  a container per attempt, labelled teamai.owner; ends: an observer line env ok per container,
                     (f) no teamai container left. An engine that is installed but not running is NOT OBSERVED in
