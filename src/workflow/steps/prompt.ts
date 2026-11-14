@@ -511,7 +511,7 @@ export async function runPromptStep({ config, lock, driver, lease, adapter = ste
     secrets,
     expected: expectedOutput(lease.output),
     // The lease `env` is set over the step's environment, as a command's is.
-    env: { ...withoutOuterSessionMarkers(lease.processEnv ?? process.env), ...launchHomeEnv(target), ...lease.env, ...attemptEnv(config, lock.run, lease.attempt, mode) },
+    env: { ...withoutOuterSessionMarkers(lease.processEnv ?? process.env), ...launchHomeEnv(target, lease.processEnv ?? process.env), ...lease.env, ...attemptEnv(config, lock.run, lease.attempt, mode) },
   };
 
   let launcher = adapter;
