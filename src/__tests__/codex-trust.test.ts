@@ -540,8 +540,8 @@ describe('Codex hook trust — an instance', () => {
   }
 
   afterEach(async () => {
-    const { useToolInstances } = await import('../tool-registry.js');
-    useToolInstances(new Map());
+    const { resetToolInstancesForTests } = await import('../tool-instances.js');
+    resetToolInstancesForTests();
   });
 
   it.each([
@@ -835,8 +835,8 @@ describe('Codex trust — project scopes', () => {
     await fse.outputFile(path.join(repo, 'teamai.yaml'), 'team: acme\nrepo: acme/team\n');
     await fse.outputFile(path.join(home, '.teamai', 'tools', 'acme-codex.yaml'), 'schemaVersion: v1alpha1\nname: acme-codex\nextends: codex\nhome: { dir: .acme-codex }\n');
     const { loadTeamConfig } = await import('../config.js');
-    const { useToolInstances } = await import('../tool-registry.js');
-    onTestFinished(() => useToolInstances(new Map()));
+    const { resetToolInstancesForTests } = await import('../tool-instances.js');
+    onTestFinished(resetToolInstancesForTests);
     const config = await loadTeamConfig(repo, null);
 
     if (!config) throw new Error('the team config did not load');

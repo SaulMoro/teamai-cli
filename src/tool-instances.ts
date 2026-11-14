@@ -261,6 +261,14 @@ export function ignorePersonalToolInstances(): void {
   publish();
 }
 
+/** Forgets every team repo and member's directory this process loaded, for a test that loads another. */
+export function resetToolInstancesForTests(): void {
+  teamByRepo.clear();
+  personal = [];
+  readsPersonal = true;
+  publish();
+}
+
 /**
  * The instances a lookup sees: the member's own first, then the team's. A workspace's team instance replaces the user
  * scope's of the same name, as its driver definitions do; one name two team repos of one scope define apart is left out.
