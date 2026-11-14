@@ -12,7 +12,7 @@ import { fleetStepRuntime, shadowedFleetEntries, type OpenWake } from '../fleet/
 import { log } from '@teamai/shared/log';
 import { warnOnce } from '../../utils/warn-once.js';
 import { stdioStepRuntime } from './stdio.js';
-import { type InitInstance, type RuntimeFailure, type RuntimeOptions } from '@teamai/runtime-protocol';
+import { type InitHomeEnv, type InitInstance, type RuntimeFailure, type RuntimeOptions } from '@teamai/runtime-protocol';
 import { acceptToolCommand } from '../../tool-instances.js';
 import { instanceHomeDir } from '../../tool-home.js';
 import { baseToolOf, instanceNames, toolOf } from '../../tool-registry.js';
@@ -21,7 +21,7 @@ import { composedName, composedOffer, composedStepRuntime, nestedOptions } from 
 import { credentialSecrets, isExecRuntimeTool, type ExecRuntimeTool, type RuntimeOrigin } from './attempt.js';
 import { LOGIN_TOOLS, type LoginTool } from './login.js';
 import type { SignInVariables } from '@teamai/tool-core/launch';
-import { executableOf, isLaunchTool, launchAdapterIdOf, launchAdapterOf, toolCommandEnv } from '../../launch-registry.js';
+import { executableOf, isLaunchTool, LAUNCH_ORDER, launchAdapterIdOf, launchAdapterOf, toolCommandEnv } from '../../launch-registry.js';
 import type { StepLaunchDeps } from '@teamai/runtime-tools';
 import { opencodeMajorVersion } from '../../opencode-version.js';
 import { agyGatewayEnv } from '../../models/agy-gateway.js';
@@ -277,11 +277,17 @@ async function runnableInstances(): Promise<InitInstance[]> {
       name: instance.name, tool: instance.extends,
       ...(instance.command !== undefined && { command: instance.command }),
       ...(home !== undefined && { home: { dir: home } }),
-      // The variables teamai sets on the instance's command started in a home, the one decision a runtime applies as given.
-      homeEnv: Object.keys(toolCommandEnv(instance.name, { kind: 'at', dir: home ?? '' })),
       ...(instance.paths && { paths: instance.paths }),
     };
   });
+}
+
+/**
+ * Every variable each tool's command reads its home from, for every tool teamai launches and every instance `init` gives:
+ * what teamai sets on that command started in a home (`toolCommandEnv`), the one decision a runtime applies as given.
+ */
+export function homeEnvOf(instances: readonly InitInstance[]): InitHomeEnv {
+  return Object.fromEntries([...LAUNCH_ORDER, ...instances.map(({ name }) => name)].map((name) => [name, Object.keys(toolCommandEnv(name, { kind: 'at', dir: '' }))]));
 }
 
 /**
@@ -429,8 +435,10 @@ async function openRuntime(driver: ResolvedDriver, { use, options, sandbox }: { 
   const runtime = removingCopy(spawned());
   const credentials = { env: [...split.credentials.map((credential) => credential.name), ...Object.keys(found)], logins: split.engine.logins };
 
+  const instances = await runnableInstances();
+
   const ready = await runtime.init({
-    options: initOptions, mode: purpose === 'check' ? 'check' : mode, credentials, instances: await runnableInstances(), checkout,
+    options: initOptions, mode: purpose === 'check' ? 'check' : mode, credentials, instances, homeEnv: homeEnvOf(instances), checkout,
   });
 
   // A runtime that runs each tool on the attempt's tool home gets the login there, as an exec runtime does.

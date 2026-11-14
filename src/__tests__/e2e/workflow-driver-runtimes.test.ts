@@ -880,21 +880,23 @@ steps:
     expect(inits.at(-1)).toMatchObject({ checkout: repo, cwd: repo });
   });
 
-  it('gives a runtime the instances the member may run at init, with their command, their home resolved as teamai resolves it, and every variable teamai sets that home with', async () => {
+  it('gives a runtime the instances the member may run at init, with their command and their home resolved as teamai resolves it, and every variable teamai sets each tool\'s home with', async () => {
     acmeInstance();
     writeDefinition('toyagentacme', [{ use: 'toy', options: { state, agent: { output: { ok: true } } } }]);
     const moved = path.join(os.tmpdir(), 'acme-claude-moved');
-    const initsOf = () => fs.readFileSync(path.join(state, 'inits.jsonl'), 'utf8').trim().split('\n').map((line) => JSON.parse(line) as { instances?: unknown[] });
+    const initsOf = () => fs.readFileSync(path.join(state, 'inits.jsonl'), 'utf8').trim().split('\n').map((line) => JSON.parse(line) as { instances?: unknown[]; homeEnv?: Record<string, string[]> });
 
     await runCLI(['workflow', 'start', 'oneprompt', '--driver', 'toyagentacme'], repo, env());
-    expect(initsOf().at(-1)?.instances).toContainEqual(expect.objectContaining({ name: 'acme-claude', tool: 'claude', command: 'acme-claude', home: { dir: path.join(os.homedir(), '.acme-claude') }, homeEnv: ['CLAUDE_CONFIG_DIR', 'ACME_CLAUDE_CONFIG_DIR'] }));
+    expect(initsOf().at(-1)?.instances).toContainEqual(expect.objectContaining({ name: 'acme-claude', tool: 'claude', command: 'acme-claude', home: { dir: path.join(os.homedir(), '.acme-claude') } }));
+    // A shipped tool's variables as well as an instance's, so a runtime names none of its own.
+    expect(initsOf().at(-1)?.homeEnv).toMatchObject({ 'claude': ['CLAUDE_CONFIG_DIR'], 'codex': ['CODEX_HOME'], 'opencode': [], 'acme-claude': ['CLAUDE_CONFIG_DIR', 'ACME_CLAUDE_CONFIG_DIR'] });
 
     await runCLI(['workflow', 'start', 'oneprompt', '--driver', 'toyagentacme'], repo, env({ ACME_CLAUDE_CONFIG_DIR: moved }));
-    expect(initsOf().at(-1)?.instances).toContainEqual(expect.objectContaining({ name: 'acme-claude', home: { dir: moved }, homeEnv: ['CLAUDE_CONFIG_DIR', 'ACME_CLAUDE_CONFIG_DIR'] }));
+    expect(initsOf().at(-1)?.instances).toContainEqual(expect.objectContaining({ name: 'acme-claude', home: { dir: moved } }));
 
     // A relative value, as teamai itself reads it from where it runs.
     await runCLI(['workflow', 'start', 'oneprompt', '--driver', 'toyagentacme'], repo, env({ ACME_CLAUDE_CONFIG_DIR: 'acme-claude-here' }));
-    expect(initsOf().at(-1)?.instances).toContainEqual(expect.objectContaining({ name: 'acme-claude', home: { dir: path.join(fs.realpathSync(repo), 'acme-claude-here') }, homeEnv: ['CLAUDE_CONFIG_DIR', 'ACME_CLAUDE_CONFIG_DIR'] }));
+    expect(initsOf().at(-1)?.instances).toContainEqual(expect.objectContaining({ name: 'acme-claude', home: { dir: path.join(fs.realpathSync(repo), 'acme-claude-here') } }));
   });
 
   it('runs a step whose default tool is an instance on the next runtime when the first offers only the tool it extends', async () => {

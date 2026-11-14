@@ -90,8 +90,6 @@ export function offer({ serving, adder, start, recover }: { serving: Serving; ad
   // thread, not a home teamai gives a tool.
   const toolHomeEnv = options.startedFrom === undefined ? options.env : {};
 
-  const toolHomeOf = (instance: ServedTool, driver: Driver): string => teamaiToolHome({ instance, driver, home: options.home, env: toolHomeEnv, cwd: options.cwd });
-
   // teamai quotes a keyed option failure (`key` set) inside a sentence of its own and ends it, so it brings no full stop.
   const init = async (request: Extract<RuntimeRequest, { type: 'init' }>): Promise<void> => {
     if (request.mode === 'recover') {
@@ -108,6 +106,9 @@ export function offer({ serving, adder, start, recover }: { serving: Serving; ad
 
       return;
     }
+
+    const homeEnv = request.homeEnv ?? {};
+    const toolHomeOf = (instance: ServedTool, driver: Driver): string => teamaiToolHome({ instance, driver, home: options.home, homeEnv: homeEnv[instance.tool] ?? [], env: toolHomeEnv, cwd: options.cwd });
 
     // A check connects to nothing: it runs no step, so it adds no project or provider instance and starts no sign-in.
     if (request.mode === 'check') {
@@ -174,7 +175,7 @@ export function offer({ serving, adder, start, recover }: { serving: Serving; ad
       const homeOf = (provider: Provider, driver: Driver): string => instanceToolHome(settings, { instanceId: provider.providerInstanceId, driver, userHome: options.t3UserHome });
 
       const served = servedInstances({
-        instances: named, mapped,
+        instances: named, mapped, homeEnv,
         lookup: {
           providers, binaryPathOf, homeOf,
           isUsable: (provider) => (provider.constraints ?? []).length === 0 && project.instanceEnabled(provider.providerInstanceId) !== false,
@@ -236,7 +237,7 @@ export function offer({ serving, adder, start, recover }: { serving: Serving; ad
       ];
 
       const offersTokens = sessionHomes.every(({ driver, home }) => canListStore(driver, home));
-      start({ t3: connected.t3, mode: request.mode, environment, instances: runs, pending: toAdd.pending, runtimeMode: parsed.options.runtime_mode, signIn: connected.signIn, checkout, threadModel, offersTokens });
+      start({ t3: connected.t3, mode: request.mode, environment, instances: runs, pending: toAdd.pending, runtimeMode: parsed.options.runtime_mode, signIn: connected.signIn, checkout, threadModel, offersTokens, homeEnv });
       // An instance teamai adds on its first open is offered as well: the open adds it, or fails saying why.
       const tools = [...runs.keys(), ...toAdd.pending.keys()];
       // A step that names no tool runs on the member's effective T3 default, or the started-from thread's, when its instance is the one offered.

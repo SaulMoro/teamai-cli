@@ -34,25 +34,6 @@ export function isPaseoTool(tool: string): tool is PaseoTool {
 /** The tools this runtime runs, in the order it offers them. */
 export const PASEO_TOOLS: readonly PaseoTool[] = Object.keys(CONFINED_MODES).filter(isPaseoTool);
 
-/** The variable that moves `tool`'s home, which a Paseo provider's env may set: OpenCode's is its data directory's. */
-export function homeVariableOf(tool: PaseoTool): string {
-  switch (tool) {
-    case 'claude':
-      // oxlint-disable-next-line teamai/tool-home-env -- a runtime package names the variable of the shipped tool a provider runs: InitInstance.homeEnv carries only an instance's, and toolCommandEnv is in src/
-      return 'CLAUDE_CONFIG_DIR';
-    case 'codex':
-      // oxlint-disable-next-line teamai/tool-home-env -- a runtime package names the variable of the shipped tool a provider runs: InitInstance.homeEnv carries only an instance's, and toolCommandEnv is in src/
-      return 'CODEX_HOME';
-    case 'opencode':
-      return 'XDG_DATA_HOME';
-    default: {
-      const unhandled: never = tool;
-
-      return unhandled;
-    }
-  }
-}
-
 /**
  * The home teamai resolved for an instance and passed in `init.instances`: absolute, the member's value of its variable
  * when their environment sets it, else its directory under their home. The runtime takes it as given.
@@ -61,7 +42,7 @@ export function instanceHomeOf(home: NonNullable<InitInstance['home']>): string 
   return path.resolve(getUserHome(), home.dir);
 }
 
-/** Each of an instance's `homeEnv` variables set to `dir`, as teamai sets them on its command. */
+/** Each of `homeEnv`, the variables teamai names for a tool in init, set to `dir`, as teamai sets them on its command. */
 export function homeEnvAt(homeEnv: readonly string[], dir: string): Record<string, string> {
   return Object.fromEntries(homeEnv.map((variable) => [variable, dir]));
 }
@@ -99,11 +80,11 @@ export const CustomProvidersSchema = z.record(z.string(), z.object({ extends: z.
 export type CustomProviders = z.infer<typeof CustomProvidersSchema>;
 
 /**
- * `providers` with only the variables of each env that move a tool's home, the shipped tools' and `variables`: the rest
- * may hold a secret, and none is kept.
+ * `providers` with only the variables of each env that move a tool's home, `variables`, which teamai names in init: the
+ * rest may hold a secret, and none is kept.
  */
 export function keptOf(providers: CustomProviders, variables: readonly string[]): CustomProviders {
-  const kept = new Set([...PASEO_TOOLS.map(homeVariableOf), ...variables]);
+  const kept = new Set(variables);
 
   return Object.fromEntries(Object.entries(providers).map(([id, entry]) => [id, {
     ...entry, ...(entry.env && { env: Object.fromEntries(Object.entries(entry.env).filter(([name]) => kept.has(name))) }),
@@ -149,12 +130,13 @@ export type ProviderFound = { provider: string } | { cannot: string } | { add: P
  * run the instance's command, else the one custom provider that does, and, for an instance with only a home of its own,
  * the one that runs the tool's own command with that home. With none, the one teamai adds, when it can: on a daemon on
  * this machine, under the instance's name, with its command found on teamai's PATH. Or why it cannot, with how to set one
- * up. `home` is the absolute home of the instance's own, when it has one, which every variable of its `homeEnv` is set to.
+ * up. `home` is the absolute home of the instance's own, when it has one, which every variable of `homeEnv`, the ones
+ * teamai names for the instance in init, is set to.
  */
-export function providerOf(instance: InitInstance, tool: PaseoTool, { custom, named, home, onThisMachine }: {
-  custom: CustomProviders; named: string | undefined; home: string | undefined; onThisMachine: boolean;
+export function providerOf(instance: InitInstance, tool: PaseoTool, { custom, named, home, homeEnv, onThisMachine }: {
+  custom: CustomProviders; named: string | undefined; home: string | undefined; homeEnv: readonly string[]; onThisMachine: boolean;
 }): ProviderFound {
-  const { command, name, homeEnv } = instance;
+  const { command, name } = instance;
   const hostPlatform = onThisMachine ? process.platform : undefined;
 
   if (named !== undefined) {
@@ -263,7 +245,7 @@ export function providerAdds(state: ProcessState) {
       }
 
       try {
-        const added = await live.addProvider(planned, instance);
+        const added = await live.addProvider(planned, instance, state.homeEnv[name] ?? []);
 
         // A provider it added stays, so the person is told how to remove it: one the instance runs on, or one Paseo
         // would not remove again when the instance cannot run on it.

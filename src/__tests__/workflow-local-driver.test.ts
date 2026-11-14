@@ -23,7 +23,7 @@ import { type WorkflowRunRecord } from '../workflow/records.js';
 import { attemptDir, AttemptIdSchema, attemptResultPath, readRun, RunIdSchema } from '../workflow/store.js';
 import { recordGroup } from '@teamai/shared/process-group';
 import { attemptRuntimePath, attemptToolHome, readAttemptPlacement, recordInProcessAttempt } from '../workflow/runtimes/attempt.js';
-import { openDriver } from '../workflow/runtimes/sources.js';
+import { homeEnvOf, openDriver } from '../workflow/runtimes/sources.js';
 import { personalDir } from '../workflow/runtimes/layers.js';
 import { cancelRun } from '../workflow/run-controls.js';
 import { stdioStepRuntime } from '../workflow/runtimes/stdio.js';
@@ -1378,7 +1378,7 @@ steps:
     const state = path.join(path.dirname(workspace), 'toy-state');
     const runtime = stdioStepRuntime({ name: 'toy', command: process.execPath, args: [TOY_RUNTIME] });
     onTestFinished(() => runtime.dispose());
-    const ready = await runtime.init({ options: { state, agent: { output: { ok: true }, transcript: true, conversations: false }, prompt_tool_home: true }, mode: 'unattended' });
+    const ready = await runtime.init({ options: { state, agent: { output: { ok: true }, transcript: true, conversations: false }, prompt_tool_home: true }, mode: 'unattended', homeEnv: homeEnvOf([]) });
     if (!ready.ok) throw new Error(ready.failure.message);
     const runtimes: DriverRuntimes = {
       driver: 'toy', asked: 'toy',

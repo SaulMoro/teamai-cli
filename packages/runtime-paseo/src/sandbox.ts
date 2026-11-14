@@ -4,7 +4,7 @@ import { findOnPath } from '@teamai/shared/lookpath';
 import type { Daemon, Target } from './daemon/connect.js';
 import type { AgentPrompt, Place } from './journal.js';
 import type { ProcessState } from './process-state.js';
-import { addedNotice, homeVariableOf } from './providers.js';
+import { addedNotice } from './providers.js';
 
 // ─── A place that runs through a sandbox ─────────────────
 //
@@ -62,7 +62,7 @@ export async function openThrough(state: ProcessState, live: Daemon, request: Ex
     if (wrapper.added && found !== null) state.write({ event: 'notice', op, message: addedNotice(live.url, { id, entry: { extends: target.tool, label: id, command: [found] } }, target.name) });
 
     if ('cannot' in wrapper) return cannot(wrapper.cannot);
-    const home = view?.toolHome[homeVariableOf(target.tool)];
+    const home = (state.homeEnv[target.name] ?? []).map((variable) => view?.toolHome[variable]).find((dir) => dir !== undefined);
 
     return { outer, provider: wrapper.provider, ...(home !== undefined && { home }) };
   } finally {

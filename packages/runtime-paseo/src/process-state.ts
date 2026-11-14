@@ -1,4 +1,4 @@
-import type { InitInstance, OpId, RuntimeFailure } from '@teamai/runtime-protocol';
+import type { InitHomeEnv, InitInstance, OpId, RuntimeFailure } from '@teamai/runtime-protocol';
 import type { OpLedger } from '@teamai/runtime-kit/ledger';
 import type { Daemon, Target } from './daemon/connect.js';
 import type { Journal } from './journal.js';
@@ -54,6 +54,8 @@ export interface ProcessState {
   sessionHomes: Map<string, string>;
   /** Whether init offered `tokens`: then a finished prompt whose tokens the runtime cannot read says why. */
   offersTokens: boolean;
+  /** Every variable each tool's command reads its home from, by the name a step gives it, as teamai sent it in init. */
+  homeEnv: InitHomeEnv;
   /** The home each team instance keeps its sessions in, as teamai resolved it, by its name. */
   homeDirs: Map<string, string>;
   /** The tool home each offered tool or instance runs in when its Paseo provider's env sets one, by its name. */

@@ -393,22 +393,29 @@ export type InitCredentials = z.infer<typeof InitCredentialsSchema>;
  * extends; `command`, the executable on PATH that starts it; `home`, the absolute path of its home on this machine, as
  * teamai resolves it once for every runtime (the member's value of the instance's own variable when their environment
  * sets it and it moves neither the extended tool's own home nor an XDG base directory, else `~/<its directory>`);
- * `homeEnv`, every variable its command reads its home from, the extended tool's and the instance's own, as teamai sets
- * them on it: a runtime that starts the command in a home sets each one to that home, and decides none of its own;
  * `paths`, the tool paths it sets. A runtime lists in `can.tools` the instances it can serve: on one that execs its tool,
- * teamai then launches `command` with every `homeEnv` variable set to the attempt's tool home. `home.dir` is absolute in
- * every release that speaks protocol 1, the first included, so no runtime reads a relative one.
+ * teamai then launches `command` with every variable `init.homeEnv` names for it set to the attempt's tool home.
+ * `home.dir` is absolute in every release that speaks protocol 1, the first included, so no runtime reads a relative one.
  */
 export const InitInstanceSchema = z.object({
   name: z.string().min(1),
   tool: z.string().min(1),
   command: z.string().min(1).optional(),
   home: z.object({ dir: z.string().min(1) }).optional(),
-  homeEnv: z.array(z.string().min(1)),
   paths: z.record(z.string(), z.unknown()).optional(),
 });
 
 export type InitInstance = z.infer<typeof InitInstanceSchema>;
+
+/**
+ * For each tool a step may name, a shipped tool teamai launches or an instance in `init.instances`, every variable its
+ * command reads its home from, as teamai sets them on it: a shipped tool's own, and for an instance the extended tool's
+ * and its own. A runtime that starts a tool's command in a home, or reads the home a provider of it sets, uses these and
+ * decides none of its own; a tool with none listed, or none sent, takes no variable.
+ */
+export const InitHomeEnvSchema = z.record(z.string().min(1), z.array(z.string().min(1)));
+
+export type InitHomeEnv = z.infer<typeof InitHomeEnvSchema>;
 
 /** The extensions Windows starts a command by name with, as its default PATHEXT lists the scripts among them. */
 const WINDOWS_COMMAND_EXTENSIONS = ['', '.exe', '.cmd', '.bat'];
@@ -438,6 +445,7 @@ const InitRequestSchema = z.object({
   type: z.literal('init'), protocol: z.literal(RUNTIME_PROTOCOL), mode: z.enum(RUNTIME_MODES), options: RuntimeOptionsSchema,
   credentials: InitCredentialsSchema.optional(),
   instances: z.array(InitInstanceSchema).optional(),
+  homeEnv: InitHomeEnvSchema.optional(),
   /** The run's checkout, an absolute path: teamai starts the runtime there too. */
   checkout: z.string().min(1).optional(),
 });

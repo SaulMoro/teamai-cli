@@ -1,5 +1,5 @@
 import path from 'node:path';
-import { fitReason, runsCommand, type InitInstance } from '@teamai/runtime-protocol';
+import { fitReason, runsCommand, type InitHomeEnv, type InitInstance } from '@teamai/runtime-protocol';
 import { DRIVER_NAMES, DRIVERS, driverOf, type Driver } from './sessions.js';
 import type { Provider } from './t3.js';
 
@@ -23,11 +23,8 @@ export function runsOwnBinary(binaryPath: string | undefined, driver: Driver): b
   return binaryPath === undefined || runsCommand({ executable: binaryPath, command: DRIVERS[driver].tool, expandsHome: true });
 }
 
-/**
- * What T3 serves a tool by: a tool instance `init` gives, with the variables teamai sets its home with, or a shipped tool
- * the definition's `instances` maps, which has none.
- */
-export type ServedTool = Pick<InitInstance, 'name' | 'tool' | 'command' | 'home'> & Partial<Pick<InitInstance, 'homeEnv'>>;
+/** What T3 serves a tool by: a tool instance `init` gives, or a shipped tool the definition's `instances` maps. */
+export type ServedTool = Pick<InitInstance, 'name' | 'tool' | 'command' | 'home'>;
 
 /** What finds the provider instance of each tool instance: T3's instances, which of them can run now, and each one's Binary path. */
 export interface InstanceLookup {
@@ -60,7 +57,7 @@ export interface ServedInstances {
  * cannot hold is not served, and `unavailable` says what to set. teamai passes every instance the member may run at init, so a problem
  * with one never fails the others.
  */
-export function servedInstances({ instances, mapped, lookup }: { instances: ServedTool[]; mapped: Record<string, string> | undefined; lookup: InstanceLookup }): ServedInstances {
+export function servedInstances({ instances, mapped, lookup, homeEnv }: { instances: ServedTool[]; mapped: Record<string, string> | undefined; lookup: InstanceLookup; homeEnv: InitHomeEnv }): ServedInstances {
   const served = new Map<string, Provider>();
   const unavailable: Record<string, string> = {};
   const notices: string[] = [];
@@ -82,10 +79,11 @@ export function servedInstances({ instances, mapped, lookup }: { instances: Serv
     const label = DRIVERS[driver].label;
     const id = mapped?.[name];
     // T3 Code starts a provider instance with a Binary path and a Home path only, and sets no variable but the tool's own.
-    const unset = (instance.homeEnv ?? []).filter((variable) => variable !== DRIVERS[driver].homeEnv);
+    const own = homeEnv[instance.tool] ?? [];
+    const unset = (homeEnv[name] ?? []).filter((variable) => !own.includes(variable));
 
     if (unset.length > 0) {
-      unavailable[name] = fitReason(`${name} reads its home from ${unset.join(' and ')}, which T3 Code cannot set: it starts a provider instance with a Binary path and a Home path only, so ${name} would read another home than the one teamai delivered to. Remove home.env from the ${name} tool definition, so teamai sets ${DRIVERS[driver].homeEnv}, or run its steps on another runtime.`);
+      unavailable[name] = fitReason(`${name} reads its home from ${unset.join(' and ')}, which T3 Code cannot set: it starts a provider instance with a Binary path and a Home path only, so ${name} would read another home than the one teamai delivered to. Remove home.env from the ${name} tool definition, so teamai sets ${own.join(' and ')}, or run its steps on another runtime.`);
       continue;
     }
 
@@ -168,14 +166,14 @@ export function driverOfProvider(provider: Provider): Driver | undefined {
 }
 
 /**
- * The tool home teamai gives `instance`: its own `home.dir`, which teamai resolved; else its base tool's, which the
- * tool's home variable in `env` moves (`~` as `home`, relative to `cwd`, where teamai runs), else under `home`, the
- * member's home.
+ * The tool home teamai gives `instance`: its own `home.dir`, which teamai resolved; else its base tool's, which a
+ * variable of `homeEnv`, the ones teamai names for that tool in init, moves in `env` (`~` as `home`, relative to `cwd`,
+ * where teamai runs), else under `home`, the member's home.
  */
-export function teamaiToolHome({ instance, driver, home, env, cwd }: { instance: ServedTool; driver: Driver; home: string; env: Readonly<Record<string, string | undefined>>; cwd: string }): string {
+export function teamaiToolHome({ instance, driver, home, homeEnv, env, cwd }: { instance: ServedTool; driver: Driver; home: string; homeEnv: readonly string[]; env: Readonly<Record<string, string | undefined>>; cwd: string }): string {
   if (instance.home) return path.resolve(home, instance.home.dir);
 
-  const moved = env[DRIVERS[driver].homeEnv]?.trim();
+  const moved = homeEnv.map((variable) => env[variable]?.trim()).find((dir) => dir !== undefined && dir !== '');
 
   if (!moved) return path.join(home, DRIVERS[driver].home);
 

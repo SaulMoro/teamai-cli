@@ -598,7 +598,8 @@ export function conversations({ serving, adder }: { serving: Serving; adder: Ins
       // The session is in the tool home of the instance the thread runs on, or through a sandbox in the attempt's, which is
       // the scoring and resume store.
       const instanceId = instanceIdOf(s, thread);
-      const attemptHome = driver && toolHomes?.[DRIVERS[driver].homeEnv];
+      const variables = driver ? s.homeEnv[DRIVERS[driver].tool] ?? [] : [];
+      const attemptHome = variables.map((variable) => toolHomes?.[variable]).find((dir) => dir !== undefined);
       const toolHome = driver && (attemptHome ?? (instanceId !== undefined ? instanceToolHome(readSettings(options.t3Home), { instanceId, driver, userHome: options.t3UserHome }) : undefined));
       // A new thread never resumes the session the lease names (T3 starts each with a new one), so that session, of an
       // earlier thread in this folder the step did not go on in, is not this one's.
@@ -609,7 +610,7 @@ export function conversations({ serving, adder }: { serving: Serving; adder: Ins
         // T3 runs the tool in the instance's home path, else in the home its own server's environment names, which
         // teamai cannot read: only the setting makes the two agree.
         const named = driver && attemptHome === undefined && instanceId !== undefined && toolHome !== undefined
-          ? ` teamai looks for it in the home path of T3 provider instance "${instanceId}", else in ~/${DRIVERS[driver].home} of the user T3 Code runs as (${toolHome}). If the T3 server runs ${thread.tool} with a ${DRIVERS[driver].homeEnv} of its own, set providerInstances.${instanceId}.config.homePath to that directory in ${path.join(options.t3Home, 'userdata', 'settings.json')} (Settings → Providers in T3 Code), then retry the step.`
+          ? ` teamai looks for it in the home path of T3 provider instance "${instanceId}", else in ~/${DRIVERS[driver].home} of the user T3 Code runs as (${toolHome}). If the T3 server runs ${thread.tool} with a ${variables.join(' or ')} of its own, set providerInstances.${instanceId}.config.homePath to that directory in ${path.join(options.t3Home, 'userdata', 'settings.json')} (Settings → Providers in T3 Code), then retry the step.`
           : '';
 
         return stopped({ op: request.op, state: 'failed', failure: { code: 'tool_failed', message: `${where} finished, but ${thread.tool} kept no session for ${cwd}${toolHome === undefined ? '' : ` in ${toolHome}`}, so the step cannot be scored or resumed.${named}` } });

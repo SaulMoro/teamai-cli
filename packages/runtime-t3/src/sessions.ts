@@ -20,22 +20,20 @@ import { canList, FsFailureSchema, isPermissionDenied } from '@teamai/shared/fs-
 
 /**
  * The T3 provider drivers this runtime runs, each with the teamai tool it is, its name in T3, its tool's home under a
- * user's home, the variable that moves that home, the folder of a tool home its sessions are in and their store there,
- * and the format its transcript records tokens in.
+ * user's home, the folder of a tool home its sessions are in and their store there, and the format its transcript
+ * records tokens in. The variables that move that home are the ones teamai names in init (`Session.homeEnv`).
  */
 export const DRIVERS = {
   claudeAgent: {
-    // oxlint-disable-next-line teamai/tool-home-env -- a runtime package names the variable of the shipped tool a provider runs: InitInstance.homeEnv carries only an instance's, and toolCommandEnv is in src/
-    tool: 'claude', label: 'Claude', home: '.claude', homeEnv: 'CLAUDE_CONFIG_DIR', store: 'projects', sessions: (toolHome: string) => new ClaudeCodeAdapter('claude-code', path.join(toolHome, 'projects')),
+    tool: 'claude', label: 'Claude', home: '.claude', store: 'projects', sessions: (toolHome: string) => new ClaudeCodeAdapter('claude-code', path.join(toolHome, 'projects')),
     tokens: 'claude-jsonl',
   },
   codex: {
-    // oxlint-disable-next-line teamai/tool-home-env -- a runtime package names the variable of the shipped tool a provider runs: InitInstance.homeEnv carries only an instance's, and toolCommandEnv is in src/
-    tool: 'codex', label: 'Codex', home: '.codex', homeEnv: 'CODEX_HOME', store: 'sessions', sessions: (toolHome: string, host: SessionHost) => new CodexAdapter('codex', path.join(toolHome, 'sessions'), host),
+    tool: 'codex', label: 'Codex', home: '.codex', store: 'sessions', sessions: (toolHome: string, host: SessionHost) => new CodexAdapter('codex', path.join(toolHome, 'sessions'), host),
     tokens: 'codex-rollout',
   },
 } as const satisfies Record<string, {
-  tool: string; label: string; home: string; homeEnv: string; store: string; sessions(toolHome: string, host: SessionHost): AgentAdapter; tokens: StepTokenFormat;
+  tool: string; label: string; home: string; store: string; sessions(toolHome: string, host: SessionHost): AgentAdapter; tokens: StepTokenFormat;
 }>;
 
 export type Driver = keyof typeof DRIVERS;

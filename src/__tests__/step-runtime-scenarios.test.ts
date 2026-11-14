@@ -9,7 +9,7 @@ import { buildSync } from 'esbuild';
 import { z } from 'zod';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { log } from '@teamai/shared/log';
-import { toolsLaunchDeps } from '../workflow/runtimes/sources.js';
+import { homeEnvOf, toolsLaunchDeps } from '../workflow/runtimes/sources.js';
 import { stepLauncher, toolsStepRuntime } from '@teamai/runtime-tools';
 import { stdioStepRuntime } from '../workflow/runtimes/stdio.js';
 import { composedStepRuntime } from '../workflow/runtimes/composed.js';
@@ -140,7 +140,7 @@ describe.each(SUBJECTS)('StepRuntime scenarios: $name', (subject) => {
   const start = async (): Promise<StepRuntime<DriverCan>> => {
     const runtime = subject.start(state);
     started.push(runtime);
-    const ready = await runtime.init({ options: subject.options(state), mode: 'unattended' });
+    const ready = await runtime.init({ options: subject.options(state), mode: 'unattended', homeEnv: homeEnvOf([]) });
     expect(ready).toMatchObject({ ok: true });
 
     return runtime;
@@ -690,7 +690,7 @@ describe.each(PROMPT_SUBJECTS)('StepRuntime prompt scenarios: $name', (subject) 
   const start = async (agent: JsonValue = {}): Promise<StepRuntime<DriverCan>> => {
     const runtime = subject.start(state);
     started.push(runtime);
-    const ready = await runtime.init({ options: subject.options(state, agent), mode: 'unattended' });
+    const ready = await runtime.init({ options: subject.options(state, agent), mode: 'unattended', homeEnv: homeEnvOf([]) });
     offersTokens = ready.ok && ready.can.tokens === true;
     expect(ready).toMatchObject({ ok: true, launchesAgents: true, ...(subject.execsOnToolHome ? { runsOnToolHome: true } : { can: subject.through ? { isolation: 'sandbox' } : { exec: false } }) });
     // Through a sandbox, the sandbox runs commands, which it offers by leaving `exec` unset.

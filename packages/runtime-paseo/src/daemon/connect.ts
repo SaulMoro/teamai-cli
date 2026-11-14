@@ -6,9 +6,9 @@ import { z } from 'zod';
 import type { PaseoAgent, PaseoApi } from '@getpaseo/client';
 import type { DaemonClient } from '@getpaseo/client/internal/daemon-client';
 import type { WebSocketFactory } from '@getpaseo/client/internal/daemon-client-transport-types';
-import { RUN_DIR_ENV, type InitInstance, type RuntimeFailure } from '@teamai/runtime-protocol';
+import { RUN_DIR_ENV, type InitHomeEnv, type InitInstance, type RuntimeFailure } from '@teamai/runtime-protocol';
 import { paseoKeyOf, type AgentCreate } from '../journal.js';
-import { CustomProvidersSchema, daemonRuns, homeDirOf, homeEnvAt, homeVariableOf, instanceHomeOf, isPaseoTool, keptOf, namedProblem, PASEO_TOOLS, providerOf, shownPath, type CustomProviders, type PaseoTool, type ProviderFound, type ProviderToAdd } from '../providers.js';
+import { CustomProvidersSchema, daemonRuns, homeDirOf, homeEnvAt, instanceHomeOf, isPaseoTool, keptOf, namedProblem, PASEO_TOOLS, providerOf, shownPath, type CustomProviders, type PaseoTool, type ProviderFound, type ProviderToAdd } from '../providers.js';
 import { isOnThisMachine } from './address.js';
 import { routedHost, savedHosts, type Host, type SavedHost } from './host.js';
 import { atLeast, OLDEST_PASEO, type PaseoClient } from './client.js';
@@ -259,6 +259,8 @@ export type Added = { provider: string; added: boolean; home?: string; providerH
 export interface ToolChoices {
   modes: ConfiguredModes;
   instances: readonly InitInstance[];
+  /** Every variable each tool's command reads its home from, by the name a step gives it, as teamai sent it in init. */
+  homeEnv: InitHomeEnv;
   /** A Paseo provider id for a tool or an instance name, over the one the runtime finds. */
   providers: Readonly<Record<string, string>>;
   /** Only to answer a check, which runs nothing: a Codex Paseo resolves counts as one it runs, its sign-in unasked. */
@@ -285,7 +287,7 @@ export interface Daemon {
    * provider that runs the instance is there by now, and checks the instance's sign-in on it. Paseo saves and applies the
    * entry at once. Callers hold the daemon's providers across runtimes (`Journal.holdProviders`).
    */
-  addProvider(toAdd: ProviderToAdd, instance: InitInstance): Promise<Added>;
+  addProvider(toAdd: ProviderToAdd, instance: InitInstance, homeEnv: readonly string[]): Promise<Added>;
   models(provider: string): Promise<Model[]>;
   /** Whether Paseo has an active workspace on a directory, as one the member opened in the app; fails with no answer in 20 s. */
   isOpen(cwd: string): Promise<boolean>;
@@ -532,7 +534,7 @@ export async function connect(url: string, paseo: PaseoClient, abandoned?: Abort
     url,
     serverId,
     version,
-    async installedTools({ modes: configured, instances, providers: named, isCheck = false }) {
+    async installedTools({ modes: configured, instances, homeEnv, providers: named, isCheck = false }) {
       // The snapshot carries each provider's default mode, which the member's own agents start in.
       const [{ providers }, { entries }] = await Promise.all([api.providers.listAvailable(), api.providers.snapshot()]);
       const available = new Set(providers.filter((entry) => entry.available).map((entry) => entry.provider));
@@ -548,7 +550,7 @@ export async function connect(url: string, paseo: PaseoClient, abandoned?: Abort
         unread = `Paseo did not answer with its providers (${PaseoSaidSchema.parse(error)}); run \`paseo daemon config get agents.providers --json\` on the daemon's host to see why`;
       }
 
-      const customs = keptOf(parsed?.success ? parsed.data : {}, instances.flatMap((instance) => instance.homeEnv));
+      const customs = keptOf(parsed?.success ? parsed.data : {}, Object.values(homeEnv).flat());
       custom = new Map(Object.entries(customs));
 
       /** The modes Paseo lists for `provider`, and the one a step of `tool` starts in there, or why it cannot be offered. */
@@ -577,7 +579,7 @@ export async function connect(url: string, paseo: PaseoClient, abandoned?: Abort
       });
 
       const teams = teamInstances.map(({ instance, tool }): Planned => {
-        const found = unread === undefined ? providerOf(instance, tool, { custom: customs, named: named[instance.name], onThisMachine: isOnThisMachine(url), ...ownHome(instance) }) : { cannot: unread };
+        const found = unread === undefined ? providerOf(instance, tool, { custom: customs, named: named[instance.name], homeEnv: homeEnv[instance.name] ?? [], onThisMachine: isOnThisMachine(url), ...ownHome(instance) }) : { cannot: unread };
 
         if ('cannot' in found) return { kind: 'unavailable', name: instance.name, tool, reason: found.cannot };
 
@@ -600,9 +602,9 @@ export async function connect(url: string, paseo: PaseoClient, abandoned?: Abort
 
         if (!available.has(provider)) return cannotRun(`Paseo does not find the command of its provider ${provider} on the daemon's PATH; install it there, then \`paseo daemon reload\``);
         const instance = teamInstances.find((team) => team.instance.name === name)?.instance;
-        // An instance's command reads its home from the variables teamai names; a shipped tool's from its own.
-        const variables = instance?.homeEnv ?? [homeVariableOf(tool)];
-        const teamaiHome = instance?.home ? instanceHomeOf(instance.home) : process.env[homeVariableOf(tool)] || path.join(getUserHome(), homeDirOf(tool));
+        // A tool's command reads its home from the variables teamai names for it in init, a shipped tool's as an instance's.
+        const variables = homeEnv[name] ?? [];
+        const teamaiHome = instance?.home ? instanceHomeOf(instance.home) : variables.map((one) => process.env[one]).find((dir) => dir !== undefined && dir !== '') ?? path.join(getUserHome(), homeDirOf(tool));
         const variable = variables.find((one) => custom.get(provider)?.env?.[one] !== undefined);
         const set = variable === undefined ? undefined : custom.get(provider)?.env?.[variable];
         const providerHome = variable !== undefined && set !== undefined && path.isAbsolute(set) ? { variable, dir: set, teamaiHome } : undefined;
@@ -622,7 +624,7 @@ export async function connect(url: string, paseo: PaseoClient, abandoned?: Abort
         return 'cannot' in listed ? cannotRun(listed.cannot) : { kind: 'runs', name, tool, provider, ...listed, ...(signedIn.home !== undefined && { home: signedIn.home }), ...(providerHome && { providerHome }) };
       }));
     },
-    async addProvider({ id, entry }, instance) {
+    async addProvider({ id, entry }, instance, homeEnv) {
       const tool = entry.extends;
       const home = ownHome(instance);
       let found: ProviderFound;
@@ -630,7 +632,7 @@ export async function connect(url: string, paseo: PaseoClient, abandoned?: Abort
       try {
         // Read again: another runtime may have added it since this one's init.
         const parsed = CustomProvidersSchema.safeParse((await api.config.get()).config.providers);
-        found = providerOf(instance, tool, { custom: parsed.success ? keptOf(parsed.data, instance.homeEnv) : {}, named: undefined, onThisMachine: true, ...home });
+        found = providerOf(instance, tool, { custom: parsed.success ? keptOf(parsed.data, homeEnv) : {}, named: undefined, homeEnv, onThisMachine: true, ...home });
       } catch (error) {
         return { cannot: `Paseo did not answer with its providers (${PaseoSaidSchema.parse(error)}); check that its daemon answers with \`paseo ls\`, then run the step again`, added: false };
       }
@@ -680,7 +682,7 @@ export async function connect(url: string, paseo: PaseoClient, abandoned?: Abort
           return await cannotRun(`Paseo does not find the command of its provider ${provider} on the daemon's PATH; install it there, then \`paseo daemon reload\``);
         }
 
-        signedIn = await signIn({ name: instance.name, tool, provider }, { runsIn: home.home === undefined ? undefined : { variables: instance.homeEnv, dir: home.home, shown: shownPath(home.home) }, command: instance.command, isCheck: false });
+        signedIn = await signIn({ name: instance.name, tool, provider }, { runsIn: home.home === undefined ? undefined : { variables: homeEnv, dir: home.home, shown: shownPath(home.home) }, command: instance.command, isCheck: false });
       } catch (error) {
         return cannotRun(`Paseo failed its diagnostic (${PaseoSaidSchema.parse(error)}); run \`paseo provider diagnostic ${provider}\` on the daemon's host to see why`);
       }

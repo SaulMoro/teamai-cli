@@ -7,6 +7,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, expect } from 'vitest';
 import { z } from 'zod';
 import { expectNothingLeft } from '@teamai/runtime-testing/leaks';
 import { bundleRuntime, connect, fakeT3, signIn, type Connection, type FakeT3, type Line } from './harness.js';
+import type { DRIVERS, Driver } from '../sessions.js';
 
 // The T3 runtime's tests: teamai-runtime-t3 through its stdio entry, against a fake T3 Code server (fake-t3.mjs). Each
 // test file runs it in a describe that calls useT3Runtime, and a prompt step's tests also call usePromptStep.
@@ -83,10 +84,13 @@ export let result: string;
 export const OPEN = 'op-0000000a';
 export const RUN = 'r7f3a91c2';
 
+/** The home variables teamai sends for the tools T3 runs, as `toolCommandEnv` names them. */
+export const SHIPPED_HOME_ENV: Record<(typeof DRIVERS)[Driver]['tool'], string[]> = { claude: ['CLAUDE_CONFIG_DIR'], codex: ['CODEX_HOME'] };
+
 /** A runtime past init and open on the attempt's worktree, and its handle. */
 export const opened = async (mode: 'attended' | 'unattended' = 'attended', env: Record<string, string> = {}, options: Line = {}): Promise<{ runtime: Connection; handle: string }> => {
   const runtime = start(env);
-  runtime.send({ type: 'init', protocol: 1, mode, options: { environment: 'local', ...options } });
+  runtime.send({ type: 'init', protocol: 1, mode, options: { environment: 'local', ...options }, homeEnv: SHIPPED_HOME_ENV });
   expect(await runtime.next((line) => line['type'] === 'init')).toMatchObject({ ok: true });
   runtime.send({ type: 'open', op: OPEN, run: RUN, attempt: 'a1b2c3d4', credentials: {}, view: { worktree, readonly: [], result: path.dirname(result), runDir: path.join(dir, 'run'), toolHome: {} } });
   const accepted = await runtime.next((line) => line['op'] === OPEN && line['event'] === 'accepted');
@@ -118,7 +122,7 @@ export const openOn = async (runtime: Connection, folder: string, op = OPEN, tim
 
 export const initialized = async (options: Line = {}, env: Record<string, string> = {}): Promise<Connection> => {
   const runtime = start(env);
-  runtime.send({ type: 'init', protocol: 1, mode: 'attended', options: { environment: 'local', ...options } });
+  runtime.send({ type: 'init', protocol: 1, mode: 'attended', options: { environment: 'local', ...options }, homeEnv: SHIPPED_HOME_ENV });
   expect(await runtime.next((line) => line['type'] === 'init')).toMatchObject({ ok: true });
 
   return runtime;

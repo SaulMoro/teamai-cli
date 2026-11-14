@@ -1,12 +1,13 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import type { InitInstance, PromptLeaseSchema, PromptRequestSchema, RuntimeMessage, RuntimeMode, RuntimeOptions } from '@teamai/runtime-protocol';
+import type { InitHomeEnv, InitInstance, PromptLeaseSchema, PromptRequestSchema, RuntimeMessage, RuntimeMode, RuntimeOptions } from '@teamai/runtime-protocol';
 import { z } from 'zod';
 import { afterAll, afterEach, beforeAll, beforeEach } from 'vitest';
 import { expectNothingLeft } from '@teamai/runtime-testing/leaks';
 import { startFakeDaemon, type Behaviour } from './fake-daemon.js';
 import { bundleRuntime, startRuntime, type Runtime } from './harness.js';
+import type { PaseoTool } from '../providers.js';
 import { entriesUnder } from '@teamai/shared/entries-under';
 
 // ─── Test support: one test file's runtimes on a fake Paseo daemon ───
@@ -76,8 +77,17 @@ export const isOp = (op: string, event: string) => (line: RuntimeMessage): boole
 export const isEnd = (op: string) => (line: RuntimeMessage): boolean => 'op' in line && line.op === op && 'event' in line && ['finished', 'failed', 'cancelled'].includes(line.event);
 export const isInit = (line: RuntimeMessage): boolean => 'type' in line && line.type === 'init';
 
-export async function ready(runtime: Runtime, { mode = 'unattended', options = { url: daemon.url }, instances }: { mode?: RuntimeMode; options?: RuntimeOptions; instances?: InitInstance[] } = {}): Promise<RuntimeMessage> {
-  runtime.send({ type: 'init', protocol: 1, mode, options, ...(instances && { instances }) });
+/** The home variables teamai sends for the tools Paseo runs, as `toolCommandEnv` names them. */
+export const SHIPPED_HOME_ENV: Record<PaseoTool, string[]> = { claude: ['CLAUDE_CONFIG_DIR'], codex: ['CODEX_HOME'], opencode: [] };
+
+/** A team instance teamai passes at init, with the variables it names for that instance in `init.homeEnv`. */
+export type PassedInstance = InitInstance & { readonly homeEnv: readonly string[] };
+
+/** Sends `init`, as teamai does: each instance in `instances`, and its variables with the shipped tools' in `homeEnv`. */
+export async function ready(runtime: Runtime, { mode = 'unattended', options = { url: daemon.url }, instances, homeEnv = SHIPPED_HOME_ENV }: { mode?: RuntimeMode; options?: RuntimeOptions; instances?: PassedInstance[]; homeEnv?: InitHomeEnv } = {}): Promise<RuntimeMessage> {
+  const passed = instances?.map(({ homeEnv: _variables, ...instance }) => instance);
+  const sent = { ...homeEnv, ...Object.fromEntries((instances ?? []).map(({ name, homeEnv: variables }) => [name, [...variables]])) };
+  runtime.send({ type: 'init', protocol: 1, mode, options, homeEnv: sent, ...(passed && { instances: passed }) });
 
   return runtime.next(isInit);
 }

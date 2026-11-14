@@ -23,7 +23,7 @@
 // machine does; with `home` too, in that Claude home instead, which `finished` reports as the session's `home`, as a
 // T3 provider instance with its own home does. With `prompt_tool_home` beside `agent`, its init says it runs each tool
 // in the attempt's tool home (`toolHome: true`), and its agent keeps a transcript in the Claude home its place's view
-// gives (`view.toolHome.CLAUDE_CONFIG_DIR`), and none when the view gives none. Each open records the tool its attempt's prompt
+// gives under a variable init names for Claude (`homeEnv.claude`), and none when the view gives none. Each open records the tool its attempt's prompt
 // runs (`open.tool`) and the attempt's deadline (`open.deadline`).
 // `agent.display` is what its agent shows once it exists, given with the prompt's acceptance; with `display_after_ms`, it
 // accepts the prompt at once with no display and sends that one as a `display` event that long after, as a runtime that
@@ -41,7 +41,7 @@
 // new work unanswered, as a sign-in check whose provider stalls, while recover mode still answers. A request it cannot
 // answer, such as one for a handle while its journal cannot be read, gets the failure reply for its handle or operation.
 //
-// Each init's mode, the directory it was started in, and the checkout and tool instances it was given, are appended to
+// Each init's mode, the directory it was started in, and the checkout, tool instances and home variables it was given, are appended to
 // `inits.jsonl` in its state. `init_fails` is the failure an init for new work ends with, as a runtime signed out of
 // its provider; in `recover` mode it still opens, offers nothing and answers from its state, unless `recover: false`
 // makes it answer that mode as a runtime before it did. A `check` init it answers as one for new work, writing nothing
@@ -82,6 +82,8 @@ const DEFAULT_CAN = {
 };
 
 let options;
+/** The variables teamai names in init for each tool's home. */
+let homeEnv = {};
 const running = new Map();
 
 // When teamai is gone, a line it would have read goes nowhere: an exec still running keeps going and records its end.
@@ -201,7 +203,7 @@ function init(request) {
   }
 
   fs.mkdirSync(request.options.state, { recursive: true });
-  fs.appendFileSync(path.join(request.options.state, 'inits.jsonl'), `${JSON.stringify({ mode: request.mode, cwd: process.cwd(), ...(request.checkout && { checkout: request.checkout }), ...(request.instances && { instances: request.instances }) })}\n`);
+  fs.appendFileSync(path.join(request.options.state, 'inits.jsonl'), `${JSON.stringify({ mode: request.mode, cwd: process.cwd(), ...(request.checkout && { checkout: request.checkout }), ...(request.instances && { instances: request.instances }), ...(request.homeEnv && { homeEnv: request.homeEnv }) })}\n`);
 
   // A sign-in check whose provider never answers: an init for new work stalls, and recover mode, which checks nothing, does not.
   if (request.mode !== 'recover' && request.options.answer?.init === 'silent') return;
@@ -220,6 +222,7 @@ function init(request) {
     }
 
     options = request.options;
+    homeEnv = request.homeEnv ?? {};
     send({ type: 'init', ok: true, can: {} });
 
     return;
@@ -232,6 +235,7 @@ function init(request) {
   }
 
   options = request.options;
+  homeEnv = request.homeEnv ?? {};
 
   if (request.credentials !== undefined) {
     fs.appendFileSync(file('credentials.jsonl'), `${JSON.stringify({ type: 'init', names: request.credentials.env, logins: request.credentials.logins })}\n`);
@@ -443,7 +447,8 @@ function agentOutcome(record) {
   const session = { tool: record.lease.tool, id, ...(options.agent.home !== undefined && { home: options.agent.home }) };
 
   // On the attempt's tool home, the agent keeps its transcript in the Claude home its place's view gives.
-  const placeHome = options.prompt_tool_home === true ? readJson(file('views', `${record.handle}.json`), null)?.toolHome?.CLAUDE_CONFIG_DIR : undefined;
+  const view = options.prompt_tool_home === true ? readJson(file('views', `${record.handle}.json`), null) : null;
+  const placeHome = (homeEnv.claude ?? []).map((variable) => view?.toolHome?.[variable]).find((dir) => dir !== undefined);
 
   if (options.agent.transcript && (options.prompt_tool_home !== true || placeHome !== undefined)) {
     const project = path.join(placeHome ?? options.agent.home ?? path.join(os.homedir(), '.claude'), 'projects', encodeCwdClaude(record.cwd));

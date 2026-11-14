@@ -81,6 +81,21 @@ describe('teamai-runtime-paseo', () => {
     }
   });
 
+  // teamai names each tool's home variables in init, and the runtime finds the home a provider sets through those alone.
+  it.skipIf(process.platform === 'win32').each<{ sent: string; homeEnv: Record<string, string[]>; offered: string[] }>([
+    { sent: 'CODEX_HOME, as teamai sends it for Codex', homeEnv: { codex: ['CODEX_HOME'] }, offered: ['codex'] },
+    { sent: 'no variable, when teamai sends none', homeEnv: {}, offered: [] },
+  ])('checks a shipped Codex on the provider the definition names in the home that provider sets through $sent', async ({ homeEnv, offered }) => {
+    const providerHome = path.join(dir, 'paseo-homes', 'codex-work');
+    fs.mkdirSync(path.join(providerHome, 'sessions'), { recursive: true });
+    behave({
+      models: { codex: ['gpt-6.1-sol'] }, codex_login: 'signed_in', codex_login_home: providerHome,
+      custom_providers: { 'codex-work': { extends: 'codex', env: { CODEX_HOME: providerHome } } },
+    });
+
+    expect(await ready(start(), { options: { url: daemon.url, providers: { codex: 'codex-work' } }, homeEnv })).toMatchObject({ ok: true, can: { tools: offered } });
+  });
+
   it('offers neither a step nor a judge on a tool installed but signed out, which Paseo still calls available, and names it unavailable with how to sign it in', async () => {
     behave({ models: { claude: ['claude-opus-5-5'], opencode: ['opencode/beam-free'] }, sign_in: { claude: 'signed_out' } });
 

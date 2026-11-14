@@ -65,7 +65,7 @@ export const BASE_ID_COMPARISONS = new Map(Object.entries({
   'packages/runtime-paseo/src/conversation.ts': 2,
   'packages/runtime-paseo/src/daemon/connect.ts': 4,
   'packages/runtime-paseo/src/offer.ts': 2,
-  'packages/runtime-paseo/src/providers.ts': 4,
+  'packages/runtime-paseo/src/providers.ts': 2,
   // A fake Paseo daemon: it runs the providers Paseo ships, by the base `baseOf` gives a provider's id.
   'packages/runtime-paseo/src/testing/fake-daemon.ts': 6,
   // The member's provider, a `PaseoTool` (DaemonHost.memberProvider), never an instance's name.

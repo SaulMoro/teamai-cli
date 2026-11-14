@@ -6,7 +6,7 @@ import { RuntimeMessageSchema } from '@teamai/runtime-protocol';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { z } from 'zod';
 import { PATH_WITHOUT_T3, type Connection, type Line } from './testing/harness.js';
-import { checkout, dir, ended, initialized, isNotice, linkTo, noticesOf, OPEN, opened, openOn, prompt, result, RUN, scriptsInProject1, start, t3, usePromptStep, useT3Runtime, worktree } from './testing/suite.js';
+import { checkout, dir, ended, initialized, isNotice, linkTo, noticesOf, OPEN, opened, openOn, prompt, result, RUN, scriptsInProject1, SHIPPED_HOME_ENV, start, t3, usePromptStep, useT3Runtime, worktree } from './testing/suite.js';
 
 /** teamai's wrapper for Claude, which a step through a sandbox runs in place of Claude. */
 const SANDBOX_CLAUDE = 'teamai-sandbox-claude';
@@ -630,7 +630,7 @@ describe('teamai-runtime-t3', () => {
 
       const throughSandbox = async (env: Record<string, string> = {}): Promise<Connection> => {
         const runtime = start({ PATH: [bin, t3.bin, PATH_WITHOUT_T3].join(path.delimiter), ...env });
-        runtime.send({ type: 'init', protocol: 1, mode: 'attended', options: { environment: 'local' } });
+        runtime.send({ type: 'init', protocol: 1, mode: 'attended', options: { environment: 'local' }, homeEnv: SHIPPED_HOME_ENV });
         expect(await runtime.next((line) => line['type'] === 'init')).toMatchObject({ ok: true });
 
         return runtime;

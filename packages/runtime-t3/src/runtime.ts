@@ -1,4 +1,4 @@
-import type { RUNTIME_MODES, OpId, RuntimeFailure, RuntimeMessage } from '@teamai/runtime-protocol';
+import type { InitHomeEnv, RUNTIME_MODES, OpId, RuntimeFailure, RuntimeMessage } from '@teamai/runtime-protocol';
 import { opLedger, type OpLedger } from '@teamai/runtime-kit/ledger';
 import { placeWork, type PlaceWork } from '@teamai/runtime-kit/places';
 import { serveRuntime } from '@teamai/runtime-kit/serve';
@@ -115,6 +115,8 @@ export interface Session extends Reached {
   threadModel: ModelSelection | undefined;
   /** Whether init offered `tokens`: then a finished prompt whose tokens the runtime cannot read says why. */
   offersTokens: boolean;
+  /** Every variable each tool's command reads its home from, by the name a step gives it, as teamai sent it in init. */
+  homeEnv: InitHomeEnv;
 }
 
 export type Reach = { ok: true; reached: Reached } | { ok: false; failure: RuntimeFailure };

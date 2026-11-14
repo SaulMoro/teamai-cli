@@ -74,7 +74,7 @@ export async function serve({ input, env, write: emit, note, journal, startedFro
 
   const state: ProcessState = {
     journal, ledger, write, fail, startedFrom, daemon: undefined, mode: 'attended', closing: false, reachBy: (deadline) => reachBy(deadline),
-    offers: new Map(), targets: new Map(), modeIds: new Map(), sessionHomes: new Map(), offersTokens: false, homeDirs: new Map(), providerHomes: new Map(), toAdd: new Map(),
+    offers: new Map(), targets: new Map(), modeIds: new Map(), sessionHomes: new Map(), offersTokens: false, homeEnv: {}, homeDirs: new Map(), providerHomes: new Map(), toAdd: new Map(),
     waiting: new Map(), stopping: new Set(), closeStops: new Set(), opens: new Map(), turns: new Map(), creates: new Map(),
   };
 
@@ -204,7 +204,8 @@ export async function serve({ input, env, write: emit, note, journal, startedFro
     }
 
     const modes = Object.fromEntries(Object.entries(options.mode ?? {}).filter(([tool]) => isPaseoTool(tool)));
-    const installed = await connected.installedTools({ modes, instances, providers: options.providers ?? {}, isCheck: request.mode === 'check' });
+    const homeEnv = request.homeEnv ?? {};
+    const installed = await connected.installedTools({ modes, instances, homeEnv, providers: options.providers ?? {}, isCheck: request.mode === 'check' });
     const found = { installed, instances, foreign, url: connected.url };
 
     // A check connects and lists, and keeps nothing: providers are added only by an open, and no step will follow.
@@ -229,6 +230,7 @@ export async function serve({ input, env, write: emit, note, journal, startedFro
     refill(state.homeDirs, offered.homeDirs);
     refill(state.providerHomes, offered.providerHomes);
     refill(state.toAdd, offered.toAdd);
+    state.homeEnv = homeEnv;
     state.offersTokens = offered.init.ok && offered.init.can.tokens === true;
     // A daemon that routes to saved hosts can start a fleet member on one; recover mode returned above.
     write(offered.init.ok && connected.routesHosts ? { ...offered.init, wake: true } : offered.init);

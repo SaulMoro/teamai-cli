@@ -1,5 +1,5 @@
 import { randomBytes } from 'node:crypto';
-import { OpIdSchema, type Can, type ConfinedKept, type ExecRequestSchema, type InitCredentials, type InitInstance, type OpenRequestSchema, type OpId, type OpState, type PromptRequestSchema, type PromptResult, type PromptSessionSchema, type PromptUsageSchema, type RuntimeDisplay, type RuntimeFailure, type RuntimeMode, type RuntimeOptions, type WakeRequest } from './protocol.js';
+import { OpIdSchema, type Can, type ConfinedKept, type ExecRequestSchema, type InitCredentials, type InitHomeEnv, type InitInstance, type OpenRequestSchema, type OpId, type OpState, type PromptRequestSchema, type PromptResult, type PromptSessionSchema, type PromptUsageSchema, type RuntimeDisplay, type RuntimeFailure, type RuntimeMode, type RuntimeOptions, type WakeRequest } from './protocol.js';
 import type { z } from 'zod';
 
 // ─── Step runtimes ───────────────────────────────────────
@@ -145,10 +145,10 @@ export interface StepRuntime<TCan = Can> {
   readonly isToolPickedThere?: boolean;
   /**
    * Validates `options` (a bad key fails with `bad_option` naming it) and answers what the runtime offers, knowing the
-   * names of the `credentials` its definition gives it, the tool `instances` the member may run, and the run's
-   * `checkout`. In `recover` mode it only answers for the handles it recorded.
+   * names of the `credentials` its definition gives it, the tool `instances` the member may run, each tool's `homeEnv`,
+   * and the run's `checkout`. In `recover` mode it only answers for the handles it recorded.
    */
-  init(request: { options: RuntimeOptions; mode: RuntimeMode; credentials?: InitCredentials; instances?: InitInstance[]; checkout?: string }): Promise<Initialized<TCan>>;
+  init(request: { options: RuntimeOptions; mode: RuntimeMode; credentials?: InitCredentials; instances?: InitInstance[]; homeEnv?: InitHomeEnv; checkout?: string }): Promise<Initialized<TCan>>;
   /**
    * Opens the attempt's place. `onAccepted` runs with the handle before `open` settles, so teamai persists it; `open`
    * rejects with its error. A place made in steps (a runtime through another) is accepted at each, with the handle so far.

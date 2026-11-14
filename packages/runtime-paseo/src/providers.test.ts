@@ -1,17 +1,17 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import type { InitInstance, RuntimeMessage, RuntimeOptions } from '@teamai/runtime-protocol';
+import type { RuntimeMessage, RuntimeOptions } from '@teamai/runtime-protocol';
 import { describe, expect, it } from 'vitest';
 import { daemonRuns } from './providers.js';
 import { type Behaviour } from './testing/fake-daemon.js';
 import { type Runtime } from './testing/harness.js';
-import { dir, daemonState, daemon, ATTEMPT, behave, received, start, isOp, isEnd, ready, openRequest, opened, delay, cannotRun, until, promptRequest, useRuntimeSuite } from './testing/suite.js';
+import { dir, daemonState, daemon, ATTEMPT, behave, received, start, isOp, isEnd, ready, openRequest, opened, delay, cannotRun, until, promptRequest, useRuntimeSuite, type PassedInstance } from './testing/suite.js';
 
 describe('teamai-runtime-paseo', () => {
   useRuntimeSuite();
 
   describe('a team tool instance', () => {
-    const ACME: InitInstance = { name: 'acme-claude', tool: 'claude', command: 'acme-claude', home: { dir: '.claude-acme' }, homeEnv: ['CLAUDE_CONFIG_DIR'] };
+    const ACME: PassedInstance = { name: 'acme-claude', tool: 'claude', command: 'acme-claude', home: { dir: '.claude-acme' }, homeEnv: ['CLAUDE_CONFIG_DIR'] };
 
     it('runs a step on an instance through the Paseo custom provider whose command is the instance\'s, in its base tool\'s mode and grants, and names the instance as the session\'s tool', async () => {
       behave({ output: { ok: true }, custom_providers: { 'claude-acme': { extends: 'claude', command: ['/opt/acme/bin/acme-claude'] } } });
@@ -123,7 +123,7 @@ describe('teamai-runtime-paseo', () => {
 
     it('adds a provider once when two runtimes open the same instance together, setting no home for an instance with none of its own', async () => {
       const { file, env } = installed('acme-claude');
-      const plain: InitInstance = { name: 'acme-claude', tool: 'claude', command: 'acme-claude', homeEnv: ['CLAUDE_CONFIG_DIR'] };
+      const plain: PassedInstance = { name: 'acme-claude', tool: 'claude', command: 'acme-claude', homeEnv: ['CLAUDE_CONFIG_DIR'] };
       behave({ config_ms: 500 });
       const [first, second] = [start(env), start(env)];
 
@@ -140,8 +140,8 @@ describe('teamai-runtime-paseo', () => {
     it('adds a provider once when another runtime opens an instance while this one adds two at once', async () => {
       const { file, env } = installed('acme-claude');
       installed('beta-claude');
-      const acme: InitInstance = { name: 'acme-claude', tool: 'claude', command: 'acme-claude', homeEnv: ['CLAUDE_CONFIG_DIR'] };
-      const beta: InitInstance = { name: 'beta-claude', tool: 'claude', command: 'beta-claude', homeEnv: ['CLAUDE_CONFIG_DIR'] };
+      const acme: PassedInstance = { name: 'acme-claude', tool: 'claude', command: 'acme-claude', homeEnv: ['CLAUDE_CONFIG_DIR'] };
+      const beta: PassedInstance = { name: 'beta-claude', tool: 'claude', command: 'beta-claude', homeEnv: ['CLAUDE_CONFIG_DIR'] };
       // acme-claude's add takes long; beta-claude's, which this runtime starts while it adds acme-claude, does not.
       behave({ provider_config_ms: { 'acme-claude': 1500 } });
       const [first, second] = [start(env), start(env)];
@@ -162,7 +162,7 @@ describe('teamai-runtime-paseo', () => {
     });
 
     it('adds a provider that runs its tool\'s own command in its own home for an instance with only a home of its own, and runs on one already there that does', async () => {
-      const work: InitInstance = { name: 'claude-work', tool: 'claude', home: { dir: '.claude-work' }, homeEnv: ['CLAUDE_CONFIG_DIR'] };
+      const work: PassedInstance = { name: 'claude-work', tool: 'claude', home: { dir: '.claude-work' }, homeEnv: ['CLAUDE_CONFIG_DIR'] };
       const home = path.join(dir, 'home', '.claude-work');
       behave({ output: { ok: true } });
       const runtime = start({ PASEO_HOME: path.join(dir, 'paseo') });
@@ -190,7 +190,7 @@ describe('teamai-runtime-paseo', () => {
     // teamai resolves an instance's home once, the member's CLAUDE_CONFIG_DIR included, and the runtime uses it as given.
     it('adds the provider of an instance with only a home of its own in the home teamai resolved for it, wherever that is', async () => {
       const moved = path.join(dir, 'moved', 'claude-work-home');
-      const work: InitInstance = { name: 'claude-work', tool: 'claude', home: { dir: moved }, homeEnv: ['CLAUDE_CONFIG_DIR'] };
+      const work: PassedInstance = { name: 'claude-work', tool: 'claude', home: { dir: moved }, homeEnv: ['CLAUDE_CONFIG_DIR'] };
       behave({ output: { ok: true } });
       const runtime = start({ PASEO_HOME: path.join(dir, 'paseo') });
 
@@ -219,7 +219,7 @@ describe('teamai-runtime-paseo', () => {
     });
 
     it('fails the open of an instance whose added provider is signed out, naming its sign-in step, and removes the provider it added, which no agent ran on', async () => {
-      const work: InitInstance = { name: 'claude-work', tool: 'claude', home: { dir: '.claude-work' }, homeEnv: ['CLAUDE_CONFIG_DIR'] };
+      const work: PassedInstance = { name: 'claude-work', tool: 'claude', home: { dir: '.claude-work' }, homeEnv: ['CLAUDE_CONFIG_DIR'] };
       behave({ sign_in: { 'claude-work': 'signed_out' } });
       const runtime = start({ PASEO_HOME: path.join(dir, 'paseo') });
       await ready(runtime, { instances: [work] });
@@ -238,7 +238,7 @@ describe('teamai-runtime-paseo', () => {
     });
 
     it('fails the open of a Codex instance whose own home does not exist yet as signed out, naming the step that makes it and signs in there, and removes the provider it added', async () => {
-      const work: InitInstance = { name: 'codex-work', tool: 'codex', home: { dir: '.codex-work' }, homeEnv: ['CODEX_HOME'] };
+      const work: PassedInstance = { name: 'codex-work', tool: 'codex', home: { dir: '.codex-work' }, homeEnv: ['CODEX_HOME'] };
       behave({ codex_login: 'signed_out', codex_needs_home: true });
       const runtime = start({ PASEO_HOME: path.join(dir, 'paseo'), CODEX_HOME: undefined });
       await ready(runtime, { instances: [work] });
@@ -254,7 +254,7 @@ describe('teamai-runtime-paseo', () => {
 
     // A team Codex build may read its home from its own variable only; teamai names every variable the command reads.
     it('adds the provider of an instance whose build reads its own home variable with every home variable teamai gives it, and checks its sign-in with them', async () => {
-      const work: InitInstance = { name: 'codex-work', tool: 'codex', home: { dir: '.codex-work' }, homeEnv: ['CODEX_HOME', 'CODEX_WORK_HOME'] };
+      const work: PassedInstance = { name: 'codex-work', tool: 'codex', home: { dir: '.codex-work' }, homeEnv: ['CODEX_HOME', 'CODEX_WORK_HOME'] };
       const home = path.join(dir, 'home', '.codex-work');
       fs.mkdirSync(home, { recursive: true });
       behave({ output: { ok: true }, codex_login: 'signed_in', codex_login_home: home, codex_needs_home: true });
@@ -269,7 +269,7 @@ describe('teamai-runtime-paseo', () => {
     });
 
     it('says once that the provider it added stays, and how to remove it, when Paseo refuses to remove it again for an instance that cannot run on it', async () => {
-      const work: InitInstance = { name: 'claude-work', tool: 'claude', home: { dir: '.claude-work' }, homeEnv: ['CLAUDE_CONFIG_DIR'] };
+      const work: PassedInstance = { name: 'claude-work', tool: 'claude', home: { dir: '.claude-work' }, homeEnv: ['CLAUDE_CONFIG_DIR'] };
       behave({ sign_in: { 'claude-work': 'signed_out' }, refuse_remove: 'The daemon config is read-only' });
       const runtime = start({ PASEO_HOME: path.join(dir, 'paseo') });
       await ready(runtime, { instances: [work] });
@@ -408,7 +408,7 @@ describe('teamai-runtime-paseo', () => {
   });
 
   it('checks the sign-in of a Codex instance in the instance\'s own Codex home', async () => {
-    const acme: InitInstance = { name: 'acme-codex', tool: 'codex', command: 'acme-codex', home: { dir: '.codex-acme' }, homeEnv: ['CODEX_HOME'] };
+    const acme: PassedInstance = { name: 'acme-codex', tool: 'codex', command: 'acme-codex', home: { dir: '.codex-acme' }, homeEnv: ['CODEX_HOME'] };
     behave({ codex_login: 'signed_in', codex_login_home: path.join(dir, 'home', '.codex-acme'), custom_providers: { 'codex-acme': { extends: 'codex', command: ['/opt/acme/bin/acme-codex'] } } });
 
     expect(await ready(start(), { instances: [acme] })).toMatchObject({
@@ -418,7 +418,7 @@ describe('teamai-runtime-paseo', () => {
   });
 
   it('names the instance\'s own command and home in the sign-in step of an instance that is signed out', async () => {
-    const acme: InitInstance = { name: 'acme-codex', tool: 'codex', command: 'acme-codex', home: { dir: '.codex-acme' }, homeEnv: ['CODEX_HOME'] };
+    const acme: PassedInstance = { name: 'acme-codex', tool: 'codex', command: 'acme-codex', home: { dir: '.codex-acme' }, homeEnv: ['CODEX_HOME'] };
     behave({ codex_login: 'signed_out', sign_in: { 'claude-acme': 'signed_out' }, custom_providers: { 'codex-acme': { extends: 'codex', command: ['/opt/acme/bin/acme-codex'] }, 'claude-acme': { extends: 'claude', command: ['acme-claude'] } } });
 
     expect(await ready(start(), { instances: [acme, { name: 'acme-claude', tool: 'claude', command: 'acme-claude', homeEnv: ['CLAUDE_CONFIG_DIR'] }] })).toMatchObject({
@@ -431,7 +431,7 @@ describe('teamai-runtime-paseo', () => {
 
   it('checks a Codex instance\'s sign-in, and finds its sessions, in the home its Paseo provider sets in its env, saying once that this is not teamai\'s home for it', async () => {
     const providerHome = path.join(dir, 'paseo-homes', 'acme-codex');
-    const acme: InitInstance = { name: 'acme-codex', tool: 'codex', command: 'acme-codex', home: { dir: '.codex-acme' }, homeEnv: ['CODEX_HOME'] };
+    const acme: PassedInstance = { name: 'acme-codex', tool: 'codex', command: 'acme-codex', home: { dir: '.codex-acme' }, homeEnv: ['CODEX_HOME'] };
     behave({
       output: { ok: true }, codex_login: 'signed_in', codex_login_home: providerHome, codex_home: providerHome,
       custom_providers: { 'codex-acme': { extends: 'codex', command: ['/opt/acme/bin/acme-codex'], env: { CODEX_HOME: providerHome, OPENAI_BASE_URL: 'https://llm.acme.example' } } },
