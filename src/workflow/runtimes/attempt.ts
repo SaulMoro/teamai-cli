@@ -6,8 +6,8 @@ import { storeDirOf } from '../../session-flow/adapters/index.js';
 import { sessionPlatformFacts } from '../../session-flow/adapters/platform-facts.js';
 import { AgentSession } from '../../session-flow/agent-session.js';
 import { parse as parseToml, stringify as stringifyToml } from 'smol-toml';
-import { defaultToolHome, homeEnvOf, realHost } from '../../tool-home.js';
-import { baseToolOf, isToolId } from '../../tool-registry.js';
+import { homeEnvOf, realHost, toolHomeOf } from '../../tool-home.js';
+import { baseToolOf } from '../../tool-registry.js';
 import { isRecord } from '../expression.js';
 import { log } from '@teamai/shared/log';
 import type { LaunchTool } from '../../launch-registry.js';
@@ -769,8 +769,8 @@ function attemptThrough({ config, run, attempt, sends, driver, sources, deadline
 
   /**
    * Records the home outside the attempt a finished prompt's session lives in: the one its runtime reported, else, as
-   * protocol 1 reads an omitted home, the tool's default home under $HOME (for a tool that keeps its sessions in XDG
-   * data, `~/.local/share`), whatever moved the member's own.
+   * protocol 1 reads an omitted home, the default home under $HOME of the tool it ran as (for a tool that keeps its
+   * sessions in XDG data, `~/.local/share`; for an instance, its own directory), whatever moved the member's own.
    */
   const keptIn = async (end: PromptEnd): Promise<PromptEnd> => {
     const now = await current();
@@ -779,8 +779,10 @@ function attemptThrough({ config, run, attempt, sends, driver, sources, deadline
     const { tool } = end.session;
     const host = realHost();
 
+    const root = toolHomeOf(tool, host)?.root;
+
     const home = end.session.home
-      ?? (keepsSessionsInXdgData(tool) ? host.path.join(host.home, '.local', 'share') : isToolId(tool) ? defaultToolHome(tool, host) : undefined);
+      ?? (keepsSessionsInXdgData(tool) ? host.path.join(host.home, '.local', 'share') : root !== undefined ? host.path.join(host.home, ...root.split('/')) : undefined);
 
     if (home !== undefined) await save({ ...now, sessionHome: { tool, dir: home } });
 

@@ -5,7 +5,7 @@ import fsp from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest';
 import type { LocalConfig } from '../types.js';
 import { attemptRun, attemptSessionStore, attemptToolHome, readAttemptPlacement, seedToolHome, type AttemptRuntimeRecord } from '../workflow/runtimes/attempt.js';
 import { endLogin, ensureLogin, holdLogin, holdLoginFrom, loginHolder, loginLockFile } from '../workflow/runtimes/login.js';
@@ -13,6 +13,7 @@ import { OpIdSchema, type RuntimeDisplay } from '@teamai/runtime-protocol';
 import { newOpId, type ExecEnd, type PromptEnd, type Reattached, type StepRuntime } from '@teamai/runtime-protocol/step-runtime';
 import type { DriverCan } from '../workflow/requirements.js';
 import { attemptDir, AttemptIdSchema, RunIdSchema } from '../workflow/store.js';
+import { useToolInstances } from '../tool-registry.js';
 
 const RUN = RunIdSchema.parse('r0123abcd');
 const FIRST = AttemptIdSchema.parse('a00000001');
@@ -737,5 +738,45 @@ describe('a place a restarted teamai opens again', () => {
 
     expect(await attemptRun({ config: config(), run: RUN, attempt: FIRST, runtime, driver: 'd' }).open(undefined)).toMatchObject({ ok: false });
     expect(await readAttemptPlacement(config(), RUN, FIRST)).toMatchObject({ kind: 'external', record: { open: { handle: whole } } });
+  });
+});
+
+describe('the session store of a tool instance\'s prompt on a runtime that launches agents', () => {
+  const config = (): LocalConfig => ({ repo: { localPath: root, remote: 'local', kind: 'self' }, username: 'tester', scope: 'project', additionalRoles: [], projectRoot: root, dataHome: path.join(root, 'data') });
+
+  it('reads the session of an instance whose runtime named no home in the instance\'s own directory under $HOME, not in the one its variable moves', async () => {
+    vi.stubEnv('ACME_CODEX_HOME', path.join(root, 'moved'));
+    useToolInstances(new Map([['acme-codex', {
+      name: 'acme-codex', extends: 'codex', home: { dir: '.acme-codex', env: 'ACME_CODEX_HOME' },
+      source: 'personal', file: path.join(root, '.teamai', 'tools', 'acme-codex.yaml'), location: '~/.teamai/tools/acme-codex.yaml', revision: 'r1',
+    }]]));
+    onTestFinished(() => useToolInstances(new Map()));
+    const runtime: StepRuntime = {
+      name: 'agents',
+      init: async () => ({ ok: true, can: {}, launchesAgents: true }),
+      open: async (_request, onAccepted) => {
+        await onAccepted('h1');
+
+        return { kind: 'ready', handle: 'h1' };
+      },
+      exec: () => new Promise<ExecEnd>(() => {}),
+      prompt: async (_request, events) => {
+        events.onAccepted?.({});
+
+        return { kind: 'finished', session: { tool: 'acme-codex', id: 'ses_1' }, result: { output: { ok: true } } };
+      },
+      cancel: async () => {},
+      collect: async () => ({ ok: true }),
+      reattach: async () => ({ kind: 'gone' }),
+      close: async () => ({ ok: true }),
+      dispose: async () => {},
+    };
+    const run = attemptRun({ config: config(), run: RUN, attempt: FIRST, runtime, driver: 'd' });
+    expect(await run.open(undefined, { tool: 'acme-codex' })).toMatchObject({ ok: true });
+    expect(await run.prompt({
+      lease: { step: 'review', tool: 'acme-codex', prompt: 'p', result: path.join(root, 'out', 'result.json'), permissions: 'unattended', interactive: false }, env: {}, unset: [], credentials: {}, cwd: root,
+    }, {})).toMatchObject({ kind: 'finished' });
+
+    expect(await attemptSessionStore(config(), RUN, FIRST)).toBe(path.join(root, '.acme-codex', 'sessions'));
   });
 });
