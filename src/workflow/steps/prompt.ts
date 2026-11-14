@@ -506,6 +506,7 @@ export async function runPromptStep({ config, lock, driver, lease, adapter = ste
 
   const inherited = lease.processEnv ?? process.env;
   const toolRoots = stepConfig.toolRoots ?? await resolveMemberToolRoots(cwd);
+  const delivered = toolCommandEnv(target.name, { kind: 'delivered', inherited, toolRoots });
 
   const input: StepRun = {
     prompt: lease.prompt!,
@@ -514,7 +515,7 @@ export async function runPromptStep({ config, lock, driver, lease, adapter = ste
     secrets,
     expected: expectedOutput(lease.output),
     // The lease `env` is set over the step's environment, as a command's is.
-    env: { ...withoutOuterSessionMarkers(inherited), ...toolCommandEnv(target.name, { kind: 'delivered', inherited, toolRoots }), ...lease.env, ...attemptEnv(config, lock.run, lease.attempt, mode) },
+    env: { ...withoutOuterSessionMarkers(inherited), ...(delivered.kind === 'ready' && delivered.env), ...lease.env, ...attemptEnv(config, lock.run, lease.attempt, mode) },
   };
 
   let launcher = adapter;
@@ -543,6 +544,9 @@ export async function runPromptStep({ config, lock, driver, lease, adapter = ste
     const start = runtimeLauncher(onRuntime.run, { view, tool: launched, toolHome: { tool: toolHome.tool, dir: toolHome.dir }, unset: scoped.unset, credentials: credentialsForTool(onRuntime.credentials, onRuntime.found, toolHome.tool), setUp });
     // The runtime finds the command where it runs it, and a resumed step attaches there to the tool it left running.
     launcher = stepLauncher(toolsLaunchDeps(), { start, canReattach: true, resolveTool: (command) => command, resolveInstanceCommand: (command) => command });
+  } else if (delivered.kind === 'home_gone') {
+    // Started here, the tool reads the delivered home; delivery skips a tool whose recorded home is gone, and so does its step.
+    return giveUp({ code: 'tool_unavailable', message: delivered.message }, launched);
   }
 
   if (launch) input.launchEnv = launchEnv(launch);

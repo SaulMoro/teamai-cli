@@ -70,14 +70,17 @@ export interface ConfinedToolLevel {
   isolation: ConfinedLevel;
 }
 
-/** The version of `tool` and the level its confined profile reaches on this machine; undefined when it is not on PATH. */
+/** The version of `tool` and the level its confined profile reaches on this machine; undefined when it is not on PATH or its recorded home is gone. */
 export async function confinedToolLevel(tool: ConfinedTool, { resolveTool = resolveCliPath }: ToolLookup = {}): Promise<ConfinedToolLevel | undefined> {
   const executable = resolveTool(executableOf(tool));
 
   if (executable === null) return undefined;
+  const confined = confinedEnv(tool, await resolveMemberToolRoots());
+
+  // Delivery skips a tool whose recorded home is gone, and so does what this machine offers.
+  if (confined.kind === 'home_gone') return undefined;
   const tmp = await fs.realpath(os.tmpdir());
-  const env = confinedEnv(tool, await resolveMemberToolRoots());
-  const version = await probeBinary(executable, ['--version'], (command, args, options) => execCommand(command, args, { ...options, env, cwd: tmp }));
+  const version = await probeBinary(executable, ['--version'], (command, args, options) => execCommand(command, args, { ...options, env: confined.env, cwd: tmp }));
 
   return { tool, version, isolation: await confinedIsolation({ profile: profileOf(tool), family: familyOf(tool), version, dir: tmp }) };
 }
@@ -143,19 +146,23 @@ function memberEnv(): NodeJS.ProcessEnv {
   return restored;
 }
 
-function confinedEnv(tool: ConfinedTool, toolRoots: LocalConfig['toolRoots']): NodeJS.ProcessEnv {
+/** The env a confined run of `tool` starts with, or why it cannot start: the home a record names is gone. */
+function confinedEnv(tool: ConfinedTool, toolRoots: LocalConfig['toolRoots']): { readonly kind: 'ready'; readonly env: NodeJS.ProcessEnv } | { readonly kind: 'home_gone'; readonly message: string } {
   const restored = memberEnv();
+  const home = toolCommandEnv(tool, { kind: 'delivered', inherited: restored, toolRoots });
+
+  if (home.kind === 'home_gone') return home;
 
   const env: NodeJS.ProcessEnv = {
     ...Object.fromEntries(confinedEnvNames(tool).flatMap((key) => restored[key] === undefined ? [] : [[key, restored[key]]])),
-    ...toolCommandEnv(tool, { kind: 'delivered', inherited: restored, toolRoots }),
+    ...home.env,
   };
 
   if (tool === 'agy') Object.assign(env, agyGatewayEnv(restored));
   env[LAUNCHED_BY_ENV] = 'confined';
   env[RUN_MODE_ENV] = resolveRunMode(process.env);
 
-  return env;
+  return { kind: 'ready', env };
 }
 
 /** How teamai reads the member's config files a confined run carries over, given to the tools runtime once. */
@@ -194,7 +201,10 @@ export async function runConfined(input: ConfinedInput, { resolveTool = resolveC
 
   // The runtime reports its own failures; what the member's machine gives the run is read here, before it starts.
   try {
-    machine = { env: confinedEnv(input.tool, await resolveMemberToolRoots()), memberEnv: memberEnv(), home: toolHome(input.tool) };
+    const confined = confinedEnv(input.tool, await resolveMemberToolRoots());
+
+    if (confined.kind === 'home_gone') return { ok: false, code: 'confined_tool_unavailable', message: confined.message };
+    machine = { env: confined.env, memberEnv: memberEnv(), home: toolHome(input.tool) };
   } catch (error) {
     return { ok: false, code: 'confined_failed', message: `${input.tool} could not run confined: ${error instanceof Error ? error.message : String(error)}. Fix that, then retry.` };
   }
