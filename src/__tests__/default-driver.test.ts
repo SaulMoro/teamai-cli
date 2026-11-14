@@ -5,7 +5,7 @@ import YAML from 'yaml';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { refreshRoleAssignment } from '../config.js';
 import { awaitsLine, driveByDefault } from '../default-driver.js';
-import { getUserConfigPath, LocalConfigSchema, type LocalConfig } from '../types.js';
+import { getTeamaiHomeDir, getUserConfigPath, LocalConfigSchema, type LocalConfig } from '../types.js';
 import { DriverNameSchema } from '../workflow/driver-name.js';
 import { log } from '@teamai/shared/log';
 
@@ -81,7 +81,13 @@ describe('driveByDefault', () => {
     const config = await workspace('', 'workflows: { driver: boxed }\n');
     const team = config.repo.localPath;
     fs.mkdirSync(path.join(team, 'drivers'));
-    fs.writeFileSync(path.join(team, 'drivers', 'boxed.yaml'), 'schemaVersion: v1alpha1\nname: boxed\nruntimes:\n  - use: t3\n    through: sandbox\n');
+    // The app is the member's own runtime, which needs no acceptance, so only the sandbox it runs through can leave the driver unaccepted.
+    const own = path.join(getTeamaiHomeDir(), 'runtimes', 'acme-app');
+    fs.mkdirSync(own, { recursive: true });
+    dirs.push(own);
+    fs.writeFileSync(path.join(own, 'runtime'), '#!/bin/sh\nexit 1\n', { mode: 0o755 });
+    fs.writeFileSync(path.join(own, 'RUNTIME.yaml'), 'protocol: 1\nentry: ./runtime\n');
+    fs.writeFileSync(path.join(team, 'drivers', 'boxed.yaml'), 'schemaVersion: v1alpha1\nname: boxed\nruntimes:\n  - use: acme-app\n    through: sandbox\n');
     fs.mkdirSync(path.join(team, 'runtimes', 'sandbox'), { recursive: true });
     fs.writeFileSync(path.join(team, 'runtimes', 'sandbox', 'runtime'), '#!/bin/sh\nexit 1\n', { mode: 0o755 });
     fs.writeFileSync(path.join(team, 'runtimes', 'sandbox', 'RUNTIME.yaml'), 'protocol: 1\nentry: ./runtime\n');
