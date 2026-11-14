@@ -24,10 +24,10 @@ export function runsOwnBinary(binaryPath: string | undefined, driver: Driver): b
 }
 
 /**
- * What T3 serves a tool by: a tool instance `init` gives, or a shipped tool the definition's `instances` maps. T3 Code
- * starts it with a Binary path and a Home path only, so no home variable of `InitInstance.homeEnv` reaches it.
+ * What T3 serves a tool by: a tool instance `init` gives, with the variables teamai sets its home with, or a shipped tool
+ * the definition's `instances` maps, which has none.
  */
-export type ServedTool = Pick<InitInstance, 'name' | 'tool' | 'command' | 'home'>;
+export type ServedTool = Pick<InitInstance, 'name' | 'tool' | 'command' | 'home'> & Partial<Pick<InitInstance, 'homeEnv'>>;
 
 /** What finds the provider instance of each tool instance: T3's instances, which of them can run now, and each one's Binary path. */
 export interface InstanceLookup {
@@ -81,6 +81,13 @@ export function servedInstances({ instances, mapped, lookup }: { instances: Serv
     const { name, command } = instance;
     const label = DRIVERS[driver].label;
     const id = mapped?.[name];
+    // T3 Code starts a provider instance with a Binary path and a Home path only, and sets no variable but the tool's own.
+    const unset = (instance.homeEnv ?? []).filter((variable) => variable !== DRIVERS[driver].homeEnv);
+
+    if (unset.length > 0) {
+      unavailable[name] = fitReason(`${name} reads its home from ${unset.join(' and ')}, which T3 Code cannot set: it starts a provider instance with a Binary path and a Home path only, so ${name} would read another home than the one teamai delivered to. Remove home.env from the ${name} tool definition, so teamai sets ${DRIVERS[driver].homeEnv}, or run its steps on another runtime.`);
+      continue;
+    }
 
     if (id !== undefined) {
       const provider = lookup.providers.find((one) => one.providerInstanceId === id);

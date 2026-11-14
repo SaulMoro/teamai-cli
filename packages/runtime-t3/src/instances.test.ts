@@ -216,6 +216,25 @@ describe('teamai-runtime-t3', () => {
         expect(fs.readFileSync(file, 'utf8')).toBe('{ "providerInstances": ');
       });
 
+      // T3 Code sets only the base tool's home variable from a provider instance's Home path, so the command would read another home.
+      it.each([
+        { world: 'no provider instance runs it yet', settings: MEMBER_SETTINGS },
+        { world: 'a provider instance already runs it', settings: { ...MEMBER_SETTINGS, providerInstances: { ...MEMBER_SETTINGS.providerInstances, 'acme-claude': { driver: 'claudeAgent', enabled: true, config: { binaryPath: '/opt/acme/bin/acme-claude' } } } } },
+      ])('does not offer an instance that reads its home from a variable of its own, naming the variable and what to do, when $world', async ({ settings }) => {
+        signIn(t3, undefined, undefined, FULL);
+        t3.settings(settings);
+        const { reply } = await initOn({ mode: 'unattended', instances: [{ ...ACME, home: { dir: '.acme-claude' }, homeEnv: ['CLAUDE_CONFIG_DIR', 'ACME_CLAUDE_CONFIG_DIR'] }] });
+
+        expect(reply).toMatchObject({
+          ok: true, can: { tools: ['claude', 'codex'] },
+          unavailable: {
+            'acme-claude': 'acme-claude reads its home from ACME_CLAUDE_CONFIG_DIR, which T3 Code cannot set: it starts a provider instance with a Binary path and a Home path only, so acme-claude would read another home than the one teamai delivered to. Remove home.env from the acme-claude tool definition, so teamai sets CLAUDE_CONFIG_DIR, or run its steps on another runtime.',
+          },
+        });
+        expect(settingsNow()).toEqual(settings);
+        expect(pairings()).toEqual([]);
+      });
+
       it('does not offer it, naming what to do, when its name is not one T3 takes for a provider instance', async () => {
         signIn(t3, undefined, undefined, FULL);
         const { reply } = await initOn({ mode: 'unattended', instances: [{ ...ACME, name: 'acme.claude' }] });
