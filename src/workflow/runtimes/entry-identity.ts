@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { z } from 'zod';
 import { canonicalJson } from '../../utils/canonical-json.js';
 import type { DriverDefinition, ResolvedDriver } from './definitions.js';
 
@@ -7,20 +8,31 @@ import type { DriverDefinition, ResolvedDriver } from './definitions.js';
  * runtime as records and messages name it (`use`, or `use through through`). `digest` is the sha256 of the entry as it
  * runs: its `use`, `through`, `sandbox` and options, with the member's `workflows.drivers.<driver>.runtimes` for each
  * runtime it names over them. Two entries with one digest start the same runtime on the same options, which answers for
- * the same handles, so either reaches a place the other opened. `isNameShared`: another entry of the definition has the
- * same name, so only the digest tells which of them holds a place: a record that names only the runtime, as one written
- * before records named the entry, or whose entry changed since, cannot.
+ * the same handles, so either reaches a place the other opened. `sameName`: the entry is the `at`th of the `of` entries
+ * of the definition with that name, so only the digest tells which of them holds a place once `of` is more than 1.
  */
 export interface RuntimeEntryIdentity {
   name: string;
   digest: string;
-  isNameShared: boolean;
+  sameName: SameName;
 }
 
-/** What an attempt's runtime record says of where its place is: the runtime's name, and the entry's digest once recorded. */
+/**
+ * Where an entry stood among the definition's entries of its runtime name: the `at`th (from 1) of `of`. Each attempt
+ * records it beside the digest, so a later teamai knows whether the name alone told the entry apart when the attempt ran.
+ */
+export const SameNameSchema = z.object({ at: z.number().int().positive(), of: z.number().int().positive() });
+
+type SameName = z.infer<typeof SameNameSchema>;
+
+/**
+ * What an attempt's runtime record says of where its place is: the runtime's name, and, once recorded, the entry's digest
+ * and where it stood among the entries of that name.
+ */
 interface RecordedEntry {
   runtime: string;
   entry?: string | undefined;
+  sameName?: SameName | undefined;
 }
 
 type DefinitionEntry = DriverDefinition['runtimes'][number];
@@ -42,21 +54,27 @@ function of(driver: ResolvedDriver, entry: DefinitionEntry): RuntimeEntryIdentit
   };
 
   const name = nameOf(entry);
+  const named = driver.definition.runtimes.filter((other) => nameOf(other) === name);
 
   return {
     name,
     digest: createHash('sha256').update(canonicalJson(runs)).digest('hex'),
-    isNameShared: driver.definition.runtimes.filter((other) => nameOf(other) === name).length > 1,
+    sameName: { at: named.indexOf(entry) + 1, of: named.length },
   };
 }
 
+/** Whether no other entry of the definition had the attempt's runtime name when it ran; a record from before says nothing. */
+const wasNameAlone = (record: RecordedEntry): boolean => record.sameName === undefined || record.sameName.of === 1;
+
 /**
  * Whether the place `record` names is on the runtime of `entry`: by the entry's digest, or by the runtime's name while no
- * other entry of the definition shares it. The name alone still reaches an entry whose options changed since, as when the
- * member fixed them to stop what ran there, and a record written before records named the entry.
+ * other entry of the definition shares it now and none shared it when the attempt ran. The name alone still reaches an
+ * entry whose options changed since, as when the member fixed them to stop what ran there, and a record written before
+ * records named the entry. It never reaches the entry left once another of the name, which may be the one that ran the
+ * attempt, was removed.
  */
 function holds(record: RecordedEntry, entry: RuntimeEntryIdentity): boolean {
-  return record.entry === entry.digest || (record.runtime === entry.name && !entry.isNameShared);
+  return record.entry === entry.digest || (record.runtime === entry.name && entry.sameName.of === 1 && wasNameAlone(record));
 }
 
 /**
@@ -70,6 +88,8 @@ function find<TCandidate extends { entry: RuntimeEntryIdentity }>(record: Record
   const named = candidates.filter((candidate) => candidate.entry.name === record.runtime);
 
   if (named.length === 0) return { ok: false, why: `driver "${driver}" no longer uses that runtime.` };
+
+  if (record.sameName !== undefined && record.sameName.of > 1) return { ok: false, why: `the attempt ran on entry ${record.sameName.at} of the ${record.sameName.of} that driver "${driver}" listed for runtime "${record.runtime}", which is no longer there as it ran: it changed or was removed since, in the definition or in your workflows.drivers.${driver}.runtimes, so teamai cannot tell which entry holds the place. Put that entry back as it was.` };
 
   if (record.entry !== undefined) return { ok: false, why: `driver "${driver}" lists runtime "${record.runtime}" more than once, and the entry that ran it changed since, in the definition or in your workflows.drivers.${driver}.runtimes, so teamai cannot tell which of them ran it. Put the entry back as it was.` };
 

@@ -1241,16 +1241,36 @@ steps:
 
       const cancelled = await runCLI(['workflow', 'cancel', runId], repo, env());
 
-      expect(cancelled.stderr).toContain(`Could not stop attempt ${attempt} of run ${runId} on step runtime "toy" of driver "toytwicechanged": driver "toytwicechanged" lists runtime "toy" more than once, and the entry that ran it changed since`);
+      expect(cancelled.stderr).toContain(`Could not stop attempt ${attempt} of run ${runId} on step runtime "toy" of driver "toytwicechanged": the attempt ran on entry 2 of the 2 that driver "toytwicechanged" listed for runtime "toy", which is no longer there as it ran: it changed or was removed since`);
       expect(cancelled.stderr).toContain(`teamai workflow cancel ${runId} --release ${attempt} lets it go.`);
       expect(signalPid(held, 0)).toBe('sent');
       expect(runtimeRecord(runId, attempt)).toMatchObject({ phase: 'running' });
     });
 
+    it('keeps the place, and says why, when the entry that ran the attempt was removed and one of its name is left, until it is back', async () => {
+      const { runId, attempt, held } = await killedOnSecond('toytwiceremoved');
+      writeDefinition('toytwiceremoved', twice().slice(0, 1));
+
+      const kept = await runCLI(['workflow', 'cancel', runId], repo, env());
+
+      expect(kept.stderr).toContain(`Could not stop attempt ${attempt} of run ${runId} on step runtime "toy" of driver "toytwiceremoved": the attempt ran on entry 2 of the 2 that driver "toytwiceremoved" listed for runtime "toy", which is no longer there as it ran`);
+      expect(kept.stderr).toContain(`teamai workflow cancel ${runId} --release ${attempt} lets it go.`);
+      expect(signalPid(held, 0)).toBe('sent');
+      expect(runtimeRecord(runId, attempt)).toMatchObject({ phase: 'running' });
+
+      writeDefinition('toytwiceremoved', twice());
+      const stopped = await runCLI(['workflow', 'cancel', runId], repo, env());
+
+      expect(stopped.stderr).toContain(`Stopped attempt ${attempt} of run ${runId} on step runtime "toy" and closed its place.`);
+      expect(signalPid(held, 0)).toBe('gone');
+      expect(JSON.parse(fs.readFileSync(path.join(second(), 'handles.json'), 'utf8'))).toEqual({});
+      expect(runtimeRecord(runId, attempt)).toMatchObject({ phase: 'closed' });
+    });
+
     it('keeps the place, and says why, when a record that names no entry could be either', async () => {
       const { runId, attempt, held } = await killedOnSecond('toytwicelegacy');
       // A record an earlier teamai wrote names the runtime only.
-      const { entry: _entry, ...legacy } = runtimeRecord(runId, attempt) ?? {};
+      const { entry: _entry, sameName: _sameName, ...legacy } = runtimeRecord(runId, attempt) ?? {};
       fs.writeFileSync(path.join(attemptDir(runId, attempt), 'runtime.json'), JSON.stringify(legacy));
 
       const cancelled = await runCLI(['workflow', 'cancel', runId], repo, env());

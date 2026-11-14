@@ -20,7 +20,7 @@ import type { SessionRef } from '../workspace.js';
 import { redact } from '@teamai/shared/redact';
 import { AttemptResult } from '../attempt-result.js';
 import { loginFileOf } from './login.js';
-import { RuntimeEntryIdentity } from './entry-identity.js';
+import { RuntimeEntryIdentity, SameNameSchema } from './entry-identity.js';
 import { CANCEL_FAILED, CanSchema, OpIdSchema, RuntimeDisplaySchema, RuntimeFailureSchema, type OpId, type OpState, type PlaceView, type RuntimeDisplay, type RuntimeFailure } from '@teamai/runtime-protocol';
 import { isUnansweredFailure, newOpId, type Accepted, type ExecEnd, type ExecEvents, type ExecKind, type ExecRequest, type Lost, type PromptEnd, type PromptRequest, type StepRuntime } from '@teamai/runtime-protocol/step-runtime';
 import type { DriverCan } from '../requirements.js';
@@ -89,6 +89,11 @@ const AttemptRuntimeRecordSchema = z.object({
    * recorded it has none.
    */
   entry: z.string().optional(),
+  /**
+   * Where that entry stood among the definition's entries of its runtime name, written with `entry`: a later teamai
+   * reaches the place by the name alone only when no other entry had it then. A record written before has none.
+   */
+  sameName: SameNameSchema.optional(),
   /** The driver definition that chose it. */
   driver: z.string(),
   /** Where each runtime it runs on came from, the inner one first for one through another; none for one teamai builds in. */
@@ -860,7 +865,7 @@ function attemptThrough({ config, run, attempt, sends, entry, driver, sources, d
       if (before?.openFailed && before.phase !== 'closed') return { ok: false, failure: runtimeFailure(runtime.name, `could not open attempt ${attempt} (${before.openFailed.code}): ${before.openFailed.message}`) };
       const op = before?.open.op ?? newOpId();
       const toolHome = home ?? before?.toolHome;
-      const opening: AttemptRuntimeRecord = { runtime: runtime.name, entry: entry.digest, driver, phase: before?.phase ?? 'opening', open: { op } };
+      const opening: AttemptRuntimeRecord = { runtime: runtime.name, entry: entry.digest, sameName: entry.sameName, driver, phase: before?.phase ?? 'opening', open: { op } };
       const from = sources ?? before?.sources;
 
       if (from) opening.sources = [...from];
