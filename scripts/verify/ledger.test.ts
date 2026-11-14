@@ -253,14 +253,17 @@ describe("another program's own state in a ledger's section (e)", () => {
 });
 
 describe("a tool instance's home in a ledger's section (e)", () => {
-  /** A HOME whose workspace install's team repo declares acme-claude, and whose member declares their own nested one. */
+  /**
+   * A HOME whose workspace install's team repo declares acme-claude, with a command of its own, and beta-claude, on
+   * Claude's, and whose member declares their own nested one.
+   */
   function homeWithInstances(): string {
     const home = fs.mkdtempSync(path.join(os.tmpdir(), 'ledger-inst-'));
     roots.push(home);
     const dataHome = path.join(home, '.teamai', 'projects', 'w-project-0123456789abcdef');
     const team = path.join(dataHome, 'team-repo');
     fs.mkdirSync(path.join(team, 'tools'), { recursive: true });
-    fs.writeFileSync(path.join(team, 'tools', 'acme-claude.yaml'), 'schemaVersion: v1alpha1\nname: acme-claude\nextends: claude\nhome: { dir: .acme-claude, env: ACME_CLAUDE_CONFIG_DIR }\n');
+    fs.writeFileSync(path.join(team, 'tools', 'acme-claude.yaml'), 'schemaVersion: v1alpha1\nname: acme-claude\nextends: claude\ncommand: acme-claude\nhome: { dir: .acme-claude, env: ACME_CLAUDE_CONFIG_DIR }\n');
     fs.writeFileSync(path.join(dataHome, 'config.yaml'), `repo:\n  localPath: ${team}\n  remote: https://teamai.test/team/repo.git\nscope: workspace\nenabledAgents:\n  - claude\n  - acme-claude\n`);
     // A home written with a leading ./ and a trailing / is the same folder.
     fs.writeFileSync(path.join(team, 'tools', 'beta-claude.yaml'), 'schemaVersion: v1alpha1\nname: beta-claude\nextends: claude\nhome: { dir: ./.beta/ }\n');
@@ -298,6 +301,8 @@ describe("a tool instance's home in a ledger's section (e)", () => {
     const rules = ledgerRules(await toolInstancesIn(homeWithInstances()));
 
     expect(['home/.acme-claude', 'home/.own', 'home/.own/codex', 'project/.acme-claude', 'home/.claude'].map((entry) => rules.knownLeftover(entry))).toEqual(['dir', 'dir', 'dir', 'dir', 'dir']);
+    // An instance on Claude's own command keeps Claude's project paths, so no project folder is its own.
+    expect(rules.knownLeftover('project/.beta')).toBeUndefined();
     expect(rules.isToolOwnState('home/.acme-claude/.claude.json', '{"numStartups":1}')).toBe(true);
     expect(rules.isToolOwnState('home/.acme-claude/.claude.json', '{"mcpServers":{"docs":{"command":"node"}}}')).toBe(false);
   });

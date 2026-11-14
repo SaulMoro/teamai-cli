@@ -5008,7 +5008,7 @@ console.error('Could not remove podman image teamai-warm:fedcba9876543210: podma
   });
 
   describe('a team tool instance in a workspace', () => {
-    const ACME_CLAUDE = 'schemaVersion: v1alpha1\nname: acme-claude\nextends: claude\nhome: { dir: .acme-claude }\n';
+    const ACME_CLAUDE = 'schemaVersion: v1alpha1\nname: acme-claude\nextends: claude\ncommand: acme-claude\nhome: { dir: .acme-claude }\n';
 
     afterEach(async () => {
       const { resetToolInstancesForTests } = await import('../tool-instances.js');
