@@ -23,7 +23,7 @@ import { readRegularFile, readRegularFileSync } from '@teamai/shared/regular-fil
 //  and a member in ~/.teamai/tools/<name>.yaml, which teamai reads and never writes. Either may keep it as a folder
 //  tools/<name>/TOOL.yaml instead, read the same way. An instance sets another command,
 //  home and paths, and no code: it keeps the formats of the tool it extends. A member's own instance replaces the
-//  team's of the same name. An instance named like a shipped tool adjusts it.
+//  team's of the same name. An instance named like a shipped tool adjusts it, and sets only paths.
 //
 
 /** Where an instance was read: the team repo, which a teammate pushes to, or the member's own directory. */
@@ -118,6 +118,12 @@ function parseToolInstance({ file, text, source, location }: { file: string; tex
   const stem = path.basename(file) === TOOL_MARKER ? path.basename(path.dirname(file)) : path.basename(file, '.yaml');
 
   if (fields.name !== stem) return refused(file, `its name is "${fields.name}", and an instance is named after its file or its folder, "${stem}"`);
+  const adjusts = fields.name === base ? (['command', 'home'] as const).find((key) => fields[key] !== undefined) : undefined;
+
+  if (adjusts !== undefined) {
+    return refused(file, `it sets ${adjusts}, and a file named like the tool it adjusts sets only paths; `
+      + `to run another command or keep another home, write an instance of ${base} instead, such as name: acme-${base}, extends: ${base} in tools/acme-${base}.yaml`);
+  }
 
   if (isToolId(fields.name) && fields.name !== base) {
     return refused(file, `"${fields.name}" is a tool teamai ships, and an instance named like one adjusts it, so it extends ${fields.name}`);
@@ -126,7 +132,7 @@ function parseToolInstance({ file, text, source, location }: { file: string; tex
   const homeVariable = RELOCATABLE_TOOLS[base]?.envVar;
 
   // Windows reads a variable's name in any case, and a team file reaches every member's platform.
-  if (fields.name !== base && homeVariable !== undefined && fields.home?.env?.toUpperCase() === homeVariable.toUpperCase()) {
+  if (homeVariable !== undefined && fields.home?.env?.toUpperCase() === homeVariable.toUpperCase()) {
     return refused(file, `home.env: ${fields.home.env} names ${homeVariable}, the variable ${base} reads its home from in any letter case, and teamai sets it to this instance's home when it starts it; leave env out`);
   }
 
@@ -334,7 +340,7 @@ function toolHomedAt({ name, dir: own, instances, host, toolRoots }: {
   const same = (dir: string | null): boolean => dir !== null && isSameDirOn(host, own, dir);
 
   return TOOL_ORDER.find((tool) => same(toolHome(tool, host)) || same(recordedToolRootDir(tool, toolRoots, at)))
-    ?? instances.find((other) => other.name !== name && other.name !== other.extends && other.home !== undefined && same(instanceHomeDir({ name: other.name, home: other.home }, host)))?.name;
+    ?? instances.find((other) => other.name !== name && other.home !== undefined && same(instanceHomeDir({ name: other.name, home: other.home }, host)))?.name;
 }
 
 /**
@@ -350,7 +356,7 @@ function withoutSharedHomes(table: Map<string, ResolvedToolInstance>): Map<strin
   for (const instance of instances) {
     const { name, home } = instance;
 
-    if (home === undefined || name === instance.extends) continue;
+    if (home === undefined) continue;
     const declared = homeSharedWith({ name, home, instances, host: unmoved });
 
     if (declared !== undefined) {
@@ -405,7 +411,7 @@ export function leftInstanceHookFiles({ name, homes, current, toolRoots }: {
   const instances = toolInstancesFor('guard');
   const instance = instances.find((one) => one.name === name);
 
-  if (instance?.home === undefined || instance.paths !== undefined || instance.name === instance.extends) return [];
+  if (instance?.home === undefined || instance.paths !== undefined) return [];
   const { dir } = instance.home;
   const settings = defaultPathsOf(instance).settings;
 
@@ -429,7 +435,7 @@ function instancePaths(instance: ResolvedToolInstance, toolPaths: TeamaiConfig['
 export function defaultPathsOf(instance: ResolvedToolInstance): z.infer<typeof ToolPathsSchema> {
   const shipped = DEFAULT_TOOL_PATHS[instance.extends];
 
-  return instance.home && instance.name !== instance.extends ? rerootToolPaths(shipped, instance.home.dir) : shipped;
+  return instance.home ? rerootToolPaths(shipped, instance.home.dir) : shipped;
 }
 
 /**
@@ -439,7 +445,7 @@ export function defaultPathsOf(instance: ResolvedToolInstance): z.infer<typeof T
  * of an instance that sets its own paths, which teamai writes to as they are.
  */
 export function instanceReadPath(instance: ResolvedToolInstance, { from, relative }: { from: 'home' | 'project'; relative: string }): string {
-  if (!instance.home || instance.paths || instance.name === instance.extends) return relative;
+  if (!instance.home || instance.paths) return relative;
 
   // A bare file beside the tool's home (Claude Code's .claude.json) is inside a home that moved, as the instance's is.
   if (!relative.includes('/')) return from === 'home' ? `${instance.home.dir}/${relative}` : relative;
