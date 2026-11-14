@@ -41,6 +41,7 @@ function replySchema(output: OutputSchema | undefined): z.ZodType<JsonValue> {
 const FAILURE_OF = {
   no_tool: 'tool_unavailable',
   override_invalid: 'tool_unconfigured',
+  home_gone: 'tool_unavailable',
   usage_limited: 'usage_limited',
   call_failed: 'tool_failed',
 } as const satisfies Record<CallErrorKind, WorkflowFailure['code']>;
