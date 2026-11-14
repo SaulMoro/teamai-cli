@@ -32,6 +32,8 @@ export interface ConfinedDeps {
    * login refreshed there back to `from` before it frees the lock, and says why when it could not.
    */
   holdCodexLogin(input: { executable: string; from: string; toolHome: string; attempt: ConfinedAttempt; signal: AbortSignal }): Promise<ConfinedLoginHold>;
+  /** The home variables teamai sets on `tool`'s command started in `dir`, a home it chose for the run. */
+  toolCommandEnv(tool: string, dir: string): Readonly<Record<string, string>>;
 }
 
 /** The attempt a confined run belongs to, which holds a login the run brings. */
@@ -314,7 +316,7 @@ const LAUNCHES = {
     const from = env.CODEX_HOME || request.home;
     // In the attempt's directory when it has one, so a run killed while it held the login leaves what Codex refreshed.
     const toolHome = request.group === undefined ? path.join(tmp, 'codex') : path.join(request.group, 'tool-home', 'codex');
-    env.CODEX_HOME = toolHome;
+    Object.assign(env, deps.toolCommandEnv(request.tool, toolHome));
     await fs.mkdir(toolHome, { recursive: true });
     await writeRegularFile(path.join(toolHome, 'config.toml'), codexProfile(dir));
     const schema = path.join(tmp, 'schema.json');

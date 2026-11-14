@@ -11,8 +11,8 @@ import { withoutTomlBom } from '../utils/toml.js';
 import { observedEffort, observedModel, type ObservedEffort, type ObservedModel } from '../agent-observation.js';
 import { LAUNCHED_BY_ENV, resolveRunMode, RUN_MODE_ENV } from '../launch-context.js';
 import { opencodeMajorVersion } from '../opencode-version.js';
-import { movedToolHome, realHost, toolHome } from '../tool-home.js';
-import { isToolId, mcpSyntaxOf } from '../tool-registry.js';
+import { toolHome } from '../tool-home.js';
+import { mcpSyntaxOf } from '../tool-registry.js';
 import { parseJsonAs } from '../utils/json.js';
 import { resolveCliPath } from '@teamai/shared/cli-path';
 import { execCommand, probeBinary } from '@teamai/shared/exec';
@@ -22,7 +22,7 @@ import type { ConfinedAccess, ConfinedLaunch, ConfinedLevel } from '@teamai/tool
 import type { ConfinedUsage } from '@teamai/tool-core/stdout';
 import { confinedVariables } from '@teamai/tool-launch/confined-launch';
 import { confinedIsolation, runConfined as launchConfined, type ConfinedDeps, type ConfinedFailure, type ConfinedFamily, type ConfinedRequest } from '@teamai/runtime-tools/confined';
-import { CONFINED_TOOLS, executableOf, launchAdapterIdOf, launchAdapterOf, type ConfinedTool } from '../launch-registry.js';
+import { CONFINED_TOOLS, executableOf, launchAdapterIdOf, launchAdapterOf, toolCommandEnv, type ConfinedTool } from '../launch-registry.js';
 import { holdLoginFrom } from './runtimes/login.js';
 import { AttemptIdSchema, RunIdSchema } from './store.js';
 
@@ -142,12 +142,11 @@ function memberEnv(): NodeJS.ProcessEnv {
 
 function confinedEnv(tool: ConfinedTool): NodeJS.ProcessEnv {
   const restored = memberEnv();
-  const { homeEnv: variable } = profileOf(tool);
-  const moved = variable !== undefined && restored[variable] === undefined && isToolId(tool) ? movedToolHome(tool, realHost({ env: restored })) : null;
 
-  const env: NodeJS.ProcessEnv = Object.fromEntries(confinedEnvNames(tool).flatMap((key) => restored[key] === undefined ? [] : [[key, restored[key]]]));
-
-  if (variable !== undefined && moved !== null) env[variable] = moved;
+  const env: NodeJS.ProcessEnv = {
+    ...Object.fromEntries(confinedEnvNames(tool).flatMap((key) => restored[key] === undefined ? [] : [[key, restored[key]]])),
+    ...toolCommandEnv(tool, { kind: 'delivered', inherited: restored }),
+  };
 
   if (tool === 'agy') Object.assign(env, agyGatewayEnv(restored));
   env[LAUNCHED_BY_ENV] = 'confined';
@@ -176,6 +175,7 @@ const CONFINED_DEPS: ConfinedDeps = {
       },
     };
   },
+  toolCommandEnv: (tool, dir) => toolCommandEnv(tool, { kind: 'at', dir }),
 };
 
 /**
