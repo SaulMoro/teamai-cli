@@ -10,7 +10,7 @@ import { resolveHookCwd } from './utils/hook-cwd.js';
 import { ensureDir } from './utils/fs.js';
 import { repoKeys, repoLabel } from './utils/repo-attribution.js';
 import { isProcessAlive, resolveMonitorPid } from './pid-monitor.js';
-import { normalizeToolName } from './utils/tool-names.js';
+import { isCodexTool, normalizeToolName } from './utils/tool-names.js';
 import { redactWithEnv } from '@teamai/shared/redact';
 import { openRegularFile, readRegularFile } from '@teamai/shared/regular-file';
 import { acquireLock, releaseLock } from './update.js';
@@ -456,10 +456,6 @@ async function scanJsonlTranscriptOnce(transcriptPath: string): Promise<Transcri
   }
 
   return { interrupt, toolReject, toolError, prompts };
-}
-
-function isCodexTool(tool: string | undefined): boolean {
-  return tool !== undefined && tool.toLowerCase().includes('codex');
 }
 
 const COPILOT_USAGE_TAIL_BYTES = 256 * 1024;
@@ -2168,7 +2164,7 @@ export function aggregateSessionMetrics(
       lastTranscript.set(event.sessionId, event.transcriptPath);
     }
 
-    if (event.tokenScope === 'transcript' || (isCodexTool(event.tool) && event.transcriptPath !== undefined)) {
+    if (event.tokenScope === 'transcript' || (event.tool !== undefined && isCodexTool(event.tool) && event.transcriptPath !== undefined)) {
       rolloutSessions.add(event.sessionId);
     }
 
