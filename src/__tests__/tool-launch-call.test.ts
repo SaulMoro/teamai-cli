@@ -157,6 +157,25 @@ it.each([
   await expect(only('opencode', opencode.executable).callTool('Summarize', { launchedBy: 'answer' })).rejects.toMatchObject({ kind });
 });
 
+it.each([['opencode v2.3.0', ['run', '--standalone', '--format', 'json']], ['1.18.23', ['run', '--format', 'json']]])(
+  'runs OpenCode %s standalone only on V2, whose run would otherwise start a background service that outlives the call',
+  async (version, expected) => {
+    root ||= await fs.mkdtemp(path.join(os.tmpdir(), 'teamai-call-'));
+    const executable = path.join(root, 'opencode');
+    const record = path.join(root, 'opencode-args.json');
+    await fs.writeFile(executable, `#!${process.execPath}
+const args = process.argv.slice(2);
+if (args[0] === '--version') { console.log(${JSON.stringify(version)}); process.exit(0); }
+require('fs').writeFileSync(${JSON.stringify(record)}, JSON.stringify(args));
+process.stdout.write(${JSON.stringify(JSON.stringify({ type: 'text', part: { type: 'text', text: 'ok' } }))});
+`, { mode: 0o755 });
+
+    await only('opencode', executable).callTool('Summarize', { launchedBy: 'answer' });
+
+    expect(JSON.parse(await fs.readFile(record, 'utf8'))).toEqual(expected);
+  },
+);
+
 it('runs WorkBuddy through the CodeBuddy adapter, which prints Claude\'s result record', async () => {
   const workbuddy = await fakeTool('workbuddy', { stdout: JSON.stringify({ type: 'result', is_error: false, result: 'rules', usage: { input_tokens: 9, output_tokens: 1 } }) });
 

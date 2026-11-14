@@ -282,16 +282,41 @@ describe('team tool instances', () => {
     { case: 'uses one with no command whose project paths are the tool\'s and whose user paths are in its home', file: 'home: { dir: work/.acme-codex }\npaths: { skills: .codex/skills, userScope: { skills: work/.acme-codex/skills } }\n', refused: undefined },
     { case: 'refuses one with a command of its own whose hooks file is the one of the tool it extends', file: 'command: acme-codex\nhome: { dir: .acme-codex }\npaths: { skills: .acme-codex/skills, settings: .codex/hooks.json }\n', refused: 'paths.settings: .codex/hooks.json', dir: '.acme-codex' },
     { case: 'uses one with a command of its own whose project paths are the tool\'s and whose user paths are in its home', file: 'command: acme-codex\nhome: { dir: .acme-codex }\npaths: { skills: .codex/skills, userScope: { skills: .acme-codex/skills, settings: .acme-codex/hooks.json } }\n', refused: undefined },
-  ])('$case', async ({ file, refused, dir }) => {
-    const { registry, errors } = await load(teamRepo({ 'tools/acme-codex.yaml': `schemaVersion: v1alpha1\nname: acme-codex\nextends: codex\n${file}` }));
+    // Codex reads ~/.agents/skills whatever its home, so a path there is read from the instance's home too.
+    { case: 'uses one whose skills are the shared directory Codex reads from any home', file: 'command: acme-codex\nhome: { dir: .acme-codex }\npaths: { skills: .agents/skills, settings: .acme-codex/hooks.json }\n', refused: undefined },
+    // Claude Code reads .claude.json inside the home its variable names, so the one beside the home of Claude Code is read by nothing.
+    { case: 'refuses one of Claude Code whose MCP file is the one beside the home of Claude Code', base: 'claude', file: 'home: { dir: .acme-claude }\npaths: { skills: .acme-claude/skills, mcp: .claude.json }\n', refused: 'paths.mcp: .claude.json', dir: '.acme-claude' },
+  ])('$case', async ({ base = 'codex', file, refused, dir }) => {
+    const name = `acme-${base}`;
+    const { registry, errors } = await load(teamRepo({ [`tools/${name}.yaml`]: `schemaVersion: v1alpha1\nname: ${name}\nextends: ${base}\n${file}` }));
 
     if (refused === undefined) {
-      expect([errors, registry.toolOf('acme-codex')?.name]).toEqual([[], 'acme-codex']);
+      expect([errors, registry.toolOf(name)?.name]).toEqual([[], name]);
     } else {
-      expect(errors).toEqual([expect.stringContaining(`${path.join('tools', 'acme-codex.yaml')} is not valid: ${refused} is outside home.dir ${dir}, and teamai starts acme-codex `
-        + `with its home at ${dir}, the one place it reads user files from, so it would read none of it. Point every user-scope path inside ${dir}, or leave home out to keep the home of codex. Fix the file`)]);
-      expect(registry.toolOf('acme-codex')).toBeUndefined();
+      expect(errors).toEqual([expect.stringContaining(`${path.join('tools', `${name}.yaml`)} is not valid: ${refused} is outside home.dir ${dir}, and teamai starts ${name} `
+        + `with its home at ${dir}, the one place it reads user files from, so it would read none of it. Point every user-scope path inside ${dir}, or leave home out to keep the home of ${base}. Fix the file`)]);
+      expect(registry.toolOf(name)).toBeUndefined();
     }
+  });
+
+  it('starts an instance whose skills are the shared directory Codex reads at its home, and delivers them where Codex reads them from it', async () => {
+    fs.mkdirSync(path.join(home, '.acme-codex'));
+    const { config } = await load(teamRepo({ 'tools/acme-codex.yaml': 'schemaVersion: v1alpha1\nname: acme-codex\nextends: codex\nhome: { dir: .acme-codex }\npaths: { skills: .agents/skills, settings: .acme-codex/hooks.json }\n' }));
+    const { toolCommandEnv } = await vi.importActual<typeof import('../launch-registry.js')>('../launch-registry.js');
+    const { installOf, locate, ownOf, unreadWrites } = await import('../locate.js');
+    const skills = await locate('acme-codex', 'skills', installOf(config ?? { toolPaths: {} }, { repo: {}, scope: 'user' }));
+
+    expect({
+      launch: toolCommandEnv('acme-codex', { kind: 'delivered', inherited: {}, toolRoots: {} }),
+      skills: ownOf(skills)?.path,
+      unread: unreadWrites(skills, undefined, { kind: 'anywhere' }),
+      gate: skills.gates.find((gate) => gate.kind === 'installed'),
+    }).toEqual({
+      launch: { kind: 'ready', env: { CODEX_HOME: path.join(home, '.acme-codex') } },
+      skills: path.join(home, '.agents', 'skills'),
+      unread: [],
+      gate: expect.objectContaining({ probe: path.join(home, '.acme-codex'), met: true }),
+    });
   });
 
   it.each(['./scripts/acme-claude', 'bin/acme-claude', '/opt/acme/bin/acme-claude', String.raw`tools\acme-claude.exe`])(
@@ -541,6 +566,41 @@ describe('the sessions of an instance', () => {
     expect(platforms.filter((platform) => platform === 'claude-code')).toHaveLength(1);
     expect(platforms).toContain('acme-claude');
     expect(platforms).not.toContain('review-claude');
+  });
+
+  // The home of an instance with no home of its own is the one of the tool it extends, so the root recorded for that tool is its own.
+  it('starts, delivers, gates and finds the sessions of an instance with paths and no home at the root recorded for the tool it extends', async () => {
+    fs.mkdirSync(path.join(home, '.teamai'), { recursive: true });
+    fs.mkdirSync(path.join(home, '.codex-work'));
+    fs.writeFileSync(path.join(home, '.teamai', 'config.yaml'), 'repo: { localPath: /x, remote: x }\nusername: u\nscope: user\nadditionalRoles: []\ntoolRoots: { codex: ~/.codex-work }\n');
+    const { config } = await load(teamRepo({
+      'tools/review-codex.yaml': 'schemaVersion: v1alpha1\nname: review-codex\nextends: codex\npaths: { skills: .codex/review-skills }\n',
+      'tools/shared-codex.yaml': 'schemaVersion: v1alpha1\nname: shared-codex\nextends: codex\npaths: { skills: .agents/team-skills, settings: .codex/hooks.json }\n',
+    }));
+    const { scopedToolPaths } = await import('../types.js');
+    // The setup file mocks this module once, and a mock outlives vi.resetModules, binding it to the first test's registry.
+    const { toolCommandEnv } = await vi.importActual<typeof import('../launch-registry.js')>('../launch-registry.js');
+    const { installOf, locate, ownOf } = await import('../locate.js');
+    const { AgentSession } = await import('../session-flow/agent-session.js');
+    const { storeDirOf } = await import('../session-flow/adapters/index.js');
+    const toolRoots = { codex: '~/.codex-work' };
+    const skills = await locate('review-codex', 'skills', installOf(config ?? { toolPaths: {} }, { repo: {}, scope: 'user', toolRoots }));
+    const work = path.join(home, '.codex-work');
+
+    expect({
+      launch: toolCommandEnv('review-codex', { kind: 'delivered', inherited: {}, toolRoots }),
+      sessions: storeDirOf(AgentSession.platformForTool('review-codex') ?? 'none', { kind: 'recorded', toolRoots }),
+      skills: ownOf(skills)?.path,
+      gate: skills.gates.find((gate) => gate.kind === 'installed'),
+      // Only what lies in the home of Codex moves with its root; Codex reads the shared skills directory from any home.
+      outside: scopedToolPaths(config ?? { toolPaths: {} }, { scope: 'user', toolRoots })['shared-codex'],
+    }).toEqual({
+      launch: { kind: 'ready', env: { CODEX_HOME: work } },
+      sessions: path.join(work, 'sessions'),
+      skills: path.join(work, 'review-skills'),
+      gate: expect.objectContaining({ probe: work, met: true }),
+      outside: { skills: '.agents/team-skills', settings: '.codex-work/hooks.json' },
+    });
   });
 });
 

@@ -252,7 +252,7 @@ teamai webhook test --dry-run
 
 ### 团队工具（`tools/`）
 
-团队用的是某个已支持工具的内部版本或分支时，可以把它加成内置工具的实例，不用等新版本。实例只改命令、home 和路径，沿用该工具的启动参数，以及会话、token、hook 和 MCP 格式。实例只能扩展 Claude Code（`claude`）或 Codex（`codex`）；扩展其他工具的实例会被拒绝并指出文件，直到 teamai 支持该工具（[工具支持](./tool-support.md#工具实例)）。有自己 home 的实例有自己的会话；沿用该工具 home 的实例写的就是该工具的会话，收到的文件也和该工具放在同一处，包括 `init` 为它记录的目录（`toolRoots`）。
+团队用的是某个已支持工具的内部版本或分支时，可以把它加成内置工具的实例，不用等新版本。实例只改命令、home 和路径，沿用该工具的启动参数，以及会话、token、hook 和 MCP 格式。实例只能扩展 Claude Code（`claude`）或 Codex（`codex`）；扩展其他工具的实例会被拒绝并指出文件，直到 teamai 支持该工具（[工具支持](./tool-support.md#工具实例)）。有自己 home 的实例有自己的会话；沿用该工具 home 的实例写的就是该工具的会话，收到的文件也和该工具放在同一处，包括 `init` 为它记录的目录（`toolRoots`）：它自己的 `paths` 中位于该工具 home 里的路径随之移动，其余的保持原处。
 
 ```yaml
 # 团队仓库中的 tools/acme-claude.yaml
@@ -286,7 +286,7 @@ Run it? [y/N]
 
 你输入的一行只回答这个问题。同一终端上正在等待的审批或选择，会在你回答后重新询问。`teamai workflow cancel` 会让这个问题不经回答直接结束，命令不会运行。按 Ctrl-C 会停止运行而不作回答，`teamai workflow resume` 会再问一次。
 
-无人值守的运行（`TEAMAI_MODE=unattended`、CI、没有终端）会以 `tool_not_accepted` 拒绝，直到有人在终端里接受一次。Codex 实例的 hooks 也要靠它的命令来信任，所以在终端里运行 `teamai pull` 需要这个命令时会问同一个问题；无人值守的 pull，或者回答否，会让这些 hooks 保持未信任，并给出提示。接受结果按文件内容记在 `~/.teamai/trust/tools.json`：不改这个文件的提交不会再问，改了文件会再问。只设 `home` 或 `paths` 的实例运行内置命令，不需要接受。设了 `home` 而没设 `command` 的实例只移动用户主目录：在项目里，它用所扩展工具的路径（`.claude/` 或 `.codex/`），也就是内置命令读取的位置；同时启用了该工具时，两者读同一份副本，对其中任一个运行 `teamai uninstall --agent` 都会把它留给另一个。设了 `command` 的实例在项目里也把这些路径放到自己的主目录下，因为它自己的构建可能读取项目里它自己的目录。`paths` 会替换这两种路径。设了 `home` 时，不论运行的是哪个命令，命令运行时都会把工具的主目录变量（`CLAUDE_CONFIG_DIR`、`CODEX_HOME`）设为这个主目录（主目录嵌套在别的目录里也一样），所以它读到的就是 teamai 写到那里的内容。实例的用户级 `paths` 如果落在 `home.dir` 之外，不论有没有设 `command`，都会被拒绝，因为在这个主目录启动的工具一个也读不到：把这些 `paths` 指到 `home.dir` 里面，或者去掉 `home`；`env` 写的是实例自己的变量，teamai 也会把它设为同一个主目录，写成该工具的主目录变量时 teamai 会拒绝。实例的主目录如果是另一个工具的（内置工具或另一个实例），不论是 `home.dir` 直接写成那个目录，还是实例的变量或 `toolRoots` 让它解析到那里，teamai 都会拒绝，因为两个工具共用一个主目录会互相覆盖文件；实例的变量指向你的 home 目录本身时也会拒绝。要解除这两种拒绝，把变量指向一个独立的目录，再重新运行 `teamai init`：它的 `--agent` 接受被拒绝的实例，并替换那条记录；pull 不会改动已记录的主目录。实例被接受后，teamai 读取、导出和导入它的会话时也用它的命令；接受之前用内置命令。
+无人值守的运行（`TEAMAI_MODE=unattended`、CI、没有终端）会以 `tool_not_accepted` 拒绝，直到有人在终端里接受一次。Codex 实例的 hooks 也要靠它的命令来信任，所以在终端里运行 `teamai pull` 需要这个命令时会问同一个问题；无人值守的 pull，或者回答否，会让这些 hooks 保持未信任，并给出提示。接受结果按文件内容记在 `~/.teamai/trust/tools.json`：不改这个文件的提交不会再问，改了文件会再问。只设 `home` 或 `paths` 的实例运行内置命令，不需要接受。设了 `home` 而没设 `command` 的实例只移动用户主目录：在项目里，它用所扩展工具的路径（`.claude/` 或 `.codex/`），也就是内置命令读取的位置；同时启用了该工具时，两者读同一份副本，对其中任一个运行 `teamai uninstall --agent` 都会把它留给另一个。设了 `command` 的实例在项目里也把这些路径放到自己的主目录下，因为它自己的构建可能读取项目里它自己的目录。`paths` 会替换这两种路径。设了 `home` 时，不论运行的是哪个命令，命令运行时都会把工具的主目录变量（`CLAUDE_CONFIG_DIR`、`CODEX_HOME`）设为这个主目录（主目录嵌套在别的目录里也一样），所以它读到的就是 teamai 写到那里的内容。实例的用户级 `paths` 如果落在 `home.dir` 之外，不论有没有设 `command`，都会被拒绝，因为在这个主目录启动的工具一个也读不到；工具不论主目录在哪都会读取的路径除外，比如 Codex 读取的 `~/.agents/skills`：把这些 `paths` 指到 `home.dir` 里面，或者去掉 `home`；`env` 写的是实例自己的变量，teamai 也会把它设为同一个主目录，写成该工具的主目录变量时 teamai 会拒绝。实例的主目录如果是另一个工具的（内置工具或另一个实例），不论是 `home.dir` 直接写成那个目录，还是实例的变量或 `toolRoots` 让它解析到那里，teamai 都会拒绝，因为两个工具共用一个主目录会互相覆盖文件；实例的变量指向你的 home 目录本身时也会拒绝。要解除这两种拒绝，把变量指向一个独立的目录，再重新运行 `teamai init`：它的 `--agent` 接受被拒绝的实例，并替换那条记录；pull 不会改动已记录的主目录。实例被接受后，teamai 读取、导出和导入它的会话时也用它的命令；接受之前用内置命令。
 
 **调整内置工具。** 与内置工具同名的实例用来调整它。它的 `paths` 整体替换该工具的路径，和 `toolPaths` 条目一样，并且优先于 `toolPaths`。它只能设 `paths`：设了 `command` 或 `home` 的会被 teamai 拒绝，这两项属于有自己名字的实例，比如 `name: acme-codex` 加 `extends: codex`。只有 Claude Code 和 Codex 能这样调整；其他工具的 `tools/<tool>.yaml` 会被拒绝，改用 `teamai.yaml` 里的 `toolPaths.<tool>` 条目移动它的路径：
 

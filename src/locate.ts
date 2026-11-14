@@ -780,6 +780,8 @@ async function installedGateOf(tool: string, install: Install, host: Host, roots
     }
   }
 
+  // Every user path of an instance with a home is in that home or one the tool reads from any home (~/.agents/skills).
+  if (install.scope === 'user' && home && toolOf(tool)?.instance?.home !== undefined) return probe(home.dir);
   const { paths } = roots;
   // A bare `claudemd` such as `AGENTS.md` is shared by several tools and says nothing about any one of them.
   const nestedClaudemd = paths?.claudemd?.includes('/') ? paths.claudemd : undefined;
