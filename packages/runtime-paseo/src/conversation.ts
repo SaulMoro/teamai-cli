@@ -9,7 +9,7 @@ import type { OpEnd } from '@teamai/runtime-kit/ledger';
 import { registerThrough, type Registration } from '@teamai/runtime-kit/outer';
 import { cannotReadBecause, FsFailureSchema, isMissing } from '@teamai/shared/fs-failure';
 import { NotRegularFileError, readRegularFileSync } from '@teamai/shared/regular-file';
-import { UNTIMED_TURN } from '@teamai/tool-core/step-usage';
+import { UNTIMED_TURN, type Unmeasured } from '@teamai/tool-core/step-usage';
 import { isUsageLimitText } from '@teamai/tool-core/usage-limit';
 import { JsonValueSchema } from '@teamai/shared/json';
 import { extractReply } from '@teamai/tool-core/reply';
@@ -419,7 +419,7 @@ export function conversations(state: ProcessState, { ensureProvider }: { ensureP
    * machine, where the session's home is. A turn sent to an agent that already ran counts from its send on, as journaled
    * just before the send; one journaled without that time cannot be told from the earlier steps' requests, and reports none.
    */
-  const finishedOf = async (live: Daemon, op: OpId, record: AgentPrompt, ended: { id: string; createdAt: string | undefined; through: Through | undefined }): Promise<{ session: z.infer<typeof PromptSessionSchema>; usage?: z.infer<typeof PromptUsageSchema>; unmeasured?: string }> => {
+  const finishedOf = async (live: Daemon, op: OpId, record: AgentPrompt, ended: { id: string; createdAt: string | undefined; through: Through | undefined }): Promise<{ session: z.infer<typeof PromptSessionSchema>; usage?: z.infer<typeof PromptUsageSchema>; unmeasured?: Unmeasured }> => {
     const session = sessionOf(live, { tool: record.tool, ...ended });
     const target = targets.get(record.tool);
     const kept = journal.prompt(op);
@@ -428,7 +428,7 @@ export function conversations(state: ProcessState, { ensureProvider }: { ensureP
     if (!target || !isOnThisMachine(live.url) || !readsTokens(target.tool)) return { session };
 
     const measured = session.home === undefined
-      ? { kind: 'unmeasured' as const, why: `teamai found no home of ${target.tool} on this machine that holds session ${session.id}, where it reads the step's tokens. Retry the step.` }
+      ? { kind: 'unmeasured' as const, why: { cause: `teamai found no home of ${target.tool} on this machine that holds session ${session.id}, where it reads the step's tokens.`, next: 'Retry the step.' } }
       : turn && turn.sentAt === undefined
         ? UNTIMED_TURN
         : await sessionUsage({ tool: target.tool, toolHome: session.home, cwd: record.cwd, sessionId: session.id, ...(turn?.sentAt !== undefined && { turnSentAt: turn.sentAt }) });

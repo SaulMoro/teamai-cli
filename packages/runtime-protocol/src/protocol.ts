@@ -599,11 +599,11 @@ const finishedPrompt = {
   result: PromptResultSchema,
   usage: PromptUsageSchema.optional(),
   /**
-   * Without `usage`, from a runtime that offers `tokens`: why it read none for this prompt, as a sentence that names the
-   * cause and the next step, such as a transcript teamai has no permission to read. A budget that cannot count the step
-   * names it.
+   * Without `usage`, from a runtime that offers `tokens`: why it read none for this prompt. `cause` is a sentence, such
+   * as a transcript teamai has no permission to read, and is all a step under no budget tells the person; `next` is the
+   * next step, which a budget that cannot count the step adds.
    */
-  unmeasured: z.string().min(1).optional(),
+  unmeasured: z.object({ cause: z.string().min(1), next: z.string().min(1) }).strict().optional(),
   /** The model the tool ran on, as the tool named it. */
   model: z.string().min(1).optional(),
   /** What the tool said the run cost, as it said it. */

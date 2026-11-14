@@ -86,6 +86,7 @@ import { WorkflowFolder } from './folder.js';
 import { CONFINED_LEVELS } from '@teamai/tool-core/launch';
 import { toolOf } from '../tool-registry.js';
 import { CostSchema, type TokenUsage } from '@teamai/tool-core/stdout';
+import type { Unmeasured } from '@teamai/tool-core/step-usage';
 
 /**
  * Recent settled attempt ids kept for `repeated_report`.
@@ -109,9 +110,9 @@ export interface ReportInput {
   tokens?: TokenUsage;
   /**
    * Process-only, without `tokens`: why a driver that reports tokens read none for this attempt, as a runtime that reads
-   * them from the tool's transcript says it, with the next step. A budget that cannot count the attempt names it.
+   * them from the tool's transcript says it. A budget that cannot count the attempt names the cause and the next step.
    */
-  unmeasured?: string;
+  unmeasured?: Unmeasured;
   /** Milliseconds around the tool launch only, as the driver measured it. */
   durationMs?: number;
   /** What the tool stated the attempt cost, in its own unit. Never estimated. */
@@ -3606,7 +3607,7 @@ export async function reportAttempt(config: LocalConfig, runId: string, report: 
     if (unmeasured && !uncounted) {
       outcome = 'failed';
       message = report.unmeasured !== undefined
-        ? `Step "${step.id}" runs under a token budget, and its driver, which reports tokens, read none for it, so the budget cannot count what it spent: ${report.unmeasured}`
+        ? `Step "${step.id}" runs under a token budget, and its driver, which reports tokens, read none for it, so the budget cannot count what it spent: ${report.unmeasured.cause} ${report.unmeasured.next}`
         : limits?.budget !== undefined
           ? `Step "${step.id}" ends its turn at a token budget, and its report has no tokens, so the budget cannot count what it spent. Run its tool with a driver that reports its tokens, then retry the step.`
           : `Step "${step.id}" runs under a token budget, and its report has no tokens, so the budget cannot count what it spent. Run it with a driver that reports tokens (driver.can.tokens), then retry the step.`;

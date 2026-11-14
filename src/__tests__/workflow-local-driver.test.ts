@@ -1317,7 +1317,7 @@ steps:
       ok: boolean
 `);
     const state = path.join(path.dirname(workspace), 'toy-state');
-    const why = 'teamai cannot read /home/al/.claude/projects/-repo because it has no permission to read it. Let the user teamai runs as read it, then retry the step.';
+    const why = { cause: 'teamai cannot read /home/al/.claude/projects/-repo because it has no permission to read it.', next: 'Let the user teamai runs as read it, then retry the step.' };
     const runtime = stdioStepRuntime({ name: 'toy', command: process.execPath, args: [TOY_RUNTIME] });
     onTestFinished(() => runtime.dispose());
     const ready = await runtime.init({ options: { state, agent: { output: { ok: true }, unmeasured: why, conversations: false }, prompt_tool_home: true, can: { tokens: true } }, mode: 'unattended' });
@@ -1329,7 +1329,36 @@ steps:
 
     await runLocalDriver(config, runId, workspace, { runtimes });
 
-    expect(await readRun(config, runId)).toMatchObject({ steps: [{ id: 'review', status: 'failed', failure: { code: 'budget_unmeasured', message: expect.stringContaining(`read none for it, so the budget cannot count what it spent: ${why}`) } }] });
+    expect(await readRun(config, runId)).toMatchObject({ steps: [{ id: 'review', status: 'failed', failure: { code: 'budget_unmeasured', message: expect.stringContaining(`read none for it, so the budget cannot count what it spent: ${why.cause} ${why.next}`) } }] });
+  }, 30_000);
+
+  it('tells the person why it has no tokens for an unbudgeted step whose runtime read none, without calling for a retry of a step that succeeded', async () => {
+    const { config, workspace, runId } = await workflowFixture(`schemaVersion: v1alpha1
+name: build
+description: One step under no budget.
+steps:
+  - id: review
+    tool: claude
+    prompt: Review this project.
+    output:
+      ok: boolean
+`);
+    const state = path.join(path.dirname(workspace), 'toy-state');
+    const cause = 'teamai cannot read /home/al/.claude/projects/-repo because it has no permission to read it.';
+    const runtime = stdioStepRuntime({ name: 'toy', command: process.execPath, args: [TOY_RUNTIME] });
+    onTestFinished(() => runtime.dispose());
+    const ready = await runtime.init({ options: { state, agent: { output: { ok: true }, unmeasured: { cause, next: 'Let the user teamai runs as read it, then retry the step.' }, conversations: false }, prompt_tool_home: true, can: { tokens: true } }, mode: 'unattended' });
+    if (!ready.ok) throw new Error(ready.failure.message);
+    const runtimes: DriverRuntimes = {
+      driver: 'toy', asked: 'toy',
+      runtimes: [{ kind: 'external', use: 'toy', runtime, can: ready.can, launchesAgents: true, ...(ready.runsOnToolHome && { runsOnToolHome: true }), engine: { logins: [] }, credentials: {}, found: [], masks: {}, optionsFrom: 'test' }],
+    };
+    const warn = vi.spyOn(log, 'warn').mockImplementation(() => undefined);
+
+    await runLocalDriver(config, runId, workspace, { runtimes });
+
+    expect(await readRun(config, runId)).toMatchObject({ steps: [{ id: 'review', status: 'succeeded' }] });
+    expect(warn.mock.calls).toEqual([[`teamai did not measure the tokens of step "review": ${cause}`]]);
   }, 30_000);
 
   it('sends an agent step the definition\'s instructions in its prompt and the definition\'s model, since the runtime starts the tool without --agent', async () => {

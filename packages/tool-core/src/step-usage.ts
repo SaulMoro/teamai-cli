@@ -18,34 +18,40 @@ const STEP_FORMATS = {
 
 export type StepTokenFormat = keyof typeof STEP_FORMATS;
 
-/** The tokens a step billed, as the tool's own end-of-run usage reports them, or why teamai read none: the cause and the next step. */
-export type StepUsage = { kind: 'measured'; usage: ReportedTokens } | { kind: 'unmeasured'; why: string };
+/**
+ * Why teamai read no tokens for a step: the cause, which is all a step that succeeded under no budget is told, and the
+ * next step, which a budget that cannot count the step adds.
+ */
+export type Unmeasured = { cause: string; next: string };
+
+/** The tokens a step billed, as the tool's own end-of-run usage reports them, or why teamai read none. */
+export type StepUsage = { kind: 'measured'; usage: ReportedTokens } | { kind: 'unmeasured'; why: Unmeasured };
 
 /** A turn journaled before it carried its send time, which cannot be told from the earlier steps' requests. */
 export const UNTIMED_TURN: StepUsage = {
   kind: 'unmeasured',
-  why: 'Its turn was sent by a teamai that did not record when it sends one, so teamai cannot tell its requests from the earlier steps\'. Retry the step.',
+  why: { cause: 'Its turn was sent by a teamai that did not record when it sends one, so teamai cannot tell its requests from the earlier steps\'.', next: 'Retry the step.' },
 };
 
 /** Why `transcriptPath` cannot be read whole, or undefined when it can. */
-async function unreadable(transcriptPath: string): Promise<string | undefined> {
+async function unreadable(transcriptPath: string): Promise<Unmeasured | undefined> {
   const transcript = `${transcriptPath}, the transcript of the step's session`;
 
   try {
     if ((await fs.promises.stat(transcriptPath)).size > INTERVENTION_SCAN_MAX_BYTES) {
-      return `${transcript}, is over the ${INTERVENTION_SCAN_MAX_BYTES / 1024 / 1024} MiB teamai reads. Run the step in a new session rather than continue one this long.`;
+      return { cause: `${transcript}, is over the ${INTERVENTION_SCAN_MAX_BYTES / 1024 / 1024} MiB teamai reads.`, next: 'Run the step in a new session rather than continue one this long.' };
     }
 
     await (await openRegularFile(transcriptPath)).close();
   } catch (error) {
-    if (error instanceof NotRegularFileError) return `${error.message}. Retry the step.`;
+    if (error instanceof NotRegularFileError) return { cause: `${error.message}.`, next: 'Retry the step.' };
     const failure = FsFailureSchema.safeParse(error);
 
     if (!failure.success) throw error;
 
-    if (isMissing(failure.data)) return `teamai found no transcript at ${transcriptPath}, where the tool keeps the step's session. Retry the step.`;
+    if (isMissing(failure.data)) return { cause: `teamai found no transcript at ${transcriptPath}, where the tool keeps the step's session.`, next: 'Retry the step.' };
 
-    return `teamai cannot read ${transcript}, because ${cannotReadBecause(failure.data)}. Let the user teamai runs as read ${transcriptPath}, then retry the step.`;
+    return { cause: `teamai cannot read ${transcript}, because ${cannotReadBecause(failure.data)}.`, next: `Let the user teamai runs as read ${transcriptPath}, then retry the step.` };
   }
 
   return undefined;
@@ -69,13 +75,13 @@ export async function stepUsage({ format, transcriptPath, sessionId, turnSentAt 
   const transcript = `${transcriptPath}, the transcript of the step's session`;
 
   if (turnSentAt !== undefined && billed.some(({ at }) => Number.isNaN(at))) {
-    return { kind: 'unmeasured', why: `${transcript}, records a request with no time, so teamai cannot tell this turn's requests from the earlier steps'. Run the step in a new session rather than continue this one.` };
+    return { kind: 'unmeasured', why: { cause: `${transcript}, records a request with no time, so teamai cannot tell this turn's requests from the earlier steps'.`, next: 'Run the step in a new session rather than continue this one.' } };
   }
 
   const own = billed.filter(({ at }) => turnSentAt === undefined || at >= turnSentAt).map(({ tokens }) => tokens);
 
   if (own.length === 0) {
-    return { kind: 'unmeasured', why: `${transcript}, records no request since the step ${turnSentAt === undefined ? 'started' : 'sent its turn'}, as when the tool writes a turn's usage only after it ends. Retry the step.` };
+    return { kind: 'unmeasured', why: { cause: `${transcript}, records no request since the step ${turnSentAt === undefined ? 'started' : 'sent its turn'}, as when the tool writes a turn's usage only after it ends.`, next: 'Retry the step.' } };
   }
 
   return { kind: 'measured', usage: reported(own.reduce((sum, tokens) => addTokenUsage(sum, tokens))) };

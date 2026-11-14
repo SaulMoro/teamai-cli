@@ -4,6 +4,7 @@ import { z } from 'zod';
 import { ASSUMED_OPENCODE_MAJOR, type StepLaunch } from '@teamai/tool-core/launch';
 import { log } from '@teamai/shared/log';
 import { budgeted, stoppedOnUsageLimit, tokenMeter, toolStdout, type TokenUsage, type ToolReport } from '@teamai/tool-core/stdout';
+import type { Unmeasured } from '@teamai/tool-core/step-usage';
 import { NotRegularFileError, readRegularFile } from '@teamai/shared/regular-file';
 import { MAX_TIMER_MS } from '@teamai/shared/timer';
 
@@ -138,8 +139,8 @@ export type StepLaunchResult =
     model?: string;
     session?: string;
     tokens?: TokenUsage;
-    /** Without `tokens`, from a runtime that offers them: why it read none for the run, with the next step. */
-    unmeasured?: string;
+    /** Without `tokens`, from a runtime that offers them: why it read none for the run. */
+    unmeasured?: Unmeasured;
     /** What the tool said the run cost, as it said it. */
     cost?: ToolReport['cost'];
     /**

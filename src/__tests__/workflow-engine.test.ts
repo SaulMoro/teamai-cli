@@ -5718,13 +5718,13 @@ describe('token budgets', () => {
     prompt: Plan it.
 `, 'budget: { tokens: 100 }\n'));
     const plan = leaseIn(await leaseNext(config, runId, driverA, reports));
-    const why = 'teamai cannot read /home/al/.codex/sessions/2026/11/13 because it has no permission to read it. Let the user teamai runs as read it, then retry the step.';
+    const why = { cause: 'teamai cannot read /home/al/.codex/sessions/2026/11/13 because it has no permission to read it.', next: 'Let the user teamai runs as read it, then retry the step.' };
 
     await reportAttempt(config, runId, { attempt: plan.attempt, revision: plan.revision, outcome: 'success', driver: driverA, unmeasured: why });
 
     expect(await readRun(config, runId)).toMatchObject({ steps: [{ id: 'plan', status: 'failed', failure: {
       code: 'budget_unmeasured',
-      message: `Step "plan" runs under a token budget, and its driver, which reports tokens, read none for it, so the budget cannot count what it spent: ${why}`,
+      message: `Step "plan" runs under a token budget, and its driver, which reports tokens, read none for it, so the budget cannot count what it spent: ${why.cause} ${why.next}`,
     } }] });
   });
 

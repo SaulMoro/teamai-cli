@@ -98,7 +98,7 @@ describe('teamai-runtime-t3', () => {
       // The fake agent bills no request, so the runtime, which offers tokens, says why it reports none.
       expect(end).toEqual({
         op, event: 'finished', session: { tool: 'claude', id: expect.stringMatching(/^[0-9a-f-]{36}$/) }, result: { output: { verdict: 'approve' } },
-        unmeasured: expect.stringContaining('records no request since the step started'),
+        unmeasured: { cause: expect.stringContaining('records no request since the step started'), next: 'Retry the step.' },
       });
 
       const [thread] = t3.threads();

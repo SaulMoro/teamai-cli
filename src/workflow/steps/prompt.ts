@@ -24,6 +24,7 @@ import { type LeaseWire } from '../lease-wire.js';
 import { setsLimit } from '../requirements.js';
 import { idleLimit } from '../limits.js';
 import { budgeted } from '@teamai/tool-core/stdout';
+import type { Unmeasured } from '@teamai/tool-core/step-usage';
 import { stepLauncher, type StepLauncher, type StepRun, type StepRunResult } from '@teamai/runtime-tools';
 import { expectedOutput } from '../output.js';
 import { placeView, runtimeLauncher, runtimePrompter, runtimeSetup, runtimeStepEnv } from './runtime-steps.js';
@@ -657,9 +658,12 @@ export async function runPromptStep({ config, lock, driver, lease, adapter = ste
 }
 
 
-/** Why the runtime of `step`, which offers tokens, read none for it, said to the person as the step ends. */
-function warnUnmeasured(step: string, why: string): string {
-  log.warn(`teamai read no tokens for step "${step}": ${why}`);
+/**
+ * Why the runtime of `step`, which offers tokens, read none for it, said to the person as the step ends: the cause only,
+ * since a step under no budget succeeded all the same, and a budget that cannot count it fails it with the next step.
+ */
+function warnUnmeasured(step: string, why: Unmeasured): Unmeasured {
+  log.warn(`teamai did not measure the tokens of step "${step}": ${why.cause}`);
 
   return why;
 }

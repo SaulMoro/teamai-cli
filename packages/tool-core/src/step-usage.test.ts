@@ -77,25 +77,25 @@ describe('stepUsage', () => {
   it.each([
     {
       when: 'the transcript is missing', file: () => path.join(os.tmpdir(), 'teamai-step-usage-missing', 'session.jsonl'), turnSentAt: undefined,
-      why: (file: string) => `teamai found no transcript at ${file}, where the tool keeps the step's session. Retry the step.`,
+      why: (file: string) => ({ cause: `teamai found no transcript at ${file}, where the tool keeps the step's session.`, next: 'Retry the step.' }),
     },
     {
       when: 'no request falls in the turn', file: twoClaudeTurns, turnSentAt: Date.parse('2026-11-13T11:00:00.000Z'),
-      why: (file: string) => `${file}, the transcript of the step's session, records no request since the step sent its turn, as when the tool writes a turn's usage only after it ends. Retry the step.`,
+      why: (file: string) => ({ cause: `${file}, the transcript of the step's session, records no request since the step sent its turn, as when the tool writes a turn's usage only after it ends.`, next: 'Retry the step.' }),
     },
     {
       when: 'a request records no time that would place it in or out of the turn',
       file: () => transcript([claudeRequest('msg_1', undefined, { input: 4, output: 300, cacheRead: 0, cacheCreation: 0 }), claudeRequest('msg_2', SECOND_TURN, { input: 3, output: 50, cacheRead: 0, cacheCreation: 0 })]),
       turnSentAt: Date.parse(SECOND_TURN),
-      why: (file: string) => `${file}, the transcript of the step's session, records a request with no time, so teamai cannot tell this turn's requests from the earlier steps'. Run the step in a new session rather than continue this one.`,
+      why: (file: string) => ({ cause: `${file}, the transcript of the step's session, records a request with no time, so teamai cannot tell this turn's requests from the earlier steps'.`, next: 'Run the step in a new session rather than continue this one.' }),
     },
     {
       when: 'the transcript is over the size teamai reads', file: oversized, turnSentAt: undefined,
-      why: (file: string) => `${file}, the transcript of the step's session, is over the 50 MiB teamai reads. Run the step in a new session rather than continue one this long.`,
+      why: (file: string) => ({ cause: `${file}, the transcript of the step's session, is over the 50 MiB teamai reads.`, next: 'Run the step in a new session rather than continue one this long.' }),
     },
     ...(process.platform === 'win32' ? [] : [{
       when: 'teamai has no permission to read the transcript', file: unreadable, turnSentAt: undefined,
-      why: (file: string) => `teamai cannot read ${file}, the transcript of the step's session, because it has no permission to read it. Let the user teamai runs as read ${file}, then retry the step.`,
+      why: (file: string) => ({ cause: `teamai cannot read ${file}, the transcript of the step's session, because it has no permission to read it.`, next: `Let the user teamai runs as read ${file}, then retry the step.` }),
     }]),
   ])('reports no usage, never zero, and says why, when $when', async ({ file: fileOf, turnSentAt, why }) => {
     const file = fileOf();

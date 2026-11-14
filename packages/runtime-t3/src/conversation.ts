@@ -644,7 +644,7 @@ export function conversations({ serving, adder }: { serving: Serving; adder: Ins
       const { transcript } = found;
 
       const measured: StepUsage = transcript === undefined
-        ? { kind: 'unmeasured', why: `${thread.tool}'s store names no transcript of session ${found.id}, which teamai reads the step's tokens from. Retry the step.` }
+        ? { kind: 'unmeasured', why: { cause: `${thread.tool}'s store names no transcript of session ${found.id}, which teamai reads the step's tokens from.`, next: 'Retry the step.' } }
         : thread.turnOf && turnSentAt === undefined
           ? UNTIMED_TURN
           : await stepUsage({ format: DRIVERS[driver].tokens, transcriptPath: transcript, sessionId: found.id, ...(turnSentAt !== undefined && { turnSentAt }) });

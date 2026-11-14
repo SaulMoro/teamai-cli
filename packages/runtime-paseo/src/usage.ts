@@ -5,7 +5,7 @@ import { ClaudeCodeAdapter } from '@teamai/tool-core/formats/claude-code';
 import { CodexAdapter } from '@teamai/tool-core/formats/codex';
 import type { AgentAdapter } from '@teamai/tool-core/sessions/base';
 import type { SessionHost } from '@teamai/tool-core/sessions/platform';
-import { stepUsage, type StepTokenFormat, type StepUsage } from '@teamai/tool-core/step-usage';
+import { stepUsage, type StepTokenFormat, type StepUsage, type Unmeasured } from '@teamai/tool-core/step-usage';
 import type { PaseoTool } from './providers.js';
 
 // ─── The tokens a step's agent billed ────────────────────
@@ -32,17 +32,20 @@ export function readsTokens(tool: PaseoTool): boolean {
 }
 
 /** Why teamai cannot read the step's tokens in `folders` of `tool`'s store, which it has no permission to list. */
-function unlistable(tool: PaseoTool, folders: readonly string[]): string {
+function unlistable(tool: PaseoTool, folders: readonly string[]): Unmeasured {
   const named = folders.join(', ');
 
-  return `teamai cannot list ${named}, where ${tool} keeps its sessions, because it has no permission to read ${folders.length > 1 ? 'them' : 'it'}. Let the user teamai runs as read ${named}, then retry the step.`;
+  return {
+    cause: `teamai cannot list ${named}, where ${tool} keeps its sessions, because it has no permission to read ${folders.length > 1 ? 'them' : 'it'}.`,
+    next: `Let the user teamai runs as read ${named}, then retry the step.`,
+  };
 }
 
 /**
  * The transcript of session `sessionId` of `tool` in `toolHome`, or why teamai cannot find it, as a folder the daemon's
  * tool can write and teamai cannot read: the step it ran finished all the same.
  */
-async function transcriptOf(format: Transcript, { tool, toolHome, cwd, sessionId }: { tool: PaseoTool; toolHome: string; cwd: string; sessionId: string }): Promise<{ kind: 'found'; transcript: string } | { kind: 'unmeasured'; why: string }> {
+async function transcriptOf(format: Transcript, { tool, toolHome, cwd, sessionId }: { tool: PaseoTool; toolHome: string; cwd: string; sessionId: string }): Promise<{ kind: 'found'; transcript: string } | Extract<StepUsage, { kind: 'unmeasured' }>> {
   const skipped: string[] = [];
   // The runtime only reads sessions, and only writing one runs a tool's CLI, so each tool is its own command here.
   const host: SessionHost = { processes: HOST_PROCESSES, executablesOf: (name) => [name], skippedFolder: (folder) => skipped.push(folder) };
@@ -55,14 +58,14 @@ async function transcriptOf(format: Transcript, { tool, toolHome, cwd, sessionId
 
     if (failure.success && isPermissionDenied(failure.data)) return { kind: 'unmeasured', why: unlistable(tool, [failure.data.path ?? toolHome]) };
 
-    return { kind: 'unmeasured', why: `Listing the ${tool} sessions in ${toolHome} failed (${failure.success ? failure.data.message : String(error instanceof Error ? error.message : error)}). Retry the step.` };
+    return { kind: 'unmeasured', why: { cause: `Listing the ${tool} sessions in ${toolHome} failed (${failure.success ? failure.data.message : String(error instanceof Error ? error.message : error)}).`, next: 'Retry the step.' } };
   }
 
   if (transcript !== undefined) return { kind: 'found', transcript };
 
   if (skipped.length > 0) return { kind: 'unmeasured', why: unlistable(tool, skipped) };
 
-  return { kind: 'unmeasured', why: `${tool} lists no session ${sessionId} for ${cwd} in ${toolHome}, where teamai reads the step's tokens. Retry the step.` };
+  return { kind: 'unmeasured', why: { cause: `${tool} lists no session ${sessionId} for ${cwd} in ${toolHome}, where teamai reads the step's tokens.`, next: 'Retry the step.' } };
 }
 
 /**

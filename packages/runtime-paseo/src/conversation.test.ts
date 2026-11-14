@@ -187,7 +187,7 @@ describe('teamai-runtime-paseo', () => {
       const end = await runtime.next(isEnd('op-0000000b'));
       expect(end).toMatchObject({
         event: 'finished', session: { tool: 'claude', home }, result: { output: { verdict: 'approve' } },
-        unmeasured: `teamai cannot list ${folder}, where claude keeps its sessions, because it has no permission to read it. Let the user teamai runs as read ${folder}, then retry the step.`,
+        unmeasured: { cause: `teamai cannot list ${folder}, where claude keeps its sessions, because it has no permission to read it.`, next: `Let the user teamai runs as read ${folder}, then retry the step.` },
       });
       expect(end).not.toHaveProperty('usage');
     } finally {
