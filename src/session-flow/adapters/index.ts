@@ -100,7 +100,7 @@ function instanceStore(platform: string) {
   const definition = storedDefinitionOf(hosted.platform);
   const { home } = hosted.instance;
 
-  if (definition?.adapterAs === undefined || home === undefined) return undefined;
+  if (definition?.adapterAs === undefined || definition.store.in !== 'tool-home' || home === undefined) return undefined;
 
   return { store: definition.store, adapterAs: definition.adapterAs, name: hosted.instance.name, home, host: instanceSessionHost(hosted.instance) };
 }
@@ -169,9 +169,8 @@ export function storeDirOf(platform: string, root: SessionStoreRoot): string {
 
   if (!instance) return '';
   const { store, name, home } = instance;
-  const dir = store.in === 'tool-home' ? store.dir : store.child;
 
-  return path.join(root.kind === 'tool-home' ? root.dir : instanceHomeDir({ name, home }), dir);
+  return path.join(root.kind === 'tool-home' ? root.dir : instanceHomeDir({ name, home }), store.dir);
 }
 
 /** `platform`'s adapter on `storeDir`, a store directory the caller already resolved (`storeDirOf`). */
