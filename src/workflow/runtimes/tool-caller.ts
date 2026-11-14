@@ -5,7 +5,9 @@ import { resolveCliPath } from '@teamai/shared/cli-path';
 import { log } from '@teamai/shared/log';
 import { CallError, memberTools, type MemberTool } from '../member-tools.js';
 import { addTokens, type TokenUsage } from '@teamai/tool-core/stdout';
-import { executableOf, LAUNCH_ORDER, launchAdapterIdOf, launchAdapterOf, toolCommandEnv, type LaunchOrderTool } from '../../launch-registry.js';
+import { executableOf, LAUNCH_ORDER, launchAdapterIdOf, launchAdapterOf, launchExecutableOf, toolCommandEnv, type LaunchOrderTool } from '../../launch-registry.js';
+import { acceptToolCommand } from '../../tool-instances.js';
+import { toolOf } from '../../tool-registry.js';
 import { agyGatewayEnv } from '../../models/agy-gateway.js';
 import { extractReply } from '@teamai/tool-core/reply';
 import { answerLaunch } from '@teamai/runtime-tools/answer';
@@ -15,8 +17,8 @@ import { withoutOuterSessionMarkers } from '../attempt-marker.js';
 
 const DEFAULT_TIMEOUT_MS = 600_000;
 
-/** An AI call's answer, and the tool that gave it. */
-export type CallResult = { text: string; tool: LaunchOrderTool; tokens?: TokenUsage };
+/** An AI call's answer, and the tool that gave it, by the name the member gave it: an instance's own. */
+export type CallResult = { text: string; tool: string; tokens?: TokenUsage };
 
 /** A call asked for a value: the last answer, the value it holds or undefined when none held one, and how often it asked. */
 export type ReplyResult<T> = CallResult & { reply: T | undefined; asked: number };
@@ -50,8 +52,8 @@ export interface ToolCaller {
    * times, for a tool whose call can continue its session. A tool that cannot is asked once.
    */
   callForReply<T>(prompt: string, schema: z.ZodType<T>, options: ReplyOptions): Promise<ReplyResult<T>>;
-  /** The tool a call for `scope` runs on, picked as a call picks it; throws the `CallError` a call would. */
-  toolFor(scope: LocalConfig | undefined): Promise<LaunchOrderTool>;
+  /** The tool a call for `scope` runs on, by the name a call credits it with; throws the `CallError` a call would. */
+  toolFor(scope: LocalConfig | undefined): Promise<string>;
 }
 
 const DEFAULT_REPLY_RETRIES = 1;
@@ -89,7 +91,8 @@ async function scopeHere(): Promise<LocalConfig | undefined> {
   return scope ?? undefined;
 }
 
-type Picked = { tool: LaunchOrderTool; executable: string };
+/** The tool a call runs: its name, an instance's own, the shipped tool whose flags it runs with, and its executable. */
+type Picked = { name: string; tool: LaunchOrderTool; executable: string };
 
 /** The tool a call runs, and the environment it runs it in. */
 type Prepared = Picked & { env: NodeJS.ProcessEnv };
@@ -99,9 +102,9 @@ type Prepared = Picked & { env: NodeJS.ProcessEnv };
  * launch, without an outer launch's checkout or session markers. A recorded home that is gone fails the call, as it
  * skips delivery.
  */
-function callEnv({ launchedBy, tool, toolRoots }: { launchedBy: LaunchedBy; tool: string; toolRoots: LocalConfig['toolRoots'] }): NodeJS.ProcessEnv {
+function callEnv({ launchedBy, name, tool, toolRoots }: { launchedBy: LaunchedBy; name: string; tool: LaunchOrderTool; toolRoots: LocalConfig['toolRoots'] }): NodeJS.ProcessEnv {
   const { TEAMAI_LAUNCHED_TOOL: _tool, TEAMAI_LAUNCHED_CHECKOUT: _checkout, ...env } = withoutOuterSessionMarkers(process.env);
-  const home = toolCommandEnv(tool, { kind: 'delivered', inherited: env, toolRoots });
+  const home = toolCommandEnv(name, { kind: 'delivered', inherited: env, toolRoots });
 
   if (home.kind === 'home_gone') throw new CallError('home_gone', home.message);
   const gateway = tool === 'agy' ? agyGatewayEnv(env) : undefined;
@@ -112,24 +115,37 @@ function callEnv({ launchedBy, tool, toolRoots }: { launchedBy: LaunchedBy; tool
 
 /** A caller that resolves its tool once per scope and reuses it for every call there. */
 export function createToolCaller({ resolveTool = resolveCliPath, resolveScope = scopeHere }: ToolCallerDeps = {}): ToolCaller {
-  /** The tool the member names. A member who names a tool means it, so one teamai cannot run fails the call. */
-  const named = ({ source, tool: value, setting }: MemberTool): Picked => {
+  /**
+   * The tool the member names, or an instance of one, run as a workflow step runs it. A member who names a tool means
+   * it, so one teamai cannot run fails the call, and so does a team instance's command no one accepted here: a call
+   * asks no one.
+   */
+  const named = async ({ source, tool: value, setting }: MemberTool): Promise<Picked> => {
     const env = source === 'TEAMAI_AI_TOOL';
-    const tool = LAUNCH_ORDER.find((candidate) => candidate === value);
+    const resolved = toolOf(value);
+    const tool = LAUNCH_ORDER.find((candidate) => candidate === resolved?.base);
 
-    if (tool === undefined) {
+    if (resolved === undefined || tool === undefined) {
       throw new CallError('override_invalid', `${setting} is "${value}", which is not a tool teamai launches. Set it to one of: ${LAUNCH_ORDER.join(', ')}. Or ${env ? 'unset' : 'remove'} it.`);
     }
 
-    const executable = resolveTool(executableOf(tool));
+    const { instance } = resolved;
+    const command = instance?.command;
+    const executable = command === undefined ? resolveTool(executableOf(tool)) : launchExecutableOf({ tool, instance });
 
     if (executable === null) {
-      throw new CallError('override_invalid', `${setting} is "${tool}", which is not on PATH. Install ${tool}, or ${env ? 'unset TEAMAI_AI_TOOL' : 'remove it'} to use the next setting or the first installed tool.`);
+      throw new CallError('override_invalid', `${setting} is "${value}", which is not on PATH. Install ${command ?? tool}, or ${env ? 'unset TEAMAI_AI_TOOL' : 'remove it'} to use the next setting or the first installed tool.`);
     }
 
-    log.debug(`[tool-launch] using ${tool} (${executable}), from ${source}`);
+    if (instance !== undefined) {
+      const accepted = await acceptToolCommand(instance, { ask: undefined });
 
-    return { tool, executable };
+      if (!accepted.ok) throw new CallError(accepted.code, accepted.message);
+    }
+
+    log.debug(`[tool-launch] using ${value} (${executable}), from ${source}`);
+
+    return { name: value, tool, executable };
   };
 
   const resolve = async (first: MemberTool | undefined): Promise<Picked> => {
@@ -141,7 +157,7 @@ export function createToolCaller({ resolveTool = resolveCliPath, resolveScope = 
       if (executable !== null) {
         log.debug(`[tool-launch] using ${tool} (${executable}), from LAUNCH_ORDER`);
 
-        return { tool, executable };
+        return { name: tool, tool, executable };
       }
     }
 
@@ -170,23 +186,23 @@ export function createToolCaller({ resolveTool = resolveCliPath, resolveScope = 
     const here = scope ?? await resolveScope();
     const chosen = await pick(here);
 
-    return { ...chosen, env: callEnv({ launchedBy, tool: chosen.tool, toolRoots: here?.toolRoots ?? await resolveMemberToolRoots(cwd) }) };
+    return { ...chosen, env: callEnv({ launchedBy, name: chosen.name, tool: chosen.tool, toolRoots: here?.toolRoots ?? await resolveMemberToolRoots(cwd) }) };
   };
 
   /** One run of the picked tool: its answer, and the session it ran in when the tool reported one. */
-  const callOnce = async ({ tool, executable, env }: Prepared, prompt: string, { launchedBy, timeout = DEFAULT_TIMEOUT_MS, cwd = process.cwd(), signal, idleTimeout }: CallOptions, session?: string): Promise<CallResult & { session?: string }> => {
-    log.debug(`[tool-launch] ${launchedBy} → ${tool}, timeout=${Math.round(timeout / 1000)}s${session ? `, resuming ${session}` : ''}`);
+  const callOnce = async ({ name, tool, executable, env }: Prepared, prompt: string, { launchedBy, timeout = DEFAULT_TIMEOUT_MS, cwd = process.cwd(), signal, idleTimeout }: CallOptions, session?: string): Promise<CallResult & { session?: string }> => {
+    log.debug(`[tool-launch] ${launchedBy} → ${name}, timeout=${Math.round(timeout / 1000)}s${session ? `, resuming ${session}` : ''}`);
 
     const end = await answerLaunch({
-      tool: { name: tool, family: launchAdapterIdOf(tool), call: launchAdapterOf(tool).call, executable },
+      tool: { name, family: launchAdapterIdOf(tool), call: launchAdapterOf(tool).call, executable },
       prompt, session, timeoutMs: timeout, idleTimeoutMs: idleTimeout, signal, cwd, env, host: { opencodeMajor: opencodeMajorVersion },
     });
 
     // A call teamai stopped at its limit names no tool: the tool gave no answer of its own.
     if (end.kind === 'stopped') throw new CallError('call_failed', end.message);
 
-    if (end.kind === 'failed') throw new CallError(end.code, end.message, tool);
-    const result: CallResult & { session?: string } = { text: end.text, tool };
+    if (end.kind === 'failed') throw new CallError(end.code, end.message, name);
+    const result: CallResult & { session?: string } = { text: end.text, tool: name };
 
     if (end.tokens) result.tokens = end.tokens;
 
@@ -213,14 +229,14 @@ export function createToolCaller({ resolveTool = resolveCliPath, resolveScope = 
     let tokens = answer.tokens;
 
     for (; reply === undefined && answer.session !== undefined && asked <= cap && Date.now() < deadline; asked++) {
-      log.debug(`[tool-launch] ${chosen.tool} replied with no value the call accepts; asking again (${asked} of ${cap})`);
+      log.debug(`[tool-launch] ${chosen.name} replied with no value the call accepts; asking again (${asked} of ${cap})`);
 
       try {
         answer = await callOnce(chosen, retryPrompt(answer.text, cap - asked), { ...options, timeout: Math.max(1, deadline - Date.now()) }, answer.session);
       } catch (cause) {
         // The answer already given stays the result: the caller reports it held no value.
         if (!(cause instanceof CallError)) throw cause;
-        log.debug(`[tool-launch] asking ${chosen.tool} again failed: ${cause.message}`);
+        log.debug(`[tool-launch] asking ${chosen.name} again failed: ${cause.message}`);
         asked++;
         break;
       }
@@ -238,5 +254,5 @@ export function createToolCaller({ resolveTool = resolveCliPath, resolveScope = 
     return result;
   };
 
-  return { callTool, callForReply, toolFor: async (scope) => (await pick(scope ?? await resolveScope())).tool };
+  return { callTool, callForReply, toolFor: async (scope) => (await pick(scope ?? await resolveScope())).name };
 }
