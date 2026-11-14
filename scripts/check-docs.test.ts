@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
 import { afterEach, expect, it, vi } from 'vitest';
 import { z } from 'zod';
+import { entriesUnder } from '@teamai/shared/entries-under';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const command = path.join(ROOT, 'scripts/check-docs.mjs');
@@ -46,6 +47,19 @@ function run(root: string, ...args: string[]) {
   expect(child.error).toBeUndefined();
   return { status: child.status, output: child.stdout + child.stderr };
 }
+
+it.each(['LF', 'CRLF'])('checks generated text and skill headings with %s Markdown', (eol) => {
+  const root = checkout();
+  for (const { entry } of entriesUnder(root)) {
+    if (!entry.isFile() || !entry.name.endsWith('.md')) continue;
+    const target = path.join(entry.parentPath, entry.name);
+    const text = fs.readFileSync(target, 'utf8').replace(/\r?\n/g, eol === 'CRLF' ? '\r\n' : '\n');
+    fs.writeFileSync(target, text);
+  }
+
+  const checked = run(root, '--only=skill-content');
+  expect(checked.status, checked.output).toBe(0);
+});
 
 it('check refuses a stale command reference without rewriting it', () => {
   const root = checkout();
