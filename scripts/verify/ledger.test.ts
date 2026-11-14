@@ -147,6 +147,17 @@ describe("what a ledger's section (e) could not read", () => {
   it('is nothing when the harness read every entry', () => {
     expect(unobservedEntries({ 'home/a': sha('a') }, { 'home/a': sha('b') }).notes).toEqual([]);
   });
+
+  it.each<{ change: string; before: Record<string, string>; after: Record<string, string> }>([
+    { change: 'left behind', before: {}, after: { 'home/left': 'unreadable' } },
+    { change: 'removed', before: { 'home/gone': 'unreadable' }, after: {} },
+  ])('is observed, for the ledger to judge as any entry, when uninstall $change it: whether it exists is known', ({ before, after }) => {
+    const unobserved = unobservedEntries(before, after);
+    const [entry = ''] = [...Object.keys(before), ...Object.keys(after)];
+
+    expect(unobserved.notes).toEqual([]);
+    expect(unobserved.covers(entry)).toBe(false);
+  });
 });
 
 describe("a tool's own state file in a ledger's section (e)", () => {

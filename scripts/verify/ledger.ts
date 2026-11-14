@@ -584,11 +584,12 @@ function entryPath(place: LedgerPlace, entry: string): string {
 }
 
 /**
- * The entries of a snapshot the harness had no permission to read, before uninstall or after: each is NOT OBSERVED, and it
- * and everything under it are never compared, so none passes as matching.
+ * The entries the harness had no permission to read that exist both before uninstall and after: what changed in them is
+ * NOT OBSERVED, and it and everything under it are never compared, so none passes as matching. Whether an entry exists is
+ * known from its parent's listing, so one uninstall left behind or removed is compared as any entry is, by path and writer.
  */
 export function unobservedEntries(before: Readonly<Record<string, string>>, after: Readonly<Record<string, string>>) {
-  const unread = [...new Set([...Object.keys(before), ...Object.keys(after)])].filter((entry) => before[entry] === UNREADABLE || after[entry] === UNREADABLE).sort();
+  const unread = Object.keys(before).filter((entry) => Object.hasOwn(after, entry) && (before[entry] === UNREADABLE || after[entry] === UNREADABLE)).sort();
 
   return {
     notes: unread.map((entry) => `NOT OBSERVED: ${entry}, which the harness has no permission to read, so whether uninstall left anything of teamai's in it is unknown`),
