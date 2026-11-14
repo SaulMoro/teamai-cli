@@ -1241,7 +1241,7 @@ steps:
 
       const cancelled = await runCLI(['workflow', 'cancel', runId], repo, env());
 
-      expect(cancelled.stderr).toContain(`Could not stop attempt ${attempt} of run ${runId} on step runtime "toy" of driver "toytwicechanged": the entry of driver "toytwicechanged" that ran it changed since`);
+      expect(cancelled.stderr).toContain(`Could not stop attempt ${attempt} of run ${runId} on step runtime "toy" of driver "toytwicechanged": driver "toytwicechanged" lists runtime "toy" more than once, and the entry that ran it changed since`);
       expect(cancelled.stderr).toContain(`teamai workflow cancel ${runId} --release ${attempt} lets it go.`);
       expect(signalPid(held, 0)).toBe('sent');
       expect(runtimeRecord(runId, attempt)).toMatchObject({ phase: 'running' });

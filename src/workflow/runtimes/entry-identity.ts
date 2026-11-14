@@ -8,8 +8,8 @@ import type { DriverDefinition, ResolvedDriver } from './definitions.js';
  * runs: its `use`, `through`, `sandbox` and options, with the member's `workflows.drivers.<driver>.runtimes` for each
  * runtime it names over them. Two entries with one digest start the same runtime on the same options, which answers for
  * the same handles, so either reaches a place the other opened. `isNameShared`: another entry of the definition has the
- * same name, so a record that names only the runtime, as one written before records named the entry, cannot tell which
- * of them holds its place.
+ * same name, so only the digest tells which of them holds a place: a record that names only the runtime, as one written
+ * before records named the entry, or whose entry changed since, cannot.
  */
 export interface RuntimeEntryIdentity {
   name: string;
@@ -51,11 +51,12 @@ function of(driver: ResolvedDriver, entry: DefinitionEntry): RuntimeEntryIdentit
 }
 
 /**
- * Whether the place `record` names is on the runtime of `entry`: by the entry's digest once the record has one; else,
- * for a record written before records named the entry, by the runtime's name, while no other entry shares it.
+ * Whether the place `record` names is on the runtime of `entry`: by the entry's digest, or by the runtime's name while no
+ * other entry of the definition shares it. The name alone still reaches an entry whose options changed since, as when the
+ * member fixed them to stop what ran there, and a record written before records named the entry.
  */
 function holds(record: RecordedEntry, entry: RuntimeEntryIdentity): boolean {
-  return record.entry === undefined ? record.runtime === entry.name && !entry.isNameShared : record.entry === entry.digest;
+  return record.entry === entry.digest || (record.runtime === entry.name && !entry.isNameShared);
 }
 
 /**
@@ -70,7 +71,7 @@ function find<TCandidate extends { entry: RuntimeEntryIdentity }>(record: Record
 
   if (named.length === 0) return { ok: false, why: `driver "${driver}" no longer uses that runtime.` };
 
-  if (record.entry !== undefined) return { ok: false, why: `the entry of driver "${driver}" that ran it changed since, in the definition or in your workflows.drivers.${driver}.runtimes, so teamai cannot tell that the runtime it would ask runs on the same options. Put the entry back as it was.` };
+  if (record.entry !== undefined) return { ok: false, why: `driver "${driver}" lists runtime "${record.runtime}" more than once, and the entry that ran it changed since, in the definition or in your workflows.drivers.${driver}.runtimes, so teamai cannot tell which of them ran it. Put the entry back as it was.` };
 
   return { ok: false, why: `driver "${driver}" lists runtime "${record.runtime}" more than once, and the attempt's record, which an earlier teamai wrote, does not say which entry ran it.` };
 }
