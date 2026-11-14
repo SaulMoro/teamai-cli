@@ -191,8 +191,7 @@ function hostFiles(world: World, instances: readonly ResolvedToolInstance[]): Se
   if (checkoutHead !== world.build.commit) leaks.push(`this checkout's HEAD moved: ${world.build.commit.slice(0, 7)} -> ${checkoutHead.slice(0, 7)}`);
   const realHome = os.homedir();
   const since = Date.parse(world.createdAt);
-  // Every tool home TOOLS knows: default, recorded, and moved by this shell's env (also a relocated tool root), so a new tool is checked without editing this list.
-  const homes = [...new Set([path.join(realHome, '.teamai'), ...TOOL_ORDER.flatMap((tool) => [defaultToolHome(tool, { home: realHome, path }), toolHome(tool), envToolHome(tool)?.dir ?? []].flat()), ...Object.keys(RELOCATABLE_TOOLS).flatMap((tool) => detectToolRoot(tool) ?? []), ...instances.flatMap((instance) => (instance.home === undefined ? [] : [path.join(realHome, instance.home.dir), instanceHomeDir({ name: instance.name, home: instance.home })]))])];
+  const homes = hostHomes(world, instances);
   const found: string[] = [];
   const unreadable: string[] = [];
 
@@ -209,6 +208,18 @@ function hostFiles(world: World, instances: readonly ResolvedToolInstance[]): Se
   notes.push(`in the world's HOME: ${landed.join(', ') || 'nothing'}`);
 
   return { title: '(c) Host files', leaks, notes };
+}
+
+/**
+ * The homes on this machine section (c) reads: every tool home TOOLS knows, default, recorded, and moved by this shell's
+ * env (also a relocated tool root), so a new tool is checked without editing this list, and each instance's. A home this
+ * shell moves into the world, as a variable exported to mask a passed value does, is the world's, so it is left out.
+ */
+export function hostHomes(world: Pick<World, 'dir'>, instances: readonly ResolvedToolInstance[]): string[] {
+  const realHome = os.homedir();
+  const isHost = (home: string): boolean => path.relative(world.dir, home).startsWith('..') || path.isAbsolute(path.relative(world.dir, home));
+
+  return [...new Set([path.join(realHome, '.teamai'), ...TOOL_ORDER.flatMap((tool) => [defaultToolHome(tool, { home: realHome, path }), toolHome(tool), envToolHome(tool)?.dir ?? []].flat()), ...Object.keys(RELOCATABLE_TOOLS).flatMap((tool) => detectToolRoot(tool) ?? []), ...instances.flatMap((instance) => (instance.home === undefined ? [] : [path.join(realHome, instance.home.dir), instanceHomeDir({ name: instance.name, home: instance.home })]))])].filter(isHost);
 }
 
 /** Section (d)'s lines: the variables, by name, each install's commands got. */

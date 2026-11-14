@@ -3,7 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { toolInstancesIn } from './instances.js';
-import { environmentNotes, hostUnreadableNote, ledgerRules, ledgerVerdict, namingWorld, unobservedEntries } from './ledger.js';
+import { environmentNotes, hostHomes, hostUnreadableNote, ledgerRules, ledgerVerdict, namingWorld, unobservedEntries } from './ledger.js';
 
 const roots: string[] = [];
 
@@ -324,5 +324,34 @@ describe("a tool instance's home in a ledger's section (e)", () => {
     expect(rules.knownLeftover('home/.acme-claude')).toBeUndefined();
     expect(rules.ownStateOf('home/.acme-claude/projects/-w-project/s.jsonl', sha)).toBeUndefined();
     expect(rules.isToolOwnState('home/.acme-claude/.claude.json', '{"numStartups":1}')).toBe(false);
+  });
+});
+
+describe('the homes on this machine the ledger reads for files that name a world', () => {
+  const instance = { name: 'acme-codex', extends: 'codex', home: { dir: '.acme-codex', env: 'ACME_CODEX_HOME' }, source: 'team', file: 'f', location: 'l', revision: 'r' } as const;
+
+  it("leaves out an instance home this shell's variable moves into the world itself, which is the world's own", () => {
+    const world = { dir: fs.mkdtempSync(path.join(os.tmpdir(), 'ledger-world-')) };
+    roots.push(world.dir);
+    vi.stubEnv('ACME_CODEX_HOME', path.join(world.dir, 'home', 'work', 'acme-moved'));
+
+    try {
+      expect(hostHomes(world, [instance]).filter((home) => home.startsWith(world.dir))).toEqual([]);
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it('reads an instance home this shell moves elsewhere on the machine', () => {
+    const world = { dir: fs.mkdtempSync(path.join(os.tmpdir(), 'ledger-world-')) };
+    roots.push(world.dir);
+    const elsewhere = path.join(os.tmpdir(), 'ledger-acme-elsewhere');
+    vi.stubEnv('ACME_CODEX_HOME', elsewhere);
+
+    try {
+      expect(hostHomes(world, [instance])).toContain(elsewhere);
+    } finally {
+      vi.unstubAllEnvs();
+    }
   });
 });
