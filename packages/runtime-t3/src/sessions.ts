@@ -92,8 +92,13 @@ export type SessionLookup =
 export async function sessionSince({ driver, toolHome, cwd, since, other }: { driver: Driver; toolHome: string; cwd: string; since: number; other?: string }): Promise<SessionLookup> {
   let sessions: SessionMeta[];
   const skipped: string[] = [];
-  // The runtime only reads sessions, and only writing one runs a tool's CLI, so each tool is its own command here.
-  const host: SessionHost = { processes: HOST_PROCESSES, executablesOf: (tool) => [tool], skippedFolder: (folder) => skipped.push(folder) };
+
+  // The runtime only reads sessions, and only writing one runs a tool's CLI, so each tool is its own command here and no
+  // tool's command starts in a home.
+  const host: SessionHost = {
+    processes: HOST_PROCESSES, executablesOf: (tool) => [tool], skippedFolder: (folder) => skipped.push(folder),
+    homeEnvAt: (tool, dir) => { throw new Error(`The T3 runtime only reads ${tool} sessions, so it starts no ${tool} command in ${dir}.`); },
+  };
 
   try {
     sessions = await DRIVERS[driver].sessions(toolHome, host).listConversations(cwd);

@@ -8,11 +8,11 @@ import { BUILT_IN_TOOLS } from '@teamai/tool-definitions';
 import { type LocalConfig } from '../../types.js';
 import path from 'node:path';
 import type { AgentAdapter } from '@teamai/tool-core/sessions/base';
-import { HOST_PROCESSES, type Processes } from '@teamai/shared/exec';
+import { HOST_PROCESSES } from '@teamai/shared/exec';
 import { log } from '@teamai/shared/log';
 import type { ToolFamily } from '@teamai/tool-core/family';
 import { locatesOwnStore, type SessionHost, type StoredPlatformDefinition } from '@teamai/tool-core/sessions/platform';
-import { executablesOf, homeVariableOf, toolCommandEnv } from '../../launch-registry.js';
+import { executablesOf, toolCommandEnv } from '../../launch-registry.js';
 import { isSessionPlatform, isStoredSessionPlatform, type SessionPlatform, type StoredSessionPlatform } from './platform-facts.js';
 import { sessionStoreDir, type SessionStoreRoot } from '../../locate.js';
 import { instanceHomeDir } from '../../tool-home.js';
@@ -29,8 +29,9 @@ export type AdapterFactory = (storeDir: string) => AgentAdapter;
 const warnedFolders = new Set<string>();
 
 /**
- * What every adapter this registry builds starts its processes through, the executables of each tool installed here, and
- * where it warns of a folder of its store it has no permission to read.
+ * What every adapter this registry builds starts its processes through, the executables of each tool installed here,
+ * where it warns of a folder of its store it has no permission to read, and the home variables a tool's command starts
+ * with in a home (`toolCommandEnv`).
  */
 export const SESSION_HOST: SessionHost = {
   processes: HOST_PROCESSES, executablesOf,
@@ -39,6 +40,7 @@ export const SESSION_HOST: SessionHost = {
     warnedFolders.add(folder);
     log.warn(`teamai has no permission to read ${folder}, so it lists none of the sessions in it. Let the user teamai runs as read ${folder} to list them.`);
   },
+  homeEnvAt: (tool, dir) => toolCommandEnv(tool, { kind: 'at', dir }),
 };
 
 function stored(definition: StoredPlatformDefinition): AdapterFactory {
@@ -107,41 +109,20 @@ function instanceStore(platform: string) {
 
 /**
  * What an instance's adapter runs: the instance's own command first, when it may run with no one to ask
- * (`acceptedCommandOf`), then the executables of the tool it extends, which read a store of the same format.
+ * (`acceptedCommandOf`), then the executables of the tool it extends, which read a store of the same format; either
+ * starts with every home variable the instance's command reads set to the store's home.
  */
 function instanceSessionHost(instance: ResolvedToolInstance): SessionHost {
+  const own = (tool: string): string => tool === instance.extends ? instance.name : tool;
+
   return {
     ...SESSION_HOST,
-    processes: withStoreHome(instance),
     executablesOf: (tool) => {
       const command = tool === instance.extends ? acceptedCommandOf(instance) : undefined;
 
       return command === undefined ? executablesOf(tool) : [command, ...executablesOf(tool)];
     },
-  };
-}
-
-/**
- * The processes an instance's adapter starts: where it points the home variable of the tool the instance extends at
- * the store, every home variable the instance's command reads is set to that home (`toolCommandEnv`).
- */
-function withStoreHome(instance: ResolvedToolInstance): Processes {
-  const variable = homeVariableOf(instance.extends);
-  const processes = SESSION_HOST.processes;
-
-  if (variable === undefined) return processes;
-
-  const follow = <O extends { env?: NodeJS.ProcessEnv }>(options: O): O => {
-    const dir = options.env?.[variable];
-
-    return dir === undefined ? options : { ...options, env: { ...options.env, ...toolCommandEnv(instance.name, { kind: 'at', dir }) } };
-  };
-
-  return {
-    ...processes,
-    exec: (command, args, options) => processes.exec(command, args, options && follow(options)),
-    spawn: (executable, args, options) => processes.spawn(executable, args, follow(options)),
-    spawnSync: (executable, args, options) => processes.spawnSync(executable, args, follow(options)),
+    homeEnvAt: (tool, dir) => toolCommandEnv(own(tool), { kind: 'at', dir }),
   };
 }
 

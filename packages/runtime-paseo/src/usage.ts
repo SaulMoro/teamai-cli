@@ -47,8 +47,14 @@ function unlistable(tool: PaseoTool, folders: readonly string[]): Unmeasured {
  */
 async function transcriptOf(format: Transcript, { tool, toolHome, cwd, sessionId }: { tool: PaseoTool; toolHome: string; cwd: string; sessionId: string }): Promise<{ kind: 'found'; transcript: string } | Extract<StepUsage, { kind: 'unmeasured' }>> {
   const skipped: string[] = [];
-  // The runtime only reads sessions, and only writing one runs a tool's CLI, so each tool is its own command here.
-  const host: SessionHost = { processes: HOST_PROCESSES, executablesOf: (name) => [name], skippedFolder: (folder) => skipped.push(folder) };
+
+  // The runtime only reads sessions, and only writing one runs a tool's CLI, so each tool is its own command here and no
+  // tool's command starts in a home.
+  const host: SessionHost = {
+    processes: HOST_PROCESSES, executablesOf: (name) => [name], skippedFolder: (folder) => skipped.push(folder),
+    homeEnvAt: (name, dir) => { throw new Error(`The Paseo runtime only reads ${name} sessions, so it starts no ${name} command in ${dir}.`); },
+  };
+
   let transcript: string | undefined;
 
   try {

@@ -108,7 +108,7 @@ vi.mock('node:readline', async (importOriginal) => {
 });
 
 // The registry is mocked here, so the adapters these tests read through get a host of their own.
-const READ_HOST: SessionHost = { processes: HOST_PROCESSES, executablesOf: (tool) => [tool], skippedFolder: (folder) => { throw new Error(`skipped ${folder}`); } };
+const READ_HOST: SessionHost = { processes: HOST_PROCESSES, executablesOf: (tool) => [tool], skippedFolder: (folder) => { throw new Error(`skipped ${folder}`); }, homeEnvAt: (_tool, dir) => ({ CODEX_HOME: dir }) };
 
 vi.mock('../session-flow/adapters/index.js', () => {
   const adapterOf = (platform: string) => {
