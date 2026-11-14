@@ -95,7 +95,6 @@ export const BASE_ID_COMPARISONS = new Map(Object.entries({
   'src/source.ts': 1,
   'src/uninstall.ts': 3,
   'src/utils/tool-names.ts': 1,
-  'src/workflow/discovery/workflow-skills.ts': 1,
   'src/workflow/step-model.ts': 1,
   'src/workflow/steps/prompt.ts': 4,
 }));
