@@ -260,6 +260,9 @@ function printFinished(list: readonly FinishedSession[]): void {
  * reads it, with the subagents it started and every secret this scope knows redacted.
  */
 async function showSession(sessionId: string, opts: { source?: string; teamSession?: string; author?: string; suite?: string; cwd?: string; json?: boolean }): Promise<void> {
+  // stdout carries the JSON alone: a warning, as of a folder of a session store teamai cannot read, goes to stderr.
+  if (opts.json) setStderrOnly(true);
+
   if (opts.teamSession === undefined && opts.author !== undefined) return refuseCommand({ code: 'invalid_arguments', message: '--author picks who pushed --team-session <name>. Pass it with --team-session.' }, opts.json);
 
   if (opts.teamSession === undefined && opts.suite !== undefined) return refuseCommand({ code: 'invalid_arguments', message: '--suite reads --team-session <name> as pushed for the suite\'s repository. Pass it with --team-session.' }, opts.json);
