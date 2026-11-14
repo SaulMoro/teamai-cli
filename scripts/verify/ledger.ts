@@ -20,6 +20,7 @@ import { isJsonObject, parseJson, type JsonValue } from '@teamai/shared/json';
 import { PERSONAL_DIRS } from '../../src/workflow/runtimes/layers.js';
 import { installInstances, judgedInstances, recordedInstallInstances, type InstallInstance } from './instances.js';
 import { leftoversSection } from './leftovers.js';
+import { movedShippedHomes, recordedShippedHomes, type ShippedHome } from './shipped-homes.js';
 import { runOn, type Target } from './target.js';
 import { checkoutStatus, git, GONE, loadWriters, present, REPO_ROOT, teamRefs, UNREADABLE, worldFiles, worldWritersFile, type World, type Writers } from './world.js';
 
@@ -471,9 +472,20 @@ export interface LedgerRules {
   readonly knownLeftoverDirs: readonly string[];
 }
 
-/** The rules for an install that declares `instances`: the shipped tools', and each instance's as its tool's. */
-export function ledgerRules(instances: readonly ResolvedToolInstance[]): LedgerRules {
-  const views = [...SHIPPED_VIEWS, ...instances.flatMap(instanceView)];
+/**
+ * A shipped tool at a home it moved to, as the ledger judges it: the tool reading another home, which is what an
+ * instance with only a home of its own is, so `instanceView` places its reads, deliveries and state there.
+ */
+function movedInstance({ tool, home }: ShippedHome): ResolvedToolInstance {
+  return { name: `${tool}@${home}`, extends: tool, home: { dir: home }, source: 'personal', file: '', location: `${tool} moved to ~/${home}`, revision: '' };
+}
+
+/**
+ * The rules for an install that declares `instances` and whose commands found shipped tools at the `moved` homes: the
+ * shipped tools', and each instance's and each moved home's as its tool's.
+ */
+export function ledgerRules(instances: readonly ResolvedToolInstance[], moved: readonly ShippedHome[] = []): LedgerRules {
+  const views = [...SHIPPED_VIEWS, ...[...instances, ...moved.map(movedInstance)].flatMap(instanceView)];
   const reads = [...new Set(views.flatMap((view) => toolReads(view.tool).map(view.placed)))];
   const homeWrites = [...reads.filter((read) => read.startsWith('home/')), ...views.flatMap((view) => view.homeDeliveries)];
 
@@ -572,13 +584,13 @@ export function unobservedEntries(before: Readonly<Record<string, string>>, afte
 }
 
 /** A way in has a way out: after `teamai uninstall` each install's HOME and project match the snapshot taken when it was made. */
-async function reverseState(world: World, instances: ReadonlyMap<string, readonly InstallInstance[]>): Promise<Section> {
+async function reverseState(world: World, instances: ReadonlyMap<string, readonly InstallInstance[]>, moved: ReadonlyMap<string, readonly ShippedHome[]>): Promise<Section> {
   const title = '(e) After teamai uninstall';
   const leaks: string[] = [];
   const notes: string[] = [];
 
   for (const place of ledgerPlaces(world)) {
-    const reversed = await reverseOf(world, place, ledgerRules(judgedInstances(instances.get(place.label) ?? [])));
+    const reversed = await reverseOf(world, place, ledgerRules(judgedInstances(instances.get(place.label) ?? []), moved.get(place.label) ?? []));
     leaks.push(...reversed.leaks.map((line) => `${place.label}${line}`));
     notes.push(...reversed.notes.map((line) => `${place.label}${line}`));
   }
@@ -767,7 +779,10 @@ export async function runLedger(world: World): Promise<{ verdict: string; leaks:
     return [place.label, [...recordedInstallInstances(world, place.home), ...now]] as const;
   })));
 
-  const reverse = await reverseState(world, instances);
+  // And every home its commands found a shipped tool moved to, as init's toolRoots or a command's variable put it.
+  const moved = new Map(ledgerPlaces(world).map((place) => [place.label, [...recordedShippedHomes(world, place.home), ...movedShippedHomes(place.home, { env: place.env ?? {}, cwd: place.project })]] as const));
+
+  const reverse = await reverseState(world, instances, moved);
   const left = { title: '(f) What a driver left running', ...await leftovers.observe() };
   const sections = [teamRepo(world), worktrees(world), hostFiles(world, [...instances.values()].flat().map(({ declared }) => declared)), environment(world), reverse, left];
   const leaks = sections.reduce((sum, section) => sum + section.leaks.length, 0);

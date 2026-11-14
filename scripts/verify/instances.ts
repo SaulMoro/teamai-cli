@@ -24,19 +24,7 @@ const InstallRepo = z.object({ repo: LocalConfigSchema.shape.repo });
  * `teamai uninstall`, which removes those records. An instance it cannot read is judged as no tool's: what it left is a LEAK.
  */
 export async function toolInstancesIn(home: string): Promise<ResolvedToolInstance[]> {
-  const projects = projectsRootDir(home);
-  const dataHomes = [path.join(home, '.teamai'), ...(fs.existsSync(projects) ? fs.readdirSync(projects).map((slug) => path.join(projects, slug)) : [])];
-
-  const teamRepos = dataHomes.flatMap((dataHome) => {
-    const file = path.join(dataHome, 'config.yaml');
-    let text: unknown;
-
-    try {
-      text = parseYaml(fs.readFileSync(file, 'utf8'));
-    } catch {
-      return [];
-    }
-
+  const teamRepos = installConfigs(home).flatMap((text) => {
     const config = InstallRepo.safeParse(text);
 
     return config.success ? [config.data.repo.localPath] : [];
@@ -52,6 +40,20 @@ export async function toolInstancesIn(home: string): Promise<ResolvedToolInstanc
 
   // `.acme/`, `./.acme` and `.acme` name one folder.
   return instances.map((instance) => (instance.home === undefined ? instance : { ...instance, home: { ...instance.home, dir: path.posix.normalize(instance.home.dir).replace(/\/+$/, '') } }));
+}
+
+/** The config.yaml of each data home of the install under `home`, the user's and each project's, as YAML values: one it cannot read is left out. */
+export function installConfigs(home: string): unknown[] {
+  const projects = projectsRootDir(home);
+  const dataHomes = [path.join(home, '.teamai'), ...(fs.existsSync(projects) ? fs.readdirSync(projects).map((slug) => path.join(projects, slug)) : [])];
+
+  return dataHomes.flatMap((dataHome) => {
+    try {
+      return [parseYaml(fs.readFileSync(path.join(dataHome, 'config.yaml'), 'utf8'))];
+    } catch {
+      return [];
+    }
+  });
 }
 
 /** An instance an install declares, and its home as a command of the world found it. */
