@@ -38,7 +38,7 @@ import { abandonPlace, cloneDelivery, cloneHead, preparedClone, cloneRoleProblem
 import { memberTools, type MemberTool } from '../member-tools.js';
 import { acceptToolCommand } from '../../tool-instances.js';
 import { instanceHomeDir, toolHome as memberToolHome } from '../../tool-home.js';
-import { LAUNCH_ORDER, LAUNCH_TOOLS, launchAdapterIdOf, launchTargetOf, type LaunchTarget, type LaunchTool } from '../../launch-registry.js';
+import { LAUNCH_ORDER, LAUNCH_TOOLS, launchAdapterIdOf, launchHomeEnv, launchTargetOf, type LaunchTarget, type LaunchTool } from '../../launch-registry.js';
 import { chooseStepModel, loadDeployedAgent, type StepModel } from '../step-model.js';
 import type { DriverIdentity, WorkflowFailure, WorkflowStep } from '../types.js';
 import { contractClone, type SessionRef } from '../workspace.js';
@@ -511,7 +511,7 @@ export async function runPromptStep({ config, lock, driver, lease, adapter = ste
     secrets,
     expected: expectedOutput(lease.output),
     // The lease `env` is set over the step's environment, as a command's is.
-    env: { ...withoutOuterSessionMarkers(lease.processEnv ?? process.env), ...lease.env, ...attemptEnv(config, lock.run, lease.attempt, mode) },
+    env: { ...withoutOuterSessionMarkers(lease.processEnv ?? process.env), ...launchHomeEnv(target), ...lease.env, ...attemptEnv(config, lock.run, lease.attempt, mode) },
   };
 
   let launcher = adapter;
