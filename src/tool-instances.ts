@@ -280,10 +280,11 @@ export function resetToolInstancesForTests(): void {
 }
 
 /**
- * The instances a lookup sees: the member's own first, then the team's. A workspace's team instance replaces the user
- * scope's of the same name, as its driver definitions do; one name two team repos of one scope define apart is left out.
+ * The instances the files declare, before any is refused for its home: the member's own over the team's, and a
+ * workspace's team instance over the user scope's of the same name, as its driver definitions do. One name two team
+ * repos of one scope define apart is left out.
  */
-function effectiveInstances(): Map<string, ResolvedToolInstance> {
+function declaredTable(): Map<string, ResolvedToolInstance> {
   const table = new Map<string, ResolvedToolInstance>();
   const repos = [...teamByRepo.values()];
 
@@ -311,7 +312,7 @@ function effectiveInstances(): Map<string, ResolvedToolInstance> {
 
   if (readsPersonal) for (const instance of personal) table.set(instance.name, instance);
 
-  return withoutSharedHomes(table);
+  return table;
 }
 
 /**
@@ -375,7 +376,9 @@ function withoutSharedHomes(table: Map<string, ResolvedToolInstance>): Map<strin
 }
 
 function publish(): void {
-  useToolInstances(effectiveInstances());
+  const declared = declaredTable();
+
+  useToolInstances(withoutSharedHomes(new Map(declared)), declared);
 }
 
 /** The tool paths `instance` gives its tool: its own `paths`, else the paths of the tool it extends, moved to its home. */
