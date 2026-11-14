@@ -3500,13 +3500,25 @@ export function applyToolRoots(
     // Not skipped when the root is unchanged: a bare file name (the MCP
     // companion) still moves inside it (see relocateToolPaths).
     out ??= { ...toolPaths };
-    // An instance on the recorded root of the tool it extends moves only what lies in that tool's home; the rest of its
-    // paths name places the tool reads wherever its home is.
-    const base = key === tool ? undefined : toolOf(tool)?.base;
-    out[tool] = base === undefined ? rerootToolPaths(paths, newRoot) : relocateToolPaths(paths, toolPathRoots(DEFAULT_TOOL_PATHS[base]), newRoot);
+    // An instance on the recorded root of the tool it extends moves as that tool does: what lies under a root of that
+    // tool's paths moves, and the rest of its own paths name places the tool reads wherever its home is.
+    out[tool] = relocateToolPaths(paths, relocationRootsOf(key, toolPaths), newRoot);
   }
 
   return out ?? toolPaths;
+}
+
+/**
+ * The roots a recorded root of `tool` (a `toolRoots` key) moves: every root its paths in `toolPaths` hang off, and its
+ * default root, which a team that moved its paths may still name in an instance's own paths.
+ */
+function relocationRootsOf(tool: string, toolPaths: Record<string, z.infer<typeof ToolPathsSchema>>): Set<string> {
+  const resolved = toolOf(tool);
+  // An instance's own key is its own home's, which has no default root.
+  const shipped = resolved === undefined || resolved.instance?.kind === 'instance' ? undefined : DEFAULT_TOOL_PATHS[resolved.base];
+  const paths = toolPaths[tool] ?? shipped;
+
+  return new Set([...(paths ? toolPathRoots(paths) : []), ...(shipped ? toolPathRoots(shipped) : [])]);
 }
 
 /**

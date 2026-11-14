@@ -602,6 +602,41 @@ describe('the sessions of an instance', () => {
       outside: { skills: '.agents/team-skills', settings: '.codex-work/hooks.json' },
     });
   });
+
+  // The team moved the skills of Codex out of its default root, so an instance in its home moves them as Codex does.
+  it('relocates an instance with no home to the recorded root of the tool it extends as that tool\'s paths the team set relocate', async () => {
+    fs.mkdirSync(path.join(home, '.teamai'), { recursive: true });
+    fs.mkdirSync(path.join(home, '.codex-work'));
+    fs.writeFileSync(path.join(home, '.teamai', 'config.yaml'), 'repo: { localPath: /x, remote: x }\nusername: u\nscope: user\nadditionalRoles: []\nenabledAgents: [review-codex]\ntoolRoots: { codex: ~/.codex-work }\n');
+    const repo = teamRepo({
+      'tools/review-codex.yaml': 'schemaVersion: v1alpha1\nname: review-codex\nextends: codex\n',
+      'tools/shared-codex.yaml': 'schemaVersion: v1alpha1\nname: shared-codex\nextends: codex\npaths: { skills: .codex-team/review-skills, settings: .codex/hooks.json, agents: .agents/review-agents }\n',
+    });
+    fs.writeFileSync(path.join(repo, 'teamai.yaml'), 'team: acme\nrepo: acme/team\ntoolPaths:\n  codex: { skills: .codex-team/skills }\n');
+    const { config } = await load(repo);
+    const { scopedToolPaths } = await import('../types.js');
+    const { toolCommandEnv } = await vi.importActual<typeof import('../launch-registry.js')>('../launch-registry.js');
+    const { installOf, locate, ownOf, unreadWrites } = await import('../locate.js');
+    const toolRoots = { codex: '~/.codex-work' };
+    const scoped = scopedToolPaths(config ?? { toolPaths: {} }, { scope: 'user', toolRoots });
+    const skills = await locate('review-codex', 'skills', installOf(config ?? { toolPaths: {} }, { repo: {}, scope: 'user', toolRoots, enabledAgents: ['review-codex'] }));
+    const work = path.join(home, '.codex-work');
+
+    expect({
+      launch: toolCommandEnv('review-codex', { kind: 'delivered', inherited: {}, toolRoots }),
+      skills: ownOf(skills)?.path,
+      unread: unreadWrites(skills, undefined, { kind: 'anywhere' }),
+      relocated: { codex: scoped.codex, 'review-codex': scoped['review-codex'] },
+      // Its own paths move under either root Codex's paths hang off, the team's or the default; one under neither stays.
+      own: scoped['shared-codex'],
+    }).toEqual({
+      launch: { kind: 'ready', env: { CODEX_HOME: work } },
+      skills: path.join(work, 'skills'),
+      unread: [],
+      relocated: { codex: { skills: '.codex-work/skills' }, 'review-codex': { skills: '.codex-work/skills' } },
+      own: { skills: '.codex-work/review-skills', settings: '.codex-work/hooks.json', agents: '.agents/review-agents' },
+    });
+  });
 });
 
 describe('the home of an instance', () => {

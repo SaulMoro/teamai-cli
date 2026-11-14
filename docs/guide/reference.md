@@ -252,7 +252,7 @@ teamai webhook test --dry-run
 
 ### Team tools (`tools/`)
 
-A team on an internal build or a fork of a supported tool adds it as an instance of the shipped tool, with no release. An instance sets another command, home and paths. It keeps the tool's launch flags and session, token, hook and MCP formats. An instance extends Claude Code (`claude`) or Codex (`codex`); teamai refuses one that extends any other tool, naming the file, until it supports that tool ([tool support](./tool-support.md#tool-instances)). An instance with a home of its own keeps sessions of its own; one that keeps the tool's home writes that tool's sessions and receives its files where that tool does, in the root `init` recorded for it (`toolRoots`) too, where its own `paths` inside that tool's home move with it and the rest stay where they are.
+A team on an internal build or a fork of a supported tool adds it as an instance of the shipped tool, with no release. An instance sets another command, home and paths. It keeps the tool's launch flags and session, token, hook and MCP formats. An instance extends Claude Code (`claude`) or Codex (`codex`); teamai refuses one that extends any other tool, naming the file, until it supports that tool ([tool support](./tool-support.md#tool-instances)). An instance with a home of its own keeps sessions of its own; one that keeps the tool's home writes that tool's sessions and receives its files where that tool does, in the root `init` recorded for it (`toolRoots`) too, where its own `paths` under a root of that tool's paths or of its default home move with it, as that tool's do, and the rest stay where they are.
 
 ```yaml
 # tools/acme-claude.yaml in the team repo
