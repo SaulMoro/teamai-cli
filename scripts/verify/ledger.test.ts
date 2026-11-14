@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -385,5 +386,43 @@ describe("a file section (e) reads after the walk listed it", () => {
     fs.mkdirSync(path.join(place.home, '.claude.json'));
 
     expect(() => uninstallChanges({ place, before: {}, after: { 'home/.claude.json': sha('b') }, writers: {}, repository: { tracked: [], dirty: [] }, rules: ledgerRules([]) })).toThrow(/EISDIR/);
+  });
+});
+
+describe("the empty [hooks.state] table Codex leaves in its config.toml, in a ledger's section (e)", () => {
+  const hash = (text: string) => createHash('sha256').update(text).digest('hex');
+  const own = 'cli_auth_credentials_store = "file"\n';
+  const ACME = { name: 'acme-codex', extends: 'codex' as const, home: { dir: 'work/acme-moved' }, source: 'team' as const, file: '/team/tools/acme-codex.yaml', location: 'tools/acme-codex.yaml', revision: 'r1' };
+  const rules = ledgerRules([ACME], [{ tool: 'codex', home: '.codex-work' }]);
+
+  const judge = (entry: string, text: string, earlier: { before?: string; wrote?: string }) => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ledger-hooks-state-'));
+    roots.push(root);
+    const place = { home: path.join(root, 'home'), project: path.join(root, 'project') };
+    const file = path.join(root, entry);
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, text);
+    const before = earlier.before === undefined ? {} : { [entry]: hash(earlier.before) };
+    const writers = earlier.wrote === undefined ? {} : { [entry]: { program: 'cp', value: hash(earlier.wrote) } };
+
+    return uninstallChanges({ place, before, after: { [entry]: hash(text) }, writers, repository: { tracked: [], dirty: [] }, rules });
+  };
+
+  it.each([
+    { home: "Codex's own home, beside what it held before", entry: 'home/.codex/config.toml', earlier: { before: own } },
+    { home: 'the Codex root init recorded through toolRoots, beside what a member program wrote', entry: 'home/.codex-work/config.toml', earlier: { wrote: own } },
+    { home: "a Codex instance's home its variable moved, beside what a member program wrote", entry: 'home/work/acme-moved/config.toml', earlier: { wrote: own } },
+  ])("attributes it to Codex in $home", ({ entry, earlier }) => {
+    const judged = judge(entry, `${own}\n[hooks.state]\n`, earlier);
+
+    expect(judged.leaks).toEqual([]);
+    expect(judged.notes).toEqual([expect.stringMatching(new RegExp(`^Codex's empty \\[hooks\\.state\\] table.*: ${entry.replaceAll('.', '\\.')}$`))]);
+  });
+
+  it.each([
+    { left: "a trust entry of teamai's", text: `${own}\n[hooks.state]\n\n[hooks.state."/w/home/.codex-work/hooks.json:session_start:0:0"]\ntrusted_hash = "sha256:00"\n` },
+    { left: 'a line no one the ledger knows wrote', text: `${own}model = "o3"\n\n[hooks.state]\n` },
+  ])('keeps the file a LEAK when it holds $left beside the table', ({ text }) => {
+    expect(judge('home/.codex-work/config.toml', text, { wrote: own }).leaks).toEqual(['home/.codex-work/config.toml left behind']);
   });
 });

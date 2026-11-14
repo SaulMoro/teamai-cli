@@ -259,13 +259,19 @@ const TEAMAI_LEFTOVERS: readonly (readonly [string, string])[] = [
 
 /**
  * What a shipped tool writes for itself where teamai writes, as that tool has it in HOME: each file with what it holds,
- * and the directories it leaves with everything in them. teamai starts Codex's app-server to trust its hooks (#955), and
- * Codex writes its system skills, and the table of hook approvals that taking teamai's out leaves empty.
+ * the directories it leaves with everything in them, and the TOML files it leaves an empty table of its own in, beside
+ * whatever else they held. teamai starts Codex's app-server to trust its hooks (#955), and Codex writes its system
+ * skills, and the table of hook approvals, `[hooks.state]`, that taking teamai's out leaves empty.
  */
-const TOOL_LEFTOVERS: Partial<Record<ToolId, { readonly files: readonly (readonly [string, string])[]; readonly dirs: readonly string[] }>> = {
+const TOOL_LEFTOVERS: Partial<Record<ToolId, {
+  readonly files: readonly (readonly [string, string])[];
+  readonly dirs: readonly string[];
+  readonly emptyTables?: readonly { readonly file: string; readonly table: string; readonly owner: string }[];
+}>> = {
   codex: {
     files: [['home/.codex/skills', 'dir'], ['home/.codex/config.toml', createHash('sha256').update('[hooks.state]\n').digest('hex')]],
     dirs: ['home/.codex/skills/.system'],
+    emptyTables: [{ file: 'home/.codex/config.toml', table: 'hooks.state', owner: 'Codex' }],
   },
 };
 
@@ -466,6 +472,8 @@ export interface LedgerRules {
   isTeamaiPlace(entry: string, value: string | undefined): boolean;
   /** The files teamai writes its part into beside a tool's own settings, never a resource it delivers into a folder. */
   isSharedFile(entry: string): boolean;
+  /** The table a tool leaves empty in the TOML file at `entry`, in any home of it (`emptyTables`), and whose it is. */
+  emptyTableOf(entry: string): { readonly table: string; readonly owner: string } | undefined;
   /** What `entry` is known to hold when uninstall leaves it (#1808): a sha256, `dir`, or `any`. */
   knownLeftover(entry: string): string | undefined;
   /** Directories left with everything in them: session ids name what is in them, or the tool installs them. */
@@ -517,6 +525,7 @@ export function ledgerRules(instances: readonly ResolvedToolInstance[], moved: r
     ...views.flatMap((view) => (TOOL_LEFTOVERS[view.tool]?.files ?? []).map(([entry, holds]) => [view.placed(entry), holds] as const)),
   ]);
 
+  const emptyTables = new Map(views.flatMap((view) => (TOOL_LEFTOVERS[view.tool]?.emptyTables ?? []).map(({ file, table, owner }) => [view.placed(file), { table, owner }] as const)));
   const knownLeftoverDirs = ['home/.teamai/sessions', ...views.flatMap((view) => (TOOL_LEFTOVERS[view.tool]?.dirs ?? []).map(view.placed))];
 
   const isTeamaiPlace = (entry: string, value: string | undefined): boolean =>
@@ -538,6 +547,7 @@ export function ledgerRules(instances: readonly ResolvedToolInstance[], moved: r
     isToolOwnState: (entry, text) => isToolOwnState(stateFiles, entry, text),
     isTeamaiPlace,
     isSharedFile: (entry) => sharedFiles.has(entry),
+    emptyTableOf: (entry) => emptyTables.get(entry),
     knownLeftover: (entry) => (knownLeftoverDirs.includes(entry) ? 'any' : known.get(entry)),
     knownLeftoverDirs,
   };
@@ -687,6 +697,15 @@ export function uninstallChanges({ place, before, after, writers, repository, ru
       continue;
     }
 
+    // A tool leaves an empty table of its own in its TOML settings, which held before what they hold again without it.
+    const empty = text === undefined ? undefined : rules.emptyTableOf(entry);
+    const held = new Set([before[entry], writer?.value ?? undefined].filter((value) => value !== undefined));
+
+    if (empty !== undefined && text !== undefined && withoutEmptyTable(text, empty.table).some((rest) => held.has(createHash('sha256').update(rest).digest('hex')))) {
+      excuse(`${empty.owner}'s empty [${empty.table}] table, which it writes itself, beside what the file held before or a member's program wrote`, entry);
+      continue;
+    }
+
     const own = change === 'left behind' ? rules.ownStateOf(entry, now) : undefined;
 
     if (own?.kind === 'state') {
@@ -748,6 +767,20 @@ export function uninstallChanges({ place, before, after, writers, repository, ru
   for (const [why, entries] of theirs) notes.push(`${why}: ${entries.join(', ')}`);
 
   return { leaks, notes };
+}
+
+/**
+ * `text`, a TOML file, without the empty `[table]` in it, each way a writer sets a table off (with the blank line above
+ * it, or without); none when it holds no such table. A table with keys, or a subtable after it, is not empty.
+ */
+function withoutEmptyTable(text: string, table: string): string[] {
+  const lines = text.split('\n');
+  const at = lines.findIndex((line, i) => line.trim() === `[${table}]` && /^(\[|$)/.test(lines.slice(i + 1).find((next) => next.trim() !== '')?.trim() ?? '') && !lines.slice(i + 1).some((next) => next.trim().startsWith(`[${table}.`)));
+
+  if (at === -1) return [];
+  const without = (from: number) => [...lines.slice(0, from), ...lines.slice(at + 1)].join('\n');
+
+  return at > 0 && lines[at - 1]?.trim() === '' ? [without(at), without(at - 1)] : [without(at)];
 }
 
 /** A section line that says the ledger could not observe a part, a member's (`@<name> `) too: that part proves nothing. */
