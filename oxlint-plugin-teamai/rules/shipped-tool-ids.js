@@ -56,16 +56,11 @@ const BASE_ID_NAMES = new Set(['CLAUDE_TOOL_ID', 'CODEX_TOOL_ID', 'CLAUDE_TOOL',
 /**
  * Files that compare a tool name with Claude Code's or Codex's id (`tool === 'codex'`, `case CODEX_TOOL_ID:`), by count,
  * each with why the comparison is meant to be false for an instance of that tool, or why the name it compares can never
- * be one. A comparison of what `isResolved` recognizes (the tool an instance extends, a format, a family) is not counted.
+ * be one. A comparison of what `isResolved` recognizes (the tool an instance extends, a format, a family), or a case of a
+ * switch `isExhaustive` finds over a closed union, is not counted.
  * A new comparison fails; a count above what the file holds fails until it is lowered.
  */
 export const BASE_ID_COMPARISONS = new Map(Object.entries({
-  // Each switches over `PaseoTool`, the shipped tool a Paseo provider runs; an instance is matched to its base before
-  // (`isPaseoTool(instance.tool)` in daemon/connect.ts), and Paseo has no provider of its own for it.
-  'packages/runtime-paseo/src/conversation.ts': 2,
-  'packages/runtime-paseo/src/daemon/connect.ts': 4,
-  'packages/runtime-paseo/src/offer.ts': 2,
-  'packages/runtime-paseo/src/providers.ts': 2,
   // A fake Paseo daemon: it runs the providers Paseo ships, by the base `baseOf` gives a provider's id.
   'packages/runtime-paseo/src/testing/fake-daemon.ts': 6,
   // The member's provider, a `PaseoTool` (DaemonHost.memberProvider), never an instance's name.
@@ -85,8 +80,6 @@ export const BASE_ID_COMPARISONS = new Map(Object.entries({
   // Every caller passes `launchAdapterIdOf(tool)`, the adapter an instance shares with its tool; the package cannot
   // import the type that says so.
   'packages/tool-core/src/stdout.ts': 3,
-  // Compares a launch family (`ConfinedArgsInput['family']`), which an instance shares with its tool.
-  'packages/tool-launch/src/confined-launch.ts': 1,
   // `claude` is the default of `hook --tool` (src/index.ts), which a named host replaces; an instance is never that default.
   'src/dashboard-collector.ts': 2,
   // Names the Codex build in a check's title unless it is Codex itself; an instance is named.
@@ -137,8 +130,11 @@ const RESOLVERS = new Set(['baseToolOf', 'agentFormatOf', 'hookFormatOf', 'mcpFo
 /** Fields that hold such an answer, never a tool's own name: `toolOf(tool).base`, an MCP target's `format`, a descriptor's `launch`. */
 const RESOLVED_FIELDS = new Set(['base', 'format', 'family', 'kind', 'launch', 'ecosystem']);
 
-/** Types that admit only the ids teamai ships or a format, so no instance name reaches a comparison of one. */
-const RESOLVED_TYPES = new Set(['ToolName', 'AgentToolId', 'ModelAgent', 'McpFormat', 'HookFormat']);
+/**
+ * Types that admit only the ids teamai ships or a format, so no instance name reaches a comparison of one: `PaseoTool`
+ * is the shipped tool a Paseo provider runs (packages/runtime-paseo/src/providers.ts).
+ */
+const RESOLVED_TYPES = new Set(['ToolName', 'AgentToolId', 'ModelAgent', 'McpFormat', 'HookFormat', 'PaseoTool']);
 
 /**
  * Whether `node` holds the tool an instance extends, or a format or family, rather than a tool's own name: a resolver's
@@ -176,16 +172,40 @@ function isResolved(sourceCode, node, depth = 0) {
 }
 
 /**
- * Whether `type` is one of `RESOLVED_TYPES`, or a part of one picked with `Exclude` or `Extract`.
+ * Whether `type` is one of `RESOLVED_TYPES`, a part of one picked with `Exclude` or `Extract`, or the type of a resolved
+ * field (`ConfinedArgsInput['family']`).
  * @param {ESTree.Node | null | undefined} type
  * @returns {boolean}
  */
 function isResolvedType(type) {
+  if (type?.type === 'TSIndexedAccessType') {
+    const field = type.indexType.type === 'TSLiteralType' ? stringLiteralValue(type.indexType.literal) : undefined;
+
+    return field !== undefined && RESOLVED_FIELDS.has(field);
+  }
+
   if (type?.type !== 'TSTypeReference' || type.typeName.type !== 'Identifier') return false;
 
   if (RESOLVED_TYPES.has(type.typeName.name)) return true;
 
   return ['Exclude', 'Extract'].includes(type.typeName.name) && isResolvedType(type.typeArguments?.params[0]);
+}
+
+/**
+ * Whether `statement` switches over a closed union: its `default` assigns the discriminant to `never`
+ * (`const unhandled: never = tool;`), which the type check holds only when every member has a case, so no instance's
+ * name reaches one.
+ * @param {import('@oxlint/plugins').Context['sourceCode']} sourceCode
+ * @param {ESTree.SwitchStatement} statement
+ * @returns {boolean}
+ */
+function isExhaustive(sourceCode, statement) {
+  const fallback = statement.cases.find((one) => one.test === null);
+  const body = fallback?.consequent.flatMap((one) => (one.type === 'BlockStatement' ? one.body : [one])) ?? [];
+  const discriminant = sourceCode.getText(statement.discriminant);
+
+  return body.some((one) => one.type === 'VariableDeclaration' && one.declarations.some((declarator) => declarator.id.type === 'Identifier'
+    && declarator.id.typeAnnotation?.typeAnnotation.type === 'TSNeverKeyword' && declarator.init != null && sourceCode.getText(declarator.init) === discriminant));
 }
 
 /**
@@ -227,7 +247,9 @@ export default defineRule({
         if (other !== undefined && !isResolved(context.sourceCode, other)) comparisons.push(node);
       },
       SwitchCase(node) {
-        if (isBaseId(node.test) && node.parent?.type === 'SwitchStatement' && !isResolved(context.sourceCode, node.parent.discriminant)) comparisons.push(node);
+        if (isBaseId(node.test) && node.parent?.type === 'SwitchStatement' && !isResolved(context.sourceCode, node.parent.discriminant) && !isExhaustive(context.sourceCode, node.parent)) {
+          comparisons.push(node);
+        }
       },
       'Program:exit'(node) {
         if (comparisons.length > comparable) {
