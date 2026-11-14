@@ -14,6 +14,7 @@ import { defaultToolHome, envToolHome, toolHome } from '../../src/tool-home.js';
 import { detectToolRoot, LocalConfigSchema, RELOCATABLE_TOOLS, TeamaiConfigBaseSchema, type ToolPathsSchema } from '../../src/types.js';
 import { defaultPathsOf, instanceHomeDir, instanceReadPath, teamToolInstances, type ResolvedToolInstance } from '../../src/tool-instances.js';
 import { projectsRootDir } from '../../src/utils/partition.js';
+import { FsFailureSchema, isPermissionDenied, type FsFailure } from '@teamai/shared/fs-failure';
 import { parseYaml } from '@teamai/shared/yaml';
 import { MCP_SERVER_KEY } from '../../src/resources/mcp-format.js';
 import type { ToolDescriptor } from '@teamai/tool-core/definition';
@@ -77,18 +78,37 @@ function worktrees(world: World): Section {
 }
 
 /**
+ * Section (c)'s answer to `error` at `file`: gone, as a live tool home deletes files while it is read, is nothing to check;
+ * no permission is unreadable, for the time rule to judge; any other failure fails the ledger, naming the file.
+ */
+function walkFailure(failure: FsFailure, file: string, unreadable: string[]): void {
+  if (failure.code === 'ENOENT') return;
+
+  if (isPermissionDenied(failure)) {
+    unreadable.push(file);
+
+    return;
+  }
+
+  throw new Error(`Section (c) could not read ${file}: ${failure.message}`);
+}
+
+/**
  * Files under `dir`, to a depth of three, changed since the world was born and whose path or content names the world.
  * A world's own directory names hold its run id, so a partition or transcript made for it is found by name.
  */
-function namingWorld(dir: string, world: World, since: number, found: string[], unreadable: string[], depth = 0): void {
+export function namingWorld(dir: string, world: Pick<World, 'runId' | 'dir'>, since: number, found: string[], unreadable: string[], depth = 0): void {
   if (!fs.existsSync(dir)) return;
   const id = world.runId.toLowerCase();
   let entries: fs.Dirent[];
 
   try {
     entries = fs.readdirSync(dir, { withFileTypes: true });
-  } catch {
-    unreadable.push(dir);
+  } catch (error) {
+    const failure = FsFailureSchema.safeParse(error);
+
+    if (!failure.success) throw error;
+    walkFailure(failure.data, dir, unreadable);
 
     return;
   }
@@ -112,7 +132,10 @@ function namingWorld(dir: string, world: World, since: number, found: string[], 
         if (fs.readlinkSync(full).toLowerCase().includes(id)) found.push(full);
         else if (depth < 3 && fs.statSync(full).isDirectory()) namingWorld(full, world, since, found, unreadable, depth + 1);
       } catch (error) {
-        if (!(error instanceof Error && 'code' in error && error.code === 'ENOENT')) unreadable.push(full);
+        const failure = FsFailureSchema.safeParse(error);
+
+        if (!failure.success) throw error;
+        walkFailure(failure.data, full, unreadable);
       }
 
       continue;
@@ -121,7 +144,6 @@ function namingWorld(dir: string, world: World, since: number, found: string[], 
     // A .jsonl is a session log: the session running this world types its run id, so its content proves nothing.
     if (!entry.isFile() || entry.name.endsWith('.jsonl')) continue;
 
-    // A live tool home deletes files while it is read.
     try {
       const stat = fs.statSync(full);
 
@@ -130,7 +152,10 @@ function namingWorld(dir: string, world: World, since: number, found: string[], 
 
       if (text.includes(world.dir) || text.includes(world.runId)) found.push(full);
     } catch (error) {
-      if (!(error instanceof Error && 'code' in error && error.code === 'ENOENT')) unreadable.push(full);
+      const failure = FsFailureSchema.safeParse(error);
+
+      if (!failure.success) throw error;
+      walkFailure(failure.data, full, unreadable);
     }
   }
 }

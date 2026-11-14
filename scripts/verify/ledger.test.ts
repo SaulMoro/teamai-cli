@@ -1,8 +1,8 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
-import { environmentNotes, hostUnreadableNote, ledgerRules, ledgerVerdict, toolInstancesIn, unobservedEntries } from './ledger.js';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { environmentNotes, hostUnreadableNote, ledgerRules, ledgerVerdict, namingWorld, toolInstancesIn, unobservedEntries } from './ledger.js';
 
 const roots: string[] = [];
 
@@ -25,6 +25,51 @@ describe("a ledger's verdict", () => {
     { when: 'a note only mentions the words', sections: [section([], ['the tool said NOT OBSERVED once'])], verdict: 'CLEAN' },
   ])('is $verdict when $when', ({ sections, verdict }) => {
     expect(ledgerVerdict(sections)).toBe(verdict);
+  });
+});
+
+describe("section (c)'s walk of a tool home", () => {
+  const world = { runId: '20261114T000000-abcdef', dir: '/w/20261114T000000-abcdef' };
+  const toolHome = (): { home: string; folder: string } => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'ledger-walk-'));
+    roots.push(home);
+    const folder = path.join(home, 'projects');
+    fs.mkdirSync(folder);
+
+    return { home, folder };
+  };
+  const failing = (folder: string, code: string) => vi.spyOn(fs, 'readdirSync').mockImplementation(((dir: fs.PathLike, _options: { withFileTypes: true }) => {
+    if (dir.toString() === folder) throw Object.assign(new Error(`${code}: scandir '${folder}'`), { code, path: folder });
+    const listing = fs.opendirSync(dir.toString());
+    const entries: fs.Dirent[] = [];
+
+    for (let entry = listing.readSync(); entry !== null; entry = listing.readSync()) entries.push(entry);
+    listing.closeSync();
+
+    return entries;
+  }) as typeof fs.readdirSync);
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it.each(['EACCES', 'EPERM'])('counts a folder it may not list (%s) as unreadable, for the time rule to judge', (code) => {
+    const { home, folder } = toolHome();
+    failing(folder, code);
+    const unreadable: string[] = [];
+
+    namingWorld(home, world, 0, [], unreadable);
+
+    expect(unreadable).toEqual([folder]);
+  });
+
+  it('fails the ledger, naming the folder and the error, on any other failure to list it, as running out of file handles', () => {
+    const { home, folder } = toolHome();
+    failing(folder, 'EMFILE');
+    const unreadable: string[] = [];
+
+    expect(() => namingWorld(home, world, 0, [], unreadable)).toThrow(`Section (c) could not read ${folder}: EMFILE: scandir '${folder}'`);
+    expect(unreadable).toEqual([]);
   });
 });
 
