@@ -2,6 +2,7 @@ import { z } from 'zod';
 import { RuntimeOptionsSchema, type OpId, type RuntimeFailure, type RuntimeOptions } from '@teamai/runtime-protocol';
 import type { DriverCan } from '../requirements.js';
 import { toolHomeVariable } from './attempt.js';
+import { composedName } from './entry-identity.js';
 import { isUnansweredFailure, type Initialized, type OpenRequest, type Reattached, type StepRuntime } from '@teamai/runtime-protocol/step-runtime';
 
 // ─── A runtime through another ───────────────────────────
@@ -112,11 +113,6 @@ export function nestedOptions(options: RuntimeOptions, names: { outer: string; i
   }
 
   return { ok: true, ...split };
-}
-
-/** The name the engine gives `inner` through `outer`, in its records and messages. */
-export function composedName(inner: string, outer: string): string {
-  return `${inner} through ${outer}`;
 }
 
 /**

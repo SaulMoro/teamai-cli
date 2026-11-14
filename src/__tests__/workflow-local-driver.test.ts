@@ -1353,7 +1353,7 @@ steps:
     if (!ready.ok) throw new Error(ready.failure.message);
     const runtimes: DriverRuntimes = {
       driver: 'toy', asked: 'toy',
-      runtimes: [{ kind: 'external', use: 'toy', runtime, can: ready.can, launchesAgents: true, ...(ready.runsOnToolHome && { runsOnToolHome: true }), engine: { logins: [] }, credentials: {}, found: [], masks: {}, optionsFrom: 'test' }],
+      runtimes: [{ kind: 'external', use: 'toy', runtime, can: ready.can, launchesAgents: true, ...(ready.runsOnToolHome && { runsOnToolHome: true }), engine: { logins: [] }, credentials: {}, found: [], masks: {}, optionsFrom: 'test', entry: { name: 'toy', digest: 'toy', isNameShared: false } }],
     };
 
     await runLocalDriver(config, runId, workspace, { runtimes });
@@ -1385,7 +1385,7 @@ steps:
     if (!ready.ok) throw new Error(ready.failure.message);
     const runtimes: DriverRuntimes = {
       driver: 'toy', asked: 'toy',
-      runtimes: [{ kind: 'external', use: 'toy', runtime, can: ready.can, launchesAgents: true, ...(ready.runsOnToolHome && { runsOnToolHome: true }), engine: { logins: [] }, credentials: {}, found: [], masks: {}, optionsFrom: 'test' }],
+      runtimes: [{ kind: 'external', use: 'toy', runtime, can: ready.can, launchesAgents: true, ...(ready.runsOnToolHome && { runsOnToolHome: true }), engine: { logins: [] }, credentials: {}, found: [], masks: {}, optionsFrom: 'test', entry: { name: 'toy', digest: 'toy', isNameShared: false } }],
     };
 
     expect(await runLocalDriver(config, runId, workspace, { runtimes })).toMatchObject({ data: { done: { outcome: 'succeeded' } } });
@@ -1433,7 +1433,7 @@ steps:
     if (!ready.ok) throw new Error(ready.failure.message);
     const runtimes: DriverRuntimes = {
       driver: 'toy', asked: 'toy',
-      runtimes: [{ kind: 'external', use: 'toy', runtime, can: ready.can, launchesAgents: true, ...(ready.runsOnToolHome && { runsOnToolHome: true }), engine: { logins: [] }, credentials: {}, found: [], masks: {}, optionsFrom: 'test' }],
+      runtimes: [{ kind: 'external', use: 'toy', runtime, can: ready.can, launchesAgents: true, ...(ready.runsOnToolHome && { runsOnToolHome: true }), engine: { logins: [] }, credentials: {}, found: [], masks: {}, optionsFrom: 'test', entry: { name: 'toy', digest: 'toy', isNameShared: false } }],
     };
 
     expect(await runLocalDriver(config, runId, workspace, { runtimes })).toMatchObject({ data: { done: { outcome: 'succeeded' } } });
@@ -1464,7 +1464,7 @@ steps:
     if (!ready.ok) throw new Error(ready.failure.message);
     const runtimes: DriverRuntimes = {
       driver: 'toy', asked: 'toy',
-      runtimes: [{ kind: 'external', use: 'toy', runtime, can: ready.can, launchesAgents: true, ...(ready.runsOnToolHome && { runsOnToolHome: true }), engine: { logins: [] }, credentials: {}, found: [], masks: {}, optionsFrom: 'test' }],
+      runtimes: [{ kind: 'external', use: 'toy', runtime, can: ready.can, launchesAgents: true, ...(ready.runsOnToolHome && { runsOnToolHome: true }), engine: { logins: [] }, credentials: {}, found: [], masks: {}, optionsFrom: 'test', entry: { name: 'toy', digest: 'toy', isNameShared: false } }],
     };
 
     await runLocalDriver(config, runId, workspace, { runtimes });
@@ -1499,7 +1499,7 @@ steps:
     if (!ready.ok) throw new Error(ready.failure.message);
     const runtimes: DriverRuntimes = {
       driver: 'toy', asked: 'toy',
-      runtimes: [{ kind: 'external', use: 'toy', runtime, can: ready.can, launchesAgents: true, ...(ready.runsOnToolHome && { runsOnToolHome: true }), engine: { logins: [] }, credentials: {}, found: [], masks: {}, optionsFrom: 'test' }],
+      runtimes: [{ kind: 'external', use: 'toy', runtime, can: ready.can, launchesAgents: true, ...(ready.runsOnToolHome && { runsOnToolHome: true }), engine: { logins: [] }, credentials: {}, found: [], masks: {}, optionsFrom: 'test', entry: { name: 'toy', digest: 'toy', isNameShared: false } }],
     };
 
     await runLocalDriver(config, runId, workspace, { runtimes });
@@ -1526,7 +1526,7 @@ steps:
     if (!ready.ok) throw new Error(ready.failure.message);
     const runtimes: DriverRuntimes = {
       driver: 'toy', asked: 'toy',
-      runtimes: [{ kind: 'external', use: 'toy', runtime, can: ready.can, launchesAgents: true, ...(ready.runsOnToolHome && { runsOnToolHome: true }), engine: { logins: [] }, credentials: {}, found: [], masks: {}, optionsFrom: 'test' }],
+      runtimes: [{ kind: 'external', use: 'toy', runtime, can: ready.can, launchesAgents: true, ...(ready.runsOnToolHome && { runsOnToolHome: true }), engine: { logins: [] }, credentials: {}, found: [], masks: {}, optionsFrom: 'test', entry: { name: 'toy', digest: 'toy', isNameShared: false } }],
     };
     const warn = vi.spyOn(log, 'warn').mockImplementation(() => undefined);
 
@@ -1557,7 +1557,7 @@ steps:
     if (!ready.ok) throw new Error(ready.failure.message);
     const runtimes: DriverRuntimes = {
       driver: 'toy', asked: 'toy',
-      runtimes: [{ kind: 'external', use: 'toy', runtime, can: ready.can, launchesAgents: true, ...(ready.runsOnToolHome && { runsOnToolHome: true }), engine: { logins: [] }, credentials: {}, found: [], masks: {}, optionsFrom: 'test' }],
+      runtimes: [{ kind: 'external', use: 'toy', runtime, can: ready.can, launchesAgents: true, ...(ready.runsOnToolHome && { runsOnToolHome: true }), engine: { logins: [] }, credentials: {}, found: [], masks: {}, optionsFrom: 'test', entry: { name: 'toy', digest: 'toy', isNameShared: false } }],
     };
 
     await runLocalDriver(config, runId, workspace, { runtimes, toolPaths });
@@ -1587,7 +1587,7 @@ steps:
     if (!ready.ok) throw new Error(ready.failure.message);
     const runtimes: DriverRuntimes = {
       driver: 'toy', asked: 'toy',
-      runtimes: [{ kind: 'external', use: 'toy', runtime, can: ready.can, launchesAgents: true, ...(ready.runsOnToolHome && { runsOnToolHome: true }), engine: { logins: [] }, credentials: {}, found: [], masks: {}, optionsFrom: 'test' }],
+      runtimes: [{ kind: 'external', use: 'toy', runtime, can: ready.can, launchesAgents: true, ...(ready.runsOnToolHome && { runsOnToolHome: true }), engine: { logins: [] }, credentials: {}, found: [], masks: {}, optionsFrom: 'test', entry: { name: 'toy', digest: 'toy', isNameShared: false } }],
     };
 
     await runLocalDriver(config, runId, workspace, { runtimes });
@@ -1628,7 +1628,7 @@ steps:
     if (!ready.ok) throw new Error(ready.failure.message);
     const runtimes: DriverRuntimes = {
       driver: 'toy', asked: 'toy',
-      runtimes: [{ kind: 'external', use: 'toy', runtime, can: ready.can, launchesAgents: true, engine: { logins: [] }, credentials: {}, found: [], masks: {}, optionsFrom: 'test' }],
+      runtimes: [{ kind: 'external', use: 'toy', runtime, can: ready.can, launchesAgents: true, engine: { logins: [] }, credentials: {}, found: [], masks: {}, optionsFrom: 'test', entry: { name: 'toy', digest: 'toy', isNameShared: false } }],
     };
 
     expect(await runLocalDriver(config, runId, workspace, { runtimes, resolveTool: (command) => (command === 'claude' ? claude.executable : null) })).toMatchObject({ data: { done: { outcome: 'succeeded' } } });
@@ -1701,7 +1701,7 @@ steps:
     if (!ready.ok) throw new Error(ready.failure.message);
     const runtimes: DriverRuntimes = {
       driver: 'mine', asked: 'mine',
-      runtimes: [{ kind: 'external', use: 'toy', runtime, can: ready.can, launchesAgents: true, engine: { logins: [] }, credentials: {}, found: [], masks: {}, optionsFrom: 'test' }],
+      runtimes: [{ kind: 'external', use: 'toy', runtime, can: ready.can, launchesAgents: true, engine: { logins: [] }, credentials: {}, found: [], masks: {}, optionsFrom: 'test', entry: { name: 'toy', digest: 'toy', isNameShared: false } }],
     };
 
     await runLocalDriver(config, runId, workspace, { toolPaths, runtimes });
@@ -1844,7 +1844,7 @@ steps:
       fs.writeFileSync(attemptRuntimePath(config, RunIdSchema.parse(runId), attempt), '{"runtime": "to');
     }
 
-    const toy: DriverRuntimes['runtimes'][number] = { kind: 'external', use: 'toy', runtime, can: ready.can, launchesAgents: true, engine: { logins: [] }, credentials: {}, found: [], masks: {}, optionsFrom: 'test' };
+    const toy: DriverRuntimes['runtimes'][number] = { kind: 'external', use: 'toy', runtime, can: ready.can, launchesAgents: true, engine: { logins: [] }, credentials: {}, found: [], masks: {}, optionsFrom: 'test', entry: { name: 'toy', digest: 'toy', isNameShared: false } };
     const [first, ...rest] = opened.opened.runtimes;
     const runtimes: DriverRuntimes = { driver: 'mine', asked: 'mine', runtimes: toolsFirst ? [first, ...rest, toy] : [toy, first, ...rest] };
 
@@ -1877,7 +1877,7 @@ describe('a place held open for a conversation a later step continues', () => {
     if (!ready.ok) throw new Error(`toy did not start: ${ready.failure.message}`);
     const runtimes: DriverRuntimes = {
       driver: 'toy', asked: 'toy',
-      runtimes: [{ kind: 'external', use: 'toy', runtime, can: ready.can, launchesAgents: true, ...(ready.keepsConversations && { keepsConversations: true }), engine: { logins: [], ...(maxParallel !== undefined && { maxParallel }) }, credentials: {}, found: [], masks: {}, optionsFrom: 'test' }],
+      runtimes: [{ kind: 'external', use: 'toy', runtime, can: ready.can, launchesAgents: true, ...(ready.keepsConversations && { keepsConversations: true }), engine: { logins: [], ...(maxParallel !== undefined && { maxParallel }) }, credentials: {}, found: [], masks: {}, optionsFrom: 'test', entry: { name: 'toy', digest: 'toy', isNameShared: false } }],
     };
 
     const asked = (): Asked[] => fs.readFileSync(calls, 'utf8').trim().split('\n').map((line) => AskedSchema.parse(JSON.parse(line)));

@@ -2000,6 +2000,8 @@ teamai writes each operation id to `attempts/<attempt>/runtime.json` before it s
 
 `workflow cancel` stops the running exec or prompt and every process it started. When the driver was killed, the cancel asks the attempt's runtime to stop it. That works even when the runtime cannot start for new work, for example when its provider is down or its sign-in expired: teamai opens it in `recover` mode, which only stops and closes what it ran.
 
+The record also names the driver definition's entry that ran the attempt, so a resume or a cancel reaches that entry, even when the definition lists one runtime twice with other options. When that entry, or your `workflows.drivers.<driver>.runtimes` for it, changed since, teamai keeps the place and says so: put the entry back, or, once nothing of the attempt still runs there, run `teamai workflow cancel <run> --release <attempt>`.
+
 A runtime that cannot stop the work says why. teamai then keeps the place, its records and the login, and prints the runtime's advice:
 
 ```text

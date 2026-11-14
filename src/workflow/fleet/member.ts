@@ -16,6 +16,7 @@ import { attemptHoldingSession, attemptRun, attemptRuntimePath } from '../runtim
 import { stopCancelledAttempts, stopLeftAttempt, stopLeftInProcess } from '../runtimes/cancelled.js';
 import { isSkillRunnerHolding } from '../drivers/skill/skill-driver.js';
 import type { OpenedDriver } from '../runtimes/sources.js';
+import type { RuntimeEntryIdentity } from '../runtimes/entry-identity.js';
 import { RUN_DIR_ENV } from '@teamai/runtime-protocol';
 import type { StepRuntime } from '@teamai/runtime-protocol/step-runtime';
 import type { DriverCan } from '../requirements.js';
@@ -68,7 +69,7 @@ const ANSWER_READ_MS = 1_000;
 const STDERR_KEPT = 4_000;
 
 /** Where a member runs a step: here, as `--driver local` does, or on a step runtime of its own driver. */
-type RuntimePlace = { kind: 'runtime'; driver: string; use: string; runtime: StepRuntime<DriverCan>; labels?: readonly string[]; tools?: string[] };
+type RuntimePlace = { kind: 'runtime'; driver: string; use: string; runtime: StepRuntime<DriverCan>; entry: RuntimeEntryIdentity; labels?: readonly string[]; tools?: string[] };
 
 /** A step runtime of the member's driver that runs prompt steps, with what a prompt there needs of its offer. */
 type PromptRuntimePlace = RuntimePlace & { offer: PromptOffer };
@@ -107,7 +108,7 @@ export function memberPlace(opened: OpenedDriver | undefined): MemberPlace | { r
     if (entry.use === 'fleet') continue;
 
     const runtime: RuntimePlace = {
-      kind: 'runtime', driver: opened.driver.name, use: entry.use, runtime: entry.runtime, ...(entry.can.labels && { labels: entry.can.labels }), ...(entry.can.tools && { tools: entry.can.tools }),
+      kind: 'runtime', driver: opened.driver.name, use: entry.use, runtime: entry.runtime, entry: entry.entry, ...(entry.can.labels && { labels: entry.can.labels }), ...(entry.can.tools && { tools: entry.can.tools }),
     };
 
     // A runtime runs commands, and prompts, unless it says it does not.
@@ -759,7 +760,7 @@ function promptRun(config: LocalConfig, { lock, claim, trusted, place, work, roo
   const { run, attempt } = claim;
   const { step } = trusted;
   const stopping = new AbortController();
-  const running = place.kind === 'runtime' ? attemptRun({ config, run, attempt, runtime: place.runtime, driver: place.driver }) : undefined;
+  const running = place.kind === 'runtime' ? attemptRun({ config, run, attempt, runtime: place.runtime, entry: place.entry, driver: place.driver }) : undefined;
 
   const exit = (async (): Promise<FleetResult> => {
     await fs.mkdir(path.dirname(attemptResultPath(config, run, attempt)), { recursive: true });
@@ -1007,7 +1008,7 @@ async function archiveSession(config: LocalConfig, { run, attempt, root, session
  * failure of the runtime ends it as a failed command whose stderr says why, so the member writes it as the step's end.
  */
 function runtimeCommand(config: LocalConfig, { run, attempt, place, work, runDir, command, env, unset }: { run: RunId; attempt: AttemptId; place: RuntimePlace; work: string; runDir: string; command: string; env: Record<string, string>; unset: readonly string[] }): GroupedCommand {
-  const running = attemptRun({ config, run, attempt, runtime: place.runtime, driver: place.driver });
+  const running = attemptRun({ config, run, attempt, runtime: place.runtime, entry: place.entry, driver: place.driver });
   let output = '';
   let stderr = '';
   // A stop while the place opens finds no exec to cancel, so the exec is not sent.

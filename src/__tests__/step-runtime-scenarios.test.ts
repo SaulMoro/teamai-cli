@@ -41,6 +41,7 @@ import { signalPid } from '@teamai/shared/process-group';
 import { entriesUnder } from '@teamai/shared/entries-under';
 import { hostRuntimeIn } from './helpers/host-runtime.js';
 import { DRIVER_PROFILES, DRIVERS_UNDER_TEST, PROFILES_UNDER_TEST } from '../workflow/conformance-interpreter.js';
+import { soleEntry } from './helpers/runtime-entry.js';
 
 /**
  * One scenario suite every step runtime passes, through the `StepRuntime` interface alone. `retains` says whether the
@@ -2663,7 +2664,7 @@ describe('StepRuntime scenarios: fleet with two installs', () => {
     await owner.record();
     await readableReportsWorktree(owner.bob.config);
     const take = async (place: MemberPlace) => takeFleetAttempt(owner.bob.config, { pool: 'default', repository: getRepoIdentity(owner.bob.checkout) ?? '', root: owner.bob.checkout, member: await installOwner(owner.bob.config), secrets: {}, place });
-    const elsewhere = { kind: 'runtime' as const, driver: 'teamai-docker', use: 'docker', runtime: fleetStepRuntime({ config: owner.bob.config, masks: {} }) };
+    const elsewhere = { kind: 'runtime' as const, driver: 'teamai-docker', use: 'docker', runtime: fleetStepRuntime({ config: owner.bob.config, masks: {} }), entry: { name: 'docker', digest: 'docker', isNameShared: false } };
 
     expect(await take({ command: { kind: 'here' } })).toEqual({ data: { idle: { offered: 0 } } });
     owner.bob.config.workflows = { tools: {}, labels: ['gpu'] };
@@ -3443,7 +3444,7 @@ done`);
       const runtime = fleetStepRuntime({ config: owner.alice.config, masks: {} });
       fleetRuntimes.push(runtime);
       expect(await runtime.init({ homeEnv: homeEnvOf([]), options: { stale_after: '60s' }, mode: 'unattended', checkout: owner.alice.checkout })).toMatchObject({ ok: true });
-      const attempt = attemptRun({ config: owner.alice.config, run: owner.run, attempt: owner.attempt, runtime, driver: 'fleet' });
+      const attempt = attemptRun({ config: owner.alice.config, run: owner.run, attempt: owner.attempt, runtime, entry: soleEntry(runtime), driver: 'fleet' });
       expect(await attempt.open(undefined)).toMatchObject({ ok: true });
       const prompt = async () => attempt.prompt({
         env: {}, unset: [], credentials: {}, cwd: place,

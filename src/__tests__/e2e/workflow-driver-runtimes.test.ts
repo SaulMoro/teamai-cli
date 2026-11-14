@@ -1159,6 +1159,108 @@ steps:
     expect(closesOf()).toContainEqual({ handle: closed?.handle, present: false });
   });
 
+  describe('a definition that lists the toy twice with other options', () => {
+    const first = (): string => path.join(sandbox, 'toy-twice-first');
+    const second = (): string => path.join(sandbox, 'toy-twice-second');
+    // The first entry launches agents and runs no command, so a command step goes to the second, whose state is its own.
+    const twice = (secondOptions: Record<string, unknown> = {}): Array<{ use: string; options: Record<string, unknown> }> => [
+      { use: 'toy', options: { state: first(), agent: { output: { ok: true } } } },
+      { use: 'toy', options: { state: second(), ...secondOptions } },
+    ];
+
+    /** Starts a held command on the second entry and kills the driver by its pid once the command runs: its run, attempt and the command's pid. */
+    const killedOnSecond = async (definition: string): Promise<{ runId: string; attempt: string; held: number }> => {
+      fs.rmSync(first(), { recursive: true, force: true });
+      fs.rmSync(second(), { recursive: true, force: true });
+      writeFlow('heldtwice', `  - id: hold
+    command: node -e "require('fs').writeFileSync(process.env.HOLD_MARK, String(process.pid)); setTimeout(() => {}, 120000)"`);
+      expect((await runCLI(['pull'], repo)).code).toBe(0);
+      writeDefinition(definition, twice());
+      const mark = path.join(sandbox, `${definition}-mark`);
+      const driving = spawn(process.execPath, [CLI, 'workflow', 'start', 'heldtwice', '--driver', definition], { cwd: repo, env: { ...process.env, ...env({ HOLD_MARK: mark }), FORCE_COLOR: '0' }, stdio: ['ignore', 'ignore', 'pipe'] });
+      let stderr = '';
+      driving.stderr.on('data', (chunk: Buffer) => { stderr += chunk.toString(); });
+      const ended = new Promise((resolve) => driving.on('close', resolve));
+      for (const deadline = Date.now() + 30_000; !fs.existsSync(mark) && Date.now() < deadline;) await new Promise((resolve) => setTimeout(resolve, 100));
+      expect(fs.existsSync(mark), stderr).toBe(true);
+      const held = Number(fs.readFileSync(mark, 'utf8'));
+      onTestFinished(() => { signalPid(held, 'SIGKILL'); });
+      driving.kill('SIGKILL');
+      await ended;
+      const runId = /Run (r[0-9a-f]+) started/.exec(stderr)?.[1] ?? '';
+      const [attempt = ''] = fs.readdirSync(path.join(dataHome, 'workflows', 'runs', runId, 'attempts'));
+
+      return { runId, attempt, held };
+    };
+
+    it('stops a killed driver\'s command on the entry that ran it', async () => {
+      const { runId, attempt, held } = await killedOnSecond('toytwice');
+
+      const cancelled = await runCLI(['workflow', 'cancel', runId], repo, env());
+
+      expect(cancelled.stderr).toContain(`Stopped attempt ${attempt} of run ${runId} on step runtime "toy" and closed its place.`);
+      expect(signalPid(held, 0)).toBe('gone');
+      expect(JSON.parse(fs.readFileSync(path.join(second(), 'handles.json'), 'utf8'))).toEqual({});
+      expect(runtimeRecord(runId, attempt)).toMatchObject({ phase: 'closed' });
+    });
+
+    it('resumes a killed driver\'s command on the entry that ran it, which the runtime still runs', async () => {
+      const release = path.join(sandbox, 'toy-twice-release');
+      const ran = path.join(sandbox, 'toy-twice-ran');
+      fs.rmSync(release, { force: true });
+      fs.rmSync(ran, { force: true });
+      writeFlow('heldtwiceonce', `  - id: hold
+    command: node -e "const fs = require('fs'); fs.appendFileSync(process.env.RAN_MARK, 'x'); fs.writeFileSync(process.env.HOLD_MARK, String(process.pid)); setInterval(() => { if (fs.existsSync(process.env.RELEASE_MARK)) process.exit(0); }, 100)"`);
+      expect((await runCLI(['pull'], repo)).code).toBe(0);
+      writeDefinition('toytwiceresume', twice());
+      const mark = path.join(sandbox, 'toytwiceresume-mark');
+      const marks = { HOLD_MARK: mark, RAN_MARK: ran, RELEASE_MARK: release };
+      const driving = spawn(process.execPath, [CLI, 'workflow', 'start', 'heldtwiceonce', '--driver', 'toytwiceresume'], { cwd: repo, env: { ...process.env, ...env(marks), FORCE_COLOR: '0' }, stdio: ['ignore', 'ignore', 'pipe'] });
+      let stderr = '';
+      driving.stderr.on('data', (chunk: Buffer) => { stderr += chunk.toString(); });
+      const ended = new Promise((resolve) => driving.on('close', resolve));
+      for (const deadline = Date.now() + 30_000; !fs.existsSync(mark) && Date.now() < deadline;) await new Promise((resolve) => setTimeout(resolve, 100));
+      expect(fs.existsSync(mark), stderr).toBe(true);
+      const held = Number(fs.readFileSync(mark, 'utf8'));
+      onTestFinished(() => { signalPid(held, 'SIGKILL'); });
+      driving.kill('SIGKILL');
+      await ended;
+      const runId = /Run (r[0-9a-f]+) started/.exec(stderr)?.[1] ?? '';
+      fs.writeFileSync(release, '');
+
+      const resumed = await runCLI(['workflow', 'resume', runId, '--driver', 'toytwiceresume'], repo, env(marks));
+
+      expect(envelope(resumed), resumed.stderr).toMatchObject({ data: { done: { outcome: 'succeeded' } } });
+      expect(fs.readFileSync(ran, 'utf8')).toBe('x');
+      expect(fs.existsSync(path.join(first(), 'handles.json')) ? JSON.parse(fs.readFileSync(path.join(first(), 'handles.json'), 'utf8')) : {}).toEqual({});
+    });
+
+    it('keeps the place, and says why, when the entry that ran the attempt changed since', async () => {
+      const { runId, attempt, held } = await killedOnSecond('toytwicechanged');
+      writeDefinition('toytwicechanged', twice({ display: { label: 'changed' } }));
+
+      const cancelled = await runCLI(['workflow', 'cancel', runId], repo, env());
+
+      expect(cancelled.stderr).toContain(`Could not stop attempt ${attempt} of run ${runId} on step runtime "toy" of driver "toytwicechanged": the entry of driver "toytwicechanged" that ran it changed since`);
+      expect(cancelled.stderr).toContain(`teamai workflow cancel ${runId} --release ${attempt} lets it go.`);
+      expect(signalPid(held, 0)).toBe('sent');
+      expect(runtimeRecord(runId, attempt)).toMatchObject({ phase: 'running' });
+    });
+
+    it('keeps the place, and says why, when a record that names no entry could be either', async () => {
+      const { runId, attempt, held } = await killedOnSecond('toytwicelegacy');
+      // A record an earlier teamai wrote names the runtime only.
+      const { entry: _entry, ...legacy } = runtimeRecord(runId, attempt) ?? {};
+      fs.writeFileSync(path.join(attemptDir(runId, attempt), 'runtime.json'), JSON.stringify(legacy));
+
+      const cancelled = await runCLI(['workflow', 'cancel', runId], repo, env());
+
+      expect(cancelled.stderr).toContain(`driver "toytwicelegacy" lists runtime "toy" more than once, and the attempt's record, which an earlier teamai wrote, does not say which entry ran it.`);
+      expect(signalPid(held, 0)).toBe('sent');
+      expect(runtimeRecord(runId, attempt)).toMatchObject({ phase: 'running' });
+    });
+  });
+
   it('keeps what the runtime shows of the place in the attempt\'s record, for the run\'s details', async () => {
     const display = { label: 'toy place', url: 'https://runtimes.example.test/place/1', fields: { place: 'toy-1', image: 'warm:3f9c' } };
     writeDefinition('shown', [{ use: 'toy', options: { state, display } }]);

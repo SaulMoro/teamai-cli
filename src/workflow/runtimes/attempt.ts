@@ -20,6 +20,7 @@ import type { SessionRef } from '../workspace.js';
 import { redact } from '@teamai/shared/redact';
 import { AttemptResult } from '../attempt-result.js';
 import { loginFileOf } from './login.js';
+import { RuntimeEntryIdentity } from './entry-identity.js';
 import { CANCEL_FAILED, CanSchema, OpIdSchema, RuntimeDisplaySchema, RuntimeFailureSchema, type OpId, type OpState, type PlaceView, type RuntimeDisplay, type RuntimeFailure } from '@teamai/runtime-protocol';
 import { isUnansweredFailure, newOpId, type Accepted, type ExecEnd, type ExecEvents, type ExecKind, type ExecRequest, type Lost, type PromptEnd, type PromptRequest, type StepRuntime } from '@teamai/runtime-protocol/step-runtime';
 import type { DriverCan } from '../requirements.js';
@@ -82,6 +83,12 @@ export type RuntimeOrigin = z.infer<typeof RuntimeOriginSchema>;
 const AttemptRuntimeRecordSchema = z.object({
   /** The runtime the attempt runs on, as the definition's `use` names it. */
   runtime: z.string(),
+  /**
+   * The digest of the definition's entry the attempt runs on (`RuntimeEntryIdentity`), written before the open is sent,
+   * so a later stop or close reaches that entry's runtime and no other of the same name. A record written before teamai
+   * recorded it has none.
+   */
+  entry: z.string().optional(),
   /** The driver definition that chose it. */
   driver: z.string(),
   /** Where each runtime it runs on came from, the inner one first for one through another; none for one teamai builds in. */
@@ -377,17 +384,17 @@ async function heldIn(config: LocalConfig, run: RunId): Promise<Held[]> {
 }
 
 /**
- * The conversation a prompt continues: the place of an earlier attempt of run `run`, held on runtime `runtime` of driver
+ * The conversation a prompt continues: the place of an earlier attempt of run `run`, held on runtime entry `entry` of driver
  * `driver` in `workspace` (the one the prompt's step shares with the steps beside it) for the first of `sessions` (the
  * lease's session, then each earlier one), with the op of the prompt that launched it. Undefined when no held place
  * holds one, and for a step with no shared workspace, which goes on in none, as `hold` holds none for it.
  */
-async function conversationOf({ config, run, runtime, driver, sessions, workspace }: { config: LocalConfig; run: RunId; runtime: string; driver: string; sessions: readonly SessionRef[]; workspace: string | undefined }): Promise<{ handle: string; op: OpId; session: SessionRef } | undefined> {
+async function conversationOf({ config, run, entry, driver, sessions, workspace }: { config: LocalConfig; run: RunId; entry: RuntimeEntryIdentity; driver: string; sessions: readonly SessionRef[]; workspace: string | undefined }): Promise<{ handle: string; op: OpId; session: SessionRef } | undefined> {
   if (workspace === undefined) return undefined;
   const held = await heldIn(config, run);
 
   for (const session of sessions) {
-    const found = held.find(({ record }) => record.runtime === runtime && record.driver === driver && record.heldFor.workspace === workspace && isSameSession(record.heldFor.conversation, session));
+    const found = held.find(({ record }) => RuntimeEntryIdentity.holds(record, entry) && record.driver === driver && record.heldFor.workspace === workspace && isSameSession(record.heldFor.conversation, session));
     const handle = found?.record.open.handle;
     const op = found?.record.prompt?.op;
 
@@ -601,7 +608,7 @@ function isStopRefused(failure: RuntimeFailure): boolean {
  * which bounds what runs in the place; undefined when the attempt has no such limit, or only stops what a teamai before
  * it left.
  */
-export function attemptRun({ runtime, ...input }: { config: LocalConfig; run: RunId; attempt: AttemptId; runtime: StepRuntime<DriverCan>; driver: string; sources?: readonly RuntimeOrigin[]; deadline?: string }): AttemptRun {
+export function attemptRun({ runtime, ...input }: { config: LocalConfig; run: RunId; attempt: AttemptId; runtime: StepRuntime<DriverCan>; entry: RuntimeEntryIdentity; driver: string; sources?: readonly RuntimeOrigin[]; deadline?: string }): AttemptRun {
   return attemptThrough({ ...input, sends: attemptSends(runtime) });
 }
 
@@ -690,8 +697,10 @@ function attemptSends(full: StepRuntime<DriverCan>) {
   };
 }
 
-function attemptThrough({ config, run, attempt, sends, driver, sources, deadline }: { config: LocalConfig; run: RunId; attempt: AttemptId; sends: AttemptSends; driver: string; sources?: readonly RuntimeOrigin[]; deadline?: string }): AttemptRun {
+function attemptThrough({ config, run, attempt, sends, entry, driver, sources, deadline }: { config: LocalConfig; run: RunId; attempt: AttemptId; sends: AttemptSends; entry: RuntimeEntryIdentity; driver: string; sources?: readonly RuntimeOrigin[]; deadline?: string }): AttemptRun {
   const { runtime } = sends;
+  // Whether the place a record names is on this attempt's runtime entry, rather than on another, of the same name too.
+  const isHere = (recorded: AttemptRuntimeRecord): boolean => RuntimeEntryIdentity.holds(recorded, entry);
   const file = attemptRuntimePath(config, run, attempt);
   let record: AttemptRuntimeRecord | undefined;
   // An exec ended `left` goes on on its runtime: its place stays open, for a later teamai to reconnect to or cancel.
@@ -800,7 +809,7 @@ function attemptThrough({ config, run, attempt, sends, driver, sources, deadline
    * Why this runtime leaves alone the place `left` names on another runtime: what ran there was not stopped
    * (`stopOnRecordedDriver`), so neither its work nor its place is this runtime's to bring back or close.
    */
-  const placeElsewhere = (left: AttemptRuntimeRecord): WorkflowFailure | undefined => (left.runtime === runtime.name ? undefined
+  const placeElsewhere = (left: AttemptRuntimeRecord): WorkflowFailure | undefined => (isHere(left) ? undefined
     : runtimeFailure(runtime.name, `left the place of attempt ${attempt} on step runtime "${left.runtime}" of driver "${left.driver}" open, since what ran there may still run. Resume the run with --driver ${left.driver}.`));
 
   /** The setup a teamai before this one left, which the runtime could not stop, may still run in its place. */
@@ -822,18 +831,18 @@ function attemptThrough({ config, run, attempt, sends, driver, sources, deadline
       const found = await current();
       // A place closed on another runtime, or an open the runtime refused before it made a place, holds nothing of this
       // one: the attempt starts again here.
-      const before = found && !(found.phase === 'closed' && (found.runtime !== runtime.name || found.open.handle === undefined)) ? found : undefined;
+      const before = found && !(found.phase === 'closed' && (!isHere(found) || found.open.handle === undefined)) ? found : undefined;
 
       // A record of another runtime is one whose place there is still open: what ran there was not stopped
       // (`stopOnRecordedDriver`), so the attempt does not move while it may still run.
-      if (before && before.runtime !== runtime.name && before.phase !== 'closed') {
+      if (before && !isHere(before) && before.phase !== 'closed') {
         return { ok: false, failure: runtimeFailure(runtime.name, `cannot continue attempt ${attempt}, whose place on step runtime "${before.runtime}" of driver "${before.driver}" is still open, so what ran there may still run. Resume the run with --driver ${before.driver}.`) };
       }
 
       if (before?.openFailed && before.phase !== 'closed') return { ok: false, failure: runtimeFailure(runtime.name, `could not open attempt ${attempt} (${before.openFailed.code}): ${before.openFailed.message}`) };
       const op = before?.open.op ?? newOpId();
       const toolHome = home ?? before?.toolHome;
-      const opening: AttemptRuntimeRecord = { runtime: runtime.name, driver, phase: before?.phase ?? 'opening', open: { op } };
+      const opening: AttemptRuntimeRecord = { runtime: runtime.name, entry: entry.digest, driver, phase: before?.phase ?? 'opening', open: { op } };
       const from = sources ?? before?.sources;
 
       if (from) opening.sources = [...from];
@@ -1104,7 +1113,7 @@ function attemptThrough({ config, run, attempt, sends, driver, sources, deadline
       const handle = before?.open.handle;
 
       // One left on another runtime was stopped through the driver recorded for it before this attempt reached here.
-      if (!before?.setup || !isSetupLeftRunning(before) || before.runtime !== runtime.name || handle === undefined) return undefined;
+      if (!before?.setup || !isSetupLeftRunning(before) || !isHere(before) || handle === undefined) return undefined;
       const notStopped = await stopLeftRunning(handle, before.setup.op);
 
       return notStopped && leftSetupNotStopped(notStopped);
@@ -1114,7 +1123,7 @@ function attemptThrough({ config, run, attempt, sends, driver, sources, deadline
       const before = await current();
       const handle = before?.open.handle;
 
-      if (!before || before.phase === 'closed' || before.runtime !== runtime.name || handle === undefined) return undefined;
+      if (!before || before.phase === 'closed' || !isHere(before) || handle === undefined) return undefined;
       const closed = await runtime.close(handle);
 
       if (!closed.ok) {

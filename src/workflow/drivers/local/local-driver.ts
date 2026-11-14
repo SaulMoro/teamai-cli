@@ -25,6 +25,7 @@ import { failedCommand, placeView, runtimeCommand, runtimeSetup, runtimeStepEnv,
 import { attemptRun, credentialSecrets, HeldPlace, isExecRuntimeTool, readAttemptPlacement, recordInProcessAttempt, attemptRuntimePath, maskAttemptResults, type AttemptRun, type AttemptRuntimeRecord, type RuntimeOrigin } from '../../runtimes/attempt.js';
 import { answerCallTool, hostStepRuntime } from '../../runtimes/host.js';
 import { writeHeldSteps, type HeldSteps } from '../../runtimes/held.js';
+import { RuntimeEntryIdentity } from '../../runtimes/entry-identity.js';
 import { closeAfterSweep, endLeftLogins, releaseHeldPlaces, stopLeftInProcess, stopOnRecordedDriver } from '../../runtimes/cancelled.js';
 import { loginHolder } from '../../runtimes/login.js';
 import { homeEnvOf, toolsLaunchDeps, type EngineOptions, type OpenedDriver } from '../../runtimes/sources.js';
@@ -236,7 +237,11 @@ export interface DriverRuntimes {
  * through an `AttemptRun`. Each is reached through the `StepRuntime` interface for its offer and the lifecycle of its
  * attempts' places.
  */
-type RuntimeSlot = SlotBase & { kind: 'host' | 'tools' | 'external' };
+type RuntimeSlot = (SlotBase & { kind: 'host' | 'tools' }) | (SlotBase & {
+  kind: 'external';
+  /** Which entry of the definition it is, which each attempt on it records (`RuntimeEntryIdentity`). */
+  entry: RuntimeEntryIdentity;
+});
 
 interface SlotBase {
   use: string;
@@ -287,8 +292,8 @@ async function stageLease(lease: StagedLease, { config, lock, root, env, mode, s
   launches?: string;
   /** The attempt's run on its step runtime, which runs setup once the step opens its place there (`runtimeSetup`). */
   setUpOn?: AttemptRun;
-  /** The step runtime this driver gives the attempt, by its definition's name; undefined for this host. */
-  runsOn?: string;
+  /** The entry of the step runtime this driver gives the attempt; undefined for this host. */
+  runsOn?: RuntimeEntryIdentity | undefined;
 }): Promise<WorkflowFailure | undefined> {
   if (lease.unreadableWorkspace) return unreadablePlace(lock.run);
   // A lease is handed back to a driver after one of this run was killed: the setup or command that one left running
@@ -349,18 +354,18 @@ async function stopLeftHere({ config, run, attempt, step, leftRunning }: { confi
 }
 
 /**
- * Stops what a killed teamai left of attempt `attempt` open on a step runtime other than `runsOn`, the one this driver
+ * Stops what a killed teamai left of attempt `attempt` open on a step runtime entry other than `runsOn`, the one this driver
  * gives it (undefined: this host), through the driver recorded for it, as `teamai workflow cancel` does. Once that place
  * is closed, the attempt starts again here: its record of the other runtime goes. Answers why the stop is not confirmed,
  * which keeps the place and the record.
  */
-async function stopLeftElsewhere({ config, run, attempt, runsOn, checkout }: { config: LocalConfig; run: RunId; attempt: string; runsOn: string | undefined; checkout: string }): Promise<WorkflowFailure | undefined> {
+async function stopLeftElsewhere({ config, run, attempt, runsOn, checkout }: { config: LocalConfig; run: RunId; attempt: string; runsOn: RuntimeEntryIdentity | undefined; checkout: string }): Promise<WorkflowFailure | undefined> {
   const id = AttemptIdSchema.safeParse(attempt);
   const placement = id.success ? await readAttemptPlacement(config, run, id.data) : undefined;
 
   // One in teamai's process left its process group, which staging stops; it holds no place elsewhere. An unreadable
   // record names no place to stop.
-  if (!id.success || placement?.kind !== 'external' || placement.record.phase === 'closed' || placement.record.runtime === runsOn) return undefined;
+  if (!id.success || placement?.kind !== 'external' || placement.record.phase === 'closed' || (runsOn !== undefined && RuntimeEntryIdentity.holds(placement.record, runsOn))) return undefined;
   const notStopped = await stopOnRecordedDriver(config, run, id.data, { checkout });
 
   if (notStopped) return notStopped;
@@ -695,7 +700,7 @@ async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, given: 
         return { kind: 'tools', use: entry.use, runtime: toolsRuntime, can: toolsReady.can, launchesAgents: false, engine: entry.engine, credentials: {}, found: [] };
       case 'external':
         return {
-          kind: 'external', use: entry.use, runtime: entry.runtime, launchesAgents: entry.launchesAgents, engine: entry.engine, credentials: entry.credentials, found: entry.found,
+          kind: 'external', use: entry.use, entry: entry.entry, runtime: entry.runtime, launchesAgents: entry.launchesAgents, engine: entry.engine, credentials: entry.credentials, found: entry.found,
           ...(entry.unavailable && { unavailable: entry.unavailable }), ...(entry.isThrough && { isThrough: true }), ...(entry.keepsConversations && { keepsConversations: true }), ...(entry.runsOnToolHome && { runsOnToolHome: true }), ...(entry.sources && { sources: entry.sources }),
           can: {
             // One that runs its tool on the attempt's tool home, as one that execs it does, runs only the tools a tool home holds.
@@ -759,17 +764,17 @@ async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, given: 
     if (known) return known;
     // The lease's expiry is the latest the attempt may run on its runtime. A turn limit ends the turn instead, and the
     // driver keeps it itself, so it gives no deadline.
-    const created = attemptRun({ config, run: runId, attempt: lease.attempt, runtime: slot.runtime, driver: defined.driver, ...(slot.sources && { sources: slot.sources }), ...(lease.expiresAt !== undefined && { deadline: lease.expiresAt }) });
+    const created = attemptRun({ config, run: runId, attempt: lease.attempt, runtime: slot.runtime, entry: slot.entry, driver: defined.driver, ...(slot.sources && { sources: slot.sources }), ...(lease.expiresAt !== undefined && { deadline: lease.expiresAt }) });
     attemptRuns.set(lease.attempt, created);
 
     return created;
   };
 
-  /** The external step runtime the lease's attempt is bound to, by its definition's name; undefined on this host. */
-  const externalOf = (lease: StagedLease): string | undefined => {
+  /** The entry of the external step runtime the lease's attempt is bound to; undefined on this host. */
+  const externalOf = (lease: StagedLease): RuntimeEntryIdentity | undefined => {
     const slot = slotOf.get(lease.attempt);
 
-    return slot?.kind === 'external' ? slot.use : undefined;
+    return slot?.kind === 'external' ? slot.entry : undefined;
   };
 
   // Each runtime before the one a step lands on that cannot run its tool now, once per drive, by runtime and tool.
@@ -868,7 +873,8 @@ async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, given: 
     || [...slotOf.values()].filter((bound) => bound === slot).length < slot.engine.maxParallel;
 
   // A restarted loop hands each attempt it left open back to the runtime it ran on, one at a time, by its record: an
-  // external one to the runtime the record names, one in teamai's process to the slot here. An attempt with no record
+  // external one to the entry the record names, one in teamai's process to the slot here. One whose entry no slot is
+  // goes to the first external one, whose staging stops it where it ran, or keeps it, saying why. An attempt with no record
   // started nowhere, as each kind is recorded before it starts, so it goes to the first slot, as a new lease would.
   const reconnecting: Array<{ attempt: string; slot: RuntimeSlot }> = [];
 
@@ -881,8 +887,8 @@ async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, given: 
 
       switch (placement.kind) {
         case 'external': {
-          const { runtime } = placement.record;
-          slot = slots.find((candidate) => candidate.kind === 'external' && candidate.use === runtime) ?? slots.find((candidate) => candidate.kind === 'external') ?? slots[0];
+          const { record } = placement;
+          slot = slots.find((candidate) => candidate.kind === 'external' && RuntimeEntryIdentity.holds(record, candidate.entry)) ?? slots.find((candidate) => candidate.kind === 'external') ?? slots[0];
           break;
         }
 
@@ -926,11 +932,11 @@ async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, given: 
     return state !== 'missing' && state !== 'corrupt' ? { continued: continuedConversations(state), workspace: sharedWorkspace(state, step) } : { continued: [], workspace: undefined };
   };
 
-  /** This driver's runtime of a held place's record, which closes it with no second open of the driver. */
-  const live = (record: AttemptRuntimeRecord): StepRuntime<DriverCan> | undefined => {
-    const slot = record.driver === defined.driver ? slots.find((candidate) => candidate.kind === 'external' && candidate.use === record.runtime) : undefined;
+  /** This driver's runtime entry of a held place's record, which closes it with no second open of the driver. */
+  const live = (record: AttemptRuntimeRecord): { runtime: StepRuntime<DriverCan>; entry: RuntimeEntryIdentity } | undefined => {
+    const slot = record.driver === defined.driver ? slots.find((candidate) => candidate.kind === 'external' && RuntimeEntryIdentity.holds(record, candidate.entry)) : undefined;
 
-    return slot?.kind === 'external' ? slot.runtime : undefined;
+    return slot?.kind === 'external' ? { runtime: slot.runtime, entry: slot.entry } : undefined;
   };
 
   /** Closes the places held for a conversation that `continued` no longer names, or, without it, every one. */
@@ -1580,8 +1586,8 @@ async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, given: 
             secrets: { ...turn.secrets, ...maskedCredentials }, askPerson,
             onRuntime: stepRun && slot && promptRuntimeOn({
               run: stepRun, offered: promptOfferOf(slot), teamEnv: turn,
-              ...(HeldPlace.holdsOn(slot) && {
-                conversationHeld: async (sessions: readonly SessionRef[]) => HeldPlace.conversationOf({ config, run: runId, runtime: slot.use, driver: defined.driver, sessions, workspace: await workspaceOf(lease.step) }),
+              ...(slot.kind === 'external' && HeldPlace.holdsOn(slot) && {
+                conversationHeld: async (sessions: readonly SessionRef[]) => HeldPlace.conversationOf({ config, run: runId, entry: slot.entry, driver: defined.driver, sessions, workspace: await workspaceOf(lease.step) }),
               }),
             }),
           });

@@ -17,7 +17,8 @@ import { acceptToolCommand } from '../../tool-instances.js';
 import { instanceHomeDir } from '../../tool-home.js';
 import { baseToolOf, toolInstancesFor } from '../../tool-registry.js';
 import { type StepRuntime } from '@teamai/runtime-protocol/step-runtime';
-import { composedName, composedOffer, composedStepRuntime, nestedOptions } from './composed.js';
+import { composedOffer, composedStepRuntime, nestedOptions } from './composed.js';
+import { composedName, RuntimeEntryIdentity } from './entry-identity.js';
 import { credentialSecrets, isExecRuntimeTool, type ExecRuntimeTool, type RuntimeOrigin } from './attempt.js';
 import { LOGIN_TOOLS, type LoginTool } from './login.js';
 import type { SignInVariables } from '@teamai/tool-core/launch';
@@ -189,9 +190,16 @@ export type OpenedRuntime =
    * `keepsConversations`: its init said a prompt's conversation outlives the prompt in its place, so teamai may hold the place for a later step.
    * `runsOnToolHome`: its init said it runs each prompt's tool in the attempt's tool home, which teamai seeds, copies a login into and reads sessions in.
    * `sources`: where the runtimes it runs on came from, which each attempt on it records; none for the built-in `fleet`.
+   * `entry`: which entry of the definition it is, which each attempt on it records, so a later teamai stops and closes
+   * the attempt's place on that entry and no other of the same name (`RuntimeEntryIdentity`).
    */
-  | { kind: 'external'; use: string; runtime: StepRuntime<DriverCan>; can: DriverCan; launchesAgents: boolean; engine: EngineOptions; credentials: Record<string, string>; found: string[]; masks: Record<string, string>; optionsFrom: string; unavailable?: Record<string, string>; isThrough?: true; wakes?: true; keepsConversations?: true; runsOnToolHome?: true; sources?: RuntimeOrigin[] }
+  | (OpenedExternal & { entry: RuntimeEntryIdentity })
 ;
+
+type OpenedExternal = { kind: 'external'; use: string; runtime: StepRuntime<DriverCan>; can: DriverCan; launchesAgents: boolean; engine: EngineOptions; credentials: Record<string, string>; found: string[]; masks: Record<string, string>; optionsFrom: string; unavailable?: Record<string, string>; isThrough?: true; wakes?: true; keepsConversations?: true; runsOnToolHome?: true; sources?: RuntimeOrigin[] };
+
+/** A runtime opened for an entry, before `openDriver` gives it the entry's identity. */
+type OpenedPart = Extract<OpenedRuntime, { kind: 'tools' }> | OpenedExternal;
 
 /**
  * A driver definition ready to drive: each of its runtimes, in definition order, none for the built-in `host`. The
@@ -297,7 +305,7 @@ export function homeEnvOf(instances: readonly InitInstance[]): InitHomeEnv {
  * promises the members' drivers give: nothing checks it here. The runtime its `wake` option names is opened on its own,
  * never through another, with that entry's options under the member's config for it, as a runtime of the definition is.
  */
-async function fleetRuntime(driver: ResolvedDriver, split: Extract<ReturnType<typeof engineOptions>, { ok: true }>, how: { mode: RunMode; canAsk: boolean; purpose: DriverPurpose; checkout: string }): Promise<{ ok: true; opened: OpenedRuntime } | { ok: false; failure: WorkflowFailure }> {
+async function fleetRuntime(driver: ResolvedDriver, split: Extract<ReturnType<typeof engineOptions>, { ok: true }>, how: { mode: RunMode; canAsk: boolean; purpose: DriverPurpose; checkout: string }): Promise<{ ok: true; opened: OpenedPart } | { ok: false; failure: WorkflowFailure }> {
   if (split.credentials.length > 0 || split.engine.logins.length > 0) return { ok: false, failure: badOption(driver, 'fleet', 'credentials', 'each member runs a step with its own driver, so fleet brings no credential') };
   const masks: Record<string, string> = {};
 
@@ -324,7 +332,7 @@ async function fleetRuntime(driver: ResolvedDriver, split: Extract<ReturnType<ty
 const CANNOT_TELL = 'check_unsupported';
 
 /** Opens one runtime of `driver`: finds it, refuses a team runtime no one accepted here, starts it and passes its options. */
-async function openRuntime(driver: ResolvedDriver, { use, options, sandbox }: { use: string; options: RuntimeOptions; sandbox?: string }, { mode, canAsk, purpose, checkout }: { mode: RunMode; canAsk: boolean; purpose: DriverPurpose; checkout: string }): Promise<{ ok: true; opened: OpenedRuntime } | { ok: false; failure: WorkflowFailure }> {
+async function openRuntime(driver: ResolvedDriver, { use, options, sandbox }: { use: string; options: RuntimeOptions; sandbox?: string }, { mode, canAsk, purpose, checkout }: { mode: RunMode; canAsk: boolean; purpose: DriverPurpose; checkout: string }): Promise<{ ok: true; opened: OpenedPart } | { ok: false; failure: WorkflowFailure }> {
   const split = engineOptions(options);
 
   if (!split.ok) return { ok: false, failure: badOption(driver, use, split.key, split.message) };
@@ -516,7 +524,7 @@ async function openRuntime(driver: ResolvedDriver, { use, options, sandbox }: { 
  * `composedStepRuntime` with the offer `composedOffer` merges. The prompt's credentials are the outer's, which runs the
  * tool; the inner keeps its own.
  */
-async function openComposed(driver: ResolvedDriver, { names, options, sandbox }: { names: { inner: string; outer: string }; options: RuntimeOptions; sandbox?: string }, how: Parameters<typeof openRuntime>[2]): Promise<{ ok: true; opened: OpenedRuntime } | { ok: false; failure: WorkflowFailure }> {
+async function openComposed(driver: ResolvedDriver, { names, options, sandbox }: { names: { inner: string; outer: string }; options: RuntimeOptions; sandbox?: string }, how: Parameters<typeof openRuntime>[2]): Promise<{ ok: true; opened: OpenedPart } | { ok: false; failure: WorkflowFailure }> {
   const name = composedName(names.inner, names.outer);
   const nested = nestedOptions(options, names);
 
@@ -631,7 +639,7 @@ export async function openDriver(
       return one;
     }
 
-    opened.push(one.opened);
+    opened.push(one.opened.kind === 'external' ? { ...one.opened, entry: RuntimeEntryIdentity.of(driver, entry) } : one.opened);
   }
 
   return { ok: true, opened: { driver, asked: name, runtimes: opened } };

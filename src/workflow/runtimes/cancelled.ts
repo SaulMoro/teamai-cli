@@ -11,6 +11,7 @@ import { knownSecrets } from '../../env-resolution.js';
 import { attemptRun, attemptRuntimeFile, attemptRuntimePath, attemptToolHome, HeldPlace, isPlaceLeftOpen, maskAttemptResults, readAttemptPlacement, readAttemptPlacementAt, releaseAttemptRuntime, type AttemptPlacement, type AttemptRuntimeRecord } from './attempt.js';
 import { endLogin, LOGIN_TOOLS, loginHolder, type LoginTool } from './login.js';
 import { disposeDriver, openDriver } from './sources.js';
+import { RuntimeEntryIdentity } from './entry-identity.js';
 import { retryCommand } from './retry-command.js';
 import { CANCEL_FAILED } from '@teamai/runtime-protocol';
 import type { StepRuntime } from '@teamai/runtime-protocol/step-runtime';
@@ -277,14 +278,14 @@ async function endLeftLogin(config: LocalConfig, tool: LoginTool, { run, attempt
 export async function releaseHeldPlaces(config: LocalConfig, run: RunId, { checkout, continued, live }: {
   checkout: string;
   continued?: Parameters<typeof HeldPlace.toRelease>[2];
-  /** The runtime a driver still has open for the place `record` names, which closes it without opening the driver again. */
-  live?: (record: AttemptRuntimeRecord) => StepRuntime<DriverCan> | undefined;
+  /** The runtime entry a driver still has open for the place `record` names, which closes it without opening the driver again. */
+  live?: (record: AttemptRuntimeRecord) => { runtime: StepRuntime<DriverCan>; entry: RuntimeEntryIdentity } | undefined;
 }): Promise<WorkflowFailure[]> {
   const kept: WorkflowFailure[] = [];
 
   for (const { attempt, record } of await HeldPlace.toRelease(config, run, continued)) {
-    const runtime = live?.(record);
-    const notClosed = runtime ? await attemptRun({ config, run, attempt, runtime, driver: record.driver }).close() : await stopOnRecordedDriver(config, run, attempt, { checkout });
+    const open = live?.(record);
+    const notClosed = open ? await attemptRun({ config, run, attempt, ...open, driver: record.driver }).close() : await stopOnRecordedDriver(config, run, attempt, { checkout });
 
     if (notClosed) kept.push(notClosed);
   }
@@ -347,11 +348,13 @@ async function stopAttempt(config: LocalConfig, run: RunId, attempt: AttemptId, 
   if (!opened.ok) return cannot(opened.failure.message);
 
   try {
-    const entry = opened.opened.runtimes.find((one) => one.kind === 'external' && one.use === record.runtime);
+    // Only the entry that ran the attempt reaches its place: another of the same name would find nothing to stop.
+    const found = RuntimeEntryIdentity.find(record, opened.opened.runtimes.filter((one) => one.kind === 'external'), record.driver);
 
-    if (entry?.kind !== 'external') return cannot(`driver "${record.driver}" no longer uses that runtime.`);
+    if (!found.ok) return cannot(`${found.why} Once you checked that nothing of it still runs there, teamai workflow cancel ${run} --release ${attempt} lets it go.`);
+    const { found: entry } = found;
     const masked = entry.masks;
-    const placed = attemptRun({ config, run, attempt, runtime: entry.runtime, driver: record.driver });
+    const placed = attemptRun({ config, run, attempt, runtime: entry.runtime, entry: entry.entry, driver: record.driver });
 
     const notStopped = await placed.stopLeftOperation();
 
@@ -412,7 +415,7 @@ async function releaseAttempt(config: LocalConfig, run: RunId, attempt: AttemptI
 }
 
 /**
- * Closes again one place each step runtime closed for each run of `runs`, whose clone or team folder teamai removed
+ * Closes again one place each step runtime entry closed for each run of `runs`, whose clone or team folder teamai removed
  * outside the drive that ran it, such as at the start of a later drive: the runtime sees the folder gone at a close,
  * the verb it cleans up at (T3 removes a project it added there). A close of a handle already closed answers `closed`.
  * Each definition is opened in `recover` mode, as a cancel opens it; what fails is only logged.
@@ -420,8 +423,8 @@ async function releaseAttempt(config: LocalConfig, run: RunId, attempt: AttemptI
 export async function closeAfterSweep(config: LocalConfig, runs: readonly RunId[]): Promise<void> {
   for (const run of runs) {
     const state = await readRun(config, run);
-    // The place each runtime of each definition closed last, by definition: the record written last.
-    const closed = new Map<string, Map<string, { handle: string; at: number }>>();
+    // The places each definition's runtimes closed, by definition, each with when its record was written.
+    const closed = new Map<string, Array<{ record: AttemptRuntimeRecord; handle: string; at: number }>>();
 
     for (const name of await fs.readdir(attemptsDir(config, run)).catch((): string[] => [])) {
       const attempt = AttemptIdSchema.safeParse(name);
@@ -430,15 +433,12 @@ export async function closeAfterSweep(config: LocalConfig, runs: readonly RunId[
 
       if (!attempt.success || record?.phase !== 'closed' || record.open.handle === undefined) continue;
       const at = (await fs.stat(attemptRuntimePath(config, run, attempt.data))).mtimeMs;
-      const byRuntime = closed.get(record.driver) ?? new Map<string, { handle: string; at: number }>();
-
-      if ((byRuntime.get(record.runtime)?.at ?? -1) < at) byRuntime.set(record.runtime, { handle: record.open.handle, at });
-      closed.set(record.driver, byRuntime);
+      closed.set(record.driver, [...closed.get(record.driver) ?? [], { record, handle: record.open.handle, at }]);
     }
 
     const checkout = (state === 'missing' ? undefined : await existingCheckout(state)) ?? process.cwd();
 
-    for (const [driver, handles] of closed) {
+    for (const [driver, places] of closed) {
       const opened = await openDriver(config, driver, { personal: true, mode: resolveRunMode(process.env), canAsk: false, purpose: 'stop', checkout });
 
       if (!opened.ok) {
@@ -448,10 +448,12 @@ export async function closeAfterSweep(config: LocalConfig, runs: readonly RunId[
 
       try {
         for (const entry of opened.opened.runtimes) {
-          const handle = entry.kind === 'external' ? handles.get(entry.use)?.handle : undefined;
-          const again = entry.kind === 'external' && handle !== undefined ? await entry.runtime.close(handle) : undefined;
+          if (entry.kind !== 'external') continue;
+          // The place this entry closed last: the record written last of those its entry holds, never another's of its name.
+          const [last] = places.filter((place) => RuntimeEntryIdentity.holds(place.record, entry.entry)).sort((one, other) => other.at - one.at);
+          const again = last === undefined ? undefined : await entry.runtime.close(last.handle);
 
-          if (again && !again.ok) log.debug(`Runtime ${entry.use} did not close ${handle} again after teamai removed a clone of run ${run}: ${again.failure.message}`);
+          if (again && !again.ok) log.debug(`Runtime ${entry.use} did not close ${last?.handle} again after teamai removed a clone of run ${run}: ${again.failure.message}`);
         }
       } finally {
         await disposeDriver(opened.opened);

@@ -19,6 +19,7 @@ import type { BenchmarkRunRecord } from '../benchmark/result.js';
 import { fixRecord } from './helpers/benchmark-fixture.js';
 import { TOY_RUNTIME } from './helpers/toy-runtime.js';
 import { homeEnvOf } from '../workflow/runtimes/sources.js';
+import { soleEntry } from './helpers/runtime-entry.js';
 
 const roots: string[] = [];
 const driver = { kind: 'ide', machine: 'host-7f3a', workspace: '/private/work/checkout' };
@@ -254,7 +255,7 @@ describe('dashboard workflow runs', () => {
     try {
       expect(await runtime.init({ homeEnv: homeEnvOf([]), options: { state: path.join(root, 'toy-state'), display }, mode: 'unattended' })).toMatchObject({ ok: true });
       const view = { worktree: root, readonly: [], result: path.join(root, 'out'), runDir: path.join(root, 'scratch'), toolHome: {} };
-      expect(await attemptRun({ config, run: id, attempt, runtime, driver: 'toyd' }).open(view)).toMatchObject({ ok: true });
+      expect(await attemptRun({ config, run: id, attempt, runtime, entry: soleEntry(runtime), driver: 'toyd' }).open(view)).toMatchObject({ ok: true });
     } finally {
       await runtime.dispose();
     }
@@ -287,7 +288,7 @@ describe('dashboard workflow runs', () => {
     const runtime = stdioStepRuntime({ name: 'toy', command: process.execPath, args: [TOY_RUNTIME] });
     try {
       expect(await runtime.init({ homeEnv: homeEnvOf([]), options: { state: path.join(root, 'toy-state'), close_fails: true }, mode: 'unattended' })).toMatchObject({ ok: true });
-      const placed = attemptRun({ config, run: id, attempt, runtime, driver: 'toyd' });
+      const placed = attemptRun({ config, run: id, attempt, runtime, entry: soleEntry(runtime), driver: 'toyd' });
       expect(await placed.open({ worktree: root, readonly: [], result: path.join(root, 'out'), runDir: path.join(root, 'scratch'), toolHome: {} })).toMatchObject({ ok: true });
       expect(await placed.close()).toMatchObject({ code: 'runtime_failed' });
     } finally {

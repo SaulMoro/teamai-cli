@@ -37,6 +37,7 @@ import { getDataHome } from '../types.js';
 import { sweepLeftovers } from '../workflow/leftovers.js';
 import { entriesUnder } from '@teamai/shared/entries-under';
 import { scratchHostRuntime } from './helpers/host-runtime.js';
+import { soleEntry } from './helpers/runtime-entry.js';
 
 /** A member that runs every step here, as `--driver local` does. */
 const HERE: MemberPlace = { command: { kind: 'here' }, prompt: { kind: 'here' } };
@@ -492,7 +493,7 @@ describe('a member taking a prompt attempt', () => {
     if (!ready.ok) throw new Error(ready.failure.message);
     const opened: OpenedDriver = {
       driver: { name: 'bobs', definition: { schemaVersion: 'v1alpha1', name: 'bobs', runtimes: [] }, source: 'personal', location: 'bobs.yaml', config: (await team().member('bob')).config }, asked: 'bobs',
-      runtimes: [{ kind: 'external', use: 'toy', runtime, can: ready.can, launchesAgents: true, ...(ready.runsOnToolHome && { runsOnToolHome: true }), engine: { logins: [] }, credentials: {}, found: [], masks: {}, optionsFrom: 'test' }],
+      runtimes: [{ kind: 'external', use: 'toy', runtime, can: ready.can, launchesAgents: true, ...(ready.runsOnToolHome && { runsOnToolHome: true }), engine: { logins: [] }, credentials: {}, found: [], masks: {}, optionsFrom: 'test', entry: { name: 'toy', digest: 'toy', isNameShared: false } }],
     };
     const place = memberPlace(opened);
     if ('refused' in place) throw new Error(place.refused);
@@ -735,7 +736,7 @@ steps:
       return local.exec(request, events, kind);
     } };
 
-    const { taken, record, alice } = await takeForged(() => undefined, undefined, MARK, { command: { kind: 'runtime', driver: 'bobs', use: 'box', runtime } });
+    const { taken, record, alice } = await takeForged(() => undefined, undefined, MARK, { command: { kind: 'runtime', driver: 'bobs', use: 'box', runtime, entry: soleEntry(runtime) } });
 
     expect(taken).toMatchObject({ data: { ran: { step: 'write', exit_code: 0 } } });
     expect(execs).toEqual([{ argv: expect.arrayContaining(['echo written > "$MARK"']), env: { MARK: 'made.txt', TEAMAI_WORKFLOW_ATTEMPT: expect.stringMatching(new RegExp(`/${ATTEMPT}$`)), TEAMAI_MODE: expect.any(String), TEAMAI_RUN_DIR: expect.stringMatching(new RegExp(`/attempts/${ATTEMPT}/run$`)) }, cwd: expect.stringMatching(/work$/) }]);
@@ -749,7 +750,7 @@ steps:
     const runtime: StepRuntime<DriverCan> = { ...local, exec: () => Promise.reject(new Error('the box went away')) };
 
     let forgedRun: RunId | undefined;
-    const { taken, record, bob } = await takeForged((_forged, run) => { forgedRun = run; }, undefined, MARK, { command: { kind: 'runtime', driver: 'bobs', use: 'box', runtime } });
+    const { taken, record, bob } = await takeForged((_forged, run) => { forgedRun = run; }, undefined, MARK, { command: { kind: 'runtime', driver: 'bobs', use: 'box', runtime, entry: soleEntry(runtime) } });
 
     expect(taken).toMatchObject({ data: { ran: { step: 'write', exit_code: 1 } } });
     expect(record).toMatchObject({ state: 'finished', result: { exitCode: 1 } });
@@ -871,7 +872,7 @@ steps:
     } };
     const folder = { 'WORKFLOW.yaml': MARK.replace('echo written > "$MARK"', 'cp "$TEAMAI_WORKFLOW_DIR/mark.txt" "$MARK"'), 'mark.txt': 'written\n' };
 
-    const { taken } = await takeForged((forged) => { forged.lease = { ...forged.lease, kind: 'command', command: 'cp "$TEAMAI_WORKFLOW_DIR/mark.txt" "$MARK"' }; }, undefined, { folder }, { command: { kind: 'runtime', driver: 'bobs', use: 'box', runtime } });
+    const { taken } = await takeForged((forged) => { forged.lease = { ...forged.lease, kind: 'command', command: 'cp "$TEAMAI_WORKFLOW_DIR/mark.txt" "$MARK"' }; }, undefined, { folder }, { command: { kind: 'runtime', driver: 'bobs', use: 'box', runtime, entry: soleEntry(runtime) } });
 
     expect(taken).toMatchObject({ data: { ran: { step: 'write', exit_code: 0 } } });
     expect(views).toEqual([expect.objectContaining({ readonly: expect.arrayContaining([expect.stringMatching(/[\\/]workflows[\\/]folders[\\/][0-9a-f]{64}$/)]) })]);
@@ -1080,7 +1081,7 @@ describe('cancelling an attempt through its record', () => {
         return local.exec(request, events, kind);
       },
     };
-    const taking = takeFleetAttempt(bob.config, { pool: 'default', repository: 'github.com/acme/business', root: bob.checkout, member: await installOwner(bob.config), secrets: {}, place: { command: { kind: 'runtime', driver: 'bobs', use: 'box', runtime } } });
+    const taking = takeFleetAttempt(bob.config, { pool: 'default', repository: 'github.com/acme/business', root: bob.checkout, member: await installOwner(bob.config), secrets: {}, place: { command: { kind: 'runtime', driver: 'bobs', use: 'box', runtime, entry: soleEntry(runtime) } } });
     const claimed = await eventually(async () => {
       const record = await recordOf(alice, run);
 
@@ -1312,7 +1313,7 @@ describe('a restarted member', () => {
     fs.writeFileSync(attemptRuntimePath(bob.config, run, ATTEMPT), JSON.stringify({ runtime: runtime.name, driver: 'bobs', phase: 'closed', open: { op: newOpId(), handle: 'h-left' }, exec: { op: stoppedExec } }));
     await readableReportsWorktree(bob.config);
 
-    const taken = await takeFleetAttempt(bob.config, { pool: 'default', repository: 'github.com/acme/business', root: bob.checkout, member: await installOwner(bob.config), secrets: {}, place: { command: { kind: 'runtime', driver: 'bobs', use: 'box', runtime } } });
+    const taken = await takeFleetAttempt(bob.config, { pool: 'default', repository: 'github.com/acme/business', root: bob.checkout, member: await installOwner(bob.config), secrets: {}, place: { command: { kind: 'runtime', driver: 'bobs', use: 'box', runtime, entry: soleEntry(runtime) } } });
 
     expect(taken).toEqual({ data: { ran: { run, attempt: ATTEMPT, step: 'work', exit_code: 0 } } });
     const finished = await recordOf(alice, run);
@@ -1581,7 +1582,7 @@ describe('where a member runs an attempt', () => {
     const runtime = hostStepRuntime({ config });
     const runtimes = cans.map((entry): OpenedRuntime => (entry === 'local'
       ? { kind: 'tools', use: 'tools', engine: { logins: [] } }
-      : { kind: 'external', use: entry.use, runtime, can: entry.can, launchesAgents: false, engine: { logins: [] }, credentials: {}, found: [], masks: {}, optionsFrom: 'test' }));
+      : { kind: 'external', use: entry.use, runtime, can: entry.can, launchesAgents: false, engine: { logins: [] }, credentials: {}, found: [], masks: {}, optionsFrom: 'test', entry: { name: entry.use, digest: entry.use, isNameShared: false } }));
     const [first, ...rest] = runtimes;
     if (!first) throw new Error('no runtime');
 

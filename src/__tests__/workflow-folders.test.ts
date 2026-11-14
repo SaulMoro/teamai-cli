@@ -343,7 +343,7 @@ describe('running a workflow folder', () => {
 
       return host.open(request, events);
     } };
-    const runtimes: DriverRuntimes = { driver: 'box', asked: 'box', runtimes: [{ kind: 'external', use: 'box', runtime, can: {}, launchesAgents: false, engine: { logins: [] }, credentials: {}, found: [], masks: {}, optionsFrom: 'test' }] };
+    const runtimes: DriverRuntimes = { driver: 'box', asked: 'box', runtimes: [{ kind: 'external', use: 'box', runtime, can: {}, launchesAgents: false, engine: { logins: [] }, credentials: {}, found: [], masks: {}, optionsFrom: 'test', entry: { name: 'box', digest: 'box', isNameShared: false } }] };
 
     const outputs = await runToEnd(config, workspace, 'release', runtimes);
 
@@ -362,7 +362,7 @@ describe('running a workflow folder', () => {
 
       return host.open(request, events);
     } };
-    const runtimes: DriverRuntimes = { driver: 'box', asked: 'box', runtimes: [{ kind: 'external', use: 'box', runtime, can: {}, launchesAgents: false, engine: { logins: [] }, credentials: {}, found: [], masks: {}, optionsFrom: 'test' }] };
+    const runtimes: DriverRuntimes = { driver: 'box', asked: 'box', runtimes: [{ kind: 'external', use: 'box', runtime, can: {}, launchesAgents: false, engine: { logins: [] }, credentials: {}, found: [], masks: {}, optionsFrom: 'test', entry: { name: 'box', digest: 'box', isNameShared: false } }] };
 
     await runToEnd(config, workspace, 'plain', runtimes);
 

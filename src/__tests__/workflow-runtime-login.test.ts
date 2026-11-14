@@ -14,6 +14,7 @@ import { newOpId, type ExecEnd, type PromptEnd, type Reattached, type StepRuntim
 import type { DriverCan } from '../workflow/requirements.js';
 import { attemptDir, AttemptIdSchema, RunIdSchema } from '../workflow/store.js';
 import { useToolInstances } from '../tool-registry.js';
+import { soleEntry } from './helpers/runtime-entry.js';
 
 const RUN = RunIdSchema.parse('r0123abcd');
 const FIRST = AttemptIdSchema.parse('a00000001');
@@ -245,7 +246,7 @@ describe('an attempt a killed teamai left running on its step runtime', () => {
 
   /** Opens the attempt and sends its exec on `runtime`, as the teamai that was killed did. */
   const leftRunning = async (runtime: ReturnType<typeof runtimeSeeing>): Promise<void> => {
-    const before = attemptRun({ config: config(), run: RUN, attempt: FIRST, runtime, driver: 'd' });
+    const before = attemptRun({ config: config(), run: RUN, attempt: FIRST, runtime, entry: soleEntry(runtime), driver: 'd' });
     expect(await before.open({ worktree: root, readonly: [], result: path.join(root, 'out'), runDir: path.join(root, 'scratch'), toolHome: {} })).toMatchObject({ ok: true });
     void before.exec({ argv: ['tool'], env: {}, unset: [], credentials: {}, cwd: root }, {}, 'command');
     await runtime.received;
@@ -253,7 +254,7 @@ describe('an attempt a killed teamai left running on its step runtime', () => {
 
   /** Opens the attempt and sends its prompt on `runtime`, as the teamai that was killed did. */
   const promptLeftRunning = async (runtime: ReturnType<typeof runtimeSeeing>): Promise<void> => {
-    const before = attemptRun({ config: config(), run: RUN, attempt: FIRST, runtime, driver: 'd' });
+    const before = attemptRun({ config: config(), run: RUN, attempt: FIRST, runtime, entry: soleEntry(runtime), driver: 'd' });
     expect(await before.open({ worktree: root, readonly: [], result: path.join(root, 'out'), runDir: path.join(root, 'scratch'), toolHome: {} })).toMatchObject({ ok: true });
     void resumePrompt(runtime);
     await runtime.received;
@@ -271,7 +272,7 @@ describe('an attempt a killed teamai left running on its step runtime', () => {
     const closes: string[] = [];
     const runtime = { ...runtimeSeeing([omits]), cancel: async (op) => { cancels.push(op); }, close: async (handle) => { closes.push(handle); return { ok: true }; } } satisfies StepRuntime<DriverCan>;
     await leftRunning(runtime);
-    const placed = attemptRun({ config: config(), run: RUN, attempt: FIRST, runtime, driver: 'd' });
+    const placed = attemptRun({ config: config(), run: RUN, attempt: FIRST, runtime, entry: soleEntry(runtime), driver: 'd' });
 
     expect(await placed.stopLeftOperation()).toBeUndefined();
     expect(await placed.close()).toBeUndefined();
@@ -283,10 +284,10 @@ describe('an attempt a killed teamai left running on its step runtime', () => {
     const runtime = runtimeSeeing([running, ended({ code: 'tool_failed', message: 'codex exited with status 1' })]);
     await leftRunning(runtime);
 
-    expect(await attemptRun({ config: config(), run: RUN, attempt: FIRST, runtime, driver: 'd' }).stopLeftOperation()).toBeUndefined();
+    expect(await attemptRun({ config: config(), run: RUN, attempt: FIRST, runtime, entry: soleEntry(runtime), driver: 'd' }).stopLeftOperation()).toBeUndefined();
   });
 
-  const resumePrompt = (runtime: StepRuntime<DriverCan>) => attemptRun({ config: config(), run: RUN, attempt: FIRST, runtime, driver: 'd' }).prompt({
+  const resumePrompt = (runtime: StepRuntime<DriverCan>) => attemptRun({ config: config(), run: RUN, attempt: FIRST, runtime, entry: soleEntry(runtime), driver: 'd' }).prompt({
     lease: { step: 'review', tool: 'codex', prompt: 'p', result: path.join(root, 'out', 'result.json'), permissions: 'unattended', interactive: false }, env: {}, unset: [], credentials: {}, cwd: root,
   }, {});
 
@@ -378,7 +379,7 @@ describe('an attempt a killed teamai left running on its step runtime', () => {
       reattach: async () => (Date.now() < slowFrom ? running(op) : new Promise<Reattached>((resolve) => setTimeout(() => resolve(running(op)), 15_000))),
     } satisfies StepRuntime<DriverCan>;
     await leftRunning(runtime);
-    const stopped = attemptRun({ config: config(), run: RUN, attempt: FIRST, runtime, driver: 'd' }).stopLeftOperation();
+    const stopped = attemptRun({ config: config(), run: RUN, attempt: FIRST, runtime, entry: soleEntry(runtime), driver: 'd' }).stopLeftOperation();
     await cancelAsked;
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
 
@@ -397,14 +398,14 @@ describe('an attempt a killed teamai left running on its step runtime', () => {
     const runtime = runtimeSeeing([unreachable]);
     await leftRunning(runtime);
 
-    expect(await attemptRun({ config: config(), run: RUN, attempt: FIRST, runtime, driver: 'd' }).stopLeftOperation()).toEqual({ code: 'runtime_exited', message: 'gone away' });
+    expect(await attemptRun({ config: config(), run: RUN, attempt: FIRST, runtime, entry: soleEntry(runtime), driver: 'd' }).stopLeftOperation()).toEqual({ code: 'runtime_exited', message: 'gone away' });
   });
 
   it('ends a restarted exec whose old run the runtime cannot show stopped as lost, instead of reporting it interrupted', async () => {
     const runtime = runtimeSeeing([running, unreachable]);
     await leftRunning(runtime);
 
-    const end = await attemptRun({ config: config(), run: RUN, attempt: FIRST, runtime, driver: 'd' }).exec({ argv: ['tool'], env: {}, unset: [], credentials: {}, cwd: root }, {}, 'command');
+    const end = await attemptRun({ config: config(), run: RUN, attempt: FIRST, runtime, entry: soleEntry(runtime), driver: 'd' }).exec({ argv: ['tool'], env: {}, unset: [], credentials: {}, cwd: root }, {}, 'command');
 
     expect(end).toMatchObject({ kind: 'lost' });
   });
@@ -423,7 +424,7 @@ describe('an attempt a killed teamai left running on its step runtime', () => {
       },
       cancel: async () => { cancels += 1; },
     };
-    const before = attemptRun({ config: config(), run: RUN, attempt: FIRST, runtime, driver: 'd' });
+    const before = attemptRun({ config: config(), run: RUN, attempt: FIRST, runtime, entry: soleEntry(runtime), driver: 'd' });
     expect(await before.open({ worktree: root, readonly: [], result: path.join(root, 'out'), runDir: path.join(root, 'scratch'), toolHome: {} })).toMatchObject({ ok: true });
     const left = before.exec({ argv: ['tool'], env: {}, unset: [], credentials: {}, cwd: root }, {}, 'command');
     await seeing.received;
@@ -431,7 +432,7 @@ describe('an attempt a killed teamai left running on its step runtime', () => {
     await before.stop();
 
     expect(await left).toEqual({ kind: 'left' });
-    void attemptRun({ config: config(), run: RUN, attempt: FIRST, runtime, driver: 'd' }).exec({ argv: ['tool'], env: {}, unset: [], credentials: {}, cwd: root }, {}, 'command');
+    void attemptRun({ config: config(), run: RUN, attempt: FIRST, runtime, entry: soleEntry(runtime), driver: 'd' }).exec({ argv: ['tool'], env: {}, unset: [], credentials: {}, cwd: root }, {}, 'command');
     await vi.waitFor(() => expect(sent).toHaveLength(2));
     expect(sent[1]).toBe(sent[0]);
     expect(cancels).toBe(0);
@@ -456,7 +457,7 @@ describe('an attempt a killed teamai left running on its step runtime', () => {
         endExec({ kind: 'cancelled' });
       },
     };
-    const attempt = attemptRun({ config: config(), run: RUN, attempt: FIRST, runtime, driver: 'd' });
+    const attempt = attemptRun({ config: config(), run: RUN, attempt: FIRST, runtime, entry: soleEntry(runtime), driver: 'd' });
     expect(await attempt.open({ worktree: root, readonly: [], result: path.join(root, 'out'), runDir: path.join(root, 'scratch'), toolHome: {} })).toMatchObject({ ok: true });
     const exec = attempt.exec({ argv: ['tool'], env: {}, unset: [], credentials: {}, cwd: root }, {}, 'command');
     await seeing.received;
@@ -511,9 +512,9 @@ describe('an open that failed, or that a killed teamai left unanswered', () => {
 
       return { kind: 'failed', failure: refused };
     });
-    expect(await attemptRun({ config: config(), run: RUN, attempt: FIRST, runtime, driver: 'd' }).open(view())).toMatchObject({ ok: false });
+    expect(await attemptRun({ config: config(), run: RUN, attempt: FIRST, runtime, entry: soleEntry(runtime), driver: 'd' }).open(view())).toMatchObject({ ok: false });
 
-    const restarted = attemptRun({ config: config(), run: RUN, attempt: FIRST, runtime, driver: 'd' });
+    const restarted = attemptRun({ config: config(), run: RUN, attempt: FIRST, runtime, entry: soleEntry(runtime), driver: 'd' });
 
     expect(await restarted.open(view())).toMatchObject({ ok: false, failure: { message: expect.stringContaining('(sandbox_failed): The image cannot be pulled.') } });
     expect(runtime.opens).toHaveLength(1);
@@ -523,7 +524,7 @@ describe('an open that failed, or that a killed teamai left unanswered', () => {
 
   it('closes the record of an open teamai never sent to a runtime that had stopped, which holds no place', async () => {
     const runtime = runtimeOpening(async () => ({ kind: 'failed', failure: { code: 'runtime_not_sent', message: 'Step runtime "fake" stopped: it exited with status 70. teamai did not send open.' } }));
-    const run = attemptRun({ config: config(), run: RUN, attempt: FIRST, runtime, driver: 'd' });
+    const run = attemptRun({ config: config(), run: RUN, attempt: FIRST, runtime, entry: soleEntry(runtime), driver: 'd' });
 
     expect(await run.open(view())).toMatchObject({ ok: false });
     expect(await run.close()).toBeUndefined();
@@ -532,11 +533,11 @@ describe('an open that failed, or that a killed teamai left unanswered', () => {
 
   it('keeps an open a killed teamai left with no handle when the restarted open is refused, since the first may have made a place', async () => {
     const left = runtimeOpening(() => new Promise(() => {}));
-    void attemptRun({ config: config(), run: RUN, attempt: FIRST, runtime: left, driver: 'd' }).open(view());
+    void attemptRun({ config: config(), run: RUN, attempt: FIRST, runtime: left, entry: soleEntry(left), driver: 'd' }).open(view());
     await expect.poll(() => left.opens.length).toBe(1);
 
     const runtime = runtimeOpening(async () => ({ kind: 'failed', failure: refused }));
-    const restarted = attemptRun({ config: config(), run: RUN, attempt: FIRST, runtime, driver: 'd' });
+    const restarted = attemptRun({ config: config(), run: RUN, attempt: FIRST, runtime, entry: soleEntry(runtime), driver: 'd' });
 
     expect(await restarted.open(view())).toMatchObject({ ok: false });
     expect(runtime.opens).toEqual(left.opens);
@@ -689,7 +690,7 @@ describe('the session store of an OpenCode prompt on a runtime that launches age
   });
 
   const promptOn = async (runtime: StepRuntime<DriverCan>): Promise<void> => {
-    const run = attemptRun({ config: config(), run: RUN, attempt: FIRST, runtime, driver: 'd' });
+    const run = attemptRun({ config: config(), run: RUN, attempt: FIRST, runtime, entry: soleEntry(runtime), driver: 'd' });
     expect(await run.open(undefined, { tool: 'opencode' })).toMatchObject({ ok: true });
     expect(await run.prompt({
       lease: { step: 'review', tool: 'opencode', prompt: 'p', result: path.join(root, 'out', 'result.json'), permissions: 'unattended', interactive: false }, env: {}, unset: [], credentials: {}, cwd: root,
@@ -736,7 +737,7 @@ describe('a place a restarted teamai opens again', () => {
       dispose: async () => {},
     };
 
-    expect(await attemptRun({ config: config(), run: RUN, attempt: FIRST, runtime, driver: 'd' }).open(undefined)).toMatchObject({ ok: false });
+    expect(await attemptRun({ config: config(), run: RUN, attempt: FIRST, runtime, entry: soleEntry(runtime), driver: 'd' }).open(undefined)).toMatchObject({ ok: false });
     expect(await readAttemptPlacement(config(), RUN, FIRST)).toMatchObject({ kind: 'external', record: { open: { handle: whole } } });
   });
 });
@@ -771,7 +772,7 @@ describe('the session store of a tool instance\'s prompt on a runtime that launc
       close: async () => ({ ok: true }),
       dispose: async () => {},
     };
-    const run = attemptRun({ config: config(), run: RUN, attempt: FIRST, runtime, driver: 'd' });
+    const run = attemptRun({ config: config(), run: RUN, attempt: FIRST, runtime, entry: soleEntry(runtime), driver: 'd' });
     expect(await run.open(undefined, { tool: 'acme-codex' })).toMatchObject({ ok: true });
     expect(await run.prompt({
       lease: { step: 'review', tool: 'acme-codex', prompt: 'p', result: path.join(root, 'out', 'result.json'), permissions: 'unattended', interactive: false }, env: {}, unset: [], credentials: {}, cwd: root,

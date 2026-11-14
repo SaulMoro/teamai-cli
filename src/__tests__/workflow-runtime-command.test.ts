@@ -13,6 +13,7 @@ import { getDataHome, type LocalConfig } from '../types.js';
 import { AttemptIdSchema, attemptResultPath, attemptsDir, RunIdSchema, runsRemovalLockIn } from '../workflow/store.js';
 import type { StepRuntime } from '@teamai/runtime-protocol/step-runtime';
 import type { OpId } from '@teamai/runtime-protocol';
+import { soleEntry } from './helpers/runtime-entry.js';
 
 /** An attempt on a step runtime whose `cancel`, like the real one, stops only an exec it has sent. */
 function commandRun(): { run: AttemptRun; execs: () => number } {
@@ -200,12 +201,12 @@ describe('a prompt\'s tool a restarted teamai sends anew on its step runtime', (
       close: async () => ({ ok: true }),
       dispose: async () => {},
     };
-    const first = attemptRun({ config, ...ids, runtime, driver: 'forgetful' });
+    const first = attemptRun({ config, ...ids, runtime, entry: soleEntry(runtime), driver: 'forgetful' });
     await first.open(view);
     void first.exec({ argv: ['claude'], env: {}, unset: [], credentials: {}, cwd: root }, {}, 'tool');
     await vi.waitFor(() => { expect(fs.existsSync(resultPath)).toBe(true); });
 
-    const launcher = runtimeLauncher(attemptRun({ config, ...ids, runtime, driver: 'forgetful' }), { view, tool: 'claude', toolHome: { tool: 'claude', dir: path.join(root, 'home') }, unset: [], credentials: {}, setUp: async () => undefined });
+    const launcher = runtimeLauncher(attemptRun({ config, ...ids, runtime, entry: soleEntry(runtime), driver: 'forgetful' }), { view, tool: 'claude', toolHome: { tool: 'claude', dir: path.join(root, 'home') }, unset: [], credentials: {}, setUp: async () => undefined });
     const ran = await stepLauncher(toolsLaunchDeps(), { start: launcher, canReattach: true, resolveTool: () => 'claude', resolveInstanceCommand: () => null })
       .run('claude', { prompt: 'review', cwd: root, resultPath, secrets: {}, expected: undefined });
 
@@ -310,7 +311,7 @@ describe('an attempt\'s operations on a step runtime', () => {
       close: async () => ({ ok: true }),
       dispose: async () => {},
     };
-    const run = attemptRun({ config, run: RunIdSchema.parse('r0123abcd'), attempt: AttemptIdSchema.parse('a00000001'), runtime, driver: 'counted' });
+    const run = attemptRun({ config, run: RunIdSchema.parse('r0123abcd'), attempt: AttemptIdSchema.parse('a00000001'), runtime, entry: soleEntry(runtime), driver: 'counted' });
 
     return { run, config, execs: () => execs, done: () => fs.rmSync(root, { recursive: true, force: true }) };
   }
@@ -427,7 +428,7 @@ describe('an attempt\'s operations on a step runtime', () => {
       close: async () => ({ ok: true }),
       dispose: async () => {},
     };
-    const ids = { config, run: RunIdSchema.parse('r0123abcd'), attempt: AttemptIdSchema.parse('a00000001'), runtime, driver: 'reconnected' };
+    const ids = { config, run: RunIdSchema.parse('r0123abcd'), attempt: AttemptIdSchema.parse('a00000001'), runtime, entry: soleEntry(runtime), driver: 'reconnected' };
     const command = { argv: ['node', 'build.js'], env: {}, unset: [], credentials: {}, cwd: '/work' };
     const asked = { env: {}, unset: [], credentials: {}, cwd: '/work', lease: { step: 'review', tool: 'claude', prompt: 'Review the work.', result: '/work/out/result.json', permissions: 'approval-required' as const, interactive: false } };
     const send = async (run: AttemptRun) => (sends === 'exec' ? run.exec(command, {}, 'command') : run.prompt(asked, {}));
