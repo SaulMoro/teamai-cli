@@ -26,9 +26,10 @@ vi.mock('../utils/git.js', async (importOriginal) => ({
 // pull() takes a real ~/.teamai/.sync-lock; parallel workers would race on it.
 vi.mock('../update.js', async (importOriginal) => ({
   LockDirectoryGoneError: (await importOriginal<typeof import('../update.js')>()).LockDirectoryGoneError,
-  withFileLock: (await importOriginal<typeof import('../update.js')>()).withFileLock,
   acquireLock: vi.fn().mockResolvedValue(true),
   releaseLock: vi.fn().mockResolvedValue(undefined),
+  // A pull records a tool's moved home under this lock.
+  withFileLock: (await importOriginal<typeof import('../update.js')>()).withFileLock,
 }));
 
 vi.mock('@teamai/shared/log', () => ({
