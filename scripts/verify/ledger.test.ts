@@ -63,6 +63,17 @@ describe("section (c)'s walk of a tool home", () => {
     expect(unreadable).toEqual([folder]);
   });
 
+  it.skipIf(process.platform === 'win32')('counts a link that leads back to itself as unreadable, for the time rule to judge, rather than fail the ledger', () => {
+    const { home, folder } = toolHome();
+    const link = path.join(folder, 'loop');
+    fs.symlinkSync(link, link);
+    const unreadable: string[] = [];
+
+    namingWorld(home, world, 0, [], unreadable);
+
+    expect(unreadable).toEqual([link]);
+  });
+
   it('fails the ledger, naming the folder and the error, on any other failure to list it, as running out of file handles', () => {
     const { home, folder } = toolHome();
     failing(folder, 'EMFILE');

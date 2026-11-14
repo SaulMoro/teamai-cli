@@ -79,12 +79,13 @@ function worktrees(world: World): Section {
 
 /**
  * Section (c)'s answer to `error` at `file`: gone, as a live tool home deletes files while it is read, is nothing to check;
- * no permission is unreadable, for the time rule to judge; any other failure fails the ledger, naming the file.
+ * no permission, or a link that leads back to itself (ELOOP), is unreadable, for the time rule to judge; any other failure
+ * fails the ledger, naming the file.
  */
 function walkFailure(failure: FsFailure, file: string, unreadable: string[]): void {
   if (failure.code === 'ENOENT') return;
 
-  if (isPermissionDenied(failure)) {
+  if (isPermissionDenied(failure) || failure.code === 'ELOOP') {
     unreadable.push(file);
 
     return;
