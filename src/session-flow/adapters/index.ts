@@ -16,7 +16,7 @@ import { executablesOf, toolCommandEnv } from '../../launch-registry.js';
 import { isSessionPlatform, isStoredSessionPlatform, type SessionPlatform, type StoredSessionPlatform } from './platform-facts.js';
 import { sessionStoreDir, type SessionStoreRoot } from '../../locate.js';
 import { instanceHomeDir } from '../../tool-home.js';
-import { acceptedCommandOf, type ResolvedToolInstance } from '../../tool-instances.js';
+import { acceptedCommandOf, type DeclaredTool } from '../../tool-instances.js';
 import { instancePlatform, toolInstancesFor } from '../../tool-registry.js';
 
 /**
@@ -112,7 +112,7 @@ function instanceStore(platform: string) {
  * (`acceptedCommandOf`), then the executables of the tool it extends, which read a store of the same format; either
  * starts with every home variable the instance's command reads set to the store's home.
  */
-function instanceSessionHost(instance: ResolvedToolInstance): SessionHost {
+function instanceSessionHost(instance: DeclaredTool): SessionHost {
   const own = (tool: string): string => tool === instance.extends ? instance.name : tool;
 
   return {

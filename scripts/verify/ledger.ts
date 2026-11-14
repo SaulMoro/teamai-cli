@@ -12,7 +12,7 @@ import type { ToolId } from '../../src/tools.js';
 import { z } from 'zod';
 import { defaultToolHome, envToolHome, instanceHomeDir, toolHome } from '../../src/tool-home.js';
 import { detectToolRoot, RELOCATABLE_TOOLS, TeamaiConfigBaseSchema, type ToolPathsSchema } from '../../src/types.js';
-import { defaultPathsOf, instanceReadPath, type ResolvedToolInstance } from '../../src/tool-instances.js';
+import { defaultPathsOf, instanceReadPath, type DeclaredTool, type ResolvedToolInstance } from '../../src/tool-instances.js';
 import { FsFailureSchema, isPermissionDenied, type FsFailure } from '@teamai/shared/fs-failure';
 import { MCP_SERVER_KEY } from '../../src/resources/mcp-format.js';
 import type { ToolDescriptor } from '@teamai/tool-core/definition';
@@ -180,7 +180,7 @@ export function hostUnreadableNote(file: string, since: number): string {
     : `NOT OBSERVED: ${file}, which the harness cannot read and which changed since the world was made, so whether it names the world is unknown`;
 }
 
-function hostFiles(world: World, instances: readonly ResolvedToolInstance[]): Section {
+function hostFiles(world: World, instances: readonly DeclaredTool[]): Section {
   const leaks: string[] = [];
   const notes: string[] = [];
   const before = new Set(world.baseline.checkoutStatus);
@@ -216,7 +216,7 @@ function hostFiles(world: World, instances: readonly ResolvedToolInstance[]): Se
  * env (also a relocated tool root), so a new tool is checked without editing this list, and each instance's. A home this
  * shell moves into the world, as a variable exported to mask a passed value does, is the world's, so it is left out.
  */
-export function hostHomes(world: Pick<World, 'dir'>, instances: readonly ResolvedToolInstance[]): string[] {
+export function hostHomes(world: Pick<World, 'dir'>, instances: readonly DeclaredTool[]): string[] {
   const realHome = os.homedir();
   const isHost = (home: string): boolean => path.relative(world.dir, home).startsWith('..') || path.isAbsolute(path.relative(world.dir, home));
 
@@ -326,7 +326,7 @@ const SHIPPED_VIEWS: readonly ToolView[] = TOOL_ORDER.map((tool) => ({ tool, hom
 const USER_FIELDS = ['skills', 'rules', 'settings', 'agents', 'hooks', 'claudemd'] as const;
 
 /** The view of `instance`; none for one with no home of its own, which reads where its tool does. */
-function instanceView(instance: ResolvedToolInstance): ToolView[] {
+function instanceView(instance: DeclaredTool): ToolView[] {
   if (instance.home === undefined || instance.name === instance.extends) return [];
 
   const placed = (entry: string): string => {
@@ -485,14 +485,14 @@ export interface LedgerRules {
  * instance with only a home of its own is, so `instanceView` places its reads, deliveries and state there.
  */
 function movedInstance({ tool, home }: ShippedHome): ResolvedToolInstance {
-  return { name: `${tool}@${home}`, extends: tool, home: { dir: home }, source: 'personal', file: '', location: `${tool} moved to ~/${home}`, revision: '' };
+  return { kind: 'instance', name: `${tool}@${home}`, extends: tool, home: { dir: home }, source: 'personal', file: '', location: `${tool} moved to ~/${home}`, revision: '' };
 }
 
 /**
  * The rules for an install that declares `instances` and whose commands found shipped tools at the `moved` homes: the
  * shipped tools', and each instance's and each moved home's as its tool's.
  */
-export function ledgerRules(instances: readonly ResolvedToolInstance[], moved: readonly ShippedHome[] = []): LedgerRules {
+export function ledgerRules(instances: readonly DeclaredTool[], moved: readonly ShippedHome[] = []): LedgerRules {
   const views = [...SHIPPED_VIEWS, ...[...instances, ...moved.map(movedInstance)].flatMap(instanceView)];
   const reads = [...new Set(views.flatMap((view) => toolReads(view.tool).map(view.placed)))];
   const homeWrites = [...reads.filter((read) => read.startsWith('home/')), ...views.flatMap((view) => view.homeDeliveries)];

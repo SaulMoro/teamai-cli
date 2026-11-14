@@ -747,7 +747,7 @@ describe('the session store of a tool instance\'s prompt on a runtime that launc
   it('reads the session of an instance whose runtime named no home in the instance\'s own directory under $HOME, not in the one its variable moves', async () => {
     vi.stubEnv('ACME_CODEX_HOME', path.join(root, 'moved'));
     useToolInstances(new Map([['acme-codex', {
-      name: 'acme-codex', extends: 'codex', home: { dir: '.acme-codex', env: 'ACME_CODEX_HOME' },
+      kind: 'instance', name: 'acme-codex', extends: 'codex', home: { dir: '.acme-codex', env: 'ACME_CODEX_HOME' },
       source: 'personal', file: path.join(root, '.teamai', 'tools', 'acme-codex.yaml'), location: '~/.teamai/tools/acme-codex.yaml', revision: 'r1',
     }]]));
     onTestFinished(() => useToolInstances(new Map()));

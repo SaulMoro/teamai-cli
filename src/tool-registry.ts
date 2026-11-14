@@ -1,5 +1,5 @@
 import type { InstancePlatform } from '@teamai/tool-core/instance';
-import type { ResolvedToolInstance } from './tool-instances.js';
+import type { DeclaredTool } from './tool-instances.js';
 import { makeToolRegistry, type ResolvedTool } from '@teamai/tool-core/registry';
 import type { McpFormat } from '@teamai/tool-core/definition';
 import type { RuleFormatId } from '@teamai/tool-core/definition';
@@ -26,17 +26,17 @@ function hostsInstances(platform: SessionPlatform): boolean {
 }
 
 /** The instances of every team repo and member's directory loaded in this process, by name. */
-let instanceTable: ReadonlyMap<string, ResolvedToolInstance> = new Map();
+let instanceTable: ReadonlyMap<string, DeclaredTool> = new Map();
 
 /** The same, before any was refused for where its home resolves: what init records and clears homes for. */
-let declaredTable: ReadonlyMap<string, ResolvedToolInstance> = new Map();
+let declaredTable: ReadonlyMap<string, DeclaredTool> = new Map();
 
 /**
  * Makes `instances` the instances every lookup of a tool name sees: the ones this process resolved from the team
  * repos and the member's directory it loaded (`tool-instances.ts`, the one writer). `declared` adds the ones refused
  * for their home, which no lookup sees.
  */
-export function useToolInstances(instances: ReadonlyMap<string, ResolvedToolInstance>, declared: ReadonlyMap<string, ResolvedToolInstance> = instances): void {
+export function useToolInstances(instances: ReadonlyMap<string, DeclaredTool>, declared: ReadonlyMap<string, DeclaredTool> = instances): void {
   instanceTable = instances;
   declaredTable = declared;
 }
@@ -51,7 +51,7 @@ export function useToolInstances(instances: ReadonlyMap<string, ResolvedToolInst
 export type InstancePurpose = 'use' | 'guard';
 
 /** The instances this process loaded, the member's own over the team's, for `purpose`. */
-export function toolInstancesFor(purpose: InstancePurpose): ResolvedToolInstance[] {
+export function toolInstancesFor(purpose: InstancePurpose): DeclaredTool[] {
   switch (purpose) {
     case 'use':
       return [...instanceTable.values()];
@@ -66,7 +66,7 @@ export function toolInstancesFor(purpose: InstancePurpose): ResolvedToolInstance
 }
 
 /** The tool `name` names here: an instance, with the shipped tool it extends, or a shipped tool; undefined for neither. */
-export const toolOf: (name: string) => ResolvedTool<ToolId, ResolvedToolInstance> | undefined = REGISTRY.toolOf;
+export const toolOf: (name: string) => ResolvedTool<ToolId, DeclaredTool> | undefined = REGISTRY.toolOf;
 
 /**
  * The shipped tool `name` runs as: the tool an instance extends, else `name` itself. A step's `tool` on the runtime
@@ -84,7 +84,7 @@ export function baseToolOf(name: string): string {
 export function toolRootsKeyOf(name: string): string {
   const instance = toolOf(name)?.instance;
 
-  return instance !== undefined && instance.name !== instance.extends && instance.home === undefined && instance.paths === undefined ? instance.extends : name;
+  return instance?.kind === 'instance' && instance.home === undefined && instance.paths === undefined ? instance.extends : name;
 }
 
 /**
@@ -106,7 +106,7 @@ export function runsSteps(name: string): boolean {
 }
 
 /** The instance whose own session platform `platform` is, and the shipped platform its sessions keep the format of. */
-export const instancePlatform: (platform: string) => { instance: ResolvedToolInstance; platform: SessionPlatform } | undefined = REGISTRY.instancePlatform;
+export const instancePlatform: (platform: string) => { instance: DeclaredTool; platform: SessionPlatform } | undefined = REGISTRY.instancePlatform;
 
 /** Every built-in tool, in `TOOLS` order. */
 export const TOOL_ORDER: readonly ToolId[] = REGISTRY.ids;

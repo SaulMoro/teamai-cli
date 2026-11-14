@@ -329,7 +329,7 @@ describe("a tool instance's home in a ledger's section (e)", () => {
 });
 
 describe('the homes on this machine the ledger reads for files that name a world', () => {
-  const instance = { name: 'acme-codex', extends: 'codex', home: { dir: '.acme-codex', env: 'ACME_CODEX_HOME' }, source: 'team', file: 'f', location: 'l', revision: 'r' } as const;
+  const instance = { kind: 'instance', name: 'acme-codex', extends: 'codex', home: { dir: '.acme-codex', env: 'ACME_CODEX_HOME' }, source: 'team', file: 'f', location: 'l', revision: 'r' } as const;
 
   it("leaves out an instance home this shell's variable moves into the world itself, which is the world's own", () => {
     const world = { dir: fs.mkdtempSync(path.join(os.tmpdir(), 'ledger-world-')) };
@@ -392,7 +392,7 @@ describe("a file section (e) reads after the walk listed it", () => {
 describe("the empty [hooks.state] table Codex leaves in its config.toml, in a ledger's section (e)", () => {
   const hash = (text: string) => createHash('sha256').update(text).digest('hex');
   const own = 'cli_auth_credentials_store = "file"\n';
-  const ACME = { name: 'acme-codex', extends: 'codex' as const, home: { dir: 'work/acme-moved' }, source: 'team' as const, file: '/team/tools/acme-codex.yaml', location: 'tools/acme-codex.yaml', revision: 'r1' };
+  const ACME = { kind: 'instance' as const, name: 'acme-codex', extends: 'codex' as const, home: { dir: 'work/acme-moved' }, source: 'team' as const, file: '/team/tools/acme-codex.yaml', location: 'tools/acme-codex.yaml', revision: 'r1' };
   const rules = ledgerRules([ACME], [{ tool: 'codex', home: '.codex-work' }]);
 
   const judge = (entry: string, text: string, earlier: { before?: string; wrote?: string }) => {

@@ -9,7 +9,7 @@ import path from 'node:path';
 import { z } from 'zod';
 import { parseYaml } from '@teamai/shared/yaml';
 import { instanceHomeDir, parseToolHomes, realHost } from '../../src/tool-home.js';
-import { teamToolInstances, type ResolvedToolInstance } from '../../src/tool-instances.js';
+import { teamToolInstances, type DeclaredTool } from '../../src/tool-instances.js';
 import { TOOL_IDS } from '../../src/tools.js';
 import { LocalConfigSchema, ToolPathsSchema } from '../../src/types.js';
 import { projectsRootDir } from '../../src/utils/partition.js';
@@ -23,7 +23,7 @@ const InstallRepo = z.object({ repo: LocalConfigSchema.shape.repo });
  * namespace's, and the member's own in ~/.teamai/tools, with its home as teamai joins it to HOME. Read before
  * `teamai uninstall`, which removes those records. An instance it cannot read is judged as no tool's: what it left is a LEAK.
  */
-export async function toolInstancesIn(home: string): Promise<ResolvedToolInstance[]> {
+export async function toolInstancesIn(home: string): Promise<DeclaredTool[]> {
   const teamRepos = installConfigs(home).flatMap((text) => {
     const config = InstallRepo.safeParse(text);
 
@@ -58,23 +58,30 @@ export function installConfigs(home: string): unknown[] {
 
 /** An instance an install declares, and its home as a command of the world found it. */
 export interface InstallInstance {
-  readonly declared: ResolvedToolInstance;
+  readonly declared: DeclaredTool;
   /** That home relative to the install's HOME; undefined when it has none of its own, or it lies outside HOME. */
   readonly home?: string | undefined;
 }
 
+const DeclaredFile = z.object({
+  name: z.string(),
+  extends: z.enum(TOOL_IDS),
+  paths: ToolPathsSchema.optional(),
+  source: z.enum(['team', 'personal']),
+  file: z.string(),
+  location: z.string(),
+  revision: z.string(),
+});
+
 const RecordedInstance = z.object({
-  declared: z.object({
-    name: z.string(),
-    extends: z.enum(TOOL_IDS),
-    command: z.string().optional(),
-    home: z.object({ dir: z.string(), env: z.string().optional() }).optional(),
-    paths: ToolPathsSchema.optional(),
-    source: z.enum(['team', 'personal']),
-    file: z.string(),
-    location: z.string(),
-    revision: z.string(),
-  }),
+  declared: z.discriminatedUnion('kind', [
+    DeclaredFile.extend({
+      kind: z.literal('instance'),
+      command: z.string().optional(),
+      home: z.object({ dir: z.string(), env: z.string().optional() }).optional(),
+    }),
+    DeclaredFile.extend({ kind: z.literal('adjustment') }),
+  ]),
   home: z.string().optional(),
 });
 
@@ -127,7 +134,7 @@ export function recordedInstallInstances(world: Pick<World, 'dir'>, home: string
  * The instances as the ledger judges what is under HOME: one for each home an instance was found at, its home that one
  * (so `instanceView` places its tool's reads and teamai's deliveries there), and none for one found outside HOME.
  */
-export function judgedInstances(seen: readonly InstallInstance[]): ResolvedToolInstance[] {
+export function judgedInstances(seen: readonly InstallInstance[]): DeclaredTool[] {
   const unique = new Map(seen.map((instance) => [keyOf(instance), instance]));
 
   return [...unique.values()].flatMap(({ declared, home }) => (declared.home === undefined ? [declared] : home === undefined ? [] : [{ ...declared, home: { dir: home } }]));
