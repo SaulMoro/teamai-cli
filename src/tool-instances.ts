@@ -400,6 +400,8 @@ function trustOf(text: string | undefined): TrustFile {
   }
 }
 
+const TRUST_LOCK_WAIT = { attempts: 50, delayMs: 100 };
+
 /**
  * A command a file of the team repo names, accepted at that file's content (`revision`, its sha256): a tool instance's,
  * which runs in place of the tool it extends, or a step runtime's. One name of each kind is accepted at one content.
@@ -459,9 +461,18 @@ export async function acceptTeamCommand(
     const answer = await ask(question);
 
     if (/^y(es)?$/i.test(answer?.trim() ?? '')) {
-      const kept = trust.accepted.filter((entry) => !accepts(entry, subject));
       const entry = { ...(subject.kind === 'runtime' && { kind: subject.kind }), name: subject.name, revision: subject.revision, acceptedAt: new Date().toISOString() };
-      await writeJsonAtomic(trustFile(), { accepted: [...kept, entry] });
+      // Read again under the lock: another step may have accepted another command while this one asked. Loaded here,
+      // since update.js reaches config.js, which loads this module on every hook.
+      const { withFileLock } = await import('./update.js');
+
+      const recorded = await withFileLock(`${trustFile()}.lock`, TRUST_LOCK_WAIT, async () => {
+        const current = await readTrust();
+
+        await writeJsonAtomic(trustFile(), { accepted: [...current.accepted.filter((kept) => !accepts(kept, subject)), entry] });
+      });
+
+      if (!recorded.held) log.warn(`${label} runs as you accepted it, but ${trustFile()} stayed locked by another teamai process, so the next run asks again.`);
 
       return { ok: true };
     }
