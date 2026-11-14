@@ -113,6 +113,15 @@ describe('team tool instances', () => {
     ]);
   });
 
+  it('moves a user-scope hooks file the team gave the tool an instance extends into the instance\'s home', async () => {
+    const { config } = await load(teamRepo({
+      'tools/codex.yaml': 'schemaVersion: v1alpha1\nname: codex\nextends: codex\npaths: { userScope: { settings: .codex/hooks.json } }\n',
+      'tools/acme-codex.yaml': 'schemaVersion: v1alpha1\nname: acme-codex\nextends: codex\nhome: { dir: .acme-codex }\n',
+    }));
+
+    expect(config?.toolPaths['acme-codex']?.userScope?.settings).toBe('.acme-codex/hooks.json');
+  });
+
   // An adjustment changes where teamai writes for the shipped tool; what runs it and where it lives are an instance's.
   it.each([
     ['codex', 'command: acme-codex\n', 'command'],
