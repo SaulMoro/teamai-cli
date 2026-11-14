@@ -78,7 +78,7 @@ import { BUILTIN_SKILL_NAMES, LEGACY_BUILTIN_SKILL_NAMES, isCliOwnedSkillName } 
 import { ownedSkillFiles, prunedWhole, removeOwnedFiles, skillsGuardBase } from './skill-owned-files.js';
 import { cleanupOf, hookAdapterDirIn, hookSettingsFile, installOf, isInstalledFor, locate, openclawWorkspaceDir, ownOf, SHARED_AGENT_SKILLS_PATH, toolPathUnder, workspaceHooksOf, writesOf, type Location } from './locate.js';
 import { recordedHomes, realHost, reloadToolHomesHistory, toolHome, toolHomeOf, toolHomesAcrossProfiles } from './tool-home.js';
-import { baseDescriptorOf, channelsOf, toolInstancesFor, hookSyntaxOf, toolOf } from './tool-registry.js';
+import { baseDescriptorOf, channelsOf, folderReachOf, toolInstancesFor, hookSyntaxOf, toolOf } from './tool-registry.js';
 import { leftInstanceHookFiles } from './tool-instances.js';
 import { isCodexTool } from './utils/tool-names.js';
 import { describeOutsideSkillLink, readsCodexSharedSkills, readTeamSkills, skillOrigin } from './resources/skills.js';
@@ -278,6 +278,8 @@ interface RemovalPlan {
    * dispatch identity, so it is emptied with the uninstalled tool's hooks and delivered again for these.
    */
   hookHandovers: string[];
+  /** The enabled, installed tools whose rule folder grant sits in the settings file of the tool this targeted uninstall removes, so that file keeps it. */
+  ruleFolderGrantKeepers: string[];
 }
 
 /** Per-tool findings collected during discovery (tool-specific resources only). */
@@ -1596,6 +1598,7 @@ async function buildRemovalPlan(
   const plan: RemovalPlan = {
     sharedRetentionOnly: false,
     hookHandovers: [],
+    ruleFolderGrantKeepers: [],
     hookFiles: [],
     openclawHookDirs: [],
     opencodePluginDirs: [],
@@ -1718,6 +1721,14 @@ async function buildRemovalPlan(
     if (toolsToMerge.includes(tool) || !activeTools.has(tool)) continue;
 
     for (const { path: file } of resources.hookFiles) hookFileWriters.set(file, [...hookFileWriters.get(file) ?? [], tool]);
+  }
+
+  // An instance on Claude Code's home grants in the settings file Claude Code does.
+  const grantFile = agentFilter ? RuleFolders.grantSettingsFile({ tool: agentFilter, teamConfig, localConfig }) : null;
+
+  if (grantFile !== null) {
+    plan.ruleFolderGrantKeepers = [...activeTools].filter((tool) => tool !== agentFilter && folderReachOf(tool).reach === 'grant'
+      && RuleFolders.grantSettingsFile({ tool, teamConfig, localConfig }) === grantFile);
   }
 
   // Merge tool-specific resources for selected tools. Entries a sibling
@@ -4262,7 +4273,7 @@ async function removeConfirmed(
   // The workspace instruction excludes a pull wrote (#913), before the records that own them go.
   const excludesLeft = plan.includeShared ? await withdrawWorkspaceInstructionExcludes(teamConfig, localConfig) : [];
   // The rule folder grants a pull added to a tool's user settings (#1787), for every tool or the one uninstalled.
-  const grantsLeft = plan.includeShared || agentKey ? await withdrawRuleFolderGrants(localConfig, teamConfig, plan.includeShared ? null : agentKey) : [];
+  const grantsLeft = plan.includeShared || (agentKey && plan.ruleFolderGrantKeepers.length === 0) ? await withdrawRuleFolderGrants(localConfig, teamConfig, plan.includeShared ? null : agentKey) : [];
 
   const { pendingOpencode, hooksLeft, blocksLeft, filesLeft } = await executeRemoval(plan, heldMcp, {
     hooks: dispatchLeft ? [{ what: `the Codex team-hook dispatchers in ${dispatchLeft}`, tool: 'codex' }] : [],
