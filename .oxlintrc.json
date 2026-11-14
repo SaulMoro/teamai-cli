@@ -147,6 +147,8 @@
     // V2 has priority over V1: the OpenCode major teamai takes where it reads none is ASSUMED_OPENCODE_MAJOR, decided once.
     "teamai/opencode-major": "error",
     "teamai/shipped-tool-ids": "error",
+    // toolCommandEnv decides which variables start a tool's command in which home; a variable set elsewhere skips an instance's own or its recorded home.
+    "teamai/tool-home-env": "error",
     // A reducer that copies its accumulator each step is quadratic.
     "oxc/no-accumulating-spread": "error",
     // The generic rules of anti-slop (#828), vendored in
