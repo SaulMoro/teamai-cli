@@ -40,6 +40,8 @@ function checkout(): string {
   for (const name of ['docs', ...SHIPPED_FOLDERS, 'package.json', 'AGENTS.md', '.github', TOOL_IDS, DRIVER_CAN, LINT_RULES, LINT_README, ...fs.readdirSync(ROOT).filter((file) => /^README.*\.md$/.test(file))]) {
     fs.cpSync(path.join(ROOT, name), path.join(root, name), { recursive: true });
   }
+  const example = 'examples/related-recall/README.md';
+  fs.cpSync(path.join(ROOT, example), path.join(root, example));
   return root;
 }
 function run(root: string, ...args: string[]) {
