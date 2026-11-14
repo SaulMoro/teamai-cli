@@ -255,7 +255,7 @@ import {
 import { descriptorOf, TOOL_ORDER } from './tool-registry.js';
 import { reloadToolHomesHistory } from './tool-home.js';
 import { describeToolHomeChange, recordToolHomes, type ToolHomeChange } from './tool-home-record.js';
-import { leftInstanceHookFiles } from './tool-instances.js';
+import { judgeInstanceHomesAsInit, leftInstanceHookFiles } from './tool-instances.js';
 
 function validAgentIds(teamTools: readonly string[]): string[] {
   return [...new Set([
@@ -2069,6 +2069,8 @@ export async function init(options: GlobalOptions & {
   provider?: string;
 }): Promise<void> {
   let forcedProvider: ProviderName | undefined;
+
+  judgeInstanceHomesAsInit();
 
   try {
     forcedProvider = resolveInitProvider(options.provider);

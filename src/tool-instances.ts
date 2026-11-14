@@ -7,7 +7,7 @@ import { INSTANCE_KEYS, type ToolInstance, type ToolInstanceHome } from '@teamai
 import { FOLDER_MARKERS } from './folder-markers.js';
 import { isSymlink, RESOURCE_LAYOUTS, Resources, type TeamTree } from './resources/resolver.js';
 import { isSessionPlatform } from './session-flow/adapters/platform-facts.js';
-import { instanceHomeDir, isSameDirOn, realHost, recordedHomes, toolHome, type Host } from './tool-home.js';
+import { instanceHomeAfterInit, instanceHomeDir, isSameDirOn, realHost, recordedHomes, toolHome, type Host } from './tool-home.js';
 import { INSTANCE_BASES, isInstanceBase, isToolId, TOOL_ORDER, toolInstancesFor, toolOf, useToolInstances } from './tool-registry.js';
 import type { ToolId } from './tools.js';
 import { DEFAULT_TOOL_PATHS, getTeamaiHomeDir, getTrustDir, recordedToolRootDir, RELOCATABLE_TOOLS, rerootToolPaths, toolInstallRoot, toolPathRoots, ToolPathsSchema, type Scope, type TeamaiConfig } from './types.js';
@@ -267,6 +267,9 @@ let readsPersonal = true;
 /** The roots the member recorded for the shipped tools (`toolRoots`), read with the instances, for `homeSharedWith`. */
 let memberToolRoots: Readonly<Record<string, string>> | undefined;
 
+/** Where each instance's home is judged: where it is now, or, in `teamai init`, where init is about to record it. */
+let homeOf: typeof instanceHomeDir = instanceHomeDir;
+
 /**
  * Leaves the member's own instances out of every lookup from now on, for a run handed over from another member
  * (`resume --next`), whose tools are the team's.
@@ -282,7 +285,16 @@ export function resetToolInstancesForTests(): void {
   personal = [];
   memberToolRoots = undefined;
   readsPersonal = true;
+  homeOf = instanceHomeDir;
   publish();
+}
+
+/**
+ * From the next load on, judges each instance's home where `teamai init` is about to record it, so init names no
+ * refusal for a record it replaces and names one for a value it would record.
+ */
+export function judgeInstanceHomesAsInit(): void {
+  homeOf = instanceHomeAfterInit;
 }
 
 /**
@@ -329,7 +341,7 @@ function declaredTable(): Map<string, ResolvedToolInstance> {
 function homeSharedWith({ name, home, instances, host, toolRoots }: {
   name: string; home: ToolInstanceHome; instances: readonly ResolvedToolInstance[]; host: Host; toolRoots?: Readonly<Record<string, string>>;
 }): string | undefined {
-  return toolHomedAt({ name, dir: instanceHomeDir({ name, home }, host), instances, host, toolRoots });
+  return toolHomedAt({ name, dir: homeOf({ name, home }, host), instances, host, toolRoots });
 }
 
 /** The tool other than `name` whose home resolves to `dir`: a shipped tool's, a root `toolRoots` records, or another instance's. */
@@ -340,7 +352,7 @@ function toolHomedAt({ name, dir: own, instances, host, toolRoots }: {
   const same = (dir: string | null): boolean => dir !== null && isSameDirOn(host, own, dir);
 
   return TOOL_ORDER.find((tool) => same(toolHome(tool, host)) || same(recordedToolRootDir(tool, toolRoots, at)))
-    ?? instances.find((other) => other.name !== name && other.home !== undefined && same(instanceHomeDir({ name: other.name, home: other.home }, host)))?.name;
+    ?? instances.find((other) => other.name !== name && other.home !== undefined && same(homeOf({ name: other.name, home: other.home }, host)))?.name;
 }
 
 /**
@@ -365,7 +377,7 @@ function withoutSharedHomes(table: Map<string, ResolvedToolInstance>): Map<strin
       continue;
     }
 
-    const own = instanceHomeDir({ name, home }, host);
+    const own = homeOf({ name, home }, host);
 
     // home.dir cannot name the home itself; only the instance's variable, or the record init made of it, can.
     if (home.env !== undefined && isSameDirOn(host, own, host.home)) {
