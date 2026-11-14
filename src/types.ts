@@ -3303,7 +3303,7 @@ export function toolGateRoot(
 export const TOOL_ROOT_FIELDS = ['skills', 'rules', 'settings', 'hooks', 'claudemd', 'agents', 'mcp'] as const;
 
 /** `userScope` path fields, which carry the same resources at a user-scope root. */
-const USER_SCOPE_ROOT_FIELDS = ['skills', 'rules', 'agents', 'hooks', 'claudemd'] as const;
+const USER_SCOPE_ROOT_FIELDS = ['skills', 'rules', 'settings', 'agents', 'hooks', 'claudemd'] as const;
 
 /** Warned roots, so one bad entry does not repeat on every scoped lookup of a pull. */
 const warnedToolRoots = new Set<string>();
