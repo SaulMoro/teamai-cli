@@ -178,7 +178,7 @@ function isResolved(sourceCode, node, depth = 0) {
 
 /**
  * Whether `type` is one of `RESOLVED_TYPES`, a part of one picked with `Exclude` or `Extract`, or the type of a resolved
- * field (`ConfinedArgsInput['family']`).
+ * field (`AgentTool['format']`).
  * @param {ESTree.Node | null | undefined} type
  * @returns {boolean}
  */
